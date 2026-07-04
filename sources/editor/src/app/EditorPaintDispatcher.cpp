@@ -1,6 +1,7 @@
 #include "app/EditorPaintDispatcher.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorWindowResizeInteraction.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -54,12 +55,15 @@ namespace {
     return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
 }
 
-[[nodiscard]] kb::render::SceneRenderCamera BuildMaterialPreviewCamera(std::uint32_t renderWidth, std::uint32_t renderHeight) noexcept {
+[[nodiscard]] kb::render::SceneRenderCamera BuildMaterialPreviewCamera(
+    std::uint32_t renderWidth,
+    std::uint32_t renderHeight,
+    const EditorMaterialPreviewSceneSettings& settings) noexcept {
     kb::render::SceneRenderCamera camera{};
-    bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -4.0F}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -settings.cameraDistance}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
     kb::render::SceneDepthPolicy::MakePerspective(
         camera.projection.data(),
-        38.0F,
+        settings.verticalFovDegrees,
         Aspect(renderWidth, renderHeight),
         0.05F,
         50.0F,
@@ -67,25 +71,28 @@ namespace {
     return camera;
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig() noexcept {
-    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(
+    const EditorMaterialPreviewSceneSettings& settings,
+    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings, projectLightingPath);
 }
 
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
     const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
     const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
+    const EditorMaterialPreviewSceneSettings& previewSettings = sceneContext.MaterialPreviewSceneSettings();
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
         .fitMode = EditorViewportFitMode::Fit,
-        .cameraOverride = BuildMaterialPreviewCamera(renderWidth, renderHeight),
+        .cameraOverride = BuildMaterialPreviewCamera(renderWidth, renderHeight, previewSettings),
         .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(),
-        .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(),
+        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
+        .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
-        .postProcessEnabled = true,
+        .postProcessEnabled = previewSettings.postProcessEnabled,
         .selectionMaskEnabled = false,
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
@@ -126,19 +133,30 @@ namespace {
     std::uint64_t viewportKey,
     const std::optional<RECT>& preview,
     bool forcePresent) {
+    EditorCrashBreadcrumbs::WriteValue("material_preview_present", "begin viewport", viewportKey);
     if (!preview.has_value() || (!forcePresent && sceneViewport.IsHostSurfaceVisible(host, viewportKey))) {
+        EditorCrashBreadcrumbs::Write("material_preview_present", !preview.has_value() ? "skip no preview rect" : "skip host surface visible");
         return false;
     }
     const kb::assets::AssetMetadata* metadata = MaterialMetadataForAsset(
         sceneContext,
         viewportKey == kMaterialEditorPreviewViewportKey ? sceneContext.MaterialEditor().OpenAssetId() : sceneContext.AssetBrowser().InspectorAsset());
     if (metadata == nullptr) {
+        EditorCrashBreadcrumbs::Write("material_preview_present", "skip no metadata");
         return false;
     }
+    EditorCrashBreadcrumbs::Write("material_preview_present", "metadata type=" + metadata->type + " path=" + metadata->virtualPath.generic_string());
 
+    EditorCrashBreadcrumbs::Write("material_preview_present", "MaterialPreviewScene begin");
     const kb::scene::Scene& previewScene = sceneContext.MaterialPreviewScene(metadata->id);
+    EditorCrashBreadcrumbs::Write("material_preview_present", "BuildMaterialPreviewSettings begin");
     const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(sceneContext, *preview, viewportKey);
+    EditorCrashBreadcrumbs::Write(
+        "material_preview_present",
+        "Present begin render=" + std::to_string(settings.renderWidth) + "x" + std::to_string(settings.renderHeight) +
+            " post=" + (settings.postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     sceneViewport.Present(host, *preview, previewScene, settings);
+    EditorCrashBreadcrumbs::Write("material_preview_present", "Present end");
     return true;
 }
 

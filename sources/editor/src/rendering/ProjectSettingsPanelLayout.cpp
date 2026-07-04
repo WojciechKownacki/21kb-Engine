@@ -60,7 +60,13 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.backendDx12Button = RECT{ rects.backendAutoButton.right + 6, graphicsRowTop + 3, rects.backendAutoButton.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
     rects.backendVulkanButton = RECT{ rects.backendDx12Button.right + 6, graphicsRowTop + 3, rects.backendDx12Button.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
 
-    const int postRowTop = graphicsRowTop + kRowHeight + kRowGap;
+    const int lightingPathRowTop = graphicsRowTop + kRowHeight + kRowGap;
+    rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
+    rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathForwardPlusButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardPlusButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardPlusButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+
+    const int postRowTop = lightingPathRowTop + kRowHeight + kRowGap;
     rects.postProcessLabel = RECT{ left, postRowTop, left + kLabelWidth, postRowTop + kRowHeight };
     rects.postProcessCheckbox = CheckboxForRow(left, postRowTop);
 
@@ -76,6 +82,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.msaaOffButton = RECT{ left + kLabelWidth, msaaRowTop + 3, left + kLabelWidth + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
     rects.msaa2xButton = RECT{ rects.msaaOffButton.right + 6, msaaRowTop + 3, rects.msaaOffButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
     rects.msaa4xButton = RECT{ rects.msaa2xButton.right + 6, msaaRowTop + 3, rects.msaa2xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
+    rects.msaa8xButton = RECT{ rects.msaa4xButton.right + 6, msaaRowTop + 3, rects.msaa4xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
+    rects.msaa16xButton = RECT{ rects.msaa8xButton.right + 6, msaaRowTop + 3, rects.msaa8xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
 
     const int bloomRowTop = RowTopAfter(rects.msaaLabel);
     rects.bloomLabel = RECT{ left, bloomRowTop, left + kLabelWidth, bloomRowTop + kRowHeight };
@@ -121,6 +129,19 @@ RECT ProjectSettingsPanelLayout::BackendOptionButton(const ProjectSettingsPanelL
         return rects.backendDx12Button;
     case 2:
         return rects.backendVulkanButton;
+    default:
+        return {};
+    }
+}
+
+RECT ProjectSettingsPanelLayout::LightingPathOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {
+    switch (index) {
+    case 0:
+        return rects.lightingPathForwardButton;
+    case 1:
+        return rects.lightingPathForwardPlusButton;
+    case 2:
+        return rects.lightingPathDeferredButton;
     default:
         return {};
     }
@@ -183,6 +204,10 @@ RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayo
         return rects.msaa2xButton;
     case 2:
         return rects.msaa4xButton;
+    case 3:
+        return rects.msaa8xButton;
+    case 4:
+        return rects.msaa16xButton;
     default:
         return {};
     }

@@ -77,6 +77,7 @@ private:
     // refreshed from the global runtime store at bind time so global parameter edits do not recompile graphs.
     mutable std::unordered_map<std::string, bgfx::UniformHandle> graphUniforms_;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle gbufferProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;

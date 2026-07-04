@@ -27,6 +27,9 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "scene/EditorSceneMeshAssetActions.hpp"
+
+#include <algorithm>
 
 namespace kb::editor {
 namespace {
@@ -68,6 +71,76 @@ namespace {
         return false;
     }
     return sceneContext.SetMaterialTextureAsset(materialId, *slot, textureId);
+}
+
+[[nodiscard]] bool DropMeshOnMaterialEditorPreview(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId meshId) {
+    const std::optional<RECT> materialEditor =
+        EditorDropPanelResolver::Resolve(DockPanelKind::MaterialEditor, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+    if (!materialEditor.has_value() || !Contains(*materialEditor, x, y)) {
+        return false;
+    }
+    const std::optional<RECT> preview = MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditor, sceneContext);
+    if (!preview.has_value() || !Contains(*preview, x, y)) {
+        return false;
+    }
+
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(meshId);
+    if (metadata == nullptr || !EditorSceneMeshAssetActions::IsMeshAsset(*metadata)) {
+        sceneContext.Console().Error("Materials", "Only mesh assets can be used as the Material Preview mesh.");
+        return true;
+    }
+    static_cast<void>(sceneContext.SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::CustomMesh(meshId)));
+    sceneContext.Console().Info("Materials", "Material Preview mesh set to " + (metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name) + ".");
+    return true;
+}
+
+[[nodiscard]] bool DropMaterialGraphPaletteCommand(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId materialId,
+    MaterialEditorGraphMenuCommand command) {
+    if (!materialId.IsValid() ||
+        sceneContext.MaterialEditor().OpenAssetId() != materialId ||
+        !MaterialEditorGraphMenuCommandCreatesCanvasObject(command)) {
+        return false;
+    }
+
+    const std::optional<RECT> materialEditor =
+        EditorDropPanelResolver::Resolve(DockPanelKind::MaterialEditor, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+    if (!materialEditor.has_value() || !Contains(*materialEditor, x, y)) {
+        static_cast<void>(sceneContext.CloseMaterialGraphContextMenu());
+        return false;
+    }
+
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditor);
+    if (!MaterialEditorPanelPointInRect(layout.graphCanvas, x, y)) {
+        static_cast<void>(sceneContext.CloseMaterialGraphContextMenu());
+        return false;
+    }
+
+    sceneContext.SetMaterialGraphCanvasViewport(
+        MaterialEditorPanelRectWidth(layout.graphCanvas),
+        MaterialEditorPanelRectHeight(layout.graphCanvas));
+    const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
+    const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom);
+    const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext.MaterialGraphPanY()) / zoom);
+    static_cast<void>(sceneContext.OpenMaterialGraphContextMenu(materialId, x, y, graphX, graphY));
+    return sceneContext.ExecuteMaterialGraphContextMenuCommand(command);
 }
 
 [[nodiscard]] bool IsMeshRendererMaterialHit(const InspectorPanelRenderer::Hit& hit) noexcept {
@@ -216,6 +289,7 @@ bool EditorPointerDropHandler::Drop(
         return (drag.assetId.IsValid() && EditorMeshAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetInstantiatesPrefab && EditorPrefabAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
             || (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
+            || (drag.assetCreatesMeshEntity && DropMeshOnMaterialEditorPreview(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetCreatesMeshEntity && EditorMeshAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
@@ -228,6 +302,18 @@ bool EditorPointerDropHandler::Drop(
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);
+    case EditorPointerDragKind::MaterialGraphPaletteCommand:
+        return DropMaterialGraphPaletteCommand(
+            sourceWindow,
+            mainWindow,
+            x,
+            y,
+            dockModel,
+            floatingWindows,
+            metrics,
+            sceneContext,
+            drag.materialGraphAssetId,
+            drag.materialGraphCommand);
     case EditorPointerDragKind::None:
     default:
         return false;

@@ -82,7 +82,7 @@ struct EditorMaterialGraphCookConfig {
     std::string varyingDefPath;    // varying.def.sc used by the mesh vertex shader
     std::vector<std::string> includeDirs; // graph shader include dirs (engine shaders + bgfx headers)
     std::string cacheRoot;         // per-project graph shader cache root (shared with the renderer)
-    std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + ShadowDepth
+    std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + GBuffer + ShadowDepth + BaseTransparent
     std::uint32_t materialTypeVersion = 1U;
     std::uint32_t debounceMs = 180U; // coalesce rapid edits into a single recook
     std::uint32_t compileWarningMs = 5000U;
@@ -119,10 +119,16 @@ public:
 
     // Enqueue a debounced async cook of the working copy; supersedes any pending cook for the
     // same asset. Returns the request generation so callers can match completions.
-    std::uint64_t RequestCook(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material);
+    std::uint64_t RequestCook(
+        kb::assets::AssetId assetId,
+        const kb::render::RenderMaterialAssetData& material,
+        kb::render::RenderMaterialGraphBuildContext graphContext = {});
 
     // Synchronous cook used by batch paths and tests. No debounce, no worker thread.
-    [[nodiscard]] EditorMaterialGraphCookResult CookNow(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material) const;
+    [[nodiscard]] EditorMaterialGraphCookResult CookNow(
+        kb::assets::AssetId assetId,
+        const kb::render::RenderMaterialAssetData& material,
+        kb::render::RenderMaterialGraphBuildContext graphContext = {}) const;
 
     // Drain completions published by the worker since the last call (UI poll, oldest first).
     [[nodiscard]] std::vector<EditorMaterialGraphCookResult> DrainResults();
@@ -136,6 +142,7 @@ public:
 private:
     struct PendingEntry {
         kb::render::RenderMaterialAssetData material;
+        kb::render::RenderMaterialGraphBuildContext graphContext{};
         std::uint64_t generation = 0U;
         std::chrono::steady_clock::time_point readyAt{};
     };

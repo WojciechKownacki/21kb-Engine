@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace kb::render {
@@ -1737,6 +1738,13 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
 
 } // namespace
 
+RuntimeMaterialResolver::RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept
+    : graphBuildContext_(std::move(graphBuildContext)) {}
+
+void RuntimeMaterialResolver::SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept {
+    graphBuildContext_ = std::move(graphBuildContext);
+}
+
 std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept {
     std::string key = "RenderMeshEmbeddedMaterial:";
     key += std::to_string(meshAssetId);
@@ -1904,13 +1912,13 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
         if (collectionHasError) {
             return resolved;
         }
+        RenderMaterialGraphBuildContext graphContext = graphBuildContext_;
+        graphContext.assetId = materialMetadata.id.value;
+        graphContext.sourcePath = materialMetadata.virtualPath.generic_string();
+        graphContext.functionLibrary = &functionLibrary.library;
         const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
             materialAsset.graph,
-            RenderMaterialGraphBuildContext{
-                .assetId = materialMetadata.id.value,
-                .sourcePath = materialMetadata.virtualPath.generic_string(),
-                .functionLibrary = &functionLibrary.library,
-            });
+            graphContext);
         resolved.graphDiagnostics.insert(
             resolved.graphDiagnostics.end(),
             graphCompile.diagnostics.begin(),

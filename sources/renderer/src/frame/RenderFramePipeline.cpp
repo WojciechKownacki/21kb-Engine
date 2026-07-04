@@ -34,6 +34,26 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         .lifetime = RenderGraphResourceLifetime::External,
     }));
     static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::GBufferAlbedo,
+        .target = Target(RenderTargetRole::GBufferAlbedo, RenderTargetFormat::Bgra8, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::GBufferNormal,
+        .target = Target(RenderTargetRole::GBufferNormal, RenderTargetFormat::Rgba16F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::GBufferMaterial,
+        .target = Target(RenderTargetRole::GBufferMaterial, RenderTargetFormat::Rgba8, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::GBufferDepth,
+        .target = Target(RenderTargetRole::GBufferDepth, RenderTargetFormat::D32F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
         .id = RenderGraphResource::SelectionMask,
         .target = Target(RenderTargetRole::SelectionMask, RenderTargetFormat::R8, extent, true, true),
         .lifetime = RenderGraphResourceLifetime::Transient,
@@ -94,7 +114,25 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     case RenderPassKind::OpaqueScene:
         pass.Reads(RenderGraphResource::ShadowMap).Writes(RenderGraphResource::SceneColor).Writes(RenderGraphResource::SceneDepth);
         break;
+    case RenderPassKind::GBufferGeometry:
+        pass.Writes(RenderGraphResource::GBufferAlbedo)
+            .Writes(RenderGraphResource::GBufferNormal)
+            .Writes(RenderGraphResource::GBufferMaterial)
+            .Writes(RenderGraphResource::GBufferDepth)
+            .Writes(RenderGraphResource::SceneDepth);
+        break;
+    case RenderPassKind::DeferredLighting:
+        pass.Reads(RenderGraphResource::GBufferAlbedo)
+            .Reads(RenderGraphResource::GBufferNormal)
+            .Reads(RenderGraphResource::GBufferMaterial)
+            .Reads(RenderGraphResource::GBufferDepth)
+            .Reads(RenderGraphResource::ShadowMap)
+            .Writes(RenderGraphResource::SceneColor);
+        break;
     case RenderPassKind::TransparentScene:
+        pass.Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::SceneColor);
+        break;
+    case RenderPassKind::EditorSceneOverlays:
         pass.Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::SceneColor);
         break;
     case RenderPassKind::EditorSelectionMask:
@@ -126,9 +164,6 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         break;
     case RenderPassKind::FinalComposite:
         pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::FinalOutput);
-        break;
-    case RenderPassKind::EditorSceneOverlays:
-        pass.Reads(RenderGraphResource::SceneDepth).Reads(RenderGraphResource::FinalOutput).Writes(RenderGraphResource::FinalOutput);
         break;
     case RenderPassKind::EditorUiComposite:
         pass.Reads(RenderGraphResource::FinalOutput).Reads(RenderGraphResource::SelectionMask).Writes(RenderGraphResource::FinalOutput);

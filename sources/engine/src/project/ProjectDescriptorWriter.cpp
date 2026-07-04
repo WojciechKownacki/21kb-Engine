@@ -29,6 +29,18 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     return value.size() <= ProjectDescriptorFormat::MaxStringBytes;
 }
 
+[[nodiscard]] std::uint32_t SceneLightingPathValue(ProjectSceneLightingPath path) noexcept {
+    switch (path) {
+    case ProjectSceneLightingPath::Deferred:
+        return 1U;
+    case ProjectSceneLightingPath::ForwardPlus:
+        return 2U;
+    case ProjectSceneLightingPath::Forward:
+    default:
+        return 0U;
+    }
+}
+
 [[nodiscard]] bool CanWrite(const ProjectDescriptor& descriptor) {
     if (descriptor.name.empty() ||
         descriptor.engineAssociation.empty() ||
@@ -104,6 +116,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     // File version 2+: project-wide input settings.
     WriteString(output, descriptor.inputMappingContext);
     WriteBool(output, descriptor.inputEnabled);
+    // File version 4+: project-wide scene lighting path.
+    WriteUInt32(output, SceneLightingPathValue(descriptor.sceneLightingPath));
     return output;
 }
 

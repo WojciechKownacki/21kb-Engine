@@ -23,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -282,7 +283,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
     Require(document.shaderModel == RenderMaterialShaderModel::MetallicRoughnessPbr, "KBMAT-GRAPH-0002: Built-in PBR material type must declare metallic-roughness shader model");
     Require(document.defaultBlendMode == RenderMaterialBlendMode::Opaque, "KBMAT-GRAPH-0002: Built-in PBR material type must declare default opaque blend mode");
     Require(document.defaultCullMode == RenderMaterialCullMode::BackFace, "KBMAT-GRAPH-0002: Built-in PBR material type must declare default cull mode");
-    Require(document.renderPasses.size() == 5U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare render pass support");
+    Require(document.renderPasses.size() == 6U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare render pass support");
     Require(document.permutationKeys.size() == 3U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare permutation keys");
     Require(document.requiredResources.size() >= 4U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare shader resources");
     Require(document.schema.typeName == document.stableTypeId, "Built-in PBR material type document schema id mismatch");
@@ -297,6 +298,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
         return false;
     };
     Require(hasPass("BaseOpaque", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing BaseOpaque pass");
+    Require(hasPass("GBuffer", RenderMaterialFeatureSupport::Supported), "Deferred: Built-in PBR material type missing GBuffer pass");
     Require(hasPass("ShadowDepth", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing ShadowDepth pass");
     Require(hasPass("SelectionId", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing SelectionId pass");
     Require(hasPass("BaseTransparent", RenderMaterialFeatureSupport::Supported), "KBMAT-MAT80: Built-in PBR material type must declare the transparent pass as supported");
@@ -322,6 +324,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
     };
     Require(hasResource("vs_mesh_instanced", "vertexShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing base vertex shader resource");
     Require(hasResource("fs_mesh_instanced", "fragmentShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing base fragment shader resource");
+    Require(hasResource("fs_mesh_gbuffer_instanced", "fragmentShader"), "Deferred: Built-in PBR material type missing GBuffer fragment shader resource");
     Require(hasResource("fs_mesh_shadow_instanced", "fragmentShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing shadow fragment shader resource");
     Require(ValidateRenderMaterialTypeDocument(document).Succeeded(), "KBMAT-GRAPH-0004: Built-in PBR Material Type document should pass version validation");
 }
@@ -1452,6 +1455,41 @@ void RunMaterialGraphSchemaMigrationGoldenTest() {
         "MAT-70: canonical migration golden should round-trip without graph data loss");
 }
 
+void RunMaterialGraphStableLinkIdMigrationTest() {
+    const std::uint32_t fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true);
+    const std::uint32_t toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false);
+    RenderMaterialGraphLink expectedLink{
+        .fromNodeId = 2U,
+        .fromPinId = fromPinId,
+        .toNodeId = 1U,
+        .toPinId = toPinId,
+    };
+    const std::uint32_t expectedLinkId = MakeRenderMaterialGraphLinkId(expectedLink);
+    const std::uint32_t staleLinkId = expectedLinkId == 123U ? 124U : 123U;
+    std::ostringstream text;
+    text << "version 1\n"
+         << "materialType builtin.pbr\n"
+         << "materialTypeVersion 1\n"
+         << "baseColor 1 1 1 1\n"
+         << "graphVersion 1\n"
+         << "graphNode 1 MaterialOutput 640 240\n"
+         << "graphNode 2 TextureSample 240 180\n"
+         << "graphLink " << staleLinkId << " 2 " << fromPinId << " color 1 " << toPinId << " baseColor\n";
+
+    std::istringstream input{ text.str() };
+    const RenderMaterialAssetParseResult migrated = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(migrated.asset.has_value(), "Material graph stable link id migration should keep the asset loadable");
+    Require(!migrated.Succeeded(), "Material graph stable link id migration should keep a visible warning diagnostic");
+    const RenderMaterialAssetParseDiagnostic* migration = FindParseDiagnostic(migrated.diagnostics, RenderMaterialAssetParseDiagnosticCode::GraphMigration);
+    Require(migration != nullptr && migration->field == "graphLink" && migration->severity == RenderMaterialAssetParseDiagnosticSeverity::Warning,
+        "Material graph stable link id migration should emit a graphLink warning");
+    Require(migrated.asset->graph.links.size() == 1U &&
+            migrated.asset->graph.links[0].id == expectedLinkId &&
+            migrated.asset->graph.links[0].fromPinId == fromPinId &&
+            migrated.asset->graph.links[0].toPinId == toPinId,
+        "Material graph stable link id migration should normalize the link identity");
+}
+
 void RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest() {
     // Regression: RenderMaterialGraphNodeKindName is used both for serialization (graphNode <id> <kind> ...)
     // and the parser reads the kind as a SINGLE whitespace token. Every multi-word node kind therefore has
@@ -1726,6 +1764,35 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
     Require(ParseRenderMaterialGraphNodeKind("UV") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse UV token as the UV node");
     Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::TextureCoordinate, "MAT-45 TextureCoordinate is a distinct tiling node and must round-trip to itself, not collapse to UV");
+    const auto compileTextureCoordinate = [](std::string_view hint) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        graph.nodes.push_back(RenderMaterialGraphNode{
+            .id = 2U,
+            .kind = RenderMaterialGraphNodeKind::TextureCoordinate,
+            .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ hint } },
+        });
+        graph.nodes.push_back(RenderMaterialGraphNode{
+            .id = 3U,
+            .kind = RenderMaterialGraphNodeKind::TextureSample,
+            .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "texCoordProbe", .textureRole = "baseColor", .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb },
+        });
+        graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureCoordinate, 2U, "uv", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+        graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        return CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0810U });
+    };
+    const RenderMaterialGraphCompileResult defaultTextureCoordinate = compileTextureCoordinate({});
+    const RenderMaterialGraphCompileResult legacyUv1TextureCoordinate = compileTextureCoordinate("1");
+    const RenderMaterialGraphCompileResult tiledUv1TextureCoordinate = compileTextureCoordinate("2 3 1");
+    Require(defaultTextureCoordinate.Succeeded() &&
+            defaultTextureCoordinate.shader.source.find("ctx.uv0 * vec2(1.0, 1.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate default must sample UV0 with 1x tiling, not collapse to zero UVs");
+    Require(legacyUv1TextureCoordinate.Succeeded() &&
+            legacyUv1TextureCoordinate.shader.source.find("ctx.uv1 * vec2(1.0, 1.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate legacy hint '1' must select UV1 instead of being parsed as a tiling scalar");
+    Require(tiledUv1TextureCoordinate.Succeeded() &&
+            tiledUv1TextureCoordinate.shader.source.find("ctx.uv1 * vec2(2.0, 3.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate extended hint must preserve tiling and UV set");
     Require(ParseRenderMaterialGraphNodeKind("Abs") == RenderMaterialGraphNodeKind::Absolute, "Material graph utility math should parse Abs alias");
     Require(ParseRenderMaterialGraphNodeKind("Min") == RenderMaterialGraphNodeKind::Minimum, "Material graph utility math should parse Min alias");
     Require(ParseRenderMaterialGraphNodeKind("Max") == RenderMaterialGraphNodeKind::Maximum, "Material graph utility math should parse Max alias");
@@ -4176,15 +4243,15 @@ void RunMaterialDomainGatingTest() {
     Require(FindGraphDiagnostic(surfaceResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain) == nullptr,
         "KBMAT-MAT34: the production Surface domain must not emit an unsupported-domain diagnostic");
 
-    // A declared-but-unimplemented domain falls back to Surface with a warning (no error, real shader).
+    // A declared-but-unimplemented domain fails instead of being silently compiled as Surface.
     RenderMaterialGraphDocument volumeGraph = surfaceGraph;
     volumeGraph.materialDomain = "volume";
     const RenderMaterialGraphCompileResult volumeResult = CompileRenderMaterialGraphToShaderSource(volumeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0341U });
-    Require(volumeResult.Succeeded(), "KBMAT-MAT34: a non-production domain must still produce a fallback shader (warning, not error)");
-    Require(!volumeResult.shader.source.empty(), "KBMAT-MAT34: the Surface fallback shader source must be produced");
+    Require(!volumeResult.Succeeded(), "KBMAT-MAT34: a non-production domain must fail instead of compiling as Surface");
+    Require(volumeResult.shader.source.empty(), "KBMAT-MAT34: a non-production domain must not produce a Surface shader");
     const RenderMaterialGraphDiagnostic* domainDiag = FindGraphDiagnostic(volumeResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
-    Require(domainDiag != nullptr && domainDiag->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT34: an unimplemented domain must emit a warning diagnostic with the Surface fallback");
+    Require(domainDiag != nullptr && domainDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
+        "KBMAT-MAT34: an unimplemented domain must emit an error diagnostic without a Surface fallback");
 
     Require(IsRenderMaterialDomainProduction(RenderMaterialDomain::Surface), "KBMAT-MAT34: Surface domain must be production");
     Require(!IsRenderMaterialDomainProduction(RenderMaterialDomain::DeferredDecal) &&
@@ -4220,28 +4287,52 @@ void RunMaterialShadingModelGatingTest() {
     Require(ComputeRenderMaterialGraphReflectionHash(unlitResult.shader.reflection) != ComputeRenderMaterialGraphReflectionHash(litResult.shader.reflection),
         "KBMAT-MAT37: Unlit and DefaultLit must hash to different program identities");
 
-    // A declared-but-unimplemented model falls back to DefaultLit with a warning (no error, real shader).
-    RenderMaterialGraphDocument subsurfaceGraph = litGraph;
-    subsurfaceGraph.shadingModel = "subsurface";
-    const RenderMaterialGraphCompileResult subsurfaceResult = CompileRenderMaterialGraphToShaderSource(subsurfaceGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0372U });
-    Require(subsurfaceResult.Succeeded(), "KBMAT-MAT37: a non-production shading model must still produce a fallback shader (warning, not error)");
-    Require(subsurfaceResult.shader.reflection.shadingModel == RenderMaterialShadingModel::DefaultLit,
-        "KBMAT-MAT37: a non-production shading model must resolve to the DefaultLit fallback");
-    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(subsurfaceResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
-    Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT37: an unimplemented shading model must emit a warning diagnostic with the DefaultLit fallback");
+    for (const auto& [token, model, marker] : std::initializer_list<std::tuple<const char*, RenderMaterialShadingModel, const char*>>{
+             { "subsurface", RenderMaterialShadingModel::Subsurface, "subsurfaceThickness" },
+             { "clearCoat", RenderMaterialShadingModel::ClearCoat, "clearCoatNormalRaw" },
+             { "singleLayerWater", RenderMaterialShadingModel::SingleLayerWater, "waterWeight" },
+             { "thinTranslucent", RenderMaterialShadingModel::ThinTranslucent, "lighting += surface.thinTranslucentOutput.rgb" } }) {
+        RenderMaterialGraphDocument modelGraph = litGraph;
+        modelGraph.shadingModel = token;
+        modelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+        modelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.2 0.5 1 1" } });
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "subsurfaceColor"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "surfaceThickness"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "clearCoat"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "singleLayerWaterOutput"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "thinTranslucentOutput"));
+        const RenderMaterialGraphCompileResult modelResult = CompileRenderMaterialGraphToShaderSource(modelGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0372U });
+        Require(modelResult.Succeeded(), "KBMAT-MAT37: production shading model must compile");
+        Require(modelResult.shader.reflection.shadingModel == model,
+            "KBMAT-MAT37: production shading model reflection lost requested model");
+        Require(FindGraphDiagnostic(modelResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel) == nullptr,
+            "KBMAT-MAT37: production shading model must not emit unsupported diagnostic");
+        const std::string wrapper = BuildGraphFragmentWrapperSource(modelResult.shader, "BaseOpaque");
+        Require(wrapper.find(marker) != std::string::npos,
+            "KBMAT-MAT37: production shading model wrapper did not emit model branch");
+        Require(ComputeRenderMaterialGraphReflectionHash(modelResult.shader.reflection) != ComputeRenderMaterialGraphReflectionHash(litResult.shader.reflection),
+            "KBMAT-MAT37: production shading model must produce a distinct runtime identity");
+    }
+
+    RenderMaterialGraphDocument hairGraph = litGraph;
+    hairGraph.shadingModel = "hair";
+    const RenderMaterialGraphCompileResult hairResult = CompileRenderMaterialGraphToShaderSource(hairGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });
+    Require(!hairResult.Succeeded(), "KBMAT-MAT37: a declared shading model without a production branch must fail instead of falling back");
+    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(hairResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
+    Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
+        "KBMAT-MAT37: an unimplemented shading model must emit an error diagnostic without a DefaultLit fallback");
 
     Require(IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Unlit) &&
-            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit),
-            "KBMAT-MAT37: Unlit and DefaultLit must be production shading models");
-    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Subsurface) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ClearCoat) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Subsurface) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ClearCoat) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
+            "KBMAT-MAT37: Unlit, DefaultLit and implemented advanced models must be production shading models");
+    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
             !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Hair) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
-            "KBMAT-MAT37: only Unlit and DefaultLit are production; the other declared models must be non-production");
+            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
+            "KBMAT-MAT37: declared shading models without runtime branches must remain non-production");
 }
 
 void RunMaterialGraphBlendModeTest() {
@@ -4674,20 +4765,32 @@ void RunMaterialWorldSpaceNodeCodegenTest() {
     const RenderMaterialGraphCompileResult objectBounds = CompileRenderMaterialGraphToShaderSource(boundsGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0462U });
     Require(objectBounds.Succeeded() && objectBounds.shader.source.find("ctx.objectBounds") != std::string::npos, "KBMAT-MAT46: ObjectBounds must emit ctx.objectBounds");
 
-    // Float2 view-size nodes routed through a TextureSample UV pin.
-    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind) {
+    // Float2 screen/view nodes routed through a TextureSample UV pin.
+    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind, std::string_view outputPin, std::string_view valueHint = {}) {
         RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
         graph.shadingModel = "unlit";
-        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind });
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ valueHint } } });
         graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::TextureSample, .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "vs", .textureRole = "baseColor", .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb } });
-        graph.links.push_back(MakeGraphLink(kind, 2U, "value", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+        graph.links.push_back(MakeGraphLink(kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
         graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
         return CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0461U });
     };
-    const RenderMaterialGraphCompileResult viewSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewSize);
-    const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty);
+    const RenderMaterialGraphCompileResult pixelPosition = compileVec2Node(RenderMaterialGraphNodeKind::PixelPosition, "xy");
+    const RenderMaterialGraphCompileResult viewSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewSize, "value");
+    const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value");
+    const RenderMaterialGraphCompileResult viewPropertyInvSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "invViewSize");
+    const RenderMaterialGraphCompileResult viewPropertyScreenPosition = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "screenPosition");
+    const RenderMaterialGraphCompileResult viewPropertyPixelPosition = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "pixelPosition");
+    Require(pixelPosition.Succeeded() && pixelPosition.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: PixelPosition must emit absolute viewport pixel coordinates");
     Require(viewSize.Succeeded() && viewSize.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewSize must emit ctx.viewSize");
     Require(viewProperty.Succeeded() && viewProperty.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewProperty must emit a view property (ctx.viewSize)");
+    Require(viewPropertyInvSize.Succeeded() && viewPropertyInvSize.shader.source.find("1.0, 1.0) / max(ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit inverse view size when selected");
+    Require(viewPropertyScreenPosition.Succeeded() && viewPropertyScreenPosition.shader.source.find("ctx.screenPosition") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit screen position when selected");
+    Require(viewPropertyPixelPosition.Succeeded() && viewPropertyPixelPosition.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit pixel position when selected");
 
     RenderMaterialGraphDocument twoSidedSignGraph = MakeDefaultRenderMaterialGraphDocument();
     twoSidedSignGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TwoSidedSign });
@@ -4945,6 +5048,12 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
         "KBMAT-MAT31: parser must recognize SceneColor");
     Require(ParseRenderMaterialGraphNodeKind("SceneTexture").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::SceneTexture,
         "KBMAT-MAT31: parser must recognize SceneTexture");
+    Require(ParseRenderMaterialGraphNodeKind("PixelDepth").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelDepth,
+        "KBMAT-MAT31: parser must recognize PixelDepth");
+    Require(ParseRenderMaterialGraphNodeKind("PixelPosition").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelPosition,
+        "KBMAT-MAT31: parser must recognize PixelPosition");
+    Require(ParseRenderMaterialGraphNodeKind("CameraDepthFade").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::CameraDepthFade,
+        "KBMAT-MAT31: parser must recognize CameraDepthFade");
 
     Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::TextureSampleCube, "direction") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSampleCube, "texture", false) == RenderMaterialGraphPinType::TextureCube,
@@ -4958,6 +5067,17 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::SceneColor, "r") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::SceneTexture, "color", true) == RenderMaterialGraphPinType::Color,
         "KBMAT-MAT31: SceneColor/SceneTexture must expose color channel outputs");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelDepth, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelDepth, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT31: PixelDepth must expose a float value output");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelPosition, "xy") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelPosition, "xy", true) == RenderMaterialGraphPinType::Float2,
+        "KBMAT-MAT31: PixelPosition must expose a float2 xy output");
+    Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeLength") &&
+            IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeOffset") &&
+            IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::CameraDepthFade, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT31: CameraDepthFade must expose fade controls and a float value output");
 
     RenderMaterialGraphDocument objectGraph = MakeDefaultRenderMaterialGraphDocument();
     objectGraph.shadingModel = "unlit";
@@ -5019,6 +5139,28 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     const RenderMaterialGraphCompileResult sceneTextureDepthResult = CompileRenderMaterialGraphToShaderSource(sceneDepthTextureGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0493U });
     Require(sceneTextureDepthResult.Succeeded() && sceneTextureDepthResult.shader.reflection.usesSceneDepth && !sceneTextureDepthResult.shader.reflection.usesSceneColor,
         "KBMAT-MAT31: SceneTexture(depth) must set usesSceneDepth reflection");
+
+    RenderMaterialGraphDocument pixelDepthGraph = MakeDefaultRenderMaterialGraphDocument();
+    pixelDepthGraph.shadingModel = "unlit";
+    pixelDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelDepth });
+    pixelDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PixelDepth, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult pixelDepth = CompileRenderMaterialGraphToShaderSource(pixelDepthGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0494U });
+    Require(pixelDepth.Succeeded() &&
+            pixelDepth.shader.source.find("ctx.fragmentDepth") != std::string::npos &&
+            pixelDepth.shader.source.find("SAMPLER2D(s_kbSceneDepth") == std::string::npos &&
+            !pixelDepth.shader.reflection.usesSceneDepth,
+        "KBMAT-MAT31: PixelDepth must compile from fragment depth without requiring scene-depth texture binding");
+
+    RenderMaterialGraphDocument cameraDepthFadeGraph = MakeDefaultRenderMaterialGraphDocument();
+    cameraDepthFadeGraph.shadingModel = "unlit";
+    cameraDepthFadeGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::CameraDepthFade });
+    cameraDepthFadeGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult cameraDepthFade = CompileRenderMaterialGraphToShaderSource(cameraDepthFadeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0495U });
+    Require(cameraDepthFade.Succeeded() &&
+            cameraDepthFade.shader.source.find("distance(ctx.cameraPosition, ctx.worldPos)") != std::string::npos &&
+            cameraDepthFade.shader.source.find("SAMPLER2D(s_kbSceneDepth") == std::string::npos &&
+            !cameraDepthFade.shader.reflection.usesSceneDepth,
+        "KBMAT-MAT31: CameraDepthFade must compile from camera/world context without requiring scene-depth texture binding");
 
     RenderMaterialGraphDocument mismatchGraph = MakeDefaultRenderMaterialGraphDocument();
     mismatchGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TextureObjectCube });
@@ -5157,6 +5299,12 @@ void RunMaterialGraphCustomCodeNodeSchemaTest() {
 }
 
 void RunMaterialGraphVertexDataReflectionTest() {
+    Require(ParseRenderMaterialGraphNodeKind("DistanceCullFade") == RenderMaterialGraphNodeKind::DistanceCullFade,
+        "KBMAT-MAT47: DistanceCullFade must parse as a runtime fade input node");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::DistanceCullFade, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::DistanceCullFade, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT47: DistanceCullFade must expose a scalar value output");
+
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = "unlit";
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::VertexColor });
@@ -5166,6 +5314,7 @@ void RunMaterialGraphVertexDataReflectionTest() {
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::PreSkinnedPosition });
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::PreSkinnedNormal });
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::DistanceCullFade });
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceRandom, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "x"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceFadeAmount, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "y"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceCustomData, 5U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "z"));
@@ -5173,12 +5322,15 @@ void RunMaterialGraphVertexDataReflectionTest() {
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PreSkinnedNormal, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::DistanceCullFade, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
 
     const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0470U });
     Require(result.Succeeded(), "KBMAT-MAT47: vertex/instance data graph must compile");
     Require(result.shader.source.find("ctx.vertexColor") != std::string::npos, "KBMAT-MAT47: VertexColor must emit ctx.vertexColor");
     Require(result.shader.source.find("ctx.perInstanceRandom") != std::string::npos, "KBMAT-MAT47: PerInstanceRandom must emit ctx.perInstanceRandom");
     Require(result.shader.source.find("ctx.perInstanceFadeAmount") != std::string::npos, "KBMAT-MAT47: PerInstanceFadeAmount must emit ctx.perInstanceFadeAmount");
+    Require(result.shader.source.find("material.roughness = ctx.perInstanceFadeAmount") != std::string::npos,
+        "KBMAT-MAT47: DistanceCullFade must emit the same production distance-fade context value");
     Require(result.shader.source.find("ctx.perInstanceCustomData") != std::string::npos, "KBMAT-MAT47: PerInstanceCustomData must emit ctx.perInstanceCustomData");
     Require(result.shader.source.find("ctx.preSkinnedPosition") != std::string::npos, "KBMAT-MAT47: PreSkinnedPosition must emit ctx.preSkinnedPosition");
     Require(result.shader.source.find("ctx.preSkinnedNormal") != std::string::npos, "KBMAT-MAT47: PreSkinnedNormal must emit ctx.preSkinnedNormal");
@@ -5414,8 +5566,15 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
             "MAT-71: Support matrix path statuses must match RenderMaterialGraphNodeSupportForPath");
         Require(RenderMaterialGraphNodeSupportStatus(kind) != RenderMaterialGraphNodeSupport::Unsupported,
             "KBMAT-MAT03: Every enumerated node kind must have an explicit support matrix entry");
-        Require(entry.gpuDeferredSupport != RenderMaterialGraphNodeSupport::Production,
-            "MAT-71: Deferred/GBuffer graph support must not be listed as Production before a real GBuffer writer exists");
+        const bool deferredSceneBindingNode =
+            kind == RenderMaterialGraphNodeKind::SceneDepth ||
+            kind == RenderMaterialGraphNodeKind::SceneColor ||
+            kind == RenderMaterialGraphNodeKind::SceneTexture ||
+            kind == RenderMaterialGraphNodeKind::DepthFade;
+        Require(deferredSceneBindingNode
+                ? entry.gpuDeferredSupport == RenderMaterialGraphNodeSupport::Unsupported
+                : entry.gpuDeferredSupport == entry.authoringSupport,
+            "MAT-71: Deferred/GBuffer graph support must match authoring support except scene texture/depth nodes that lack a deferred geometry binding");
     }
 
     // Cross-check: a node kind is in the canonical list iff it has a known (non-Unsupported) status.
@@ -5439,13 +5598,18 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
     Require(RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind::Multiply).empty(),
         "KBMAT-MAT03: Production node must not be decorated with an unsupported/experimental UI tag");
 
-    // The path dimension must be live: a non-production render path downgrades supported nodes to FallbackOnly.
+    // The path dimension must be live: production render paths keep supported nodes Production.
     Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Production,
         "KBMAT-MAT03: Production node on the forward path must remain Production");
-    Require(IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath::GpuDeferred) == false,
-        "KBMAT-MAT65: Deferred/GBuffer graph path must be reported as non-production until a real GBuffer writer exists");
-    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::FallbackOnly,
-        "KBMAT-MAT65: Supported graph nodes on the Deferred path must downgrade to FallbackOnly");
+    Require(IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath::GpuDeferred),
+        "Deferred/GBuffer graph path must be reported as production after real GBuffer writer, deferred lighting and GPU readback coverage");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Production,
+        "Supported graph nodes on the Deferred path must remain Production");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneColor, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported &&
+            RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneDepth, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported,
+        "Scene color/depth graph nodes must fail closed on Deferred/GBuffer until explicit deferred bindings exist");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::PixelDepth, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Production,
+        "PixelDepth must remain Production on Deferred because it reads the current fragment depth, not a scene texture binding");
     Require(RenderMaterialGraphNodeSupportForPath(bogus, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Unsupported,
         "KBMAT-MAT03: Unsupported node stays Unsupported on every render path");
 
@@ -5455,7 +5619,8 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
     Require(docs.find("MAT-71") != std::string::npos &&
             docs.find("RenderMaterialGraphNodeSupport") != std::string::npos &&
             docs.find("kb_standalone_player") != std::string::npos &&
-            docs.find("GpuDeferred | FallbackOnly") != std::string::npos &&
+            docs.find("GpuDeferred` | Production") != std::string::npos &&
+            docs.find("Forward+ / clustered lighting | Production") != std::string::npos &&
             docs.find("Apple/Metal | Unsupported") != std::string::npos,
         "MAT-71: Material Graph documentation must include support matrix, standalone runtime, render-path gating and Metal status");
 
@@ -5497,15 +5662,31 @@ void RunMaterialGraphUnsupportedNodeValidationTest() {
     Require(!HasGraphDiagnostic(forwardDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
         "KBMAT-MAT03: Production nodes on the forward path must not raise render-path support diagnostics");
 
-    // MAT-65/#52: Deferred/GBuffer is explicitly non-production until a real graph GBuffer writer exists.
-    // Every supported node is flagged as a fallback warning, not silently dropped or falsely marked production.
+    // Deferred/GBuffer is production after the real graph GBuffer writer, deferred lighting and readback proof.
     const std::vector<RenderMaterialGraphDiagnostic> deferredDiagnostics =
         ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuDeferred);
     const RenderMaterialGraphDiagnostic* pathDiagnostic = FindGraphDiagnostic(deferredDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode);
-    Require(pathDiagnostic != nullptr && pathDiagnostic->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT65: Graph nodes on the Deferred path must raise an explicit non-production warning diagnostic");
-    Require(pathDiagnostic->message.find("GpuDeferred") != std::string::npos,
-        "KBMAT-MAT65: Deferred path diagnostic must name GpuDeferred");
+    Require(pathDiagnostic == nullptr,
+        "Deferred production path must not raise a render-path support diagnostic for supported graph nodes");
+
+    RenderMaterialGraphDocument deferredOpaqueSceneDepthGraph = MakeDefaultRenderMaterialGraphDocument();
+    deferredOpaqueSceneDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::SceneDepth });
+    deferredOpaqueSceneDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "x"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "y"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "z"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const std::vector<RenderMaterialGraphDiagnostic> deferredOpaqueSceneDepthDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredOpaqueSceneDepthGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(HasGraphDiagnostic(deferredOpaqueSceneDepthDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "Deferred opaque/GBuffer graph must still reject scene-depth sampling because the geometry pass has no scene-depth binding");
+
+    RenderMaterialGraphDocument deferredTransparentSceneDepthGraph = deferredOpaqueSceneDepthGraph;
+    deferredTransparentSceneDepthGraph.blendMode = "translucent";
+    const std::vector<RenderMaterialGraphDiagnostic> deferredTransparentSceneDepthDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredTransparentSceneDepthGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(!HasGraphDiagnostic(deferredTransparentSceneDepthDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "Deferred transparent graph must accept SceneDepth because BaseTransparent binds the GBuffer depth texture");
 
     // Unknown node kind must still be rejected as an unsupported node.
     RenderMaterialGraphDocument unknownGraph = MakeDefaultRenderMaterialGraphDocument();
@@ -5774,6 +5955,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialAssetTilingOffsetRoundTripTest();
     RunMaterialGraphRoundTripTest();
     RunMaterialGraphSchemaMigrationGoldenTest();
+    RunMaterialGraphStableLinkIdMigrationTest();
     RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest();
     RunMaterialGraphEveryShaderNodeKindHasCodegenTest();
     RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest();

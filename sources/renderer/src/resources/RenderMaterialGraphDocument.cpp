@@ -189,6 +189,7 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         node.kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
         node.kind == RenderMaterialGraphNodeKind::StaticSwitch ||
         node.kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
+        node.kind == RenderMaterialGraphNodeKind::CollectionParameter ||
         node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
         node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
         node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
@@ -525,6 +526,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         break;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         AppendIrPin(irNode, irNode.kind, "forward", false);
+        AppendIrPin(irNode, irNode.kind, "forwardPlus", false);
         AppendIrPin(irNode, irNode.kind, "deferred", false);
         AppendIrPin(irNode, irNode.kind, "result", true);
         break;
@@ -572,6 +574,12 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        AppendIrPin(irNode, irNode.kind, "fadeLength", false);
+        AppendIrPin(irNode, irNode.kind, "fadeOffset", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::SceneColor:
@@ -796,6 +804,10 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
         AppendIrPin(irNode, irNode.kind, "rgba", true);
+        AppendIrPin(irNode, irNode.kind, "r", true);
+        AppendIrPin(irNode, irNode.kind, "g", true);
+        AppendIrPin(irNode, irNode.kind, "b", true);
+        AppendIrPin(irNode, irNode.kind, "a", true);
         break;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         AppendIrPin(irNode, irNode.kind, "value", true);
@@ -821,6 +833,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -835,6 +848,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "a", true);
         break;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         AppendIrPin(irNode, irNode.kind, "xy", true);
         break;
     case RenderMaterialGraphNodeKind::LocalPosition:
@@ -1137,11 +1151,13 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -1178,6 +1194,8 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -1561,6 +1579,7 @@ void AppendCustomCodeFunctionDefinitions(
 [[nodiscard]] std::string_view RenderMaterialGraphShadingPathPinName(RenderMaterialGraphShadingPath path) noexcept {
     switch (path) {
     case RenderMaterialGraphShadingPath::Forward: return "forward";
+    case RenderMaterialGraphShadingPath::ForwardPlus: return "forwardPlus";
     case RenderMaterialGraphShadingPath::Deferred: return "deferred";
     }
     return "forward";
@@ -1646,6 +1665,44 @@ void AppendCustomCodeFunctionDefinitions(
     return "vec4(" + r + ", " + g + ", " + b + ", " + a + ")";
 }
 
+[[nodiscard]] std::string ViewPropertyExpression(std::string_view hint) {
+    if (EqualsIgnoreCase(hint, "invViewSize") || EqualsIgnoreCase(hint, "inverseViewSize") || EqualsIgnoreCase(hint, "viewInvSize")) {
+        return "(vec2(1.0, 1.0) / max(ctx.viewSize, vec2(1.0, 1.0)))";
+    }
+    if (EqualsIgnoreCase(hint, "screenPosition") || EqualsIgnoreCase(hint, "viewportUV") || EqualsIgnoreCase(hint, "screenUV")) {
+        return "ctx.screenPosition";
+    }
+    if (EqualsIgnoreCase(hint, "pixelPosition") || EqualsIgnoreCase(hint, "viewportPixelPosition") || EqualsIgnoreCase(hint, "screenPixelPosition")) {
+        return "(ctx.screenPosition * ctx.viewSize)";
+    }
+    return "ctx.viewSize";
+}
+
+struct TextureCoordinateHint {
+    float uTile = 1.0F;
+    float vTile = 1.0F;
+    bool useUv1 = false;
+};
+
+[[nodiscard]] TextureCoordinateHint ParseTextureCoordinateHint(std::string_view hint) {
+    TextureCoordinateHint result{};
+    if (hint.empty() || EqualsIgnoreCase(hint, "0") || EqualsIgnoreCase(hint, "uv0")) {
+        return result;
+    }
+    if (EqualsIgnoreCase(hint, "1") || EqualsIgnoreCase(hint, "uv1")) {
+        result.useUv1 = true;
+        return result;
+    }
+
+    const std::vector<float> values = ParseDefaultNumbers(hint);
+    if (!values.empty()) {
+        result.uTile = values[0];
+        result.vTile = values.size() > 1U ? values[1] : result.uTile;
+        result.useUv1 = values.size() > 2U && values[2] >= 0.5F;
+    }
+    return result;
+}
+
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::Reroute:
@@ -1678,12 +1735,10 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)"),
             node.parameter.defaultValueHint);
     case RenderMaterialGraphNodeKind::TextureCoordinate: {
-        // MAT-45: tiling-scaled UV from a selectable coordinate set (hint = "uTile vTile [set]").
-        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
-        const float uTile = values.size() > 0U ? values[0] : 1.0F;
-        const float vTile = values.size() > 1U ? values[1] : uTile;
-        const bool useUv1 = values.size() > 2U && values[2] >= 0.5F;
-        return std::string{ useUv1 ? "ctx.uv1" : "ctx.uv0" } + " * vec2(" + FloatLiteral(uTile) + ", " + FloatLiteral(vTile) + ")";
+        // MAT-45/MAT-81: tiling-scaled UV from a selectable coordinate set. Legacy hints "0"/"1"
+        // mean UV0/UV1; extended hints use "uTile vTile set".
+        const TextureCoordinateHint hint = ParseTextureCoordinateHint(node.parameter.defaultValueHint);
+        return std::string{ hint.useUv1 ? "ctx.uv1" : "ctx.uv0" } + " * vec2(" + FloatLiteral(hint.uTile) + ", " + FloatLiteral(hint.vTile) + ")";
     }
     case RenderMaterialGraphNodeKind::ViewportUV:
         // MAT-45: the normalised viewport coordinate (same source as ScreenPosition).
@@ -1709,13 +1764,34 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::PreSkinnedNormal:
         return "ctx.preSkinnedNormal";
     case RenderMaterialGraphNodeKind::ViewSize:
-    case RenderMaterialGraphNodeKind::ViewProperty:
         return "ctx.viewSize";
+    case RenderMaterialGraphNodeKind::ViewProperty:
+        return ViewPropertyExpression(node.parameter.defaultValueHint);
     case RenderMaterialGraphNodeKind::TwoSidedSign:
         return "ctx.twoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
         // MAT-80/#18b: the opaque scene device depth at this fragment's screen position.
         return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
+    case RenderMaterialGraphNodeKind::PixelDepth:
+        return "ctx.fragmentDepth";
+    case RenderMaterialGraphNodeKind::CameraDepthFade: {
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFadeLength = values.size() > 0U ? std::max(values[0], 0.0001F) : 1.0F;
+        const float defaultFadeOffset = values.size() > 1U ? values[1] : 0.0F;
+        const std::string fadeLength = CompileInputExpression(
+            cg,
+            node,
+            "fadeLength",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeLength));
+        const std::string fadeOffset = CompileInputExpression(
+            cg,
+            node,
+            "fadeOffset",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeOffset));
+        return "clamp((distance(ctx.cameraPosition, ctx.worldPos) - (" + fadeOffset + ")) / max(" + fadeLength + ", 0.0001), 0.0, 1.0)";
+    }
     case RenderMaterialGraphNodeKind::SceneColor: {
         const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.screenPosition");
         return "texture2D(s_kbSceneColor, " + uv + ")";
@@ -1730,7 +1806,14 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         // MAT-80/#18b: soft fade (0 at the opaque surface, 1 further in front). abs() of the device-depth
         // separation is projection-convention robust; the transparent fragment already passed the depth
         // test so it lies in front of the sampled opaque depth.
-        const std::string fadeDistance = CompileInputExpression(cg, node, "fadeDistance", RenderMaterialGraphPinType::Float, "0.01");
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFadeDistance = values.size() > 0U ? std::max(values[0], 0.0001F) : 0.01F;
+        const std::string fadeDistance = CompileInputExpression(
+            cg,
+            node,
+            "fadeDistance",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeDistance));
         return "clamp(abs(texture2D(s_kbSceneDepth, ctx.screenPosition).x - ctx.fragmentDepth) / max(" + fadeDistance + ", 0.0001), 0.0, 1.0)";
     }
     case RenderMaterialGraphNodeKind::Panner: {
@@ -1783,8 +1866,15 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
             return it->second;
         }
-        const std::string axis = CompileInputExpression(cg, node, "axis", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
-        const std::string angle = CompileInputExpression(cg, node, "angle", RenderMaterialGraphPinType::Float, "0.0");
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float axisX = values.size() > 0U ? values[0] : 0.0F;
+        const float axisY = values.size() > 1U ? values[1] : 0.0F;
+        const float axisZ = values.size() > 2U ? values[2] : 1.0F;
+        const float angleDefault = values.size() > 3U ? values[3] : 0.0F;
+        const std::string axisDefault =
+            "vec3(" + FloatLiteral(axisX) + ", " + FloatLiteral(axisY) + ", " + FloatLiteral(axisZ) + ")";
+        const std::string axis = CompileInputExpression(cg, node, "axis", RenderMaterialGraphPinType::Float3, axisDefault);
+        const std::string angle = CompileInputExpression(cg, node, "angle", RenderMaterialGraphPinType::Float, FloatLiteral(angleDefault));
         const std::string position = CompileInputExpression(cg, node, "position", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string id = std::to_string(node.id);
         const std::string tmp = "rax" + id;
@@ -2289,16 +2379,21 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "case3", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Desaturate: {
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFraction = values.size() > 0U ? values[0] : 1.0F;
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
-        const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, "1.0");
+        const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, FloatLiteral(defaultFraction));
         const std::string luma = "dot((" + color + ").rgb, vec3(0.299, 0.587, 0.114))";
         return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultExponent = values.size() > 0U ? std::max(values[0], 0.0001F) : 5.0F;
+        const float defaultBase = values.size() > 1U ? values[1] : 0.0F;
         const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
         const std::string view = CompileInputExpression(cg, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
-        const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, "5.0");
-        const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, "0.0");
+        const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, FloatLiteral(defaultExponent));
+        const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, FloatLiteral(defaultBase));
         const std::string facing = "clamp(dot(normalize(" + normal + "), normalize(" + view + ")), 0.0, 1.0)";
         return "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
     }
@@ -2379,6 +2474,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "ctx.vertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
         return "ctx.screenPosition";
+    case RenderMaterialGraphNodeKind::PixelPosition:
+        return "(ctx.screenPosition * ctx.viewSize)";
     case RenderMaterialGraphNodeKind::LocalPosition:
         return "ctx.localPosition";
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -2388,6 +2485,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
         return "ctx.perInstanceRandom";
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+        return "ctx.perInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
         return "ctx.perInstanceFadeAmount";
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
         return "ctx.perInstanceCustomData";
@@ -2493,6 +2592,8 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
     case RenderMaterialGraphNodeKind::TextureSample2DArray:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::CollectionParameter:
@@ -2652,11 +2753,13 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -2693,6 +2796,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -2840,11 +2945,13 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -2881,6 +2988,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -2986,11 +3095,13 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -3027,6 +3138,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -3262,6 +3375,34 @@ struct FunctionSignature {
     }
     return signature;
 }
+
+} // namespace
+
+RenderMaterialGraphCustomCode BuildRenderMaterialFunctionCallCustomCode(const RenderMaterialGraphDocument& functionGraph) {
+    const FunctionSignature signature = BuildMaterialFunctionSignature(functionGraph);
+    RenderMaterialGraphCustomCode customCode{};
+    customCode.body.clear();
+    customCode.inputs.clear();
+    customCode.outputs.clear();
+    customCode.outputType = signature.outputs.empty() ? RenderMaterialGraphPinType::Float4 : signature.outputs.front().type;
+    customCode.inputs.reserve(signature.inputs.size());
+    for (const FunctionEndpointSignature& input : signature.inputs) {
+        customCode.inputs.push_back(RenderMaterialGraphCustomPin{
+            .name = input.name,
+            .type = input.type,
+        });
+    }
+    customCode.outputs.reserve(signature.outputs.size());
+    for (const FunctionEndpointSignature& output : signature.outputs) {
+        customCode.outputs.push_back(RenderMaterialGraphCustomPin{
+            .name = output.name,
+            .type = output.type,
+        });
+    }
+    return customCode;
+}
+
+namespace {
 
 [[nodiscard]] bool PinListsMatchFunctionSignature(
     const std::vector<RenderMaterialGraphCustomPin>& callPins,
@@ -4182,6 +4323,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "VertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
         return "ScreenPosition";
+    case RenderMaterialGraphNodeKind::PixelPosition:
+        return "PixelPosition";
     case RenderMaterialGraphNodeKind::LocalPosition:
         return "LocalPosition";
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -4192,6 +4335,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "PerInstanceRandom";
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
         return "PerInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
+        return "DistanceCullFade";
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
         return "PerInstanceCustomData";
     case RenderMaterialGraphNodeKind::ObjectRadius:
@@ -4264,6 +4409,10 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "TwoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
         return "SceneDepth";
+    case RenderMaterialGraphNodeKind::PixelDepth:
+        return "PixelDepth";
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        return "CameraDepthFade";
     case RenderMaterialGraphNodeKind::SceneColor:
         return "SceneColor";
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -4520,6 +4669,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "ScreenPosition")) {
         return RenderMaterialGraphNodeKind::ScreenPosition;
     }
+    if (EqualsIgnoreCase(text, "PixelPosition") || EqualsIgnoreCase(text, "ViewportPixelPosition") || EqualsIgnoreCase(text, "ScreenPixelPosition")) {
+        return RenderMaterialGraphNodeKind::PixelPosition;
+    }
     if (EqualsIgnoreCase(text, "LocalPosition")) {
         return RenderMaterialGraphNodeKind::LocalPosition;
     }
@@ -4534,6 +4686,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "PerInstanceFadeAmount") || EqualsIgnoreCase(text, "PerInstanceFade")) {
         return RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
+    }
+    if (EqualsIgnoreCase(text, "DistanceCullFade") || EqualsIgnoreCase(text, "CullDistanceFade")) {
+        return RenderMaterialGraphNodeKind::DistanceCullFade;
     }
     if (EqualsIgnoreCase(text, "PerInstanceCustomData") || EqualsIgnoreCase(text, "PerInstanceCustomData0")) {
         return RenderMaterialGraphNodeKind::PerInstanceCustomData;
@@ -4644,6 +4799,12 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "SceneDepth")) {
         return RenderMaterialGraphNodeKind::SceneDepth;
+    }
+    if (EqualsIgnoreCase(text, "PixelDepth")) {
+        return RenderMaterialGraphNodeKind::PixelDepth;
+    }
+    if (EqualsIgnoreCase(text, "CameraDepthFade") || EqualsIgnoreCase(text, "CameraFade") || EqualsIgnoreCase(text, "DistanceFade")) {
+        return RenderMaterialGraphNodeKind::CameraDepthFade;
     }
     if (EqualsIgnoreCase(text, "SceneColor")) {
         return RenderMaterialGraphNodeKind::SceneColor;
@@ -4927,11 +5088,13 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -4968,6 +5131,8 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -4990,16 +5155,13 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
 }
 
 bool IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath path) noexcept {
-    // MAT-65/#52: graph materials have no Deferred/GBuffer writer yet. GpuDeferred therefore remains
-    // explicitly non-production so validation emits a warning instead of pretending deferred rendering works.
     switch (path) {
     case RenderMaterialGraphRenderPath::GpuForward:
     case RenderMaterialGraphRenderPath::GpuShadow:
+    case RenderMaterialGraphRenderPath::GpuDeferred:
     case RenderMaterialGraphRenderPath::CpuFallback:
     case RenderMaterialGraphRenderPath::Preview:
         return true;
-    case RenderMaterialGraphRenderPath::GpuDeferred:
-        return false;
     }
     return false;
 }
@@ -5083,20 +5245,52 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMater
     if (status == RenderMaterialGraphNodeSupport::Unsupported) {
         return RenderMaterialGraphNodeSupport::Unsupported;
     }
+    if (path == RenderMaterialGraphRenderPath::GpuDeferred) {
+        switch (kind) {
+        case RenderMaterialGraphNodeKind::SceneDepth:
+        case RenderMaterialGraphNodeKind::SceneColor:
+        case RenderMaterialGraphNodeKind::SceneTexture:
+        case RenderMaterialGraphNodeKind::DepthFade:
+            return RenderMaterialGraphNodeSupport::Unsupported;
+        default:
+            break;
+        }
+    }
     if (!IsRenderMaterialGraphRenderPathProduction(path)) {
         return RenderMaterialGraphNodeSupport::FallbackOnly;
     }
     return status;
 }
 
+[[nodiscard]] static bool IsDeferredSceneBindingNode(RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == RenderMaterialGraphNodeKind::SceneDepth ||
+        kind == RenderMaterialGraphNodeKind::SceneColor ||
+        kind == RenderMaterialGraphNodeKind::SceneTexture ||
+        kind == RenderMaterialGraphNodeKind::DepthFade;
+}
+
+[[nodiscard]] static RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForDocumentPath(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphNodeKind kind,
+    RenderMaterialGraphRenderPath path) noexcept {
+    const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(kind, path);
+    if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported &&
+        path == RenderMaterialGraphRenderPath::GpuDeferred &&
+        IsDeferredSceneBindingNode(kind) &&
+        IsRenderMaterialGraphBlendModeTransparent(ParseRenderMaterialGraphBlendMode(graph.blendMode))) {
+        return RenderMaterialGraphNodeSupportStatus(kind);
+    }
+    return pathSupport;
+}
+
 static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
-        return "Requires the transparent pass scene-depth binding; covered by MAT-80/MAT-68 GPU readback.";
+        return "Requires the transparent pass scene-depth binding; GpuDeferred accepts transparent materials and rejects opaque/masked GBuffer geometry.";
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
-        return "Requires the scene-color snapshot binding; covered by scene-texture graph tests.";
+        return "Requires the transparent pass scene-color snapshot binding; GpuDeferred accepts transparent materials and rejects opaque/masked GBuffer geometry.";
     case RenderMaterialGraphNodeKind::CustomCode:
         return "Production when custom pin declarations validate; invalid code reports shader-generation diagnostics.";
     case RenderMaterialGraphNodeKind::MaterialFunctionCall:
@@ -5108,7 +5302,7 @@ static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialG
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         return "Baked into source/variant identity through RenderMaterialGraphBuildContext.";
     default:
-        return "Production on GpuForward/Preview; GpuDeferred is explicitly FallbackOnly until a real GBuffer writer exists.";
+        return "Production on GpuForward/Preview/GpuDeferred; deferred requires the GBuffer graph artifact, MRT writer and deferred lighting pass.";
     }
 }
 
@@ -5217,11 +5411,13 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::DynamicParameter,
         RenderMaterialGraphNodeKind::VertexColor,
         RenderMaterialGraphNodeKind::ScreenPosition,
+        RenderMaterialGraphNodeKind::PixelPosition,
         RenderMaterialGraphNodeKind::LocalPosition,
         RenderMaterialGraphNodeKind::ObjectPosition,
         RenderMaterialGraphNodeKind::WorldPosition,
         RenderMaterialGraphNodeKind::PerInstanceRandom,
         RenderMaterialGraphNodeKind::PerInstanceFadeAmount,
+        RenderMaterialGraphNodeKind::DistanceCullFade,
         RenderMaterialGraphNodeKind::PerInstanceCustomData,
         RenderMaterialGraphNodeKind::ObjectRadius,
         RenderMaterialGraphNodeKind::ObjectBounds,
@@ -5258,6 +5454,8 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ViewSize,
         RenderMaterialGraphNodeKind::TwoSidedSign,
         RenderMaterialGraphNodeKind::SceneDepth,
+        RenderMaterialGraphNodeKind::PixelDepth,
+        RenderMaterialGraphNodeKind::CameraDepthFade,
         RenderMaterialGraphNodeKind::SceneColor,
         RenderMaterialGraphNodeKind::SceneTexture,
         RenderMaterialGraphNodeKind::DepthFade,
@@ -5882,31 +6080,34 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         return result;
     }
 
-    // MAT-34: only the Surface domain is implemented. A graph requesting another domain falls back to a
-    // Surface shader with a warning so it still renders (no false claim of e.g. post-process/decal output).
+    // MAT-34: only the Surface domain has a production graph pipeline. Declared domains without a runtime
+    // pass fail compilation instead of silently compiling as Surface.
     const RenderMaterialDomain requestedDomain = ParseRenderMaterialDomain(graph.materialDomain);
     if (!IsRenderMaterialDomainProduction(requestedDomain)) {
         result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
             .kind = RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain,
             .message = "Material domain '" + std::string{ RenderMaterialDomainName(requestedDomain) } +
-                "' is declared but not implemented; compiling as the Surface domain (fallback).",
+                "' is declared but has no production graph runtime pass.",
         });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
     }
 
-    // MAT-37: resolve the surface shading model. Unlit and DefaultLit are implemented; any other model
-    // falls back to DefaultLit with a diagnostic so a graph never silently shades with an unimplemented model.
+    // MAT-37: resolve the surface shading model. Production models have real fragment-wrapper branches;
+    // declared-but-unimplemented models fail here so the runtime never silently shades them as DefaultLit.
     const RenderMaterialShadingModel requestedShadingModel = ParseRenderMaterialShadingModel(graph.shadingModel);
-    RenderMaterialShadingModel resolvedShadingModel = requestedShadingModel;
     if (!IsRenderMaterialShadingModelProduction(requestedShadingModel)) {
-        resolvedShadingModel = RenderMaterialShadingModel::DefaultLit;
         result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
             .kind = RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel,
             .message = "Shading model '" + std::string{ RenderMaterialShadingModelName(requestedShadingModel) } +
-                "' is declared but not implemented; shading as DefaultLit (fallback).",
+                "' is declared but has no production graph runtime branch.",
         });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
     }
+    const RenderMaterialShadingModel resolvedShadingModel = requestedShadingModel;
 
     // MAT-38: resolve the blend mode. All seven modes are implemented, so there is no fallback; the value
     // selects the masked clip in the wrapper and the transparent cook/scene blend equation downstream.
@@ -6105,6 +6306,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             usesPerInstanceRandom = true;
             break;
         case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+        case RenderMaterialGraphNodeKind::DistanceCullFade:
             usesPerInstanceFadeAmount = true;
             break;
         case RenderMaterialGraphNodeKind::PerInstanceCustomData:
@@ -6423,7 +6625,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         bentNormalExpr = compileOutput("bentNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
         occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
         emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
-        alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
+        alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "1.0");
         alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
         // MAT-35: advanced fragment-domain surface outputs. They extend the surface contract; advanced shading
         // models (#24) consume them, the base forward lighting uses the core PBR subset.
@@ -6694,7 +6896,7 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 "Material graph contains an unsupported node kind.");
             continue;
         }
-        const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(node.kind, renderPath);
+        const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForDocumentPath(graph, node.kind, renderPath);
         if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported) {
             AddGraphDiagnostic(
                 diagnostics,
@@ -7052,7 +7254,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
         return pin == "es3" || pin == "sm5" || pin == "sm6";
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
-        return pin == "forward" || pin == "deferred";
+        return pin == "forward" || pin == "forwardPlus" || pin == "deferred";
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         return pin == "vertex" || pin == "fragment";
     case RenderMaterialGraphNodeKind::Panner:
@@ -7066,6 +7268,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "axis" || pin == "angle" || pin == "position";
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "fadeDistance";
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        return pin == "fadeLength" || pin == "fadeOffset";
     case RenderMaterialGraphNodeKind::Reroute:
     case RenderMaterialGraphNodeKind::CompositeInput:
     case RenderMaterialGraphNodeKind::CompositeOutput:
@@ -7195,11 +7399,13 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -7296,7 +7502,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "xyz";
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
-        return pin == "rgba";
+        return pin == "rgba" || pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
     case RenderMaterialGraphNodeKind::TextureSampleVolume:
@@ -7310,6 +7516,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "value" || pin == "scalar" || pin == "xyz" || pin == "rgba" ||
             pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         return pin == "xy";
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -7329,6 +7536,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -7388,6 +7596,8 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
     case RenderMaterialGraphNodeKind::CustomCode:
@@ -7608,7 +7818,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
-        if (pin == "forward" || pin == "deferred") return RenderMaterialGraphPinType::Float4;
+        if (pin == "forward" || pin == "forwardPlus" || pin == "deferred") return RenderMaterialGraphPinType::Float4;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
@@ -7651,7 +7861,12 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::TwoSidedSign:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        if (outputPin) return pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+        if (pin == "fadeLength" || pin == "fadeOffset") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
         if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
@@ -7717,7 +7932,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return outputPin && pin == "xyz" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
-        return outputPin && pin == "rgba" ? RenderMaterialGraphPinType::Color : RenderMaterialGraphPinType::Unknown;
+        if (!outputPin) return RenderMaterialGraphPinType::Unknown;
+        if (pin == "rgba") return RenderMaterialGraphPinType::Color;
+        if (pin == "r" || pin == "g" || pin == "b" || pin == "a") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         if (!outputPin) return RenderMaterialGraphPinType::Unknown;
         if (pin == "scalar" || pin == "r" || pin == "g" || pin == "b" || pin == "a") return RenderMaterialGraphPinType::Float;
@@ -7865,6 +8083,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
@@ -7885,6 +8104,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         return outputPin && pin == "xy" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -8093,8 +8313,17 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
     case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 3U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Power:
@@ -8249,6 +8478,10 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
         if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
         return 0U;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
@@ -8274,6 +8507,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -8403,8 +8637,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         return 0U;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         if (!outputPin && pin == "forward") return PinId(nodeKind, direction, 1U);
-        if (!outputPin && pin == "deferred") return PinId(nodeKind, direction, 2U);
-        if (outputPin && pin == "result") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "forwardPlus") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "deferred") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 4U);
         return 0U;
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         if (!outputPin && pin == "vertex") return PinId(nodeKind, direction, 1U);
@@ -8447,7 +8682,13 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        if (!outputPin && pin == "fadeLength") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "fadeOffset") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 3U);
         return 0U;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -8493,6 +8734,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
         return 0U;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         if (outputPin && pin == "xy") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::LocalPosition:
@@ -8651,11 +8893,13 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -8778,7 +9022,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
         permutationKeys.push_back(RenderMaterialTypePermutationKey{
             .name = "shadingPath",
             .defaultValue = std::string{ RenderMaterialGraphShadingPathPinName(context.shadingPath) },
-            .allowedValues = std::vector<std::string>{ "forward", "deferred" },
+            .allowedValues = std::vector<std::string>{ "forward", "forwardPlus", "deferred" },
         });
     }
     if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShaderStageSwitch)) {
@@ -8801,6 +9045,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
         .defaultCullMode = RenderMaterialCullMode::BackFace,
         .renderPasses = std::vector<RenderMaterialTypeRenderPass>{
             RenderMaterialTypeRenderPass{ .name = "BaseOpaque", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
+            RenderMaterialTypeRenderPass{ .name = "GBuffer", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
             RenderMaterialTypeRenderPass{ .name = "ShadowDepth", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_shadow_instanced", .fragmentShader = "fs_mesh_shadow_instanced" },
             RenderMaterialTypeRenderPass{ .name = "BaseTransparent", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
         },

@@ -13,10 +13,10 @@ uniform vec4 u_materialEmissive;
 uniform vec4 u_materialFlags;
 uniform vec4 u_materialUvTransform;
 uniform vec4 u_cameraPosition;
-uniform vec4 u_lightDirKind[4];
-uniform vec4 u_lightPositionRange[4];
-uniform vec4 u_lightColorIntensity[4];
-uniform vec4 u_lightSpot[4];
+uniform vec4 u_lightDirKind[32];
+uniform vec4 u_lightPositionRange[32];
+uniform vec4 u_lightColorIntensity[32];
+uniform vec4 u_lightSpot[32];
 uniform vec4 u_lightParams;
 uniform vec4 u_ambientColor;
 uniform vec4 u_environmentZenith;
@@ -180,7 +180,7 @@ void main()
         shadowVisible = SampleShadowVisibility(shadowCoord);
     }
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
-    for (int lightIndex = 0; lightIndex < 4; ++lightIndex) {
+    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
         if (float(lightIndex) < u_lightParams.x) {
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, occlusion);
             lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;

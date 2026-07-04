@@ -5,6 +5,7 @@ add_executable(kb_editor WIN32
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
     src/app/EditorApplicationLifecycle.cpp
+    src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
@@ -273,6 +274,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorCrashBreadcrumbs.hpp
     src/private/app/EditorEditCommandPolicy.hpp
     src/private/app/EditorEditCommandInputHandler.hpp
     src/private/app/EditorAssetBrowserContextCommandExecutor.hpp
@@ -546,9 +548,11 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
     src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
     src/private/scene/material_preview/EditorMaterialGraphCookService.hpp
+    src/private/scene/material_preview/EditorMaterialNodePreviewBuilder.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
     src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewSettings.hpp
     src/private/scene/material_preview/EditorMaterialPreviewTelemetry.hpp
     src/private/scene/transform_edit/EditorSceneTransformChange.hpp
     src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp

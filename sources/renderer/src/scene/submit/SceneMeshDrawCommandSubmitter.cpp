@@ -1,10 +1,12 @@
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <span>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -62,17 +64,91 @@ void EmitGraphProgramDiagnostic(
     });
 }
 
+void EmitProgramUnavailableDiagnostic(
+    SceneRenderDiagnostics* diagnostics,
+    const MeshDrawCommand& command,
+    const SceneMeshPassProgramResolution& resolution) {
+    if (diagnostics == nullptr) {
+        return;
+    }
+    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+        .severity = SceneRenderDiagnosticSeverity::Error,
+        .kind = SceneRenderDiagnosticKind::GraphMaterialProgramUnavailable,
+        .entityId = command.instances.empty() ? 0U : command.instances.front().entityId,
+        .meshAssetId = command.meshAssetId,
+        .materialAssetId = command.materialAssetId,
+        .instanceCount = static_cast<std::uint32_t>(command.instances.size()),
+        .materialTypeId = resolution.key.materialTypeId,
+        .materialTypeVersion = resolution.key.materialTypeVersion,
+        .graphSourceHash = resolution.key.graphSourceHash,
+        .graphVariantKey = resolution.key.variantKey,
+        .pipelineStateKey = resolution.key.pipelineStateKey,
+        .materialProgramIdentity = resolution.materialProgramIdentity,
+        .materialProgramBackend = resolution.key.backend,
+        .materialProgramHandle = resolution.program.idx,
+        .materialProgramStatus = resolution.status,
+    });
+}
+
 [[nodiscard]] bool IsSelectionPass(MeshPassType pass) noexcept {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
+}
+
+[[nodiscard]] const char* MeshPassName(MeshPassType pass) noexcept {
+    switch (pass) {
+    case MeshPassType::Depth:
+        return "Depth";
+    case MeshPassType::BaseOpaque:
+        return "BaseOpaque";
+    case MeshPassType::GBuffer:
+        return "GBuffer";
+    case MeshPassType::BaseTransparent:
+        return "BaseTransparent";
+    case MeshPassType::ShadowDepth:
+        return "ShadowDepth";
+    case MeshPassType::SelectionId:
+        return "SelectionId";
+    case MeshPassType::EditorSelection:
+        return "EditorSelection";
+    case MeshPassType::Gizmo:
+        return "Gizmo";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::ProgramHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::VertexBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::IndexBufferHandle handle) noexcept {
+    return handle.idx;
 }
 
 } // namespace
 
 void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc& desc) {
+    {
+        std::ostringstream message;
+        message << "Submit begin pass=" << MeshPassName(desc.pass)
+                << " viewId=" << desc.viewId
+                << " commandCount=" << desc.commands.size();
+        WriteRendererDebugLog("mesh_draw", message.str());
+    }
     for (const MeshDrawCommand& command : desc.commands) {
         if (command.meshResource == nullptr ||
             !bgfx::isValid(command.meshResource->vertexBuffer) ||
             !bgfx::isValid(command.meshResource->indexBuffer)) {
+            std::ostringstream message;
+            message << "Skip missing mesh resource pass=" << MeshPassName(desc.pass)
+                    << " meshAsset=" << command.meshAssetId
+                    << " materialAsset=" << command.materialAssetId
+                    << " instances=" << command.instances.size()
+                    << " meshResource=" << (command.meshResource != nullptr ? "true" : "false");
+            WriteRendererDebugLog("mesh_draw", message.str());
             desc.stats.missingMeshResourceCount += static_cast<std::uint32_t>(command.instances.size());
             EmitGroupDiagnostics(
                 desc.diagnostics,
@@ -86,11 +162,25 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
         const std::uint32_t instanceCount = static_cast<std::uint32_t>(command.instances.size());
         const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
         if (availableInstances == 0U) {
+            std::ostringstream message;
+            message << "Drop all instances pass=" << MeshPassName(desc.pass)
+                    << " meshAsset=" << command.meshAssetId
+                    << " materialAsset=" << command.materialAssetId
+                    << " requested=" << instanceCount
+                    << " stride=" << RenderInstanceBuffer::Stride();
+            WriteRendererDebugLog("mesh_draw", message.str());
             desc.stats.droppedInstanceCount += instanceCount;
             EmitGroupDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, command, 0U, instanceCount);
             continue;
         }
         if (availableInstances < instanceCount) {
+            std::ostringstream message;
+            message << "Drop partial instances pass=" << MeshPassName(desc.pass)
+                    << " meshAsset=" << command.meshAssetId
+                    << " materialAsset=" << command.materialAssetId
+                    << " requested=" << instanceCount
+                    << " available=" << availableInstances;
+            WriteRendererDebugLog("mesh_draw", message.str());
             desc.stats.droppedInstanceCount += instanceCount - availableInstances;
             EmitGroupDiagnostics(
                 desc.diagnostics,
@@ -127,7 +217,51 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .sceneDepthTexture = desc.sceneDepthTexture,
             .sceneColorTexture = desc.sceneColorTexture,
         });
-        EmitGraphProgramDiagnostic(desc.diagnostics, command, desc.passResources.LastProgramResolution());
+        const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
+        EmitGraphProgramDiagnostic(desc.diagnostics, command, resolution);
+        if (!bgfx::isValid(program)) {
+            std::ostringstream message;
+            message << "Skip invalid program pass=" << MeshPassName(desc.pass)
+                    << " meshAsset=" << command.meshAssetId
+                    << " materialAsset=" << command.materialAssetId
+                    << " instances=" << availableInstances
+                    << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
+                    << " fallback=" << (resolution.fellBackToBuiltin ? "true" : "false")
+                    << " status=" << static_cast<int>(resolution.status)
+                    << " keyHash=" << resolution.materialProgramIdentity
+                    << " backend=" << resolution.key.backend
+                    << " graphHash=" << resolution.key.graphSourceHash
+                    << " variant=" << resolution.key.variantKey
+                    << " pipeline=" << resolution.key.pipelineStateKey;
+            WriteRendererDebugLog("mesh_draw", message.str());
+            EmitProgramUnavailableDiagnostic(desc.diagnostics, command, resolution);
+            desc.stats.missingMaterialResourceCount += availableInstances;
+            continue;
+        }
+        {
+            std::ostringstream message;
+            message << "Draw submit pass=" << MeshPassName(desc.pass)
+                    << " viewId=" << desc.viewId
+                    << " meshAsset=" << command.meshAssetId
+                    << " materialAsset=" << command.materialAssetId
+                    << " instances=" << availableInstances << '/' << instanceCount
+                    << " indexStart=" << command.indexStart
+                    << " indexCount=" << command.indexCount
+                    << " vb=" << HandleValue(command.meshResource->vertexBuffer)
+                    << " ib=" << HandleValue(command.meshResource->indexBuffer)
+                    << " program=" << HandleValue(program)
+                    << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
+                    << " fallback=" << (resolution.fellBackToBuiltin ? "true" : "false")
+                    << " status=" << static_cast<int>(resolution.status)
+                    << " alphaMode=" << (command.materialResource != nullptr ? static_cast<int>(command.materialResource->alphaMode) : -1)
+                    << " doubleSidedMesh=" << (command.meshResource->doubleSided ? "true" : "false")
+                    << " doubleSidedMaterial=" << (command.materialResource != nullptr && command.materialResource->doubleSided ? "true" : "false")
+                    << " state=0x" << std::hex << command.state << std::dec
+                    << " keyHash=" << resolution.materialProgramIdentity
+                    << " graphHash=" << resolution.key.graphSourceHash
+                    << " backend=" << resolution.key.backend;
+            WriteRendererDebugLog("mesh_draw", message.str());
+        }
         bgfx::setState(command.state);
         bgfx::submit(desc.viewId, program);
 
@@ -139,6 +273,17 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             ++desc.stats.submittedShadowDrawCallCount;
         }
         desc.stats.instanceUploadBytes += static_cast<std::uint64_t>(availableInstances) * RenderInstanceBuffer::Stride();
+    }
+    {
+        std::ostringstream message;
+        message << "Submit end pass=" << MeshPassName(desc.pass)
+                << " submittedMeshes=" << desc.stats.submittedMeshCount
+                << " submittedDrawCalls=" << desc.stats.submittedDrawCallCount
+                << " missingMeshResource=" << desc.stats.missingMeshResourceCount
+                << " missingMaterialResource=" << desc.stats.missingMaterialResourceCount
+                << " dropped=" << desc.stats.droppedInstanceCount
+                << " uploadBytes=" << desc.stats.instanceUploadBytes;
+        WriteRendererDebugLog("mesh_draw", message.str());
     }
 }
 

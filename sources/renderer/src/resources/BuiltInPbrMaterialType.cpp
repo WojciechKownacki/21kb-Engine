@@ -400,8 +400,9 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
 } // namespace
 
 const RenderMaterialTypeDocument& GetBuiltInPbrMaterialTypeDocument() noexcept {
-    static const std::array<RenderMaterialTypeRenderPass, 5> renderPasses{{
+    static const std::array<RenderMaterialTypeRenderPass, 6> renderPasses{{
         { .name = "BaseOpaque", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
+        { .name = "GBuffer", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_gbuffer_instanced" },
         { .name = "ShadowDepth", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_shadow_instanced", .fragmentShader = "fs_mesh_shadow_instanced" },
         { .name = "SelectionId", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
         { .name = "EditorSelection", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
@@ -414,9 +415,10 @@ const RenderMaterialTypeDocument& GetBuiltInPbrMaterialTypeDocument() noexcept {
         { .name = "textureSet", .defaultValue = "mvp-pbr", .allowedValues = std::vector<std::string>{ "mvp-pbr" } },
     }};
 
-    static const std::array<RenderMaterialTypeRequiredResource, 9> requiredResources{{
+    static const std::array<RenderMaterialTypeRequiredResource, 10> requiredResources{{
         { .name = "vs_mesh_instanced", .kind = "vertexShader" },
         { .name = "fs_mesh_instanced", .kind = "fragmentShader" },
+        { .name = "fs_mesh_gbuffer_instanced", .kind = "fragmentShader" },
         { .name = "vs_mesh_shadow_instanced", .kind = "vertexShader" },
         { .name = "fs_mesh_shadow_instanced", .kind = "fragmentShader" },
         { .name = "albedoTexture", .kind = "texture", .required = false },

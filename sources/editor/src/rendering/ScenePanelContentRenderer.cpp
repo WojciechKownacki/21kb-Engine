@@ -1,6 +1,7 @@
 #include "rendering/ScenePanelContentRenderer.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
@@ -22,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <sstream>
 #include <vector>
 
 namespace kb::editor {
@@ -31,6 +33,38 @@ constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
 constexpr std::size_t kEcsOverlayTopSystemCount = 4U;
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "1" : "0";
+}
+
+[[nodiscard]] const char* AntiAliasingModeName(EditorAntiAliasingMode mode) noexcept {
+    switch (mode) {
+    case EditorAntiAliasingMode::None:
+        return "None";
+    case EditorAntiAliasingMode::Fxaa:
+        return "FXAA";
+    case EditorAntiAliasingMode::Taa:
+        return "TAA";
+    case EditorAntiAliasingMode::Msaa:
+        return "MSAA";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] const char* LightingPathName(kb::render::SceneRenderLightingPath path) noexcept {
+    switch (path) {
+    case kb::render::SceneRenderLightingPath::Forward:
+        return "Forward";
+    case kb::render::SceneRenderLightingPath::ClusteredForwardPlus:
+        return "ForwardPlus";
+    case kb::render::SceneRenderLightingPath::Deferred:
+        return "Deferred";
+    case kb::render::SceneRenderLightingPath::VisibilityBuffer:
+        return "VisibilityBuffer";
+    }
+    return "Unknown";
+}
 
 struct SceneViewportRenderProfileDesc {
     kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
@@ -166,8 +200,26 @@ struct SceneViewportRenderProfileDesc {
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(const SceneViewportRenderProfileDesc& renderProfile) noexcept {
+[[nodiscard]] kb::render::SceneRenderLightingPath RenderLightingPath(kb::project::ProjectSceneLightingPath path) noexcept {
+    switch (path) {
+    case kb::project::ProjectSceneLightingPath::Deferred:
+        return kb::render::SceneRenderLightingPath::Deferred;
+    case kb::project::ProjectSceneLightingPath::ForwardPlus:
+        return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
+    case kb::project::ProjectSceneLightingPath::Forward:
+    default:
+        return kb::render::SceneRenderLightingPath::Forward;
+    }
+}
+
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(
+    const SceneViewportRenderProfileDesc& renderProfile,
+    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
+    lighting.lightingPath = RenderLightingPath(projectLightingPath);
+    if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
+        lighting.maxForwardLights = kb::render::kMaxSceneForwardPlusLights;
+    }
     if (!renderProfile.editorStudioLightEnabled) {
         return lighting;
     }
@@ -408,10 +460,21 @@ struct LightWireframeBasis {
     static_cast<void>(panelKind);
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
-    const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
+    const bool msaaMode = renderBackendSettings.MsaaSamples() > 0U;
+    const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled() && !msaaMode;
     kb::render::ScenePostProcessSettings postProcessSettings{};
+    postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled();
+    postProcessSettings.temporalAntiAliasingEnabled = renderBackendSettings.TemporalAntiAliasingEnabled();
+    postProcessSettings.temporalJitterEnabled = renderBackendSettings.TemporalAntiAliasingEnabled();
+    postProcessSettings.bloomEnabled = renderBackendSettings.BloomEnabled();
     postProcessSettings.outputTransform.autoExposure.enabled = renderProfile.autoExposureEnabled;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled = renderProfile.autoExposureEnabled;
+    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.Project().sceneLightingPath);
+    const bool msaaForcesForward = msaaMode && lightingConfig.lightingPath == kb::render::SceneRenderLightingPath::Deferred;
+    if (msaaForcesForward) {
+        lightingConfig.lightingPath = kb::render::SceneRenderLightingPath::Forward;
+        lightingConfig.maxForwardLights = kb::render::kMaxSceneForwardLights;
+    }
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
@@ -428,6 +491,26 @@ struct LightWireframeBasis {
             gizmo.draggedAxis = sceneContext.Gizmo().draggedAxis;
             gizmo.mode = static_cast<std::uint8_t>(sceneContext.Gizmo().toolMode);
         }
+    }
+
+    {
+        std::ostringstream message;
+        message << "BuildViewportPresentSettings panelId=" << panelId
+                << " uiMode=" << AntiAliasingModeName(renderBackendSettings.AntiAliasingMode())
+                << " uiFxaa=" << BoolText(renderBackendSettings.FxaaEnabled())
+                << " uiTaa=" << BoolText(renderBackendSettings.TemporalAntiAliasingEnabled())
+                << " uiMsaaSamples=" << static_cast<unsigned>(renderBackendSettings.MsaaSamples())
+                << " postProcessEnabled=" << BoolText(postProcessEnabled)
+                << " msaaForcesPostProcessOff=" << BoolText(msaaMode && renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled())
+                << " lightingPath=" << LightingPathName(lightingConfig.lightingPath)
+                << " msaaForcesForward=" << BoolText(msaaForcesForward)
+                << " overrideFxaa=" << BoolText(postProcessSettings.fxaaEnabled)
+                << " overrideTaa=" << BoolText(postProcessSettings.temporalAntiAliasingEnabled)
+                << " overrideJitter=" << BoolText(postProcessSettings.temporalJitterEnabled)
+                << " overrideBloom=" << BoolText(postProcessSettings.bloomEnabled)
+                << " autoExposure=" << BoolText(postProcessSettings.outputTransform.autoExposure.enabled)
+                << " renderSize=" << renderWidth << 'x' << renderHeight;
+        EditorCrashBreadcrumbs::Write("aa_trace", message.str());
     }
 
     return EditorSceneBgfxViewport::PresentSettings{
@@ -448,8 +531,9 @@ struct LightWireframeBasis {
         .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
-        .lightingConfig = BuildViewportLightingConfig(renderProfile),
+        .lightingConfig = lightingConfig,
         .postProcessSettings = postProcessSettings,
+        .msaaSamples = renderBackendSettings.MsaaSamples(),
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,
         .selectionMaskEnabled = postProcessEnabled && renderProfile.selectionMaskEnabled,

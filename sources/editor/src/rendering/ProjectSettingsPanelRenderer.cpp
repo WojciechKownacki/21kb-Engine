@@ -137,6 +137,11 @@ struct TooltipContent {
             "bgfx Backend",
             "Chooses the rendering backend for the editor viewport. Changing it recreates renderer resources.",
         };
+    case ProjectSettingsTooltipKind::LightingPath:
+        return TooltipContent{
+            "Lighting Path",
+            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass.",
+        };
     case ProjectSettingsTooltipKind::PostProcess:
         return TooltipContent{
             "Post FX",
@@ -242,7 +247,11 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
     }
 }
 
-void DrawGraphicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorRenderBackendSettings& renderBackendSettings) {
+void DrawGraphicsPage(
+    HDC dc,
+    const ProjectSettingsPanelLayoutRects& rects,
+    const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings) {
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, RGB(34, 37, 42));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "GRAPHICS", RGB(150, 158, 168), 11, FW_SEMIBOLD);
 
@@ -251,6 +260,12 @@ void DrawGraphicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     DrawOptionButton(dc, rects.backendAutoButton, "Auto", backend == EditorRenderBackend::Auto);
     DrawOptionButton(dc, rects.backendDx12Button, "DX12", backend == EditorRenderBackend::DirectX12);
     DrawOptionButton(dc, rects.backendVulkanButton, "Vulkan", backend == EditorRenderBackend::Vulkan);
+
+    DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, "Lighting Path", RGB(196, 205, 214), 12);
+    const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.Project().sceneLightingPath;
+    DrawOptionButton(dc, rects.lightingPathForwardButton, "Forward", lightingPath == kb::project::ProjectSceneLightingPath::Forward);
+    DrawOptionButton(dc, rects.lightingPathForwardPlusButton, "Forward+", lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
+    DrawOptionButton(dc, rects.lightingPathDeferredButton, "Deferred", lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
 
     DrawText(dc, rects.postProcessLabel, "Post FX", RGB(196, 205, 214), 12);
     DrawCheckbox(dc, rects.postProcessCheckbox, renderBackendSettings.PostProcessEnabled());
@@ -265,6 +280,8 @@ void DrawGraphicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     DrawOptionButton(dc, rects.msaaOffButton, "Off", msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
     DrawOptionButton(dc, rects.msaa2xButton, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
     DrawOptionButton(dc, rects.msaa4xButton, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
+    DrawOptionButton(dc, rects.msaa8xButton, "8x", msaaActive && renderBackendSettings.MsaaSamples() == 8U, msaaActive);
+    DrawOptionButton(dc, rects.msaa16xButton, "16x", msaaActive && renderBackendSettings.MsaaSamples() == 16U, msaaActive);
     DrawText(dc, rects.bloomLabel, "Bloom", RGB(196, 205, 214), 12);
     DrawCheckbox(dc, rects.bloomCheckbox, renderBackendSettings.BloomEnabled());
     DrawText(dc, rects.shadowsLabel, "Shadows", RGB(196, 205, 214), 12);
@@ -301,7 +318,7 @@ void ProjectSettingsPanelRenderer::Paint(
         DrawInputsPage(dc, rects, sceneContext);
         break;
     case ProjectSettingsCategory::Graphics:
-        DrawGraphicsPage(dc, rects, renderBackendSettings);
+        DrawGraphicsPage(dc, rects, sceneContext, renderBackendSettings);
         break;
     case ProjectSettingsCategory::Count:
     default:
@@ -330,6 +347,12 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
             }
         }
+        for (int index = 0; index < 3; ++index) {
+            const RECT button = ProjectSettingsPanelLayout::LightingPathOptionButton(rects, index);
+            if (PointInRect(button, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = index, .rect = button };
+            }
+        }
         for (int index = 0; index < 5; ++index) {
             const RECT checkbox = ProjectSettingsPanelLayout::GraphicsToggleCheckbox(rects, index);
             const RECT label = ProjectSettingsPanelLayout::GraphicsToggleLabel(rects, index);
@@ -343,7 +366,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = index, .rect = button };
             }
         }
-        for (int index = 0; index < 3; ++index) {
+        for (int index = 0; index < 5; ++index) {
             const RECT button = ProjectSettingsPanelLayout::MsaaOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = index, .rect = button };
@@ -398,6 +421,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
     if (category == ProjectSettingsCategory::Graphics) {
         if (PointInRect(rects.backendLabel, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = -1, .rect = rects.backendLabel };
+        }
+        if (PointInRect(rects.lightingPathLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = -1, .rect = rects.lightingPathLabel };
         }
         if (PointInRect(rects.antiAliasingLabel, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = -1, .rect = rects.antiAliasingLabel };

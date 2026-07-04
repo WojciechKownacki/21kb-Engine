@@ -20,6 +20,8 @@
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
+#include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -261,6 +263,16 @@ public:
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
     [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
+    [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& MaterialPreviewPrimitivePolicy() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy);
+    [[nodiscard]] bool CycleMaterialPreviewPrimitive();
+    [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
+    [[nodiscard]] bool CycleMaterialPreviewSceneLightingPreset();
+    [[nodiscard]] bool CycleMaterialPreviewQualityLevel();
+    [[nodiscard]] bool MaterialPreviewNodePreviewEnabled() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewNodePreviewEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool ToggleMaterialPreviewNodePreview() noexcept;
     // Per-project graph shader cache root shared by the cook service and every renderer (preview
     // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
@@ -290,7 +302,14 @@ public:
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta) noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept;
     void SetMaterialGraphCanvasViewport(int width, int height) noexcept;
+    [[nodiscard]] bool IsMaterialEditorFindFocused() const noexcept;
+    void FocusMaterialEditorFind(bool focused) noexcept;
     void SetMaterialEditorFindQuery(std::string query);
+    void AppendMaterialEditorFindText(wchar_t character);
+    void InsertMaterialEditorFindText(std::string_view text);
+    void BackspaceMaterialEditorFind();
+    void ClearMaterialEditorFind();
+    [[nodiscard]] bool FocusFirstMaterialEditorFindResult();
     [[nodiscard]] bool FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight);
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
@@ -298,6 +317,7 @@ public:
     [[nodiscard]] bool SelectMaterialGraphDownstream();
     [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
     [[nodiscard]] bool DistributeSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphDistributeAxis axis);
+    [[nodiscard]] bool PromoteSelectedMaterialGraphNodeToParameter(kb::assets::AssetId id);
     [[nodiscard]] bool BeginMaterialGraphNodeDrag(kb::assets::AssetId assetId, std::uint32_t nodeId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphNode(int x, int y);
     [[nodiscard]] bool EndMaterialGraphNodeDrag();
@@ -341,6 +361,11 @@ public:
     [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
     [[nodiscard]] bool SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId);
     [[nodiscard]] bool SetMaterialGraphConstantColorValue(kb::assets::AssetId id, std::uint32_t nodeId, const std::array<float, 4U>& color);
+    [[nodiscard]] bool SetMaterialGraphNodeColorPropertyValue(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        std::string_view propertyId,
+        const std::array<float, 4U>& color);
     [[nodiscard]] bool SetMaterialGraphNodeEnumValue(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view propertyId, std::string_view value);
     void ToggleMaterialGraphNodeEnumDropdown(std::uint32_t nodeId, std::string propertyId);
     void CloseMaterialGraphNodeEnumDropdown() noexcept;
@@ -435,6 +460,21 @@ public:
         kb::assets::AssetId id,
         std::uint32_t nodeId,
         std::string_view valueText);
+    [[nodiscard]] bool SetMaterialGraphNodeTextProperty(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        std::string_view propertyId,
+        std::string_view value);
+    [[nodiscard]] bool SetMaterialGraphNodeDisplayName(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view displayName);
+    [[nodiscard]] bool BeginMaterialGraphNodeRenameEdit(kb::assets::AssetId id, std::uint32_t nodeId);
+    [[nodiscard]] bool IsMaterialGraphNodeRenameEditing() const noexcept;
+    void AppendMaterialGraphNodeRenameEditText(wchar_t character);
+    void InsertMaterialGraphNodeRenameEditText(std::string_view text);
+    void BackspaceMaterialGraphNodeRenameEdit();
+    void ClearMaterialGraphNodeRenameEditText();
+    void SelectAllMaterialGraphNodeRenameEditText() noexcept;
+    [[nodiscard]] bool CommitMaterialGraphNodeRenameEdit();
+    void CancelMaterialGraphNodeRenameEdit() noexcept;
     [[nodiscard]] bool BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId);
     [[nodiscard]] bool IsMaterialGraphConstantInlineEditing() const noexcept;
     [[nodiscard]] bool BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x);
@@ -470,6 +510,7 @@ public:
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
+    [[nodiscard]] bool SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
     [[nodiscard]] std::string ProjectPluginBinaryPath(std::string_view pluginId) const;
@@ -542,6 +583,7 @@ private:
     // MAT-84: cook every graph-backed material referenced by scene meshes (even unopened ones) so
     // the scene/game render their real GPU graph program instead of the CPU fallback.
     void CookSceneGraphMaterials();
+    void RequestOpenMaterialSceneGraphCook();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
@@ -576,6 +618,8 @@ private:
     std::optional<kb::assets::AssetMetadata> materialRuntimePreviewSourceMetadata_;
     std::filesystem::path materialRuntimePreviewPath_;
     std::uint64_t materialRuntimePreviewContentHash_ = 0U;
+    std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
+    bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;

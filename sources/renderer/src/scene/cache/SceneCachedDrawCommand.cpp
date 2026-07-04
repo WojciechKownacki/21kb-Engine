@@ -24,6 +24,7 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
             .pass = MeshPassTypeName(desc.pass),
             .backend = 0U,
             .pipelineStateKey = desc.materialResource->graphProgram.pipelineStateKey,
+            .requiresGeneratedVertexShader = desc.materialResource->graphProgram.requiresGeneratedVertexShader,
             .graphProgram = true,
         };
     }

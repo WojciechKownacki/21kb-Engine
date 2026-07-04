@@ -165,6 +165,10 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     LayerStack,
     CollectionParameter,
     ConstantBool,
+    PixelDepth,
+    CameraDepthFade,
+    DistanceCullFade,
+    PixelPosition,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {
@@ -270,6 +274,7 @@ enum class RenderMaterialGraphFeatureLevel : std::uint8_t {
 
 enum class RenderMaterialGraphShadingPath : std::uint8_t {
     Forward,
+    ForwardPlus,
     Deferred,
 };
 
@@ -608,7 +613,7 @@ struct RenderMaterialGraphReflection {
     bool hasThinTranslucentOutput = false;
     bool hasSingleLayerWaterOutput = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
-    // key (Unlit and DefaultLit produce different wrappers). Non-production models fall back to DefaultLit.
+    // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
     // MAT-38: resolved blend mode. Masked makes the fragment wrapper clip on alphaClipThreshold; the
     // transparent modes select the BaseTransparent cook and the scene blend equation, and contribute to
@@ -729,6 +734,7 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies = {},
     std::uint64_t shaderIncludeHash = 0U);
 [[nodiscard]] std::vector<std::uint64_t> DiscoverRenderMaterialGraphFunctionDependencies(const RenderMaterialGraphDocument& graph);
+[[nodiscard]] RenderMaterialGraphCustomCode BuildRenderMaterialFunctionCallCustomCode(const RenderMaterialGraphDocument& functionGraph);
 [[nodiscard]] RenderMaterialGraphFunctionInlineResult InlineRenderMaterialGraphFunctions(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});

@@ -96,6 +96,10 @@ struct ResolvedRuntimeMaterialAsset {
 
 class RuntimeMaterialResolver {
 public:
+    RuntimeMaterialResolver() = default;
+    explicit RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
+    void SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
+
     [[nodiscard]] static std::uint64_t EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept;
     [[nodiscard]] static std::uint64_t MaterialRuntimeContentHash(
         kb::assets::AssetManager& manager,
@@ -133,6 +137,8 @@ private:
         const kb::assets::AssetMetadata& ownerMetadata,
         std::string_view texturePath,
         std::uint32_t& unresolvedTexturePathCount) const;
+
+    RenderMaterialGraphBuildContext graphBuildContext_{};
 };
 
 } // namespace kb::render

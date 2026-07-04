@@ -131,13 +131,48 @@ void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasi
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, RGB(221, 226, 232), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawHeader(HDC dc, const RECT& content, bool dirty, bool infoVisible) {
+[[nodiscard]] const char* PreviewPrimitiveButtonLabel(EditorMaterialPreviewPrimitiveKind kind) noexcept {
+    switch (kind) {
+    case EditorMaterialPreviewPrimitiveKind::Sphere: return "Sphere";
+    case EditorMaterialPreviewPrimitiveKind::Cylinder: return "Cylinder";
+    case EditorMaterialPreviewPrimitiveKind::Cube: return "Cube";
+    case EditorMaterialPreviewPrimitiveKind::Plane: return "Plane";
+    case EditorMaterialPreviewPrimitiveKind::CustomMesh: return "Custom";
+    case EditorMaterialPreviewPrimitiveKind::Fallback: return "Fallback";
+    }
+    return "Preview";
+}
+
+[[nodiscard]] const char* PreviewSceneButtonLabel(EditorMaterialPreviewLightingPreset preset) noexcept {
+    switch (preset) {
+    case EditorMaterialPreviewLightingPreset::Studio: return "Studio";
+    case EditorMaterialPreviewLightingPreset::Neutral: return "Neutral";
+    case EditorMaterialPreviewLightingPreset::HighContrast: return "High";
+    }
+    return "Scene";
+}
+
+[[nodiscard]] const char* PreviewQualityButtonLabel(kb::render::RenderMaterialGraphQualityLevel qualityLevel) noexcept {
+    switch (qualityLevel) {
+    case kb::render::RenderMaterialGraphQualityLevel::Low: return "Low";
+    case kb::render::RenderMaterialGraphQualityLevel::Medium: return "Med";
+    case kb::render::RenderMaterialGraphQualityLevel::High: return "High";
+    case kb::render::RenderMaterialGraphQualityLevel::Epic: return "Epic";
+    }
+    return "Quality";
+}
+
+void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, header, RGB(32, 35, 39));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
     DrawText(dc, RECT{ header.left + kPadding, header.top, layout.infoButton.left - 10, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
     DrawCommandButton(dc, layout.infoButton, "Info", infoVisible);
+    DrawCommandButton(dc, layout.previewPrimitiveButton, PreviewPrimitiveButtonLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
+    DrawCommandButton(dc, layout.previewSceneButton, PreviewSceneButtonLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
+    DrawCommandButton(dc, layout.previewQualityButton, PreviewQualityButtonLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
+    DrawCommandButton(dc, layout.previewNodeButton, "Node", sceneContext.MaterialPreviewNodePreviewEnabled());
     DrawCommandButton(dc, layout.applyButton, "Apply To Selection", false);
     DrawCommandButton(dc, layout.saveButton, "Save", dirty);
     DrawCommandButton(dc, layout.revertButton, "Revert", false);
@@ -696,7 +731,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "xyz", "XYZ" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { { "rgba", "RGBA" } };
+        return { { "rgba", "RGBA" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return {
             { "value", "Value" },
@@ -1756,6 +1791,60 @@ void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMat
     }
 }
 
+[[nodiscard]] std::vector<MaterialEditorGraphDiagnosticMarker> MarkersForNode(
+    const EditorSceneContext& sceneContext,
+    std::uint32_t nodeId) {
+    std::vector<MaterialEditorGraphDiagnosticMarker> markers;
+    for (const MaterialEditorGraphDiagnosticMarker& marker : sceneContext.MaterialEditor().GraphDiagnosticMarkers()) {
+        if (marker.nodeId == nodeId) {
+            markers.push_back(marker);
+        }
+    }
+    return markers;
+}
+
+[[nodiscard]] COLORREF MarkerColor(kb::render::RenderMaterialGraphDiagnosticSeverity severity) noexcept {
+    switch (severity) {
+    case kb::render::RenderMaterialGraphDiagnosticSeverity::Error:
+        return RGB(229, 86, 91);
+    case kb::render::RenderMaterialGraphDiagnosticSeverity::Warning:
+        return RGB(226, 170, 77);
+    }
+    return RGB(226, 170, 77);
+}
+
+void DrawGraphDiagnosticMarker(
+    HDC dc,
+    const RECT& nodeRect,
+    const std::vector<MaterialEditorGraphDiagnosticMarker>& markers,
+    float scale) {
+    if (markers.empty()) {
+        return;
+    }
+    const bool hasError = std::ranges::any_of(markers, [](const MaterialEditorGraphDiagnosticMarker& marker) {
+        return marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    const MaterialEditorGraphDiagnosticMarker& primary = *std::ranges::find_if(markers, [hasError](const MaterialEditorGraphDiagnosticMarker& marker) {
+        return !hasError || marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    const int size = ScaleMetric(22, scale);
+    const RECT badge{
+        nodeRect.right - ScaleMetric(10, scale) - size,
+        nodeRect.top + ScaleMetric(5, scale),
+        nodeRect.right - ScaleMetric(10, scale),
+        nodeRect.top + ScaleMetric(5, scale) + size,
+    };
+    const COLORREF fill = MarkerColor(primary.severity);
+    FillRoundedRect(dc, badge, fill, std::max(4, ScaleMetric(6, scale)));
+    StrokeRoundedRect(dc, badge, RGB(24, 19, 20), std::max(4, ScaleMetric(6, scale)), 1);
+    DrawGraphText(dc, badge, hasError ? "!" : "?", RGB(255, 250, 244), ScaleMetric(13, scale), FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (markers.size() > 1U) {
+        const std::string count = std::to_string(markers.size());
+        const RECT countRect{ badge.left - ScaleMetric(18, scale), badge.top, badge.left - ScaleMetric(3, scale), badge.bottom };
+        DrawGraphText(dc, countRect, count.c_str(), RGB(255, 225, 212), ScaleMetric(9, scale), FW_SEMIBOLD, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void DrawGraphNode(
     HDC dc,
     const RECT& rect,
@@ -1783,7 +1872,7 @@ void DrawGraphNode(
     GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(18, 18, 18));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
 
-    std::string title = GraphNodeTitle(node.kind);
+    std::string title = node.parameter.displayName.empty() ? GraphNodeTitle(node.kind) : node.parameter.displayName;
     const std::string_view supportTag = kb::render::RenderMaterialGraphNodeSupportShortTag(node.kind);
     if (!supportTag.empty()) {
         title += "  [";
@@ -1791,6 +1880,8 @@ void DrawGraphNode(
         title += "]";
     }
     DrawGraphText(dc, RECT{ rect.left + ScaleMetric(12, scale), rect.top, rect.right - ScaleMetric(12, scale), rect.top + headerHeight }, title.c_str(), RGB(242, 242, 242), ScaleMetric(kGraphTitleFontSize, scale), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const std::vector<MaterialEditorGraphDiagnosticMarker> diagnosticMarkers = MarkersForNode(sceneContext, node.id);
+    DrawGraphDiagnosticMarker(dc, rect, diagnosticMarkers, scale);
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
     DrawConstantValue(dc, rect, node, sceneContext);
@@ -2337,6 +2428,27 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
     int y = layout.detailsPanel.top + 34;
     const int rowHeight = 18;
     const int bottom = layout.detailsPanel.bottom - 10;
+    {
+        const RECT searchRect{
+            layout.detailsPanel.left + 10,
+            y,
+            layout.detailsPanel.right - 10,
+            y + 24,
+        };
+        FillRoundedRect(dc, searchRect, rows.findFocused ? RGB(34, 45, 55) : RGB(30, 34, 40), 4);
+        StrokeRoundedRect(dc, searchRect, rows.findFocused ? RGB(83, 128, 165) : RGB(62, 70, 82), 4);
+        const std::string searchText = rows.findQuery.empty() ? "Find in material" : rows.findQuery;
+        DrawText(
+            dc,
+            RECT{ searchRect.left + 8, searchRect.top, searchRect.right - 8, searchRect.bottom },
+            searchText.c_str(),
+            rows.findQuery.empty() ? RGB(151, 162, 176) : RGB(232, 237, 243),
+            9,
+            rows.findFocused ? FW_SEMIBOLD : FW_NORMAL,
+            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        y += 32;
+    }
+
     if (!rows.instanceParentRows.empty()) {
         DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parent Chain", RGB(190, 169, 239), 10, FW_SEMIBOLD);
         y += 22;
@@ -2517,6 +2629,26 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
         y += 6;
     }
 
+    if (!rows.materialDiffRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Material Diff", RGB(241, 185, 126), 10, FW_SEMIBOLD);
+        y += 22;
+        std::size_t diffCount = 0U;
+        for (const std::string& row : rows.materialDiffRows) {
+            if (y + rowHeight > bottom || diffCount >= 8U) {
+                break;
+            }
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(235, 215, 190), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++diffCount;
+        }
+        if (diffCount < rows.materialDiffRows.size() && y + rowHeight <= bottom) {
+            const std::string more = "+" + std::to_string(rows.materialDiffRows.size() - diffCount) + " more material changes";
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, more.c_str(), RGB(201, 178, 150), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
     if (!rows.debugChannelRows.empty()) {
         DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Debug Channels", RGB(239, 203, 127), 10, FW_SEMIBOLD);
         y += 22;
@@ -2665,13 +2797,19 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
             sceneContext.MaterialEditor().Parameters(),
             sceneContext.MaterialEditor().SelectedNodeId(),
             nodeProperties);
+        if (sceneContext.MaterialEditor().SelectedNodeId() != 0U) {
+            details.title = sceneContext.MaterialEditor().GraphNodeDisplayName(sceneContext.MaterialEditor().SelectedNodeId());
+        }
         details.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
         details.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
         details.instanceStaticSwitchRows = sceneContext.MaterialEditor().InstanceStaticSwitchRows();
         details.layerTreeRows = sceneContext.MaterialEditor().LayerTreeRows();
         details.materialStats = sceneContext.MaterialEditor().MaterialStats();
         details.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
+        details.findQuery = std::string{ sceneContext.MaterialEditor().FindQuery() };
+        details.findFocused = sceneContext.MaterialEditor().IsFindFocused();
         details.findResults = sceneContext.MaterialEditor().FindResults();
+        details.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
         if (metadata.type == "RenderMaterialInstance") {
             details.title = "Material Instance Overrides";
         }
@@ -2690,7 +2828,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
-    DrawHeader(dc, content, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
+    DrawHeader(dc, content, sceneContext, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
 
     const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
     const kb::assets::AssetMetadata* metadata = assetId.IsValid()

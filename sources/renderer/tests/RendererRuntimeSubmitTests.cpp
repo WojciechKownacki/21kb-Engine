@@ -1694,9 +1694,9 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(renderer.Initialize(surface, &config), "Renderer did not initialize in explicit headless Noop mode");
 
     const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
-    Require(programStats.loads == 3U,
-        "KBMAT-MAT05: Renderer init must load the builtin mesh/shadow/selection programs through the MaterialProgramRegistry");
-    Require(programStats.liveProgramCount == 3U,
+    Require(programStats.loads == 4U,
+        "KBMAT-MAT05: Renderer init must load the builtin mesh/GBuffer/shadow/selection programs through the MaterialProgramRegistry");
+    Require(programStats.liveProgramCount == 4U,
         "KBMAT-MAT05: MaterialProgramRegistry stats must be exposed through renderer diagnostics with the live builtin programs");
     Require(programStats.failures == 0U,
         "KBMAT-MAT05: Builtin program loading must not report failures under the headless Noop backend");
@@ -2031,6 +2031,253 @@ void RunRendererReloadsChangedRuntimeMaterialAssetTest() {
     Require(reloadedRuntimeStats.materialFallbackCount == 0U, "KBMAT-0901: Fixed material reload should not count a fallback");
     Require(reloadedRuntimeStats.materialErrorCount == 0U, "KBMAT-0901: Fixed material reload should not count an error");
     Require(reloadedRuntimeStats.materialReloadCount == 1U, "KBMAT-0901: Fixed material reload should count one material reload");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererEnsuresGraphProgramTextureResourcesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_texture_resources";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph texture resource test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path texturePath = root / "graph_specular.kbtex";
+    const std::filesystem::path materialPath = root / "graph_texture_only.kbmat";
+    WriteTriangleObj(meshPath);
+    WriteTexture(texturePath, 220U, 64U, 32U);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph texture resource test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph texture resource test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Graph texture resource test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph texture resource test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Graph texture resource test did not discover mesh and texture assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* textureMetadata = manager.Registry().FindByPath("/Game/graph_specular.kbtex");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Graph texture resource test discovered wrong mesh metadata");
+    Require(textureMetadata != nullptr && textureMetadata->type == "RenderTexture", "Graph texture resource test discovered wrong texture metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+    const std::uint64_t textureAssetId = textureMetadata->id.value;
+
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.18 0.24 0.32 1"));
+    RenderMaterialGraphNode textureParameter = MakeGraphNode(3U, RenderMaterialGraphNodeKind::ParameterTexture, "graphSpecularTexture");
+    textureParameter.parameter.textureRole = "baseColor";
+    textureParameter.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;
+    material.graph.nodes.push_back(std::move(textureParameter));
+    material.graph.nodes.push_back(MakeGraphNode(4U, RenderMaterialGraphNodeKind::TextureSample));
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ParameterTexture, 3U, "texture", RenderMaterialGraphNodeKind::TextureSample, 4U, "texture"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 4U, "r", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "specular"),
+    };
+    material.graphParameterValues.push_back(MakeTextureGraphValue("graphSpecularTexture", textureAssetId));
+    Require(RenderMaterialAssetWriter::Save(materialPath, material), "Graph texture resource test could not save graph material");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Graph texture resource test did not discover graph material asset");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph_texture_only.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Graph texture resource test discovered wrong material metadata");
+    const std::uint64_t materialAssetId = materialMetadata->id.value;
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Texture Resource Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshAssetId,
+        .materialAssetId = materialAssetId,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .cachedTextures = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .frameReferencedTextures = 1U,
+        .scenePassSubmitStats = 1U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .textureResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .textureBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 1U,
+        .syncTransformResolvingEntries = 1U,
+    });
+    Require(renderer.Initialize(surface, &config), "Graph texture resource test renderer did not initialize");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 2U,
+            .maxVisibleInstances = 2U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Graph texture resource test did not begin frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph texture resource test did not submit scene");
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Graph texture resource test could not inspect scene resources");
+    const RenderMaterialHandle materialHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(materialHandle);
+    Require(materialHandle.IsValid() && materialResource != nullptr, "Graph texture resource test did not bind material resource");
+    Require(materialResource->albedoTextureAssetId == 0U,
+        "KBMAT-MAT99-16: graph-only texture test must not pass through the legacy albedo texture slot");
+    const auto graphTextureIt = std::find_if(
+        materialResource->graphProgram.textures.begin(),
+        materialResource->graphProgram.textures.end(),
+        [textureAssetId](const RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == "graphSpecularTexture" && binding.textureAssetId == textureAssetId;
+        });
+    Require(graphTextureIt != materialResource->graphProgram.textures.end(),
+        "KBMAT-MAT99-16: graph material did not expose the authored texture parameter binding");
+    const RenderTextureHandle textureHandle = resourceMap->ResolveTexture(textureAssetId, graphTextureIt->colorSpace);
+    const RenderTextureResource* textureResource = resources->FindTexture(textureHandle);
+    Require(textureHandle.IsValid() && textureResource != nullptr,
+        "KBMAT-MAT99-16: runtime submit must ensure textures referenced only by graphProgram.textures");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererRoutesGraphBlendModeToTransparentPassTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_blend_pass";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph blend pass test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path materialPath = root / "graph_additive.kbmat";
+    WriteTriangleObj(meshPath);
+
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.blendMode = "additive";
+    material.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.8 0.2 0.1 0.5"));
+    material.graph.nodes.push_back(MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"));
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    Require(RenderMaterialAssetWriter::Save(materialPath, material), "Graph blend pass test could not save additive graph material");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph blend pass test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph blend pass test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph blend pass test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Graph blend pass test did not discover mesh/material assets");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph_additive.kbmat");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Graph blend pass test discovered wrong mesh metadata");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Graph blend pass test discovered wrong material metadata");
+    const std::uint64_t materialAssetId = materialMetadata->id.value;
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Additive Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = materialAssetId,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .scenePassSubmitStats = 2U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 1U,
+        .syncTransformResolvingEntries = 1U,
+    });
+    Require(renderer.Initialize(surface, &config), "Graph blend pass test renderer did not initialize");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 2U,
+            .maxVisibleInstances = 2U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Graph blend pass test did not begin frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph blend pass test did not submit scene");
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Graph blend pass test could not inspect scene resources");
+    const RenderMaterialHandle materialHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(materialHandle);
+    Require(materialHandle.IsValid() && materialResource != nullptr, "Graph blend pass test did not bind material resource");
+    Require(materialResource->graphProgram.alphaMode == RenderMaterialAlphaMode::Blend &&
+            materialResource->alphaMode == RenderMaterialAlphaMode::Blend,
+        "KBMAT-MAT99-25: graph blend mode must drive material alpha mode used by the scene pipeline");
+    Require(materialResource->graphProgram.translucencyBlend == RenderMaterialTranslucencyBlend::Additive &&
+            materialResource->translucencyBlend == RenderMaterialTranslucencyBlend::Additive,
+        "KBMAT-MAT99-25: graph additive blend mode must drive the scene translucency blend state");
+    const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+    Require(passStats.size() == 2U, "KBMAT-MAT99-25: graph blend pass test should report opaque and transparent passes");
+    Require(passStats[0].pass == MeshPassType::BaseOpaque && passStats[0].stats.submittedMeshCount == 0U,
+        "KBMAT-MAT99-25: additive graph material must not submit in the opaque scene pass");
+    Require(passStats[1].pass == MeshPassType::BaseTransparent && passStats[1].stats.submittedMeshCount == 1U &&
+            passStats[1].stats.submittedDrawCallCount == 1U,
+        "KBMAT-MAT99-25: additive graph material must submit in the transparent scene pass");
 
     renderer.EndFrame();
     renderer.Shutdown();
@@ -3247,6 +3494,62 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest() {
+    kb::scene::Scene scene;
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .scenePassSubmitStats = 4U,
+    });
+    Require(renderer.Initialize(surface, &config), "Deferred runtime test did not initialize renderer");
+    Require(renderer.BeginFrame(), "Deferred runtime test did not begin frame");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .lightingConfig = SceneRenderLightingConfig{
+            .lightingPath = SceneRenderLightingPath::Deferred,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+
+    Require(renderer.SubmitScene(scene, desc), "Deferred runtime test did not submit scene");
+    const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+    Require(passStats.size() == 3U, "Deferred runtime test did not report GBuffer, lighting and transparent passes");
+    Require(passStats[0].renderPass == RenderPassKind::GBufferGeometry && passStats[0].pass == MeshPassType::GBuffer,
+        "Deferred runtime test did not submit GBuffer geometry as the first scene pass");
+    Require(passStats[1].renderPass == RenderPassKind::DeferredLighting,
+        "Deferred runtime test did not submit the deferred lighting pass after GBuffer");
+    Require(passStats[2].renderPass == RenderPassKind::TransparentScene && passStats[2].pass == MeshPassType::BaseTransparent,
+        "Deferred runtime test did not keep transparent rendering in the forward transparent pass");
+    for (const SceneRenderPassSubmitStats& pass : passStats) {
+        Require(pass.renderPass != RenderPassKind::OpaqueScene,
+            "Deferred runtime test must not use the forward opaque pass as deferred proof");
+    }
+    Require(!renderer.LastSceneDiagnostics().HasErrors(), "Deferred runtime test produced diagnostics for a valid GBuffer path");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+}
+
 void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
     kb::scene::Scene scene;
 
@@ -3343,6 +3646,8 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSceneRendersMultipleCookedGraphMaterialsTest();
 #endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
+    RunRendererEnsuresGraphProgramTextureResourcesTest();
+    RunRendererRoutesGraphBlendModeToTransparentPassTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();
     RunInvalidGraphMaterialUsesLastGoodThenRefreshesAfterFixTest();
@@ -3352,6 +3657,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
+    RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 

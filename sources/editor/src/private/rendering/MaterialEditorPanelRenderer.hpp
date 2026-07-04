@@ -35,10 +35,18 @@ enum class MaterialEditorPanelCommand {
     Save,
     Revert,
     Validate,
+    PreviewPrimitive,
+    PreviewScene,
+    PreviewQuality,
+    PreviewNode,
 };
 
-inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanelToolbarCommands{
+inline constexpr std::array<MaterialEditorPanelCommand, 9U> kMaterialEditorPanelToolbarCommands{
     MaterialEditorPanelCommand::Info,
+    MaterialEditorPanelCommand::PreviewPrimitive,
+    MaterialEditorPanelCommand::PreviewScene,
+    MaterialEditorPanelCommand::PreviewQuality,
+    MaterialEditorPanelCommand::PreviewNode,
     MaterialEditorPanelCommand::ApplyToSelection,
     MaterialEditorPanelCommand::Save,
     MaterialEditorPanelCommand::Revert,
@@ -59,6 +67,14 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
         return "Revert";
     case MaterialEditorPanelCommand::Validate:
         return "Validate";
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+        return "Shape";
+    case MaterialEditorPanelCommand::PreviewScene:
+        return "Scene";
+    case MaterialEditorPanelCommand::PreviewQuality:
+        return "Quality";
+    case MaterialEditorPanelCommand::PreviewNode:
+        return "Node";
     }
     return "None";
 }
@@ -78,6 +94,14 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
         return sceneContext.RevertMaterialEditorAsset(materialId);
     case MaterialEditorPanelCommand::Validate:
         return sceneContext.ValidateMaterialEditorAsset(materialId);
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+        return sceneContext.CycleMaterialPreviewPrimitive();
+    case MaterialEditorPanelCommand::PreviewScene:
+        return sceneContext.CycleMaterialPreviewSceneLightingPreset();
+    case MaterialEditorPanelCommand::PreviewQuality:
+        return sceneContext.CycleMaterialPreviewQualityLevel();
+    case MaterialEditorPanelCommand::PreviewNode:
+        return sceneContext.ToggleMaterialPreviewNodePreview();
     case MaterialEditorPanelCommand::None:
         return false;
     }
@@ -91,6 +115,10 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
     case MaterialEditorPanelCommand::Save:
     case MaterialEditorPanelCommand::Revert:
     case MaterialEditorPanelCommand::Validate:
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+    case MaterialEditorPanelCommand::PreviewScene:
+    case MaterialEditorPanelCommand::PreviewQuality:
+    case MaterialEditorPanelCommand::PreviewNode:
         return true;
     case MaterialEditorPanelCommand::None:
         return false;
@@ -111,8 +139,11 @@ struct MaterialEditorPanelDetailsRows {
     std::vector<MaterialEditorLayerTreeRow> layerTreeRows;
     MaterialEditorMaterialStatsModel materialStats;
     MaterialEditorShaderViewerModel shaderViewer;
+    std::string findQuery;
+    bool findFocused = false;
     std::vector<MaterialEditorFindResult> findResults;
     std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
+    std::vector<std::string> materialDiffRows;
     std::vector<MaterialDebugChannelRow> debugChannelRows;
     std::vector<std::string> parameterRows;
     std::vector<std::string> textureSlotRows;
@@ -127,6 +158,7 @@ struct MaterialEditorPanelParameterHit {
 
 enum class MaterialEditorGraphNodePropertyHitKind : std::uint8_t {
     None,
+    TextField,
     Slider,
     ColorPicker,
     EnumField,
@@ -198,6 +230,10 @@ struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
     RECT applyButton{};
     RECT infoButton{};
+    RECT previewPrimitiveButton{};
+    RECT previewSceneButton{};
+    RECT previewQualityButton{};
+    RECT previewNodeButton{};
     RECT saveButton{};
     RECT revertButton{};
     RECT validateButton{};
@@ -262,6 +298,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
         return SIZE{ 220, 106 };
     case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return SIZE{ 220, 106 };
     case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
         return SIZE{ 220, 86 };
     case kb::render::RenderMaterialGraphNodeKind::Uv:
@@ -498,7 +535,11 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
     layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
     layout.applyButton = RECT{ layout.saveButton.left - buttonGap - 118, buttonTop, layout.saveButton.left - buttonGap, buttonBottom };
-    layout.infoButton = RECT{ layout.applyButton.left - buttonGap - 54, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
+    layout.previewNodeButton = RECT{ layout.applyButton.left - buttonGap - 58, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
+    layout.previewQualityButton = RECT{ layout.previewNodeButton.left - buttonGap - 62, buttonTop, layout.previewNodeButton.left - buttonGap, buttonBottom };
+    layout.previewSceneButton = RECT{ layout.previewQualityButton.left - buttonGap - 62, buttonTop, layout.previewQualityButton.left - buttonGap, buttonBottom };
+    layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - 66, buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
+    layout.infoButton = RECT{ layout.previewPrimitiveButton.left - buttonGap - 54, buttonTop, layout.previewPrimitiveButton.left - buttonGap, buttonBottom };
 
     layout.graphCanvas = RECT{
         content.left,
@@ -536,6 +577,18 @@ inline MaterialEditorPanelCommand MaterialEditorPanelRenderer::CommandAt(const R
     }
     if (MaterialEditorPanelPointInRect(layout.applyButton, x, y)) {
         return MaterialEditorPanelCommand::ApplyToSelection;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewPrimitiveButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewPrimitive;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewSceneButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewScene;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewQualityButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewQuality;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewNodeButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewNode;
     }
     if (MaterialEditorPanelPointInRect(layout.saveButton, x, y)) {
         return MaterialEditorPanelCommand::Save;
@@ -787,6 +840,9 @@ inline std::optional<MaterialEditorGraphNodePropertyHit> MaterialEditorPanelRend
                 .componentIndex = property.componentIndex,
             };
             switch (property.kind) {
+            case MaterialEditorGraphNodePropertyKind::Text:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::TextField;
+                break;
             case MaterialEditorGraphNodePropertyKind::Numeric:
                 hit.kind = MaterialEditorGraphNodePropertyHitKind::Slider;
                 break;
@@ -1179,7 +1235,7 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
         return { "xyz" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { "rgba" };
+        return { "rgba", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return { "value", "scalar", "xyz", "rgba", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
@@ -1977,8 +2033,8 @@ inline constexpr std::size_t MaterialEditorGraphContextMenuFavoritesCategoryInde
 inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) noexcept {
     switch (index) {
     case 0U: return "Textures";
-    case 1U: return "UV";
-    case 2U: return "Inputs";
+    case 1U: return "Inputs";
+    case 2U: return "Parameter Inputs";
     case 3U: return "Constants";
     case 4U: return "Parameters";
     case 5U: return "Math";
@@ -1995,9 +2051,9 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray };
     case 1U:
-        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
+        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateDeltaTime, MaterialEditorGraphMenuCommand::CreateDynamicParameter, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreatePixelPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount, MaterialEditorGraphMenuCommand::CreateDistanceCullFade, MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition, MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreatePixelDepth, MaterialEditorGraphMenuCommand::CreateCameraDepthFade, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
         return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter };
     case 3U:
@@ -2125,6 +2181,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::AlignBottom,
             MaterialEditorGraphMenuCommand::DistributeHorizontal,
             MaterialEditorGraphMenuCommand::DistributeVertical,
+            MaterialEditorGraphMenuCommand::PromoteToParameter,
             MaterialEditorGraphMenuCommand::DisconnectSelected,
             MaterialEditorGraphMenuCommand::DeleteSelected,
         };
@@ -2147,6 +2204,12 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return "Texture Sample";
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return "Texture Parameter";
     case MaterialEditorGraphMenuCommand::CreateTextureObject: return "Texture Object";
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return "Texture Sample Cube";
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return "Texture Object Cube";
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return "Texture Sample Volume";
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return "Texture Object Volume";
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return "Texture Sample 2D Array";
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return "Texture Object 2D Array";
     case MaterialEditorGraphMenuCommand::CreateUv: return "UV";
     case MaterialEditorGraphMenuCommand::CreateScalar: return "Constant Scalar";
     case MaterialEditorGraphMenuCommand::CreateBool: return "Constant Bool";
@@ -2227,15 +2290,23 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
     case MaterialEditorGraphMenuCommand::CreateTime: return "Time";
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return "Delta Time";
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return "Dynamic Parameter";
     case MaterialEditorGraphMenuCommand::CreateVertexColor: return "Vertex Color";
     case MaterialEditorGraphMenuCommand::CreateScreenPosition: return "Screen Position";
+    case MaterialEditorGraphMenuCommand::CreatePixelPosition: return "Pixel Position";
     case MaterialEditorGraphMenuCommand::CreateLocalPosition: return "Local Position";
     case MaterialEditorGraphMenuCommand::CreateObjectPosition: return "Object Position";
     case MaterialEditorGraphMenuCommand::CreateWorldPosition: return "World Position";
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return "Per Instance Random";
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return "Per Instance Fade Amount";
+    case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return "Distance Cull Fade";
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return "Per Instance Custom Data";
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return "Object Radius";
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return "Object Bounds";
     case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return "Object Orientation";
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return "Pre-Skinned Position";
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return "Pre-Skinned Normal";
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return "Make Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return "Break Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return "Blend Material Attributes";
@@ -2265,7 +2336,11 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateViewProperty: return "View Property";
     case MaterialEditorGraphMenuCommand::CreateViewSize: return "View Size";
     case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return "Two Sided Sign";
+    case MaterialEditorGraphMenuCommand::CreateSceneColor: return "Scene Color";
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return "Scene Texture";
     case MaterialEditorGraphMenuCommand::CreateSceneDepth: return "Scene Depth";
+    case MaterialEditorGraphMenuCommand::CreatePixelDepth: return "Pixel Depth";
+    case MaterialEditorGraphMenuCommand::CreateCameraDepthFade: return "Camera Depth Fade";
     case MaterialEditorGraphMenuCommand::CreateDepthFade: return "Depth Fade";
     case MaterialEditorGraphMenuCommand::CreateCustomCode: return "Custom Code";
     case MaterialEditorGraphMenuCommand::CreateReroute: return "Reroute";
@@ -2290,6 +2365,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::AlignBottom: return "Align Bottom";
     case MaterialEditorGraphMenuCommand::DistributeHorizontal: return "Distribute Horizontal";
     case MaterialEditorGraphMenuCommand::DistributeVertical: return "Distribute Vertical";
+    case MaterialEditorGraphMenuCommand::PromoteToParameter: return "Promote to Parameter";
     case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
     case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected";
     case MaterialEditorGraphMenuCommand::None: return "";
@@ -2310,6 +2386,7 @@ inline bool MaterialEditorGraphMenuCommandIsAction(MaterialEditorGraphMenuComman
     case MaterialEditorGraphMenuCommand::AlignBottom:
     case MaterialEditorGraphMenuCommand::DistributeHorizontal:
     case MaterialEditorGraphMenuCommand::DistributeVertical:
+    case MaterialEditorGraphMenuCommand::PromoteToParameter:
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
     case MaterialEditorGraphMenuCommand::DeleteSelected:
         return true;
@@ -2338,6 +2415,8 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(
     case MaterialEditorGraphMenuCommand::DistributeHorizontal:
     case MaterialEditorGraphMenuCommand::DistributeVertical:
         return selectedNodeCount >= 3U;
+    case MaterialEditorGraphMenuCommand::PromoteToParameter:
+        return selectedNodeCount == 1U;
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return selectedNodeCount > 0U;
     case MaterialEditorGraphMenuCommand::DeleteSelected:
@@ -2365,6 +2444,12 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return kb::render::RenderMaterialGraphNodeKind::TextureSample;
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterTexture;
     case MaterialEditorGraphMenuCommand::CreateTextureObject: return kb::render::RenderMaterialGraphNodeKind::TextureObject;
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return kb::render::RenderMaterialGraphNodeKind::TextureSampleCube;
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return kb::render::RenderMaterialGraphNodeKind::TextureObjectCube;
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume;
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume;
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray;
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
     case MaterialEditorGraphMenuCommand::CreateUv: return kb::render::RenderMaterialGraphNodeKind::Uv;
     case MaterialEditorGraphMenuCommand::CreateScalar: return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
     case MaterialEditorGraphMenuCommand::CreateBool: return kb::render::RenderMaterialGraphNodeKind::ConstantBool;
@@ -2445,15 +2530,23 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateLerp: return kb::render::RenderMaterialGraphNodeKind::Lerp;
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return kb::render::RenderMaterialGraphNodeKind::NormalUnpack;
     case MaterialEditorGraphMenuCommand::CreateTime: return kb::render::RenderMaterialGraphNodeKind::Time;
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return kb::render::RenderMaterialGraphNodeKind::DeltaTime;
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return kb::render::RenderMaterialGraphNodeKind::DynamicParameter;
     case MaterialEditorGraphMenuCommand::CreateVertexColor: return kb::render::RenderMaterialGraphNodeKind::VertexColor;
     case MaterialEditorGraphMenuCommand::CreateScreenPosition: return kb::render::RenderMaterialGraphNodeKind::ScreenPosition;
+    case MaterialEditorGraphMenuCommand::CreatePixelPosition: return kb::render::RenderMaterialGraphNodeKind::PixelPosition;
     case MaterialEditorGraphMenuCommand::CreateLocalPosition: return kb::render::RenderMaterialGraphNodeKind::LocalPosition;
     case MaterialEditorGraphMenuCommand::CreateObjectPosition: return kb::render::RenderMaterialGraphNodeKind::ObjectPosition;
     case MaterialEditorGraphMenuCommand::CreateWorldPosition: return kb::render::RenderMaterialGraphNodeKind::WorldPosition;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom;
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
+    case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return kb::render::RenderMaterialGraphNodeKind::DistanceCullFade;
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData;
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return kb::render::RenderMaterialGraphNodeKind::ObjectRadius;
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return kb::render::RenderMaterialGraphNodeKind::ObjectBounds;
     case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return kb::render::RenderMaterialGraphNodeKind::ObjectOrientation;
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return kb::render::RenderMaterialGraphNodeKind::PreSkinnedPosition;
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return kb::render::RenderMaterialGraphNodeKind::PreSkinnedNormal;
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes;
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes;
     case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes;
@@ -2483,7 +2576,11 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateViewProperty: return kb::render::RenderMaterialGraphNodeKind::ViewProperty;
     case MaterialEditorGraphMenuCommand::CreateViewSize: return kb::render::RenderMaterialGraphNodeKind::ViewSize;
     case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return kb::render::RenderMaterialGraphNodeKind::TwoSidedSign;
+    case MaterialEditorGraphMenuCommand::CreateSceneColor: return kb::render::RenderMaterialGraphNodeKind::SceneColor;
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return kb::render::RenderMaterialGraphNodeKind::SceneTexture;
     case MaterialEditorGraphMenuCommand::CreateSceneDepth: return kb::render::RenderMaterialGraphNodeKind::SceneDepth;
+    case MaterialEditorGraphMenuCommand::CreatePixelDepth: return kb::render::RenderMaterialGraphNodeKind::PixelDepth;
+    case MaterialEditorGraphMenuCommand::CreateCameraDepthFade: return kb::render::RenderMaterialGraphNodeKind::CameraDepthFade;
     case MaterialEditorGraphMenuCommand::CreateDepthFade: return kb::render::RenderMaterialGraphNodeKind::DepthFade;
     case MaterialEditorGraphMenuCommand::CreateCustomCode: return kb::render::RenderMaterialGraphNodeKind::CustomCode;
     case MaterialEditorGraphMenuCommand::CreateReroute: return kb::render::RenderMaterialGraphNodeKind::Reroute;
@@ -2498,6 +2595,12 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     default:
         return std::nullopt;
     }
+}
+
+inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGraphMenuCommand command) noexcept {
+    return MaterialEditorGraphMenuCommandNodeKind(command).has_value() ||
+        command == MaterialEditorGraphMenuCommand::CreateComment ||
+        command == MaterialEditorGraphMenuCommand::CreateComposite;
 }
 
 [[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphPaletteAllCommands() {
@@ -2546,8 +2649,24 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     if (command == MaterialEditorGraphMenuCommand::CreateCollectionParameter) {
         haystack += " material parameter collection mpc global parameter global uniform";
     }
+    if (command == MaterialEditorGraphMenuCommand::CreateColor ||
+        command == MaterialEditorGraphMenuCommand::CreateColorParameter) {
+        haystack += " red green blue alpha channel channels";
+    }
     if (command == MaterialEditorGraphMenuCommand::CreateTextureObject) {
         haystack += " texture object parameter texture object sampler object";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSampleCube ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObjectCube) {
+        haystack += " cube cubemap environment reflection texturecube";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSampleVolume ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObjectVolume) {
+        haystack += " volume texture3d 3d voxel volumetric";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSample2DArray ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObject2DArray) {
+        haystack += " array texture array texture2darray layer slice";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateStaticSwitch) {
         haystack += " static switch parameter staticswitchparameter";
@@ -2561,8 +2680,40 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     if (command == MaterialEditorGraphMenuCommand::CreateSobol) {
         haystack += " low discrepancy quasirandom quasi random blue noise sobol2d cell index seed";
     }
+    if (command == MaterialEditorGraphMenuCommand::CreateDeltaTime) {
+        haystack += " time delta time delta frame time timestep frame dt";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateDynamicParameter) {
+        haystack += " dynamic parameters particle parameter runtime rgba channel cascade niagara";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePixelPosition) {
+        haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount) {
+        haystack += " per instance fade amount perinstancefade lod fade instance fade";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateDistanceCullFade) {
+        haystack += " distance cull fade distancecullfade lod dither culling per instance fade";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData) {
+        haystack += " per instance custom data custom data instance data perinstancecustomdata0";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition ||
+        command == MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal) {
+        haystack += " pre skinned preskinned local skeletal skinning skinned mesh vertex";
+    }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateSceneColor ||
+        command == MaterialEditorGraphMenuCommand::CreateSceneTexture) {
+        haystack += " scene texture post process opaque snapshot framebuffer screen color";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateSceneDepth ||
+        command == MaterialEditorGraphMenuCommand::CreatePixelDepth ||
+        command == MaterialEditorGraphMenuCommand::CreateCameraDepthFade ||
+        command == MaterialEditorGraphMenuCommand::CreateDepthFade) {
+        haystack += " depth pixel depth scene depth camera depth fade distance transparent z buffer zbuffer";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateArcSineFast ||
         command == MaterialEditorGraphMenuCommand::CreateArcCosineFast ||
@@ -2594,6 +2745,22 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     return sawToken;
 }
 
+[[nodiscard]] inline std::string_view MaterialEditorGraphSemanticChannelPin(std::string_view pin) noexcept {
+    if (pin == "alpha" || pin == "opacity") {
+        return "a";
+    }
+    if (pin == "red") {
+        return "r";
+    }
+    if (pin == "green") {
+        return "g";
+    }
+    if (pin == "blue") {
+        return "b";
+    }
+    return pin;
+}
+
 [[nodiscard]] inline std::optional<std::string> MaterialEditorGraphCompatibleCommandPin(
     const kb::render::RenderMaterialGraphDocument& graph,
     std::uint32_t sourceNodeId,
@@ -2614,6 +2781,19 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     const kb::render::RenderMaterialGraphPinType sourceType =
         kb::render::RenderMaterialGraphPinDataType(*sourceNode, sourcePin, sourceOutput);
     if (sourceOutput) {
+        const std::string_view preferredInputPin = MaterialEditorGraphSemanticChannelPin(sourcePin);
+        if (kb::render::IsRenderMaterialGraphInputPin(*candidateKind, preferredInputPin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                sourceType,
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, preferredInputPin, false))) {
+            return std::string{ preferredInputPin };
+        }
+        if (kb::render::IsRenderMaterialGraphInputPin(*candidateKind, sourcePin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                sourceType,
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, sourcePin, false))) {
+            return std::string{ sourcePin };
+        }
         for (const std::string& inputPin : kb::render::RenderMaterialGraphNodeInputPinNames(*candidateKind)) {
             if (kb::render::AreRenderMaterialGraphPinsCompatible(
                     sourceType,
@@ -2622,6 +2802,19 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
             }
         }
     } else {
+        const std::string_view preferredOutputPin = MaterialEditorGraphSemanticChannelPin(sourcePin);
+        if (kb::render::IsRenderMaterialGraphOutputPin(*candidateKind, preferredOutputPin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, preferredOutputPin, true),
+                sourceType)) {
+            return std::string{ preferredOutputPin };
+        }
+        if (kb::render::IsRenderMaterialGraphOutputPin(*candidateKind, sourcePin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, sourcePin, true),
+                sourceType)) {
+            return std::string{ sourcePin };
+        }
         for (const std::string& outputPin : kb::render::RenderMaterialGraphNodeOutputPinNames(*candidateKind)) {
             if (kb::render::AreRenderMaterialGraphPinsCompatible(
                     kb::render::RenderMaterialGraphPinDataType(*candidateKind, outputPin, true),

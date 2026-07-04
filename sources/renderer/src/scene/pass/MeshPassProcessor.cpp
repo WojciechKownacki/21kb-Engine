@@ -43,6 +43,7 @@ void EmitInstanceDiagnostic(
         return false;
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
     case MeshPassType::BaseTransparent:
     case MeshPassType::ShadowDepth:
     case MeshPassType::Gizmo:
@@ -56,6 +57,7 @@ void EmitInstanceDiagnostic(
     switch (pass) {
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
     case MeshPassType::ShadowDepth:
         return true;
     case MeshPassType::BaseTransparent:

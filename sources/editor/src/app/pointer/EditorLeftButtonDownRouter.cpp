@@ -38,6 +38,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -359,10 +360,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 sceneContext_.SetMaterialGraphCanvasViewport(
                     MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
                     MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
-                if (MaterialEditorGraphContextMenuCommandEnabled(
-                        menuHit.command,
-                        sceneContext_.SelectedMaterialGraphNodeIds().size(),
-                        sceneContext_.SelectedMaterialGraphCommentId() != 0U)) {
+                const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
+                    menuHit.command,
+                    sceneContext_.SelectedMaterialGraphNodeIds().size(),
+                    sceneContext_.SelectedMaterialGraphCommentId() != 0U);
+                if (commandEnabled && MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command)) {
+                    pointerDrag_.Clear();
+                    pointerDrag_.kind = EditorPointerDragKind::MaterialGraphPaletteCommand;
+                    pointerDrag_.materialGraphAssetId = materialId;
+                    pointerDrag_.materialGraphCommand = menuHit.command;
+                    pointerDrag_.assetLabel = std::string{ MaterialEditorGraphContextMenuCommandName(menuHit.command) };
+                    pointerDrag_.startX = x;
+                    pointerDrag_.startY = y;
+                    pointerDrag_.x = x;
+                    pointerDrag_.y = y;
+                    SetCapture(messageWindow);
+                } else if (commandEnabled) {
                     static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(menuHit.command));
                 }
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -405,9 +418,31 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                                 y)) {
                         static_cast<void>(sceneContext_.SelectMaterialGraphNode(property->nodeId));
                         switch (property->kind) {
+                        case MaterialEditorGraphNodePropertyHitKind::TextField:
+                            sceneContext_.CloseMaterialGraphNodeEnumDropdown();
+                            if (property->stableId == "node.name") {
+                                static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property->nodeId));
+                            } else {
+                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                    mainWindow_,
+                                    property->displayName,
+                                    MaterialEditorPanelParameterValueText(property->value));
+                                if (value.has_value()) {
+                                    static_cast<void>(sceneContext_.SetMaterialGraphNodeTextProperty(
+                                        materialId,
+                                        property->nodeId,
+                                        property->stableId,
+                                        *value));
+                                }
+                            }
+                            break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
                             if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property->value)) {
-                                static_cast<void>(sceneContext_.SetMaterialGraphConstantColorValue(materialId, property->nodeId, *color));
+                                static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
+                                    materialId,
+                                    property->nodeId,
+                                    property->stableId,
+                                    *color));
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::Slider:

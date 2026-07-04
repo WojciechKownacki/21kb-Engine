@@ -9,6 +9,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <cstdint>
@@ -21,6 +22,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #endif
 
@@ -85,6 +89,47 @@ struct ForwardRenderProbe {
             // differs from world position by a known positive offset so the proof can tell them apart.
             // MAT-77: the per-instance scalar lanes (.w) are driven by u_time.y/.z so a test can inject
             // distinct per-instance values exactly as the real instance buffer packs into i_data0/1.w.
+            "    v_objectLocalPos = vec4(v_worldPos.x + 0.7, v_worldPos.y, v_worldPos.z, u_time.y);\n"
+            "    v_objectWorldPos = vec4(0.7, 0.0, 0.0, u_time.z);\n"
+            "    v_objectOrientation = vec4(normalize(vec3(0.2, 0.7, 0.1)), u_time.z);\n"
+            "    v_preSkinnedNormal = normalize(vec3(0.1, 0.8, 0.2));\n"
+            "}\n";
+    }
+    std::ostringstream command;
+    command << '"' << '"' << KB_TEST_GRAPH_SHADERC_PATH << '"'
+        << " --type vertex --platform windows --profile s_5_0"
+        << " -f \"" << src.generic_string() << '"'
+        << " -o \"" << outBin.generic_string() << '"'
+        << " --varyingdef \"" << KB_TEST_GRAPH_SHADER_VARYING_DEF << '"'
+        << " -i \"" << KB_TEST_GRAPH_SHADER_INCLUDE_DIR << '"'
+        << " -i \"" << KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR << '"'
+        << " -O 3" << '"';
+    std::error_code error;
+    std::filesystem::remove(outBin, error);
+    const int code = std::system(command.str().c_str());
+    return code == 0 && std::filesystem::exists(outBin, error) && std::filesystem::file_size(outBin, error) > 0U;
+}
+
+[[nodiscard]] bool CookHarnessDepthVertexShader(const std::filesystem::path& outBin, float clipDepth) {
+    const std::filesystem::path src = outBin.parent_path() / "vs_graph_depth_probe.sc";
+    {
+        std::ofstream out{ src, std::ios::binary | std::ios::trunc };
+        out <<
+            "$input a_position, a_texcoord0\n"
+            "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n"
+            "#include <bgfx_shader.sh>\n\n"
+            "uniform vec4 u_time;\n\n"
+            "void main()\n{\n"
+            "    vec3 worldPos = vec3(a_position.xy, " << clipDepth << ");\n"
+            "    gl_Position = vec4(worldPos, 1.0);\n"
+            "    v_normal = vec3(0.0, 0.0, 1.0);\n"
+            "    v_color0 = vec4(0.15, 0.45, 0.85, 0.6);\n"
+            "    v_texcoord0 = a_texcoord0;\n"
+            "    v_worldPos = worldPos;\n"
+            "    v_shadowPos = vec4(0.0, 0.0, 0.0, 1.0);\n"
+            "    v_shadowFlags = vec4(0.0, u_time.z, a_texcoord0.x * 0.1, a_texcoord0.y * 0.1);\n"
+            "    v_tangent = vec3(1.0, 0.0, 0.0);\n"
+            "    v_bitangent = vec3(0.0, 1.0, 0.0);\n"
             "    v_objectLocalPos = vec4(v_worldPos.x + 0.7, v_worldPos.y, v_worldPos.z, u_time.y);\n"
             "    v_objectWorldPos = vec4(0.7, 0.0, 0.0, u_time.z);\n"
             "    v_objectOrientation = vec4(normalize(vec3(0.2, 0.7, 0.1)), u_time.z);\n"
@@ -473,6 +518,141 @@ private:
     bgfx::UniformHandle uSceneDepth_ = BGFX_INVALID_HANDLE;
 };
 
+class DeferredGBufferHarness {
+public:
+    [[nodiscard]] bool Initialize() {
+#if defined(_WIN32)
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = DefWindowProcA;
+        wc.hInstance = GetModuleHandleA(nullptr);
+        wc.lpszClassName = "KBDeferredGBufferHarnessWindow";
+        RegisterClassA(&wc);
+        window_ = CreateWindowA(wc.lpszClassName, "kb-deferred-gbuffer", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);
+#endif
+        bgfx::Init init;
+        init.type = bgfx::RendererType::Direct3D11;
+        init.resolution.width = 64U;
+        init.resolution.height = 64U;
+        init.resolution.reset = BGFX_RESET_NONE;
+#if defined(_WIN32)
+        init.platformData.nwh = window_;
+#endif
+        if (!bgfx::init(init)) {
+            return false;
+        }
+        layout_.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
+        const std::array<float, 15U> tri{
+            -1.0F, -3.0F, 0.0F, 0.0F, 2.0F,
+            -1.0F,  1.0F, 0.0F, 0.0F, 0.0F,
+             3.0F,  1.0F, 0.0F, 2.0F, 0.0F,
+        };
+        vbh_ = bgfx::createVertexBuffer(bgfx::copy(tri.data(), sizeof(tri)), layout_);
+        for (bgfx::TextureHandle& target : targets_) {
+            target = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        }
+        for (bgfx::TextureHandle& readback : readbacks_) {
+            readback = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        }
+        bgfx::Attachment attachments[3U]{};
+        for (std::uint32_t index = 0; index < 3U; ++index) {
+            attachments[index].init(targets_[index]);
+        }
+        fb_ = bgfx::createFrameBuffer(3U, attachments, false);
+        uCamera_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
+        uLightDirKind_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, 4U);
+        uLightParams_ = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
+        uTime_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
+        uDynamicParameter_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
+        bgfx::frame();
+        bgfx::frame();
+        return bgfx::isValid(vbh_) && bgfx::isValid(fb_) &&
+            bgfx::isValid(targets_[0]) && bgfx::isValid(targets_[1]) && bgfx::isValid(targets_[2]) &&
+            bgfx::isValid(readbacks_[0]) && bgfx::isValid(readbacks_[1]) && bgfx::isValid(readbacks_[2]);
+    }
+
+    [[nodiscard]] std::array<std::vector<std::uint8_t>, 3U> Render(bgfx::ProgramHandle program) {
+        const std::array<float, 4U> camera{ 0.0F, 0.0F, 1.0F, 0.0F };
+        const std::array<float, 16U> lightDirKind{};
+        const std::array<float, 4U> lightParams{};
+        const std::array<float, 4U> timeConstants{};
+        const std::array<float, 4U> dynamicParameter{};
+        bgfx::setViewFrameBuffer(0, fb_);
+        bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
+        bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x000000ffU, 1.0F, 0);
+        bgfx::setUniform(uCamera_, camera.data());
+        bgfx::setUniform(uLightDirKind_, lightDirKind.data(), 4U);
+        bgfx::setUniform(uLightParams_, lightParams.data());
+        bgfx::setUniform(uTime_, timeConstants.data());
+        bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
+        bgfx::setVertexBuffer(0, vbh_);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(0, program);
+        bgfx::frame();
+
+        std::array<std::vector<std::uint8_t>, 3U> pixels{
+            std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
+            std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
+            std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
+        };
+        std::array<std::uint32_t, 3U> readyFrames{};
+        for (std::uint32_t index = 0; index < 3U; ++index) {
+            bgfx::blit(static_cast<bgfx::ViewId>(1U + index), readbacks_[index], 0U, 0U, targets_[index], 0U, 0U, 64U, 64U);
+            readyFrames[index] = bgfx::readTexture(readbacks_[index], pixels[index].data());
+        }
+        std::uint32_t frame = bgfx::frame();
+        const std::uint32_t readyFrame = (std::max)({ readyFrames[0], readyFrames[1], readyFrames[2] });
+        int guard = 0;
+        while (frame < readyFrame && guard < 8) {
+            frame = bgfx::frame();
+            ++guard;
+        }
+        return pixels;
+    }
+
+    void Shutdown() {
+        bgfx::destroy(uDynamicParameter_);
+        bgfx::destroy(uTime_);
+        bgfx::destroy(uLightParams_);
+        bgfx::destroy(uLightDirKind_);
+        bgfx::destroy(uCamera_);
+        bgfx::destroy(fb_);
+        for (bgfx::TextureHandle readback : readbacks_) {
+            bgfx::destroy(readback);
+        }
+        for (bgfx::TextureHandle target : targets_) {
+            bgfx::destroy(target);
+        }
+        bgfx::destroy(vbh_);
+        bgfx::shutdown();
+#if defined(_WIN32)
+        if (window_ != nullptr) { DestroyWindow(window_); window_ = nullptr; }
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    HWND window_ = nullptr;
+#endif
+    bgfx::VertexLayout layout_{};
+    bgfx::VertexBufferHandle vbh_ = BGFX_INVALID_HANDLE;
+    std::array<bgfx::TextureHandle, 3U> targets_{
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+    };
+    std::array<bgfx::TextureHandle, 3U> readbacks_{
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
+    };
+    bgfx::FrameBufferHandle fb_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uCamera_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uLightDirKind_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uLightParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uTime_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uDynamicParameter_ = BGFX_INVALID_HANDLE;
+};
+
 [[nodiscard]] bgfx::ProgramHandle BuildGraphProgram(const std::vector<std::uint8_t>& vsBytes, const RenderMaterialGraphShaderArtifact& artifact) {
     const RenderMaterialGraphShaderBinary* dxbc = artifact.FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
     if (dxbc == nullptr) {
@@ -512,6 +692,7 @@ struct AcceptanceCookedMaterial {
         .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ colorHint } },
     });
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     return graph;
 }
 
@@ -522,6 +703,9 @@ struct AcceptanceCookedMaterial {
     RenderMaterialAssetWriter::Write(output, material);
     std::istringstream input{ output.str() };
     RenderMaterialAssetParseResult parsed = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    if (!parsed.Succeeded()) {
+        std::fprintf(stderr, "%s\n", parsed.ErrorMessage().c_str());
+    }
     Require(parsed.Succeeded() && parsed.asset.has_value(),
         "KBMAT-MAT68: editor-authored graph material asset must round-trip before acceptance cook");
     return *parsed.asset;
@@ -598,6 +782,77 @@ struct AcceptanceCookedMaterial {
         delta(lhs.g, rhs.g) <= tolerance &&
         delta(lhs.b, rhs.b) <= tolerance &&
         delta(lhs.a, rhs.a) <= tolerance;
+}
+
+[[nodiscard]] RenderMaterialGraphDocument MakeGBufferProofGraph(std::string_view colorHint) {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 80, .positionY = 80, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ colorHint } } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .positionX = 80, .positionY = 220, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 340, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.75" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 440, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25" } });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    return graph;
+}
+
+[[nodiscard]] RenderMaterialGraphShaderArtifact CookGBufferProofArtifact(
+    const RenderMaterialGraphDocument& graph,
+    std::uint64_t assetId,
+    const std::filesystem::path& cacheDir) {
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+        graph,
+        RenderMaterialGraphBuildContext{ .assetId = assetId, .shadingPath = RenderMaterialGraphShadingPath::Deferred });
+    Require(compiled.Succeeded(), "Deferred GBuffer graph proof must compile");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    request.pass = "GBuffer";
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "Deferred GBuffer graph proof must cook the GBuffer pass");
+    return *cooked.artifact;
+}
+
+void RunDeferredGBufferGraphGpuReadbackProofTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_gbuffer_readback";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "Deferred GBuffer graph proof vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    Require(!vsBytes.empty(), "Deferred GBuffer graph proof vertex shader bytes must be readable");
+
+    RenderMaterialGraphShaderArtifact redArtifact = CookGBufferProofArtifact(MakeGBufferProofGraph("0.90 0.05 0.03 1"), 0xD620U, cacheDir / "red");
+    RenderMaterialGraphShaderArtifact greenArtifact = CookGBufferProofArtifact(MakeGBufferProofGraph("0.04 0.85 0.08 1"), 0xD621U, cacheDir / "green");
+
+    DeferredGBufferHarness harness;
+    if (!harness.Initialize()) {
+        return;
+    }
+    const bgfx::ProgramHandle redProgram = BuildGraphProgram(vsBytes, redArtifact);
+    const bgfx::ProgramHandle greenProgram = BuildGraphProgram(vsBytes, greenArtifact);
+    Require(bgfx::isValid(redProgram) && bgfx::isValid(greenProgram), "Deferred GBuffer graph proof programs must link");
+
+    const std::array<std::vector<std::uint8_t>, 3U> redPixels = harness.Render(redProgram);
+    const std::array<std::vector<std::uint8_t>, 3U> greenPixels = harness.Render(greenProgram);
+    const ForwardRenderProbe redAlbedo = ForwardRenderHarness::ProbeAt(redPixels[0], 32U, 32U);
+    const ForwardRenderProbe greenAlbedo = ForwardRenderHarness::ProbeAt(greenPixels[0], 32U, 32U);
+    const ForwardRenderProbe normal = ForwardRenderHarness::ProbeAt(redPixels[1], 32U, 32U);
+    const ForwardRenderProbe material = ForwardRenderHarness::ProbeAt(redPixels[2], 32U, 32U);
+
+    Require(redAlbedo.r > redAlbedo.g + 100U && greenAlbedo.g > greenAlbedo.r + 100U,
+        "Deferred GBuffer readback must show graph baseColor changing the albedo attachment");
+    Require(normal.g > 220U && normal.r > 100U && normal.r < 155U && normal.b > 100U && normal.b < 155U,
+        "Deferred GBuffer readback must show graph normal output in the normal attachment");
+    Require(material.r > 170U && material.r < 215U && material.g > 45U && material.g < 90U,
+        "Deferred GBuffer readback must show graph metallic/roughness in the material attachment");
+
+    bgfx::destroy(redProgram);
+    bgfx::destroy(greenProgram);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
 }
 
 void RunForwardGraphRenderTest() {
@@ -1021,10 +1276,35 @@ void RunForwardGraphAcceptanceSuiteTest() {
             !missingBinding.binding.textures[0].resolved,
         "KBMAT-MAT68: missing texture must be reported as a binding diagnostic and unresolved texture");
 
-    const std::vector<RenderMaterialGraphDiagnostic> unsupportedDiagnostics =
+    const std::vector<RenderMaterialGraphDiagnostic> deferredReadyDiagnostics =
         ValidateRenderMaterialGraphDocument(red.graph, RenderMaterialGraphRenderPath::GpuDeferred);
-    Require(HasGraphDiagnostic(unsupportedDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
-        "KBMAT-MAT68: unsupported render path must report an explicit diagnostic");
+    Require(!HasGraphDiagnostic(deferredReadyDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "KBMAT-MAT68: deferred production render path must accept supported material-surface graph nodes");
+
+    RenderMaterialGraphDocument deferredSceneColorGraph = MakeDefaultRenderMaterialGraphDocument();
+    deferredSceneColorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::SceneColor,
+    });
+    deferredSceneColorGraph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::SceneColor, 2U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const std::vector<RenderMaterialGraphDiagnostic> deferredSceneColorDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredSceneColorGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(HasGraphDiagnostic(deferredSceneColorDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "KBMAT-MAT68: scene color must report an explicit unsupported diagnostic on the deferred GBuffer geometry path");
+
+    deferredSceneColorGraph.shadingModel = "unlit";
+    deferredSceneColorGraph.blendMode = "translucent";
+    const std::vector<RenderMaterialGraphDiagnostic> deferredTransparentSceneColorDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredSceneColorGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(!HasGraphDiagnostic(deferredTransparentSceneColorDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "KBMAT-MAT68: transparent deferred graph must accept scene color because BaseTransparent binds the scene-color snapshot");
+    const AcceptanceCookedMaterial& deferredTransparentSceneColor = cookAndTrack(deferredSceneColorGraph, 0x68F2U);
+    Require(deferredTransparentSceneColor.shader.reflection.usesSceneColor &&
+            deferredTransparentSceneColor.shader.reflection.blendMode == RenderMaterialGraphBlendMode::Translucent &&
+            deferredTransparentSceneColor.key.pass == "BaseTransparent",
+        "KBMAT-MAT68: transparent deferred scene-color graph must cook through the real BaseTransparent graph program path");
+    Require(bgfx::isValid(registry.Acquire(deferredTransparentSceneColor.key)),
+        "KBMAT-MAT68: transparent deferred scene-color graph program must link through MaterialProgramRegistry");
 
     const MaterialProgramRegistryStats stats = registry.Stats();
     Require(stats.loads >= 5U && stats.failures == 0U && stats.liveProgramCount >= 5U,
@@ -1421,6 +1701,67 @@ void RunForwardGraphScreenPositionTest() {
     harness.Shutdown();
 }
 
+// MAT-78: PixelPosition exposes absolute viewport pixel coordinates. The graph normalizes it back
+// to UV space before sampling so the GPU proof distinguishes absolute pixels from normalized screen UVs.
+void RunForwardGraphPixelPositionTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat78_pixel_position";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT78: Harness vertex shader must cook to a DXBC binary");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelPosition, .positionX = 40, .positionY = 40 });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Multiply, .positionX = 180, .positionY = 40 });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 40, .positionY = 160, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.015625" } });
+    RenderMaterialGraphNode sample{ .id = 5U, .kind = RenderMaterialGraphNodeKind::TextureSample, .positionX = 340, .positionY = 40 };
+    sample.parameter.stableId = "pixelGradTex";
+    sample.parameter.textureRole = "baseColor";
+    sample.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;
+    graph.nodes.push_back(sample);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelPosition, 2U, "xy", RenderMaterialGraphNodeKind::Multiply, 3U, "a"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Multiply, 3U, "b"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Multiply, 3U, "value", RenderMaterialGraphNodeKind::TextureSample, 5U, "uv"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::TextureSample, 5U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x7800U });
+    Require(compiled.Succeeded() && compiled.shader.reflection.textures.size() == 1U, "KBMAT-MAT78: PixelPosition sampling graph must compile");
+    Require(compiled.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT78: PixelPosition node must emit absolute pixel coordinates");
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT78: PixelPosition graph must cook");
+    const std::string samplerName = compiled.shader.reflection.textures[0].samplerName;
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT78: Direct3D11 device unavailable; cannot run GPU pixel position proof\n");
+        Require(false, "KBMAT-MAT78: A real GPU device is required to prove pixel position");
+        return;
+    }
+
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
+    Require(bgfx::isValid(program), "KBMAT-MAT78: PixelPosition graph program must link");
+
+    const std::array<std::uint32_t, 2U> gradient{ 0xff000000U, 0xff0000ffU };
+    bgfx::UniformHandle sampler = bgfx::createUniform(samplerName.c_str(), bgfx::UniformType::Sampler);
+    bgfx::TextureHandle gradientTexture = bgfx::createTexture2D(2U, 1U, false, 1U, bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(gradient.data(), sizeof(gradient)));
+
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, sampler, gradientTexture);
+    const ForwardRenderProbe leftPixel = ForwardRenderHarness::ProbeAt(pixels, 12U, 32U);
+    const ForwardRenderProbe rightPixel = ForwardRenderHarness::ProbeAt(pixels, 52U, 32U);
+    Require(rightPixel.r > leftPixel.r + 40U,
+        "KBMAT-MAT78: PixelPosition.x must vary in absolute pixels across the screen");
+
+    bgfx::destroy(gradientTexture);
+    bgfx::destroy(sampler);
+    harness.Shutdown();
+}
+
 // MAT-76: object-space inputs. The harness simulates an object translated so local position and
 // object origin differ from per-fragment world position by +0.7 in X. A graph wired
 // LocalPosition->baseColor (and ObjectPosition->baseColor) must therefore render a red distinct
@@ -1515,6 +1856,7 @@ void RunForwardGraphPerInstanceTest() {
     const bgfx::ProgramHandle randomProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceRandom, "random", "ctx.perInstanceRandom");
     const bgfx::ProgramHandle radiusProgram = buildScalarProgram(RenderMaterialGraphNodeKind::ObjectRadius, "radius", "ctx.objectRadius");
     const bgfx::ProgramHandle fadeProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceFadeAmount, "fade", "ctx.perInstanceFadeAmount");
+    const bgfx::ProgramHandle distanceCullFadeProgram = buildScalarProgram(RenderMaterialGraphNodeKind::DistanceCullFade, "distance_cull_fade", "ctx.perInstanceFadeAmount");
     const bgfx::ProgramHandle customProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceCustomData, "custom", "ctx.perInstanceCustomData");
 
     // Two instances of the same batch with distinct per-instance random (0.2 vs 0.8 in the .w lane).
@@ -1534,12 +1876,18 @@ void RunForwardGraphPerInstanceTest() {
     Require(highFade.r > lowFade.r + 40U,
         "KBMAT-MAT47: PerInstanceFadeAmount must vary the output with the per-instance fade lane");
 
+    const ForwardRenderProbe lowDistanceCullFade = ForwardRenderHarness::ProbeAt(harness.RenderPixels(distanceCullFadeProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.25F), 32U, 32U);
+    const ForwardRenderProbe highDistanceCullFade = ForwardRenderHarness::ProbeAt(harness.RenderPixels(distanceCullFadeProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.85F), 32U, 32U);
+    Require(highDistanceCullFade.r > lowDistanceCullFade.r + 40U,
+        "KBMAT-MAT47: DistanceCullFade must vary the output with the production per-instance fade lane");
+
     const ForwardRenderProbe lowCustom = ForwardRenderHarness::ProbeAt(harness.RenderPixels(customProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.15F), 32U, 32U);
     const ForwardRenderProbe highCustom = ForwardRenderHarness::ProbeAt(harness.RenderPixels(customProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.75F), 32U, 32U);
     Require(highCustom.r > lowCustom.r + 40U,
         "KBMAT-MAT47: PerInstanceCustomData must vary the output with the per-instance custom data lane");
 
     bgfx::destroy(customProgram);
+    bgfx::destroy(distanceCullFadeProgram);
     bgfx::destroy(fadeProgram);
     bgfx::destroy(radiusProgram);
     bgfx::destroy(randomProgram);
@@ -1685,12 +2033,13 @@ void RunForwardGraphTransparentBlendTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Blue base color with alpha 0.5; the MaterialOutput alpha defaults to baseColor.a, so surface.alpha = 0.5.
+    // Blue base color with explicit alpha 0.5; BaseColor.a must not implicitly drive surface alpha.
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
     color.parameter.defaultValueHint = "0 0 1 0.5";
     graph.nodes.push_back(color);
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x8000U });
     Require(compiled.Succeeded(), "KBMAT-MAT80: translucent graph must compile");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
@@ -2062,6 +2411,119 @@ void RunForwardGraphSceneDepthRendersTest() {
     bgfx::destroy(fadeProgram);
     bgfx::destroy(sceneDepthTexture);
     bgfx::destroy(program);
+    harness.Shutdown();
+}
+
+void RunForwardGraphPixelDepthRendersTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat31_pixel_depth_render";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path nearVsBin = cacheDir / "vs_graph_depth_near.bin";
+    const std::filesystem::path farVsBin = cacheDir / "vs_graph_depth_far.bin";
+    Require(CookHarnessDepthVertexShader(nearVsBin, 0.15F), "KBMAT-MAT31: PixelDepth near-depth harness vertex shader must cook");
+    Require(CookHarnessDepthVertexShader(farVsBin, 0.85F), "KBMAT-MAT31: PixelDepth far-depth harness vertex shader must cook");
+    const std::vector<std::uint8_t> nearVsBytes = ReadAllBytes(nearVsBin);
+    const std::vector<std::uint8_t> farVsBytes = ReadAllBytes(farVsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelDepth });
+    RenderMaterialGraphNode one{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    one.parameter.defaultValueHint = "1";
+    graph.nodes.push_back(one);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelDepth, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "x"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelDepth, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "y"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelDepth, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "z"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "w"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::MakeVector, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x3106U });
+    Require(compiled.Succeeded(), "KBMAT-MAT31: PixelDepth render graph must compile");
+    Require(!compiled.shader.reflection.usesSceneDepth, "KBMAT-MAT31: PixelDepth render graph must not request a scene-depth texture binding");
+    Require(compiled.shader.source.find("ctx.fragmentDepth") != std::string::npos, "KBMAT-MAT31: PixelDepth render graph must read the fragment depth context");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT31: PixelDepth render graph must cook to a real shader binary");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT31: Direct3D11 device unavailable; cannot run GPU PixelDepth proof\n");
+        Require(false, "KBMAT-MAT31: A real GPU device is required to prove PixelDepth");
+        return;
+    }
+
+    const bgfx::ProgramHandle nearProgram = BuildGraphProgram(nearVsBytes, *result.artifact);
+    const bgfx::ProgramHandle farProgram = BuildGraphProgram(farVsBytes, *result.artifact);
+    Require(bgfx::isValid(nearProgram) && bgfx::isValid(farProgram), "KBMAT-MAT31: PixelDepth graph programs must link");
+
+    const ForwardRenderProbe nearPixel = harness.Render(nearProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const ForwardRenderProbe farPixel = harness.Render(farProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(farPixel.r > nearPixel.r + 100U && farPixel.g > nearPixel.g + 100U && farPixel.b > nearPixel.b + 100U,
+        "KBMAT-MAT31: PixelDepth must render the GPU fragment depth, not a constant or scene-depth sampler");
+
+    bgfx::destroy(farProgram);
+    bgfx::destroy(nearProgram);
+    harness.Shutdown();
+}
+
+void RunForwardGraphCameraDepthFadeRendersTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat31_camera_depth_fade_render";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path nearVsBin = cacheDir / "vs_graph_camera_near.bin";
+    const std::filesystem::path farVsBin = cacheDir / "vs_graph_camera_far.bin";
+    Require(CookHarnessDepthVertexShader(nearVsBin, 0.85F), "KBMAT-MAT31: CameraDepthFade near-camera harness vertex shader must cook");
+    Require(CookHarnessDepthVertexShader(farVsBin, 0.15F), "KBMAT-MAT31: CameraDepthFade far-camera harness vertex shader must cook");
+    const std::vector<std::uint8_t> nearVsBytes = ReadAllBytes(nearVsBin);
+    const std::vector<std::uint8_t> farVsBytes = ReadAllBytes(farVsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::CameraDepthFade });
+    RenderMaterialGraphNode one{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    one.parameter.defaultValueHint = "1";
+    graph.nodes.push_back(one);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "x"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "y"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "z"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "w"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::MakeVector, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x3107U });
+    Require(compiled.Succeeded(), "KBMAT-MAT31: CameraDepthFade render graph must compile");
+    Require(!compiled.shader.reflection.usesSceneDepth, "KBMAT-MAT31: CameraDepthFade render graph must not request a scene-depth texture binding");
+    Require(compiled.shader.source.find("distance(ctx.cameraPosition, ctx.worldPos)") != std::string::npos,
+        "KBMAT-MAT31: CameraDepthFade render graph must read camera and world context");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT31: CameraDepthFade render graph must cook to a real shader binary");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT31: Direct3D11 device unavailable; cannot run GPU CameraDepthFade proof\n");
+        Require(false, "KBMAT-MAT31: A real GPU device is required to prove CameraDepthFade");
+        return;
+    }
+
+    const bgfx::ProgramHandle nearProgram = BuildGraphProgram(nearVsBytes, *result.artifact);
+    const bgfx::ProgramHandle farProgram = BuildGraphProgram(farVsBytes, *result.artifact);
+    Require(bgfx::isValid(nearProgram) && bgfx::isValid(farProgram), "KBMAT-MAT31: CameraDepthFade graph programs must link");
+
+    const ForwardRenderProbe nearPixel = harness.Render(nearProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const ForwardRenderProbe farPixel = harness.Render(farProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(farPixel.r > nearPixel.r + 100U && farPixel.g > nearPixel.g + 100U && farPixel.b > nearPixel.b + 100U,
+        "KBMAT-MAT31: CameraDepthFade must render the GPU camera/world distance fade");
+
+    bgfx::destroy(farProgram);
+    bgfx::destroy(nearProgram);
     harness.Shutdown();
 }
 
@@ -2963,6 +3425,7 @@ void RunForwardGraphMaskedDiscardTest() {
         color.parameter.defaultValueHint = rgba;
         graph.nodes.push_back(color);
         graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
         return graph;
     };
 
@@ -3014,13 +3477,14 @@ void RunForwardGraphBlendModeCompositeTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Unlit red with alpha 0.5 (surface.alpha defaults to baseColor.a) over an opaque green background.
+    // Unlit red with explicit alpha 0.5 over an opaque green background.
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = "unlit";
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
     color.parameter.defaultValueHint = "1 0 0 0.5";
     graph.nodes.push_back(color);
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x3801U });
     Require(compiled.Succeeded(), "KBMAT-MAT38C: composite graph must compile");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
@@ -3266,10 +3730,17 @@ void RunForwardGraphVariantSwitchesTest() {
     Require(pathForward.r > pathForward.b + 40U, "KBMAT-MAT52: ShadingPathSwitch forward branch must render red on the GPU");
     Require(pathDeferred.b > pathDeferred.r + 40U, "KBMAT-MAT52: ShadingPathSwitch deferred branch must render blue on the GPU");
 
+    const RenderMaterialGraphDocument forwardPlusGraph = buildSwitchGraph(RenderMaterialGraphNodeKind::ShadingPathSwitch, "forwardPlus", "deferred");
+    const ForwardRenderProbe pathForwardPlus = render(
+        forwardPlusGraph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x5206U, .shadingPath = RenderMaterialGraphShadingPath::ForwardPlus },
+        baseDir / "path_forward_plus");
+    Require(pathForwardPlus.r > pathForwardPlus.b + 40U, "KBMAT-MAT52: ShadingPathSwitch forward+ branch must render red on the GPU");
+
     const RenderMaterialGraphDocument stageGraph = buildSwitchGraph(RenderMaterialGraphNodeKind::ShaderStageSwitch, "vertex", "fragment");
     const ForwardRenderProbe stageFragment = render(
         stageGraph,
-        RenderMaterialGraphBuildContext{ .assetId = 0x5206U },
+        RenderMaterialGraphBuildContext{ .assetId = 0x5207U },
         baseDir / "stage_fragment");
     Require(stageFragment.b > stageFragment.r + 40U, "KBMAT-MAT52: ShaderStageSwitch fragment branch must render blue on the GPU");
 
@@ -3714,6 +4185,7 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
 
 void RunGraphForwardGpuRenderTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunDeferredGBufferGraphGpuReadbackProofTest();
     RunForwardGraphRenderTest();
     RunForwardGraphAcceptanceSuiteTest();
     RunForwardGraphOrganizationNodesRenderTest();
@@ -3721,6 +4193,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphUv1SamplingTest();
     RunForwardGraphVertexColorTest();
     RunForwardGraphScreenPositionTest();
+    RunForwardGraphPixelPositionTest();
     RunForwardGraphObjectSpaceTest();
     RunForwardGraphPerInstanceTest();
     RunForwardGraphPreSkinnedVertexDataTest();
@@ -3731,6 +4204,8 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphDisplacementVertexOutputTest();
     RunForwardGraphSceneDepthCooksTest();
     RunForwardGraphSceneDepthRendersTest();
+    RunForwardGraphPixelDepthRendersTest();
+    RunForwardGraphCameraDepthFadeRendersTest();
     RunForwardGraphTextureExpansionRendersTest();
     RunForwardGraphCustomCodeRendersTest();
     RunForwardGraphMaterialFunctionRendersTest();

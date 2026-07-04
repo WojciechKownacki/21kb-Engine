@@ -30,11 +30,11 @@ bool SceneRenderTarget::Ensure(const SceneRenderTargetDesc& desc) {
     if (!desc.IsValid()) {
         return false;
     }
-    return Ensure(desc.extent.width, desc.extent.height, desc.colorPolicy);
+    return Ensure(desc.extent.width, desc.extent.height, desc.colorPolicy, desc.msaaSamples);
 }
 
-bool SceneRenderTarget::Ensure(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy) {
-    return framebuffer_.Ensure(width, height, colorPolicy);
+bool SceneRenderTarget::Ensure(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy, std::uint8_t msaaSamples) {
+    return framebuffer_.Ensure(width, height, colorPolicy, msaaSamples);
 }
 
 void SceneRenderTarget::Shutdown() {
@@ -47,6 +47,10 @@ bgfx::FrameBufferHandle SceneRenderTarget::FrameBuffer() const noexcept {
 
 bgfx::TextureHandle SceneRenderTarget::ColorTexture() const noexcept {
     return framebuffer_.ColorTexture();
+}
+
+bgfx::TextureHandle SceneRenderTarget::ResolvedColorTexture() const noexcept {
+    return framebuffer_.ResolvedColorTexture();
 }
 
 bgfx::TextureHandle SceneRenderTarget::DepthTexture() const noexcept {
@@ -68,8 +72,16 @@ std::uint32_t SceneRenderTarget::Height() const noexcept {
     return framebuffer_.Height();
 }
 
+std::uint8_t SceneRenderTarget::MsaaSamples() const noexcept {
+    return framebuffer_.MsaaSamples();
+}
+
 bool SceneRenderTarget::IsValid() const noexcept {
     return framebuffer_.IsValid();
+}
+
+bool SceneRenderTarget::DepthTextureSampled() const noexcept {
+    return framebuffer_.DepthTextureSampled();
 }
 
 bool SceneRenderTarget::UsesHdrColor() const noexcept {

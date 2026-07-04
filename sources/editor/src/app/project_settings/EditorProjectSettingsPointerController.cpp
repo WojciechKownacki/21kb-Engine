@@ -1,10 +1,12 @@
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,18 @@ namespace {
     case 0:
     default:
         return EditorRenderBackend::Auto;
+    }
+}
+
+[[nodiscard]] kb::project::ProjectSceneLightingPath LightingPathForOption(int index) noexcept {
+    switch (index) {
+    case 1:
+        return kb::project::ProjectSceneLightingPath::ForwardPlus;
+    case 2:
+        return kb::project::ProjectSceneLightingPath::Deferred;
+    case 0:
+    default:
+        return kb::project::ProjectSceneLightingPath::Forward;
     }
 }
 
@@ -63,12 +77,34 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     }
 }
 
+[[nodiscard]] const char* AntiAliasingModeName(EditorAntiAliasingMode mode) noexcept {
+    switch (mode) {
+    case EditorAntiAliasingMode::None:
+        return "None";
+    case EditorAntiAliasingMode::Fxaa:
+        return "FXAA";
+    case EditorAntiAliasingMode::Taa:
+        return "TAA";
+    case EditorAntiAliasingMode::Msaa:
+        return "MSAA";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "1" : "0";
+}
+
 [[nodiscard]] std::uint8_t MsaaSamplesForOption(int index) noexcept {
     switch (index) {
     case 1:
         return 2U;
     case 2:
         return 4U;
+    case 3:
+        return 8U;
+    case 4:
+        return 16U;
     case 0:
     default:
         return 0U;
@@ -100,6 +136,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::InputEnabled;
     case ProjectSettingsHitKind::RenderBackendOption:
         return ProjectSettingsTooltipKind::RenderBackend;
+    case ProjectSettingsHitKind::LightingPathOption:
+        return ProjectSettingsTooltipKind::LightingPath;
     case ProjectSettingsHitKind::AntiAliasingMode:
         return ProjectSettingsTooltipKind::AntiAliasing;
     case ProjectSettingsHitKind::MsaaOption:
@@ -155,6 +193,14 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     }
+    case ProjectSettingsHitKind::LightingPathOption: {
+        const bool changed = sceneContext.SetProjectSceneLightingPath(LightingPathForOption(hit.index));
+        if (changed) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
     case ProjectSettingsHitKind::GraphicsToggle: {
         if (renderBackendSettings == nullptr) {
             return sceneContext.CloseProjectSettingsDropdowns();
@@ -171,8 +217,25 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         if (renderBackendSettings == nullptr) {
             return sceneContext.CloseProjectSettingsDropdowns();
         }
+        const EditorAntiAliasingMode previousMode = renderBackendSettings->AntiAliasingMode();
         const std::uint64_t previousGeneration = renderBackendSettings->Generation();
-        renderBackendSettings->SetAntiAliasingMode(AntiAliasingModeForOption(hit.index));
+        const std::uint64_t previousBackendGeneration = renderBackendSettings->BackendGeneration();
+        const EditorAntiAliasingMode requestedMode = AntiAliasingModeForOption(hit.index);
+        renderBackendSettings->SetAntiAliasingMode(requestedMode);
+        {
+            std::ostringstream message;
+            message << "UI AA mode click index=" << hit.index
+                    << " requested=" << AntiAliasingModeName(requestedMode)
+                    << " previous=" << AntiAliasingModeName(previousMode)
+                    << " current=" << AntiAliasingModeName(renderBackendSettings->AntiAliasingMode())
+                    << " fxaa=" << BoolText(renderBackendSettings->FxaaEnabled())
+                    << " taa=" << BoolText(renderBackendSettings->TemporalAntiAliasingEnabled())
+                    << " msaaSamples=" << static_cast<unsigned>(renderBackendSettings->MsaaSamples())
+                    << " generation=" << previousGeneration << "->" << renderBackendSettings->Generation()
+                    << " backendGeneration=" << previousBackendGeneration << "->" << renderBackendSettings->BackendGeneration();
+            EditorCrashBreadcrumbs::Write("aa_trace", message.str());
+            sceneContext.Console().Info("AA", message.str());
+        }
         if (renderBackendSettings->Generation() != previousGeneration) {
             sceneContext.MarkSceneRenderDirty();
         }
@@ -188,7 +251,22 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
             return false;
         }
         const std::uint64_t previousGeneration = renderBackendSettings->Generation();
-        renderBackendSettings->SetMsaaSamples(MsaaSamplesForOption(hit.index));
+        const std::uint64_t previousBackendGeneration = renderBackendSettings->BackendGeneration();
+        const std::uint8_t requestedSamples = MsaaSamplesForOption(hit.index);
+        renderBackendSettings->SetMsaaSamples(requestedSamples);
+        {
+            std::ostringstream message;
+            message << "UI MSAA samples click index=" << hit.index
+                    << " requestedSamples=" << static_cast<unsigned>(requestedSamples)
+                    << " mode=" << AntiAliasingModeName(renderBackendSettings->AntiAliasingMode())
+                    << " fxaa=" << BoolText(renderBackendSettings->FxaaEnabled())
+                    << " taa=" << BoolText(renderBackendSettings->TemporalAntiAliasingEnabled())
+                    << " msaaSamples=" << static_cast<unsigned>(renderBackendSettings->MsaaSamples())
+                    << " generation=" << previousGeneration << "->" << renderBackendSettings->Generation()
+                    << " backendGeneration=" << previousBackendGeneration << "->" << renderBackendSettings->BackendGeneration();
+            EditorCrashBreadcrumbs::Write("aa_trace", message.str());
+            sceneContext.Console().Info("AA", message.str());
+        }
         if (renderBackendSettings->Generation() != previousGeneration) {
             sceneContext.MarkSceneRenderDirty();
         }

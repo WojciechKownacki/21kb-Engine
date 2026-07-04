@@ -54,9 +54,8 @@ enum class RenderMaterialDomain : std::uint8_t {
     UserInterface,
 };
 
-// MAT-34: only Surface is implemented (drives the forward graph wrapper/pass). The other domains are
-// declared for parity but NOT implemented; a graph that requests them falls back to Surface with a
-// diagnostic instead of silently mis-rendering — zero false claim.
+// MAT-34: only Surface has a production graph runtime pass. Declared domains without a runtime pass fail
+// compilation instead of silently compiling as Surface.
 [[nodiscard]] constexpr bool IsRenderMaterialDomainProduction(RenderMaterialDomain domain) noexcept {
     return domain == RenderMaterialDomain::Surface;
 }
@@ -64,10 +63,8 @@ enum class RenderMaterialDomain : std::uint8_t {
 [[nodiscard]] RenderMaterialDomain ParseRenderMaterialDomain(std::string_view text) noexcept;
 [[nodiscard]] std::string_view RenderMaterialDomainName(RenderMaterialDomain domain) noexcept;
 
-// MAT-37: surface shading models. Unlit (emissive/base color straight to the framebuffer) and DefaultLit
-// (the metallic-roughness forward PBR path) are fully implemented and produce visibly different pixels.
-// The remaining models are declared for parity but NOT implemented; a graph that requests one falls back
-// to DefaultLit with a diagnostic instead of silently mis-shading — zero false claim.
+// MAT-37: surface shading models. Production models have explicit graph reflection and fragment-wrapper
+// branches; declared models without a runtime branch fail compilation instead of falling back to DefaultLit.
 enum class RenderMaterialShadingModel : std::uint8_t {
     Unlit,
     DefaultLit,
@@ -81,7 +78,12 @@ enum class RenderMaterialShadingModel : std::uint8_t {
 };
 
 [[nodiscard]] constexpr bool IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel model) noexcept {
-    return model == RenderMaterialShadingModel::Unlit || model == RenderMaterialShadingModel::DefaultLit;
+    return model == RenderMaterialShadingModel::Unlit ||
+        model == RenderMaterialShadingModel::DefaultLit ||
+        model == RenderMaterialShadingModel::Subsurface ||
+        model == RenderMaterialShadingModel::ClearCoat ||
+        model == RenderMaterialShadingModel::SingleLayerWater ||
+        model == RenderMaterialShadingModel::ThinTranslucent;
 }
 
 [[nodiscard]] RenderMaterialShadingModel ParseRenderMaterialShadingModel(std::string_view text) noexcept;

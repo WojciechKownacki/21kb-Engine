@@ -135,9 +135,9 @@ namespace {
     if (!config.passes.empty()) {
         return config.passes;
     }
-    // BaseOpaque (MAT-08 GPU forward), ShadowDepth (graph alpha clip) and BaseTransparent (MAT-80, now an
-    // active alpha-blended submit pass) all have a live runtime consumer.
-    return { "BaseOpaque", "ShadowDepth", "BaseTransparent" };
+    // BaseOpaque (GPU forward), GBuffer (deferred MRT), ShadowDepth (graph alpha clip) and
+    // BaseTransparent (active alpha-blended submit pass) all have a live runtime consumer.
+    return { "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent" };
 }
 
 struct CookCacheFootprint {
@@ -193,7 +193,8 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
 [[nodiscard]] EditorMaterialGraphCookResult ExecuteCook(
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
-    const kb::render::RenderMaterialAssetData& material) {
+    const kb::render::RenderMaterialAssetData& material,
+    kb::render::RenderMaterialGraphBuildContext graphContext) {
     const auto startedAt = std::chrono::steady_clock::now();
     EditorMaterialGraphCookResult result{};
     result.materialAssetId = assetId;
@@ -218,9 +219,9 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
         return result;
     }
 
-    const kb::render::RenderMaterialGraphBuildContext context{ .assetId = assetId.value, .sourcePath = {} };
+    graphContext.assetId = assetId.value;
     const kb::render::RenderMaterialGraphCompileResult compiled =
-        kb::render::CompileRenderMaterialGraphToShaderSource(material.graph, context);
+        kb::render::CompileRenderMaterialGraphToShaderSource(material.graph, graphContext);
     for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
         result.diagnostics.push_back(FormatDiagnostic(diagnostic));
     }
@@ -405,7 +406,10 @@ bool EditorMaterialGraphCookService::ShadercAvailable() const noexcept {
     return !config_.shadercPath.empty();
 }
 
-std::uint64_t EditorMaterialGraphCookService::RequestCook(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material) {
+std::uint64_t EditorMaterialGraphCookService::RequestCook(
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialAssetData& material,
+    kb::render::RenderMaterialGraphBuildContext graphContext) {
     std::uint64_t generation = 0U;
     {
         std::lock_guard<std::mutex> lock{ mutex_ };
@@ -415,6 +419,7 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(kb::assets::AssetId as
         generation = ++generationCounter_;
         PendingEntry entry{};
         entry.material = material;
+        entry.graphContext = std::move(graphContext);
         entry.generation = generation;
         entry.readyAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.debounceMs);
         pending_[assetId.value] = std::move(entry);
@@ -432,13 +437,16 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(kb::assets::AssetId as
     return generation;
 }
 
-EditorMaterialGraphCookResult EditorMaterialGraphCookService::CookNow(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material) const {
+EditorMaterialGraphCookResult EditorMaterialGraphCookService::CookNow(
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialAssetData& material,
+    kb::render::RenderMaterialGraphBuildContext graphContext) const {
     EditorMaterialGraphCookConfig snapshot;
     {
         std::lock_guard<std::mutex> lock{ mutex_ };
         snapshot = config_;
     }
-    return ExecuteCook(snapshot, assetId, material);
+    return ExecuteCook(snapshot, assetId, material, std::move(graphContext));
 }
 
 std::vector<EditorMaterialGraphCookResult> EditorMaterialGraphCookService::DrainResults() {
@@ -514,7 +522,7 @@ void EditorMaterialGraphCookService::WorkerLoop() {
         const EditorMaterialGraphCookConfig snapshot = config_;
 
         lock.unlock();
-        EditorMaterialGraphCookResult result = ExecuteCook(snapshot, assetId, entry.material);
+        EditorMaterialGraphCookResult result = ExecuteCook(snapshot, assetId, entry.material, std::move(entry.graphContext));
         result.requestGeneration = entry.generation;
         lock.lock();
 

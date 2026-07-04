@@ -18,6 +18,9 @@ struct SceneTemporalReprojectionDesc {
     std::array<float, 16> inverseCurrentViewProjection{};
     std::array<float, 16> previousViewProjection{};
     std::array<float, 4> jitterAndParams{};
+    std::array<float, 4> historyJitterParams{};
+    // x: reproject depthless background against the editor grid plane, y: plane world height.
+    std::array<float, 4> backgroundPlaneParams{};
     bool historyValid = false;
 
     [[nodiscard]] bool IsValid() const noexcept;

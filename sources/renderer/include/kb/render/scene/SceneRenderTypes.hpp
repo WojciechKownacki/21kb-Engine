@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
 #include "kb/render/scene/SceneGpuDrivenParityValidator.hpp"
@@ -17,6 +18,7 @@ enum class MeshPassType : std::uint8_t;
 
 inline constexpr std::uint32_t kMaxSceneMaterialSlotOverrides = 8U;
 inline constexpr std::uint32_t kMaxSceneForwardLights = 4U;
+inline constexpr std::uint32_t kMaxSceneForwardPlusLights = 32U;
 inline constexpr std::uint32_t kMaxSceneReflectionProbes = 8U;
 
 enum class RenderLightKind : std::uint8_t {
@@ -50,12 +52,12 @@ enum class SceneRenderLightingPath : std::uint8_t {
     VisibilityBuffer,
 };
 
-// MAT-64/#51: only the Forward path (capped at kMaxSceneForwardLights analytic lights) is implemented
-// and drives the graph/builtin shaders. ClusteredForwardPlus/Deferred/VisibilityBuffer are declared for
-// the roadmap but NOT implemented (no clustered/tiled light list reaches the shader); they are reported
-// as non-production so nothing falsely claims >4-light lighting is applied.
+// Forward is the classic capped analytic-light path. ClusteredForwardPlus uses the forward shader path with
+// a larger clustered-light budget. Deferred is the GBuffer + fullscreen lighting path.
 [[nodiscard]] constexpr bool IsSceneRenderLightingPathProduction(SceneRenderLightingPath path) noexcept {
-    return path == SceneRenderLightingPath::Forward;
+    return path == SceneRenderLightingPath::Forward ||
+        path == SceneRenderLightingPath::ClusteredForwardPlus ||
+        path == SceneRenderLightingPath::Deferred;
 }
 
 enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
@@ -256,9 +258,7 @@ struct SceneRenderSubmitStats {
     std::uint32_t invalidLightCount = 0;
     std::uint32_t forwardLightCapacity = 0;
     std::uint32_t lightingPath = 0;
-    // MAT-64/#51: false when the configured lighting path is a declared-but-unimplemented
-    // (non-production) path; the renderer still lights via the real Forward path, so this prevents a
-    // false >4-light claim.
+    // False only for declared-but-unimplemented render paths. Forward, Forward+ and Deferred report true.
     bool lightingPathProduction = true;
     std::uint32_t lightClusterCount = 0;
     std::uint32_t submittedAreaLightCount = 0;
@@ -300,6 +300,7 @@ struct SceneRenderSubmitStats {
 struct SceneRenderPassSubmitStats {
     std::uint32_t viewportId = 0;
     std::uint32_t viewportIndex = 0;
+    RenderPassKind renderPass = RenderPassKind::OpaqueScene;
     MeshPassType pass{};
     SceneRenderSubmitStats stats{};
 };
@@ -345,6 +346,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     UnsupportedMaterialAlphaBlend,
     DroppedInstances,
     GraphMaterialProgramFallback,
+    GraphMaterialProgramUnavailable,
+    DeferredRendererUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {

@@ -9,10 +9,10 @@
 namespace kb::render {
 
 struct PackedSceneLighting {
-    std::array<float, kMaxSceneForwardLights * 4U> dirKind{};
-    std::array<float, kMaxSceneForwardLights * 4U> positionRange{};
-    std::array<float, kMaxSceneForwardLights * 4U> colorIntensity{};
-    std::array<float, kMaxSceneForwardLights * 4U> spot{};
+    std::array<float, kMaxSceneForwardPlusLights * 4U> dirKind{};
+    std::array<float, kMaxSceneForwardPlusLights * 4U> positionRange{};
+    std::array<float, kMaxSceneForwardPlusLights * 4U> colorIntensity{};
+    std::array<float, kMaxSceneForwardPlusLights * 4U> spot{};
     std::array<float, 4U> params{};
     std::array<float, 4U> ambient{ 0.18F, 0.20F, 0.23F, 1.0F };
     std::array<float, 4U> environmentZenith{ 0.36F, 0.42F, 0.52F, 1.0F };

@@ -4,7 +4,9 @@
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
+#include "kb/render/SceneDeferredLightingPass.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
@@ -185,6 +187,7 @@ public:
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
+    [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
@@ -226,6 +229,7 @@ private:
         std::uint32_t viewportIndex = 0;
         RenderExtent extent{};
         std::array<float, 16> previousViewProjection{};
+        std::array<float, 2> previousJitter{};
         bool hasHistory = false;
     };
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
@@ -237,7 +241,9 @@ private:
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
+    std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneRenderTarget defaultSceneTarget_;
+    SceneGBuffer defaultSceneGBuffer_;
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
     RenderFramePipeline framePipeline_;
@@ -247,6 +253,7 @@ private:
     SceneRenderSubmitStats lastSceneSubmitStats_{};
     std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
+    std::vector<std::string> lastAaPipelineTraceLines_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
@@ -257,6 +264,7 @@ private:
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
+    std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;
     std::string graphShaderCacheRoot_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = true;

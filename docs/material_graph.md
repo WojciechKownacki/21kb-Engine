@@ -26,8 +26,8 @@ The canonical code entry points are:
 | `Preview` | Production | Uses the same cooked graph shader path as scene rendering. Preview vs scene identity is covered by MAT-68 acceptance tests. |
 | `GpuShadow` | Production | Cooks/loads generated graph vertex shader when vertex-domain outputs are present and keeps shadow-pass fragment inputs neutral where the pass has no lighting uniforms. |
 | `CpuFallback` | Production fallback | Explicit fallback/error path only. It must not be presented as GPU graph proof. |
-| `GpuDeferred` | FallbackOnly | Deferred/GBuffer graph materials are declared but not production until a real GBuffer writer exists. Validation emits `UnsupportedRenderPathNode` warnings. |
-| Forward+ / clustered lighting | Unsupported | `SceneRenderLightingPath::ClusteredForwardPlus` is declared for roadmap use only; only `SceneRenderLightingPath::Forward` is production. |
+| `GpuDeferred` | Production | Deferred graph materials cook a distinct `GBuffer` artifact, write albedo/normal/material MRT attachments, and are lit by the deferred lighting pass. Missing `GBuffer` graph programs are diagnostics/errors, not builtin forward proof. |
+| Forward+ / clustered lighting | Production | `SceneRenderLightingPath::ClusteredForwardPlus` uses the forward graph material pass with the expanded Forward+ light budget and exposes `forwardPlus` through `ShadingPathSwitch`; renderer/editor tests cover project settings, preview inheritance and GPU shader-path selection. |
 
 ## Node Support Matrix
 
@@ -38,9 +38,9 @@ The canonical code entry points are:
 - `FallbackOnly`: valid only as an explicit non-production path downgrade.
 - `Unsupported`: not a working node and must not be exposed as production.
 
-The source of truth is `BuildRenderMaterialGraphNodeSupportMatrix()`. It returns one row for every node in `AllRenderMaterialGraphNodeKinds()` with `authoringSupport`, `gpuForwardSupport`, `gpuShadowSupport`, `gpuDeferredSupport`, `cpuFallbackSupport`, `previewSupport` and a release note. Renderer tests assert that every enumerated node has a row and that `GpuDeferred | FallbackOnly` remains true until a real GBuffer implementation lands.
+The source of truth is `BuildRenderMaterialGraphNodeSupportMatrix()`. It returns one row for every node in `AllRenderMaterialGraphNodeKinds()` with `authoringSupport`, `gpuForwardSupport`, `gpuShadowSupport`, `gpuDeferredSupport`, `cpuFallbackSupport`, `previewSupport` and a release note. Renderer tests assert that every enumerated node has a row and that `GpuDeferred` remains production only with the `GBuffer` cook artifact, MRT writer, deferred lighting pass and GPU readback proof.
 
-Current authoring status: every node returned by `AllRenderMaterialGraphNodeKinds()` is `Production` for the forward/preview graph path. This includes the recent nodes and systems: texture objects and texture arrays, scene color/depth/depth fade, WPO/customized UV0/displacement, material attributes, function/layer stack nodes, custom code, parameter collections, switch nodes, world/object/camera nodes and editor organization nodes.
+Current authoring status: every node returned by `AllRenderMaterialGraphNodeKinds()` is `Production` for authoring, forward and preview graph paths. The deferred `GBuffer` graph path is `Production` for material-surface data used by the MRT writer: base color, normal, roughness, metallic, occlusion, emissive, WPO/customized UV0/displacement, material attributes, function/layer stack nodes, custom code, parameter collections, switch nodes, world/object/camera nodes and editor organization nodes. Scene color, scene texture, scene depth and depth fade are rejected for opaque/masked `GpuDeferred` GBuffer geometry, and accepted for transparent `GpuDeferred` materials because the `BaseTransparent` pass binds the scene-color snapshot and GBuffer depth texture.
 
 ## Artist Workflow
 
@@ -77,6 +77,6 @@ Run:
 .\tests\run-material-graph-release-gate.ps1 -BuildDir build/ci-fix -Config Debug -SkipConfigure
 ```
 
-The gate builds and runs renderer tests, editor tests, the editor executable and `kb_standalone_player --self-test`, then performs a no-token smoke over the Material Graph code surface. The renderer test binary includes `GraphForwardGpuRenderTests`, the MAT-68 graph acceptance suite and real D3D11 GPU readback coverage, so it is the required visual GPU proof for Material Graph releases.
+The gate builds and runs renderer tests, editor tests, the editor executable and `kb_standalone_player --self-test`, then performs a no-token smoke over the Material Graph code surface. The renderer test binary includes `GraphForwardGpuRenderTests`, the MAT-68 graph acceptance suite, deferred `GBuffer` MRT readback coverage and real D3D11 GPU readback coverage, so it is the required visual GPU proof for Material Graph releases.
 
 Use `-IncludeWindowSmoke` to also run `run-render-smoke.ps1` for the broader bgfx window sample after the Material Graph gate has passed.

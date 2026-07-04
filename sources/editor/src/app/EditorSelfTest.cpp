@@ -28,6 +28,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <algorithm>
 #include <array>
@@ -90,6 +91,8 @@ struct ProjectSettingsClickPoints {
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
     POINT vulkanBackend{};
+    POINT forwardPlusLightingPath{};
+    POINT deferredLightingPath{};
     POINT postProcessToggle{};
     POINT fxaaMode{};
     POINT msaaMode{};
@@ -108,6 +111,8 @@ struct ProjectSettingsClickPoints {
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
         .vulkanBackend = Center(rects.backendVulkanButton),
+        .forwardPlusLightingPath = Center(rects.lightingPathForwardPlusButton),
+        .deferredLightingPath = Center(rects.lightingPathDeferredButton),
         .postProcessToggle = Center(rects.postProcessCheckbox),
         .fxaaMode = Center(rects.antiAliasingFxaaButton),
         .msaaMode = Center(rects.antiAliasingMsaaButton),
@@ -201,6 +206,22 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.vulkanBackend.x, click.vulkanBackend.y, renderBackendSettings), "Clicking Vulkan backend is handled");
     report.Check(renderBackendSettings.Backend() == EditorRenderBackend::Vulkan, "Graphics backend setting changed to Vulkan");
     report.Check(renderBackendSettings.Generation() == generationBefore + 1U, "Graphics backend generation increments");
+    report.Check(HitKindAt(context, click.forwardPlusLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Forward+ lighting path point hit-tests as LightingPathOption");
+    report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y, renderBackendSettings), "Clicking Forward+ lighting path is handled");
+    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
+    {
+        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
+        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path persisted to descriptor");
+        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4 after Forward+");
+    }
+    report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
+    report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y, renderBackendSettings), "Clicking Deferred lighting path is handled");
+    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
+    {
+        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
+        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
+        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4");
+    }
     report.Check(HitKindAt(context, click.postProcessToggle) == ProjectSettingsHitKind::GraphicsToggle, "Post FX point hit-tests as GraphicsToggle");
     const std::uint64_t toggleGenerationBefore = renderBackendSettings.Generation();
     const std::uint64_t backendGenerationBeforeToggle = renderBackendSettings.BackendGeneration();
@@ -555,6 +576,39 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     report.Check(wrongTypeWarning != context.Console().Entries().end(), "Rejected wrong-type material slot assignment reports a warning");
 }
 
+void RunMaterialGraphContextMenuSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0x57D00U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = materialId,
+                     .type = "RenderMaterial",
+                     .name = "ContextMenuMaterial",
+                     .virtualPath = "/Game/Materials/ContextMenuMaterial.kbmat",
+                     .runtimeLoadable = true,
+                 }),
+        "Register material asset for graph context-menu authoring");
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    context.MaterialEditor().Open(materialId, material);
+
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 240, -160, 96), "Open material graph context menu in headless editor context");
+    report.Check(context.ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand::CreatePixelDepth),
+        "Execute PixelDepth through material graph context-menu command path");
+    const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = context.MaterialEditor().WorkingCopy();
+    const auto pixelDepth = workingCopy.has_value()
+        ? std::find_if(
+              workingCopy->graph.nodes.begin(),
+              workingCopy->graph.nodes.end(),
+              [](const kb::render::RenderMaterialGraphNode& node) {
+                  return node.kind == kb::render::RenderMaterialGraphNodeKind::PixelDepth;
+              })
+        : std::vector<kb::render::RenderMaterialGraphNode>::const_iterator{};
+    report.Check(workingCopy.has_value() && pixelDepth != workingCopy->graph.nodes.end(),
+        "PixelDepth context-menu command leaves a real node in the material graph working copy");
+}
+
 void RunInspectorLightComponentSuite(Report& report) {
     EditorSceneContext context;
     const kb::scene::SceneEntity lightEntity = context.CreateLightObject(kb::scene::LightKind::Point);
@@ -889,7 +943,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -908,6 +962,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
