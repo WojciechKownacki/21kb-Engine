@@ -854,6 +854,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .lightingConfig = effectiveLightingConfig,
                 .extent = desc.target.viewport.extent,
                 .clearRgba = desc.clearRgba,
+                .shadowMap = shadowBinding.IsValid() ? &shadowBinding : nullptr,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,
