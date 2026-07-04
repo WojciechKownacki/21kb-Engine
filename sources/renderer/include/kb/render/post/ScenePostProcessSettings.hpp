@@ -20,7 +20,7 @@ struct ScenePostProcessSettings {
     float bloomRadiusPixels = 1.5F;
     bool temporalAntiAliasingEnabled = true;
     bool temporalJitterEnabled = true;
-    float temporalHistoryBlend = 0.98F;
+    float temporalHistoryBlend = 0.88F;
     bool fxaaEnabled = false;
     bool tonemapEnabled = true;
     AutoExposureMeteringMode autoExposureMetering = AutoExposureMeteringMode::HdrColor;
