@@ -44,6 +44,16 @@ struct PosTexVertex {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
 }
 
+[[nodiscard]] bgfx::TextureHandle CreateFallbackWhiteTexture() {
+    const std::uint32_t white = 0xFFFF'FFFFU;
+    const bgfx::Memory* memory = bgfx::copy(&white, sizeof(white));
+    return bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, memory);
+}
+
+[[nodiscard]] std::array<float, 16> ZeroMatrix() noexcept {
+    return std::array<float, 16>{};
+}
+
 [[nodiscard]] std::uint16_t HandleValue(bgfx::ProgramHandle handle) noexcept {
     return handle.idx;
 }
@@ -94,6 +104,10 @@ bool SceneDeferredLightingPass::Initialize() {
     cameraPositionUniform_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
     inverseViewProjectionUniform_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
     depthParamsUniform_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
+    shadowMapSampler_ = bgfx::createUniform("s_deferredShadowMap", bgfx::UniformType::Sampler);
+    shadowViewProjUniform_ = bgfx::createUniform("u_deferredShadowViewProj", bgfx::UniformType::Mat4);
+    shadowParamsUniform_ = bgfx::createUniform("u_deferredShadowParams", bgfx::UniformType::Vec4);
+    fallbackShadowTexture_ = CreateFallbackWhiteTexture();
     {
         std::ostringstream message;
         message << "Initialize handles program=" << HandleValue(program_)
@@ -122,6 +136,22 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
                 << " materialSampler=" << HandleValue(materialSampler_)
                 << " depthSampler=" << HandleValue(depthSampler_);
         WriteRendererDebugLog("deferred_lighting", message.str());
+    }
+    if (bgfx::isValid(fallbackShadowTexture_)) {
+        bgfx::destroy(fallbackShadowTexture_);
+        fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(shadowParamsUniform_)) {
+        bgfx::destroy(shadowParamsUniform_);
+        shadowParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(shadowViewProjUniform_)) {
+        bgfx::destroy(shadowViewProjUniform_);
+        shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(shadowMapSampler_)) {
+        bgfx::destroy(shadowMapSampler_);
+        shadowMapSampler_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(depthParamsUniform_)) {
         bgfx::destroy(depthParamsUniform_);
@@ -279,10 +309,20 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setUniform(cameraPositionUniform_, cameraPosition.data());
     bgfx::setUniform(inverseViewProjectionUniform_, inverseViewProjection.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
+    // Deferred's key light used to be applied at full strength everywhere, with no shadow term at
+    // all, while the forward opaque pass darkens light index 0 by a sampled shadow map -- same light,
+    // same scene, but deferred came out visibly brighter/flatter. Feed the same shadow binding used
+    // by the forward/G-buffer passes into the lighting resolve so both paths agree.
+    const bool shadowValid = desc.shadowMap != nullptr && desc.shadowMap->IsValid();
+    static const std::array<float, 16> disabledShadowViewProj = ZeroMatrix();
+    static const std::array<float, 4> disabledShadowParams{};
+    bgfx::setUniform(shadowViewProjUniform_, shadowValid ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
+    bgfx::setUniform(shadowParamsUniform_, shadowValid ? desc.shadowMap->params.data() : disabledShadowParams.data());
     bgfx::setTexture(0U, albedoSampler_, desc.gbuffer->AlbedoTexture());
     bgfx::setTexture(1U, normalSampler_, desc.gbuffer->NormalTexture());
     bgfx::setTexture(2U, materialSampler_, desc.gbuffer->MaterialTexture());
     bgfx::setTexture(3U, depthSampler_, desc.gbuffer->DepthTexture());
+    bgfx::setTexture(4U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
@@ -306,7 +346,9 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(lightParamsUniform_) && bgfx::isValid(ambientColorUniform_) &&
         bgfx::isValid(environmentZenithUniform_) && bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&
-        bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_);
+        bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
+        bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) &&
+        bgfx::isValid(fallbackShadowTexture_);
 }
 
 } // namespace kb::render
