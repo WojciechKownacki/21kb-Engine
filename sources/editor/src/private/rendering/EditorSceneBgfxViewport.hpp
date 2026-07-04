@@ -116,16 +116,6 @@ private:
         bool layoutActiveInCurrentPaint = false;
         bool hasLayoutBounds = false;
         render::NativeWindowFramebuffer presentTarget;
-        // Interactive window/panel resize fires EnsureHostSurfaceWindow dozens of times per second;
-        // resizing the native child window (and, right after, the swapchain-backed present target
-        // bound to it) on every call forces a bgfx::frame() GPU stall each time (see
-        // NativeWindowFramebuffer::Ensure) and, worse, briefly leaves the child window's real Win32
-        // size ahead of the still-old swapchain -- which Windows shows as duplicated/stretched
-        // content. EnsureHostSurfaceWindow throttles the *window* resize using this timestamp so the
-        // window and its swapchain are always resized together, at most once per
-        // kInteractiveResizeTargetThrottle while dragging.
-        std::chrono::steady_clock::time_point lastInteractiveResizeCommitTime{};
-        bool hasLastInteractiveResizeCommitTime = false;
     };
 
     class HostSurfaceStore {
@@ -157,12 +147,6 @@ private:
         std::uint64_t submittedSceneRevision = 0U;
         render::SceneRenderTarget sceneTarget;
         render::ScenePostProcessTargets postProcessTargets;
-        // Same interactive-resize throttle idea as HostSurface::lastPresentTargetResizeTime, applied
-        // to the offscreen scene/post-process targets so their texture+framebuffer churn (up to 8
-        // post-process targets plus the bloom mip chain) is bounded during a resize drag instead of
-        // being torn down and rebuilt on every intermediate panel size.
-        std::chrono::steady_clock::time_point lastSessionTargetResizeTime{};
-        bool hasLastSessionTargetResizeTime = false;
     };
 
     class ViewportSessionStore {
@@ -237,7 +221,6 @@ private:
     private:
         [[nodiscard]] static bool EnsureSessionTargets(
             ViewportSession& session,
-            HWND host,
             std::uint32_t renderWidth,
             std::uint32_t renderHeight,
             bool postProcessEnabled,
