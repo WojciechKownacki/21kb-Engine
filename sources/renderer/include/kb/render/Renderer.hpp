@@ -184,6 +184,13 @@ public:
     [[nodiscard]] const RenderResourceRegistry* SceneResources() const noexcept;
     [[nodiscard]] SceneRenderResourceMap* SceneResourceMap() noexcept;
     [[nodiscard]] const SceneRenderResourceMap* SceneResourceMap() const noexcept;
+    // Lets a caller carry the auto-exposure meter's adapted luminance across a full Shutdown()+
+    // Initialize() cycle (e.g. an editor-side MSAA/backend switch) that has nothing to do with the
+    // scene's actual brightness, so the image doesn't visibly re-expose from scratch on every such
+    // switch. HasExposureHistory() reports whether there's an adapted value worth carrying over.
+    [[nodiscard]] float CurrentExposureLuminance() const noexcept;
+    [[nodiscard]] bool HasExposureHistory() const noexcept;
+    void PrimeExposureAdaptation(float luminance) noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
