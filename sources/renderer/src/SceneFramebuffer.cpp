@@ -11,6 +11,13 @@ constexpr std::uint64_t kSceneColorTextureFlags =
     BGFX_SAMPLER_U_CLAMP |
     BGFX_SAMPLER_V_CLAMP;
 
+constexpr std::uint64_t kResolvedSceneColorTextureFlags =
+    BGFX_TEXTURE_RT |
+    BGFX_TEXTURE_BLIT_DST |
+    BGFX_SAMPLER_MIP_POINT |
+    BGFX_SAMPLER_U_CLAMP |
+    BGFX_SAMPLER_V_CLAMP;
+
 constexpr std::uint64_t kSceneDepthTextureFlags =
     BGFX_TEXTURE_RT |
     BGFX_SAMPLER_MIN_POINT |
@@ -42,6 +49,40 @@ constexpr std::uint64_t kSceneDepthTextureFlags =
     return width > 0U && height > 0U && width <= UINT16_MAX && height <= UINT16_MAX;
 }
 
+[[nodiscard]] bool ColorFormatSupportedForSceneTarget(
+    bgfx::TextureFormat::Enum format,
+    std::uint64_t renderFlags,
+    std::uint64_t resolveFlags,
+    bool needsResolve) noexcept {
+    return SceneColorFormatSupported(format, renderFlags) &&
+        (!needsResolve || SceneColorFormatSupported(format, resolveFlags));
+}
+
+[[nodiscard]] SceneColorFormatSelection SelectSceneFramebufferColorFormat(
+    SceneColorFormatPolicy policy,
+    std::uint64_t renderFlags,
+    std::uint64_t resolveFlags,
+    bool needsResolve) noexcept {
+    if (policy != SceneColorFormatPolicy::Auto) {
+        const bgfx::TextureFormat::Enum requested = SceneColorFormatForPolicy(policy);
+        if (ColorFormatSupportedForSceneTarget(requested, renderFlags, resolveFlags, needsResolve)) {
+            return SceneColorFormatSelection{requested, policy, SceneTargetFormatSelectionStatus::Selected};
+        }
+        return SceneColorFormatSelection{bgfx::TextureFormat::Count, policy, SceneTargetFormatSelectionStatus::Unsupported};
+    }
+
+    if (ColorFormatSupportedForSceneTarget(bgfx::TextureFormat::RGBA16F, renderFlags, resolveFlags, needsResolve)) {
+        return SceneColorFormatSelection{bgfx::TextureFormat::RGBA16F, policy, SceneTargetFormatSelectionStatus::Selected};
+    }
+    if (ColorFormatSupportedForSceneTarget(bgfx::TextureFormat::RGBA16, renderFlags, resolveFlags, needsResolve)) {
+        return SceneColorFormatSelection{bgfx::TextureFormat::RGBA16, policy, SceneTargetFormatSelectionStatus::CapabilityFallback};
+    }
+    if (ColorFormatSupportedForSceneTarget(bgfx::TextureFormat::RGBA8, renderFlags, resolveFlags, needsResolve)) {
+        return SceneColorFormatSelection{bgfx::TextureFormat::RGBA8, policy, SceneTargetFormatSelectionStatus::CapabilityFallback};
+    }
+    return SceneColorFormatSelection{bgfx::TextureFormat::Count, policy, SceneTargetFormatSelectionStatus::Unsupported};
+}
+
 } // namespace
 
 SceneFramebuffer::~SceneFramebuffer() {
@@ -65,8 +106,9 @@ bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneCo
 
     const std::uint64_t msaaFlags = MsaaTextureFlags(msaaSamples);
     const std::uint64_t colorFlags = kSceneColorTextureFlags | msaaFlags;
+    const bool needsResolve = msaaSamples > 0U;
     const std::uint64_t depthFlags = kSceneDepthTextureFlags | msaaFlags | (msaaSamples > 0U ? BGFX_TEXTURE_MSAA_SAMPLE : 0U);
-    colorSelection_ = SelectSceneColorFormat(colorPolicy, colorFlags);
+    colorSelection_ = SelectSceneFramebufferColorFormat(colorPolicy, colorFlags, kResolvedSceneColorTextureFlags, needsResolve);
     depthSelection_ = SelectSceneDepthFormat(depthFlags);
     if (!colorSelection_.IsSupported() || !depthSelection_.IsSupported()) {
         return false;
@@ -80,6 +122,15 @@ bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneCo
         return false;
     }
     bgfx::setName(colorTexture_, "KB Scene Color");
+
+    if (needsResolve) {
+        resolvedColorTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, colorSelection_.format, kResolvedSceneColorTextureFlags);
+        if (!bgfx::isValid(resolvedColorTexture_)) {
+            Shutdown();
+            return false;
+        }
+        bgfx::setName(resolvedColorTexture_, "KB Scene Color Resolved");
+    }
 
     depthTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, depthSelection_.format, depthFlags);
     if (!bgfx::isValid(depthTexture_)) {
@@ -115,9 +166,13 @@ void SceneFramebuffer::Shutdown() {
             bgfx::destroy(colorTexture_);
         }
     }
+    if (bgfx::isValid(resolvedColorTexture_)) {
+        bgfx::destroy(resolvedColorTexture_);
+    }
 
     frameBuffer_ = BGFX_INVALID_HANDLE;
     colorTexture_ = BGFX_INVALID_HANDLE;
+    resolvedColorTexture_ = BGFX_INVALID_HANDLE;
     depthTexture_ = BGFX_INVALID_HANDLE;
     colorSelection_ = {};
     depthSelection_ = {};
@@ -133,6 +188,10 @@ bgfx::FrameBufferHandle SceneFramebuffer::FrameBuffer() const noexcept {
 
 bgfx::TextureHandle SceneFramebuffer::ColorTexture() const noexcept {
     return colorTexture_;
+}
+
+bgfx::TextureHandle SceneFramebuffer::ResolvedColorTexture() const noexcept {
+    return resolvedColorTexture_;
 }
 
 bgfx::TextureHandle SceneFramebuffer::DepthTexture() const noexcept {
@@ -152,7 +211,8 @@ std::uint8_t SceneFramebuffer::MsaaSamples() const noexcept {
 }
 
 bool SceneFramebuffer::IsValid() const noexcept {
-    return bgfx::isValid(frameBuffer_) && bgfx::isValid(colorTexture_) && bgfx::isValid(depthTexture_);
+    return bgfx::isValid(frameBuffer_) && bgfx::isValid(colorTexture_) && bgfx::isValid(depthTexture_) &&
+        (msaaSamples_ == 0U || bgfx::isValid(resolvedColorTexture_));
 }
 
 bool SceneFramebuffer::DepthTextureSampled() const noexcept {
