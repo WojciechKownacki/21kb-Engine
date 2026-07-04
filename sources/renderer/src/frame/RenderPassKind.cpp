@@ -12,6 +12,7 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::GBufferGeometry,
     RenderPassKind::DeferredLighting,
     RenderPassKind::TransparentScene,
+    RenderPassKind::EditorSceneOverlays,
     RenderPassKind::EditorSelectionMask,
     RenderPassKind::PostProcessExposureReadback,
     RenderPassKind::PostProcessMotionVectors,
@@ -22,7 +23,6 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::PostProcessHdrCombine,
     RenderPassKind::PostProcessHdrFinalize,
     RenderPassKind::FinalComposite,
-    RenderPassKind::EditorSceneOverlays,
     RenderPassKind::EditorUiComposite,
     RenderPassKind::EditorGizmoOverlay,
 };

@@ -38,6 +38,7 @@ public:
 
     [[nodiscard]] bgfx::FrameBufferHandle FrameBuffer() const noexcept;
     [[nodiscard]] bgfx::TextureHandle ColorTexture() const noexcept;
+    [[nodiscard]] bgfx::TextureHandle ResolvedColorTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle DepthTexture() const noexcept;
     [[nodiscard]] RenderExtent Extent() const noexcept;
     [[nodiscard]] std::uint32_t Width() const noexcept;

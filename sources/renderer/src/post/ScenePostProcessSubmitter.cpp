@@ -143,6 +143,10 @@ private:
                     << " motionVectors=" << BoolText(settings.taaEnabled)
                     << " historyBlend=" << settings.historyBlend
                     << " historyValid=" << BoolText(desc.temporal.historyValid)
+                    << " historyJitterX=" << desc.temporal.historyJitterParams[0]
+                    << " historyJitterY=" << desc.temporal.historyJitterParams[1]
+                    << " currentJitterX=" << desc.temporal.historyJitterParams[2]
+                    << " currentJitterY=" << desc.temporal.historyJitterParams[3]
                     << " targetHistoryTexture=" << desc.target.temporalHistoryTexture.idx
                     << " previousHistoryTexture=" << desc.target.previousTemporalHistoryTexture.idx;
             WriteRendererDebugLog("aa_trace", message.str());
@@ -161,6 +165,7 @@ private:
             1.0F / settings.height,
         };
         bgfx::setUniform(renderer_.temporalParamsUniform_, temporalParams);
+        bgfx::setUniform(renderer_.postParams_, desc.temporal.historyJitterParams.data());
         bgfx::setTexture(0, renderer_.sourceSampler_, desc.sceneColor);
         bgfx::setTexture(1, renderer_.historySampler_, desc.target.previousTemporalHistoryTexture);
         bgfx::setTexture(2, renderer_.velocitySampler_, desc.target.motionVectorTexture);

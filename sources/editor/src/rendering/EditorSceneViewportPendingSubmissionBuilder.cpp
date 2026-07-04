@@ -103,6 +103,7 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
         message << "sceneTarget.Ensure end msaaSamples=" << static_cast<unsigned>(session.sceneTarget.MsaaSamples())
                 << " depthSampled=" << BoolText(session.sceneTarget.DepthTextureSampled())
                 << " colorTex=" << session.sceneTarget.ColorTexture().idx
+                << " resolvedColorTex=" << session.sceneTarget.ResolvedColorTexture().idx
                 << " depthTex=" << session.sceneTarget.DepthTexture().idx;
         EditorCrashBreadcrumbs::Write("viewport_targets", message.str());
         EditorCrashBreadcrumbs::Write("aa_trace", "Scene target confirmed " + message.str());
@@ -145,6 +146,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .target = render::RenderSceneTargetBinding{
             .frameBuffer = session.sceneTarget.FrameBuffer(),
             .colorTexture = session.sceneTarget.ColorTexture(),
+            .resolvedColorTexture = session.sceneTarget.ResolvedColorTexture(),
             .depthTexture = depthTextureForSampling,
             .viewport = render::RenderViewportDesc{
                 .id = render::RenderViewportId{session.viewportIndex + 1U},

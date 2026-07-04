@@ -741,6 +741,28 @@ void EditorSceneBgfxViewport::ReportAaTrace(std::string_view message, bool force
     aaTraceReporter_(lastConsoleAaTrace_);
 }
 
+void EditorSceneBgfxViewport::ReportAaRouteTrace(std::string_view message, bool force) {
+    if (!aaTraceReporter_) {
+        return;
+    }
+    if (!force && lastConsoleAaRouteTrace_ == message) {
+        return;
+    }
+    lastConsoleAaRouteTrace_ = std::string{ message };
+    aaTraceReporter_(lastConsoleAaRouteTrace_);
+}
+
+void EditorSceneBgfxViewport::ReportAaPipelineTrace(std::string_view message, bool force) {
+    if (!aaTraceReporter_) {
+        return;
+    }
+    if (!force && lastConsoleAaPipelineTrace_ == message) {
+        return;
+    }
+    lastConsoleAaPipelineTrace_ = std::string{ message };
+    aaTraceReporter_(lastConsoleAaPipelineTrace_);
+}
+
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
     renderFailed_ = true;
     pendingPresents_.clear();

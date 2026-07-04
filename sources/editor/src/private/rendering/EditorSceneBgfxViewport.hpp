@@ -264,6 +264,8 @@ private:
     void ShutdownSessionFramebuffers() noexcept;
     [[nodiscard]] bool SubmitPendingPaint();
     void ReportAaTrace(std::string_view message, bool force = false);
+    void ReportAaRouteTrace(std::string_view message, bool force = false);
+    void ReportAaPipelineTrace(std::string_view message, bool force = false);
     void SetFailureDetail(std::string detail);
     void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
@@ -290,6 +292,8 @@ private:
     std::function<void(std::string_view)> errorReporter_{};
     std::function<void(std::string_view)> aaTraceReporter_{};
     std::string lastConsoleAaTrace_{};
+    std::string lastConsoleAaRouteTrace_{};
+    std::string lastConsoleAaPipelineTrace_{};
     std::string failureDetail_{};
     std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;
