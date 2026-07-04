@@ -83,6 +83,11 @@ public:
     [[nodiscard]] bool IsGpuInitialized() const noexcept;
     [[nodiscard]] SceneHdrExposureReadbackResult SubmitHdrReadback(const SceneHdrExposureReadbackDesc& desc) noexcept;
     void Reset() noexcept;
+    // Seeds the adapted luminance without going through Reset()'s "no history" instant-snap-on-next-
+    // Update() path, so a renderer reinitialization that has nothing to do with actual scene exposure
+    // (e.g. switching MSAA sample count) doesn't cause the very next HdrColor-metered readback -- which
+    // may itself be from an incomplete/black transitional frame -- to be treated as truth.
+    void Prime(float luminance) noexcept;
     [[nodiscard]] float Update(float meteredAverageLuminance, SceneExposureAdaptationDesc desc = {}) noexcept;
     [[nodiscard]] float Update(const RenderScene& scene, const SceneRenderLightingConfig& lightingConfig, SceneExposureAdaptationDesc desc = {}) noexcept;
     [[nodiscard]] float CurrentLuminance() const noexcept;
