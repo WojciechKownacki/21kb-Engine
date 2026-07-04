@@ -19,12 +19,17 @@ namespace kb::render {
 struct RenderSceneTargetBinding {
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle colorTexture = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle resolvedColorTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     RenderViewportDesc viewport{};
     std::uint8_t msaaSamples = 0U;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return viewport.IsValid();
+    }
+
+    [[nodiscard]] bool RequiresColorResolve() const noexcept {
+        return msaaSamples > 0U;
     }
 };
 

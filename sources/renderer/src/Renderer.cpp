@@ -101,6 +101,52 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
     return path == SceneRenderLightingPath::Deferred;
 }
 
+[[nodiscard]] bool ResolveSceneColorForSampling(
+    const RenderViewportPlan& viewportPlan,
+    const RenderSceneSubmitDesc& desc,
+    bgfx::TextureHandle& sampledSceneColor) {
+    sampledSceneColor = desc.target.colorTexture;
+    if (!desc.target.RequiresColorResolve()) {
+        return true;
+    }
+
+    {
+        std::ostringstream message;
+        message << "MSAA color resolve requested"
+                << " viewId=" << viewportPlan.viewIds.sceneOverlays
+                << " samples=" << static_cast<unsigned>(desc.target.msaaSamples)
+                << " source=" << HandleValue(desc.target.colorTexture)
+                << " resolved=" << HandleValue(desc.target.resolvedColorTexture)
+                << " extent=" << desc.target.viewport.extent.width << 'x' << desc.target.viewport.extent.height;
+        WriteRendererBreadcrumb("aa_trace", message.str());
+    }
+    const bgfx::Caps* caps = bgfx::getCaps();
+    if (caps == nullptr || (caps->supported & BGFX_CAPS_TEXTURE_BLIT) == 0U) {
+        WriteRendererBreadcrumb("aa_trace", "MSAA color resolve failed: BGFX_CAPS_TEXTURE_BLIT unavailable");
+        return false;
+    }
+    if (!bgfx::isValid(desc.target.colorTexture) || !bgfx::isValid(desc.target.resolvedColorTexture)) {
+        std::ostringstream message;
+        message << "MSAA color resolve failed invalid handles"
+                << " source=" << HandleValue(desc.target.colorTexture)
+                << " resolved=" << HandleValue(desc.target.resolvedColorTexture);
+        WriteRendererBreadcrumb("aa_trace", message.str());
+        return false;
+    }
+
+    bgfx::blit(viewportPlan.viewIds.sceneOverlays, desc.target.resolvedColorTexture, 0U, 0U, desc.target.colorTexture);
+    sampledSceneColor = desc.target.resolvedColorTexture;
+    {
+        std::ostringstream message;
+        message << "MSAA color resolve submitted"
+                << " viewId=" << viewportPlan.viewIds.sceneOverlays
+                << " source=" << HandleValue(desc.target.colorTexture)
+                << " sampled=" << HandleValue(sampledSceneColor);
+        WriteRendererBreadcrumb("aa_trace", message.str());
+    }
+    return true;
+}
+
 } // namespace
 
 Renderer::Renderer() = default;
@@ -201,6 +247,7 @@ void Renderer::Shutdown() {
     runtimeAssetDiscovery_.Clear();
     lastRuntimeMaterialLightingPath_.reset();
     sceneExposureMeter_.ShutdownGpuResources();
+    editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
     defaultSceneGBuffer_.Shutdown();
@@ -214,7 +261,6 @@ void Renderer::Shutdown() {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
     }
-    editorPassSubmitter_.Shutdown();
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->Shutdown();
         sceneRenderer_.reset();
@@ -297,6 +343,7 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
         .target = RenderSceneTargetBinding{
             .frameBuffer = defaultSceneTarget_.FrameBuffer(),
             .colorTexture = defaultSceneTarget_.ColorTexture(),
+            .resolvedColorTexture = defaultSceneTarget_.ResolvedColorTexture(),
             .depthTexture = defaultSceneTarget_.DepthTexture(),
             .viewport = RenderViewportDesc{
                 .id = RenderViewportId{ 1U },
@@ -340,6 +387,8 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastScenePassSubmitStats_.reserve(submissions.size() * 4U);
     lastSceneExposureStats_.clear();
     lastSceneExposureStats_.reserve(submissions.size());
+    lastAaPipelineTraceLines_.clear();
+    lastAaPipelineTraceLines_.reserve(submissions.size() * 3U);
     lastSceneDiagnostics_.Clear();
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     lastDefaultMaterialFallbackCount_ = 0U;
@@ -855,6 +904,39 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }
+
+    RenderSceneSubmitDesc editorOverlayDesc = desc;
+    if (deferredLighting) {
+        editorOverlayDesc.editorOverlayDepthTexture = defaultSceneGBuffer_.DepthTexture();
+    }
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport scene grid submit"
+                << " deferred=" << BoolText(deferredLighting)
+                << " sceneCamera=" << BoolText(sceneCamera != nullptr)
+                << " overlayEnabled=" << BoolText(desc.editorSceneOverlaysEnabled)
+                << " targetFb=" << HandleValue(desc.target.frameBuffer)
+                << " targetColor=" << HandleValue(desc.target.colorTexture)
+                << " targetDepth=" << HandleValue(desc.target.depthTexture)
+                << " gridDepth=" << HandleValue(editorOverlayDesc.SceneOverlayDepthTexture())
+                << " msaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples)
+                << " finalComposite=" << BoolText(desc.finalComposite.enabled)
+                << " postProcess=" << BoolText(desc.postProcessEnabled);
+        WriteRendererBreadcrumb("grid_trace", message.str());
+    }
+    editorPassSubmitter_.SubmitSceneOverlays(
+        viewportPlan,
+        editorOverlayDesc,
+        desc.editorSceneOverlaysEnabled ? sceneCamera : nullptr);
+
+    bgfx::TextureHandle sampledSceneColor = desc.target.colorTexture;
+    if (!ResolveSceneColorForSampling(viewportPlan, desc, sampledSceneColor)) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport MSAA color resolve failed");
+        return false;
+    }
+    RenderSceneSubmitDesc sampledSceneDesc = editorOverlayDesc;
+    sampledSceneDesc.target.colorTexture = sampledSceneColor;
+
     if (desc.selectionMaskEnabled) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask setup begin");
         editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
@@ -878,15 +960,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask mesh pass end");
     }
 
-    RenderSceneSubmitDesc editorOverlayDesc = desc;
-    if (deferredLighting) {
-        editorOverlayDesc.editorOverlayDepthTexture = defaultSceneGBuffer_.DepthTexture();
-    }
-
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite branch begin");
         PostProcessOutput postProcessOutput{
-            .color = desc.target.colorTexture,
+            .color = sampledSceneColor,
             .extent = desc.target.viewport.extent,
             .producer = PostProcessPassKind::IdentityCopy,
             .colorSpace = PostProcessColorSpace::SceneHdr,
@@ -896,7 +973,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             .sceneHdrPreserved = true,
             .tonemapEnabled = true,
         };
-        bgfx::TextureHandle scenePostProcessOutput = desc.target.colorTexture;
+        bgfx::TextureHandle scenePostProcessOutput = sampledSceneColor;
         if (desc.postProcessEnabled) {
             if (scenePostProcessRenderer_ == nullptr) {
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing scenePostProcessRenderer");
@@ -904,7 +981,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             }
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Evaluate begin");
             postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
-                .sceneColor = desc.target.colorTexture,
+                .sceneColor = sampledSceneColor,
                 .selectionMask = desc.postProcess.selectionMaskTexture,
                 .outputFrameBuffer = desc.postProcess.finalFrameBuffer,
                 .outputColor = desc.postProcess.finalTexture,
@@ -930,6 +1007,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                         << " finalTaa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
                         << " finalBloom=" << BoolText(postProcessOutput.bloomEnabled)
                         << " finalJitter=" << BoolText(postProcessOutput.postProcessSettings.temporalJitterEnabled)
+                        << " historyBlend=" << postProcessOutput.postProcessSettings.temporalHistoryBlend
                         << " tonemap=" << BoolText(postProcessOutput.tonemapEnabled);
                 WriteRendererBreadcrumb("aa_trace", message.str());
             }
@@ -958,17 +1036,64 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport exposure submit end");
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+            const bool temporalHistoryValid = temporalState.hasHistory && temporalState.extent == sampledSceneDesc.target.viewport.extent;
+            {
+                std::ostringstream message;
+                message << "AA renderer submit"
+                        << " viewport=" << desc.target.viewport.id.value << ':' << desc.target.viewport.viewportIndex
+                        << " lighting=" << LightingPathName(effectiveLightingConfig.lightingPath)
+                        << " fxaa=" << BoolText(postProcessOutput.fxaaEnabled)
+                        << " taa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
+                        << " jitter=" << BoolText(jitter[0] != 0.0F || jitter[1] != 0.0F)
+                        << " historyValid=" << BoolText(temporalHistoryValid)
+                        << " previousJitterX=" << temporalState.previousJitter[0]
+                        << " previousJitterY=" << temporalState.previousJitter[1]
+                        << " currentJitterX=" << jitter[0]
+                        << " currentJitterY=" << jitter[1]
+                        << " historyExtent=" << temporalState.extent.width << 'x' << temporalState.extent.height
+                        << " targetExtent=" << sampledSceneDesc.target.viewport.extent.width << 'x' << sampledSceneDesc.target.viewport.extent.height
+                        << " sourceColor=" << HandleValue(sampledSceneDesc.target.colorTexture)
+                        << " targetColor=" << HandleValue(desc.target.colorTexture)
+                        << " resolvedColor=" << HandleValue(desc.target.resolvedColorTexture)
+                        << " targetDepth=" << HandleValue(sampledSceneDesc.target.depthTexture)
+                        << " overlayDepth=" << HandleValue(sampledSceneDesc.editorOverlayDepthTexture)
+                        << " sampledDepth=" << HandleValue(sampledSceneDesc.SceneOverlayDepthTexture())
+                        << " motionTex=" << HandleValue(sampledSceneDesc.postProcess.motionVectorTexture)
+                        << " historyTex=" << HandleValue(sampledSceneDesc.postProcess.temporalHistoryTextures[static_cast<std::uint8_t>(frameIndex & 1ULL)])
+                        << " previousHistoryTex=" << HandleValue(sampledSceneDesc.postProcess.temporalHistoryTextures[static_cast<std::uint8_t>(1ULL - (frameIndex & 1ULL))])
+                        << " postFinalTex=" << HandleValue(sampledSceneDesc.postProcess.finalTexture)
+                        << " finalComposite=" << BoolText(sampledSceneDesc.finalComposite.enabled);
+                const std::string trace = message.str();
+                WriteRendererBreadcrumb("aa_trace", trace);
+                std::ostringstream consoleMessage;
+                consoleMessage << "AA renderer submit"
+                               << " viewport=" << desc.target.viewport.id.value << ':' << desc.target.viewport.viewportIndex
+                               << " lighting=" << LightingPathName(effectiveLightingConfig.lightingPath)
+                               << " fxaa=" << BoolText(postProcessOutput.fxaaEnabled)
+                               << " taa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
+                               << " jitter=" << BoolText(jitter[0] != 0.0F || jitter[1] != 0.0F)
+                               << " jitterComp=explicit"
+                               << " historyValid=" << BoolText(temporalHistoryValid)
+                               << " extent=" << sampledSceneDesc.target.viewport.extent.width << 'x' << sampledSceneDesc.target.viewport.extent.height
+                               << " sampledDepth=" << HandleValue(sampledSceneDesc.SceneOverlayDepthTexture())
+                               << " motionTex=" << HandleValue(sampledSceneDesc.postProcess.motionVectorTexture)
+                               << " postFinalTex=" << HandleValue(sampledSceneDesc.postProcess.finalTexture)
+                               << " finalComposite=" << BoolText(sampledSceneDesc.finalComposite.enabled);
+                lastAaPipelineTraceLines_.push_back(consoleMessage.str());
+            }
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit begin");
             scenePostProcessOutput = RendererPostProcessSubmitter::Submit(RendererPostProcessSubmitDesc{
                 .postProcessRenderer = *scenePostProcessRenderer_,
-                .sceneDesc = desc,
+                .sceneDesc = sampledSceneDesc,
                 .viewportPlan = viewportPlan,
                 .postProcessOutput = postProcessOutput,
                 .sceneCamera = sceneCamera,
+                .unjitteredSceneCamera = overlayCamera,
                 .jitter = jitter,
                 .frameIndex = frameIndex,
                 .temporalExtent = temporalState.extent,
                 .previousViewProjection = temporalState.previousViewProjection,
+                .previousJitter = temporalState.previousJitter,
                 .hasTemporalHistory = temporalState.hasHistory,
             });
             if (!bgfx::isValid(scenePostProcessOutput)) {
@@ -980,6 +1105,25 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 message << "SubmitSceneToViewport postProcess Submit end outputTex=" << HandleValue(scenePostProcessOutput);
                 WriteRendererBreadcrumb("renderer", message.str());
             }
+        }
+        {
+            std::ostringstream message;
+            message << "AA renderer final"
+                    << " viewport=" << desc.target.viewport.id.value << ':' << desc.target.viewport.viewportIndex
+                    << " outputTex=" << HandleValue(scenePostProcessOutput)
+                    << " producer=" << PostProcessPassKindName(postProcessOutput.producer)
+                    << " fxaa=" << BoolText(postProcessOutput.fxaaEnabled)
+                    << " taa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
+                    << " bloom=" << BoolText(postProcessOutput.bloomEnabled)
+                    << " tonemap=" << BoolText(postProcessOutput.tonemapEnabled)
+                    << " outputTonemap=" << static_cast<int>(postProcessOutput.outputTransform.tonemap)
+                    << " exposure=" << postProcessOutput.outputTransform.exposureStops
+                    << " gamma=" << postProcessOutput.outputTransform.gamma
+                    << " autoExposure=" << BoolText(postProcessOutput.outputTransform.autoExposure.enabled)
+                    << " meteredLum=" << postProcessOutput.outputTransform.autoExposure.meteredAverageLuminance;
+            const std::string trace = message.str();
+            WriteRendererBreadcrumb("aa_trace", trace);
+            lastAaPipelineTraceLines_.push_back(trace);
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit begin");
         if (!RendererFinalCompositeSubmitter::Submit(*finalCompositePass_, viewportPlan, desc, postProcessOutput, scenePostProcessOutput)) {
@@ -1021,6 +1165,7 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
         return;
     }
 
+    editorPassSubmitter_.InvalidateFrameBuffers();
     defaultPostProcessTargets_.Shutdown();
     defaultSceneGBuffer_.Shutdown();
     defaultSceneTarget_.Shutdown();
@@ -1083,6 +1228,10 @@ std::span<const SceneRenderPassSubmitStats> Renderer::LastScenePassSubmitStats()
 
 std::span<const SceneRenderExposureSubmitStats> Renderer::LastSceneExposureStats() const noexcept {
     return lastSceneExposureStats_;
+}
+
+std::span<const std::string> Renderer::LastAaPipelineTraceLines() const noexcept {
+    return lastAaPipelineTraceLines_;
 }
 
 const SceneRenderDiagnostics& Renderer::LastSceneDiagnostics() const noexcept {
@@ -1204,6 +1353,7 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
                 << " fxaa=" << BoolText(settings.fxaaEnabled)
                 << " taa=" << BoolText(settings.temporalAntiAliasingEnabled)
                 << " jitter=" << BoolText(settings.temporalJitterEnabled)
+                << " historyBlend=" << settings.temporalHistoryBlend
                 << " bloom=" << BoolText(settings.bloomEnabled);
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
@@ -1248,6 +1398,7 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
                 << " fxaa=" << BoolText(defaultPostProcessSettings_.fxaaEnabled)
                 << " taa=" << BoolText(defaultPostProcessSettings_.temporalAntiAliasingEnabled)
                 << " jitter=" << BoolText(defaultPostProcessSettings_.temporalJitterEnabled)
+                << " historyBlend=" << defaultPostProcessSettings_.temporalHistoryBlend
                 << " bloom=" << BoolText(defaultPostProcessSettings_.bloomEnabled)
                 << " aaPassPresent=" << BoolText(antiAliasing.has_value());
         if (antiAliasing.has_value()) {

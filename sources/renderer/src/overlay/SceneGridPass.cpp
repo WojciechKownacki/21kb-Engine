@@ -2,6 +2,7 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <bx/math.h>
 
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -32,12 +34,12 @@ struct GridCamera {
 constexpr float kPlaneY = 0.0F;
 constexpr float kFarFadeStartMeters = 220.0F;
 constexpr float kFarFadeEndMeters = 1600.0F;
-constexpr float kMinorLineWidthPixels = 1.00F;
-constexpr float kMajorLineWidthPixels = 1.22F;
-constexpr float kAxisLineWidthPixels = 1.60F;
-constexpr float kMinorAlpha = 0.36F;
-constexpr float kMajorAlpha = 0.60F;
-constexpr float kAxisAlpha = 0.55F;
+constexpr float kMinorLineWidthPixels = 0.64F;
+constexpr float kMajorLineWidthPixels = 0.86F;
+constexpr float kAxisLineWidthPixels = 1.16F;
+constexpr float kMinorAlpha = 0.28F;
+constexpr float kMajorAlpha = 0.48F;
+constexpr float kAxisAlpha = 0.46F;
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -167,13 +169,29 @@ void DestroyUniform(bgfx::UniformHandle& uniform) noexcept {
     }
 }
 
-void ConfigureOverlayView(const SceneGridPassDesc& desc) {
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::FrameBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] bool SameHandle(bgfx::TextureHandle lhs, bgfx::TextureHandle rhs) noexcept {
+    return lhs.idx == rhs.idx;
+}
+
+void ConfigureOverlayView(const SceneGridPassDesc& desc, bgfx::FrameBufferHandle frameBuffer) {
     const std::array<float, 16> identity = IdentityMatrix();
     const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
         ? desc.outputRect
         : RenderViewportRect{ .extent = desc.extent };
     bgfx::setViewName(desc.viewId, "KB Editor Grid");
-    bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
+    bgfx::setViewFrameBuffer(desc.viewId, frameBuffer);
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
     bgfx::setViewRect(
         desc.viewId,
@@ -194,7 +212,8 @@ SceneGridPass::~SceneGridPass() {
 
 bool SceneGridPassDesc::IsValid() const noexcept {
     return extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr &&
-           std::isfinite(minorSpacingMeters) && minorSpacingMeters > 0.0F && majorEvery >= 2U;
+           std::isfinite(minorSpacingMeters) && minorSpacingMeters > 0.0F && majorEvery >= 2U &&
+           (buildDepthFrameBuffer ? (bgfx::isValid(colorTexture) && bgfx::isValid(depthTexture)) : bgfx::isValid(frameBuffer));
 }
 
 bool SceneGridPass::Initialize() {
@@ -210,7 +229,6 @@ bool SceneGridPass::Initialize() {
     gridOriginUniform_ = bgfx::createUniform("u_editorGridOrigin", bgfx::UniformType::Vec4);
     gridWidthsUniform_ = bgfx::createUniform("u_editorGridWidths", bgfx::UniformType::Vec4);
     gridStyleUniform_ = bgfx::createUniform("u_editorGridStyle", bgfx::UniformType::Vec4);
-    sceneDepthSampler_ = bgfx::createUniform("s_editorGridSceneDepth", bgfx::UniformType::Sampler);
     depthParamsUniform_ = bgfx::createUniform("u_editorGridDepthParams", bgfx::UniformType::Vec4);
     viewProjectionUniform_ = bgfx::createUniform("u_editorGridViewProjection", bgfx::UniformType::Mat4);
     fullscreenLayout_ = FullscreenLayout();
@@ -224,12 +242,12 @@ bool SceneGridPass::Initialize() {
 
 void SceneGridPass::Shutdown() noexcept {
     if (!initialized_) {
+        InvalidateFrameBuffers();
         return;
     }
     DestroyUniform(gridStyleUniform_);
     DestroyUniform(viewProjectionUniform_);
     DestroyUniform(depthParamsUniform_);
-    DestroyUniform(sceneDepthSampler_);
     DestroyUniform(gridWidthsUniform_);
     DestroyUniform(gridOriginUniform_);
     DestroyUniform(gridParamsUniform_);
@@ -241,12 +259,35 @@ void SceneGridPass::Shutdown() noexcept {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
     }
+    InvalidateFrameBuffers();
     fullscreenLayout_ = {};
     initialized_ = false;
 }
 
+void SceneGridPass::InvalidateFrameBuffers() noexcept {
+    if (bgfx::isValid(depthFrameBuffer_)) {
+        bgfx::destroy(depthFrameBuffer_);
+        WriteRendererDebugLog("grid_trace", "Invalidated depth-tested grid framebuffer");
+    }
+    depthFrameBuffer_ = BGFX_INVALID_HANDLE;
+    depthFrameBufferColor_ = BGFX_INVALID_HANDLE;
+    depthFrameBufferDepth_ = BGFX_INVALID_HANDLE;
+}
+
 bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     if (!IsInitialized() || !desc.IsValid()) {
+        std::ostringstream message;
+        message << "Submit rejected"
+                << " initialized=" << BoolText(IsInitialized())
+                << " descValid=" << BoolText(desc.IsValid())
+                << " viewId=" << desc.viewId
+                << " fb=" << HandleValue(desc.frameBuffer)
+                << " colorTex=" << HandleValue(desc.colorTexture)
+                << " depthTex=" << HandleValue(desc.depthTexture)
+                << " rebuild=" << BoolText(desc.buildDepthFrameBuffer)
+                << " camera=" << BoolText(desc.camera != nullptr)
+                << " extent=" << desc.extent.width << 'x' << desc.extent.height;
+        WriteRendererDebugLog("grid_trace", message.str());
         return false;
     }
 
@@ -266,10 +307,57 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     const std::array<float, 4> gridParams{ minorSpacing, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
     const std::array<float, 4> gridWidths{ kMinorLineWidthPixels, kMajorLineWidthPixels, kAxisLineWidthPixels, 0.0F };
     const std::array<float, 4> gridStyle{ kMinorAlpha, kMajorAlpha, kAxisAlpha, 0.0F };
-    const bool depthTextureValid = bgfx::isValid(desc.sceneDepthTexture);
-    const std::array<float, 4> depthParams{ depthTextureValid ? 1.0F : 0.0F, 0.0000005F, SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F, 0.0F };
+    const std::array<float, 4> depthParams{ 1.0F, 0.0F, SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F, 0.0F };
+    bgfx::FrameBufferHandle frameBuffer = desc.frameBuffer;
+    if (desc.buildDepthFrameBuffer) {
+        if (!bgfx::isValid(depthFrameBuffer_) ||
+            !SameHandle(depthFrameBufferColor_, desc.colorTexture) ||
+            !SameHandle(depthFrameBufferDepth_, desc.depthTexture)) {
+            if (bgfx::isValid(depthFrameBuffer_)) {
+                bgfx::destroy(depthFrameBuffer_);
+                depthFrameBuffer_ = BGFX_INVALID_HANDLE;
+            }
+            bgfx::Attachment attachments[2]{};
+            attachments[0].init(desc.colorTexture);
+            attachments[1].init(desc.depthTexture);
+            depthFrameBuffer_ = bgfx::createFrameBuffer(2U, attachments, false);
+            depthFrameBufferColor_ = desc.colorTexture;
+            depthFrameBufferDepth_ = desc.depthTexture;
+            std::ostringstream message;
+            message << "Created depth-tested grid framebuffer"
+                    << " fb=" << HandleValue(depthFrameBuffer_)
+                    << " colorTex=" << HandleValue(depthFrameBufferColor_)
+                    << " depthTex=" << HandleValue(depthFrameBufferDepth_);
+            WriteRendererDebugLog("grid_trace", message.str());
+        }
+        frameBuffer = depthFrameBuffer_;
+    }
 
-    ConfigureOverlayView(desc);
+    if (!bgfx::isValid(frameBuffer)) {
+        std::ostringstream message;
+        message << "Submit failed invalid depth-tested framebuffer"
+                << " rebuild=" << BoolText(desc.buildDepthFrameBuffer)
+                << " inputFb=" << HandleValue(desc.frameBuffer)
+                << " colorTex=" << HandleValue(desc.colorTexture)
+                << " depthTex=" << HandleValue(desc.depthTexture);
+        WriteRendererDebugLog("grid_trace", message.str());
+        return false;
+    }
+    {
+        std::ostringstream message;
+        message << "Submit depth-tested grid"
+                << " viewId=" << desc.viewId
+                << " fb=" << HandleValue(frameBuffer)
+                << " inputFb=" << HandleValue(desc.frameBuffer)
+                << " rebuild=" << BoolText(desc.buildDepthFrameBuffer)
+                << " colorTex=" << HandleValue(desc.colorTexture)
+                << " depthTex=" << HandleValue(desc.depthTexture)
+                << " extent=" << desc.extent.width << 'x' << desc.extent.height
+                << " homogeneousDepth=" << BoolText(SceneDepthPolicy::HomogeneousDepth());
+        WriteRendererDebugLog("grid_trace", message.str());
+    }
+
+    ConfigureOverlayView(desc, frameBuffer);
     bgfx::TransientVertexBuffer vertices{};
     bgfx::allocTransientVertexBuffer(&vertices, vertexCount, fullscreenLayout_);
     std::memcpy(vertices.data, triangle.data(), sizeof(PosVertex) * triangle.size());
@@ -284,10 +372,7 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     bgfx::setUniform(gridStyleUniform_, gridStyle.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
     bgfx::setUniform(viewProjectionUniform_, camera.viewProjection.data());
-    if (depthTextureValid) {
-        bgfx::setTexture(0, sceneDepthSampler_, desc.sceneDepthTexture);
-    }
-    bgfx::setState(SceneDepthPolicy::SceneOverlayState(false) | BGFX_STATE_BLEND_ALPHA);
+    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_BLEND_ALPHA);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
     return true;
@@ -298,8 +383,7 @@ bool SceneGridPass::IsInitialized() const noexcept {
            bgfx::isValid(basisRightUniform_) && bgfx::isValid(basisUpUniform_) &&
            bgfx::isValid(basisForwardUniform_) && bgfx::isValid(gridParamsUniform_) &&
            bgfx::isValid(gridOriginUniform_) && bgfx::isValid(gridWidthsUniform_) &&
-           bgfx::isValid(gridStyleUniform_) && bgfx::isValid(sceneDepthSampler_) &&
-           bgfx::isValid(depthParamsUniform_) && bgfx::isValid(viewProjectionUniform_) &&
+           bgfx::isValid(gridStyleUniform_) && bgfx::isValid(depthParamsUniform_) && bgfx::isValid(viewProjectionUniform_) &&
            fullscreenLayout_.getStride() == sizeof(PosVertex);
 }
 

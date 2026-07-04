@@ -18,6 +18,7 @@ struct SceneTemporalReprojectionDesc {
     std::array<float, 16> inverseCurrentViewProjection{};
     std::array<float, 16> previousViewProjection{};
     std::array<float, 4> jitterAndParams{};
+    std::array<float, 4> historyJitterParams{};
     bool historyValid = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
