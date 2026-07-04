@@ -187,6 +187,7 @@ public:
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
+    [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
@@ -228,6 +229,7 @@ private:
         std::uint32_t viewportIndex = 0;
         RenderExtent extent{};
         std::array<float, 16> previousViewProjection{};
+        std::array<float, 2> previousJitter{};
         bool hasHistory = false;
     };
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
@@ -251,6 +253,7 @@ private:
     SceneRenderSubmitStats lastSceneSubmitStats_{};
     std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
+    std::vector<std::string> lastAaPipelineTraceLines_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;

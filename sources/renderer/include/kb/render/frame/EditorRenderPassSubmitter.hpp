@@ -13,6 +13,7 @@ class EditorRenderPassSubmitter {
 public:
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
+    void InvalidateFrameBuffers() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
     void SubmitSelectionMask(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const;

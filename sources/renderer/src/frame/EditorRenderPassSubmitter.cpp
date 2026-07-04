@@ -1,15 +1,34 @@
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 
+#include "renderer/RendererDebugLog.hpp"
+
 #include <bgfx/bgfx.h>
 
 #include <array>
 #include <cstdint>
+#include <sstream>
 
 namespace kb::render {
 namespace {
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
+}
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::FrameBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] bool SameHandle(bgfx::TextureHandle lhs, bgfx::TextureHandle rhs) noexcept {
+    return lhs.idx == rhs.idx;
 }
 
 [[nodiscard]] std::array<float, 16> IdentityMatrix() noexcept {
@@ -59,6 +78,10 @@ void EditorRenderPassSubmitter::Shutdown() noexcept {
     gridPass_.Shutdown();
 }
 
+void EditorRenderPassSubmitter::InvalidateFrameBuffers() noexcept {
+    gridPass_.InvalidateFrameBuffers();
+}
+
 bool EditorRenderPassSubmitter::IsInitialized() const noexcept {
     return gridPass_.IsInitialized() && gizmoPass_.IsInitialized() && selectionBoxPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
 }
@@ -88,27 +111,41 @@ void EditorRenderPassSubmitter::SubmitSelectionMask(const RenderViewportPlan& vi
 
 void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, const SceneRenderCamera* camera) const {
     if (camera != nullptr && IsInitialized()) {
-        const bool overlayFinalTarget = desc.finalComposite.enabled;
-        const bgfx::FrameBufferHandle frameBuffer = overlayFinalTarget ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
-        const RenderExtent extent = overlayFinalTarget ? desc.finalComposite.extent : desc.target.viewport.extent;
-        const RenderViewportRect outputRect = overlayFinalTarget ? desc.finalComposite.outputRect : RenderViewportRect{};
+        const bgfx::TextureHandle depthTexture = desc.SceneOverlayDepthTexture();
+        const bool buildDepthFrameBuffer = bgfx::isValid(depthTexture) && !SameHandle(depthTexture, desc.target.depthTexture);
+        {
+            std::ostringstream message;
+            message << "Scene grid route"
+                    << " viewId=" << viewportPlan.viewIds.sceneOverlays
+                    << " targetFb=" << HandleValue(desc.target.frameBuffer)
+                    << " targetColor=" << HandleValue(desc.target.colorTexture)
+                    << " targetDepth=" << HandleValue(desc.target.depthTexture)
+                    << " overlayDepth=" << HandleValue(depthTexture)
+                    << " buildDepthFb=" << BoolText(buildDepthFrameBuffer)
+                    << " finalComposite=" << BoolText(desc.finalComposite.enabled)
+                    << " postProcess=" << BoolText(desc.postProcessEnabled)
+                    << " msaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples)
+                    << " extent=" << desc.target.viewport.extent.width << 'x' << desc.target.viewport.extent.height;
+            WriteRendererDebugLog("grid_trace", message.str());
+        }
         if (desc.editorGrid.visible) {
             const SceneGridPassDesc gridDesc{
                 .viewId = viewportPlan.viewIds.sceneOverlays,
-                .frameBuffer = frameBuffer,
-                .extent = extent,
-                .outputRect = outputRect,
+                .frameBuffer = desc.target.frameBuffer,
+                .colorTexture = desc.target.colorTexture,
+                .depthTexture = depthTexture,
+                .extent = desc.target.viewport.extent,
                 .camera = camera,
-                .sceneDepthTexture = desc.SceneOverlayDepthTexture(),
                 .minorSpacingMeters = desc.editorGrid.minorSpacingMeters,
                 .majorEvery = desc.editorGrid.majorEvery,
+                .buildDepthFrameBuffer = buildDepthFrameBuffer,
             };
             static_cast<void>(gridPass_.Submit(gridDesc));
         } else {
             SubmitEmptyEditorView(
                 viewportPlan.viewIds.sceneOverlays,
-                frameBuffer,
-                extent,
+                desc.target.frameBuffer,
+                desc.target.viewport.extent,
                 "KB Editor Scene Overlays");
         }
         return;

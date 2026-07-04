@@ -20,10 +20,12 @@ struct RendererPostProcessSubmitDesc {
     const RenderViewportPlan& viewportPlan;
     const PostProcessOutput& postProcessOutput;
     const SceneRenderCamera* sceneCamera = nullptr;
+    const SceneRenderCamera* unjitteredSceneCamera = nullptr;
     std::array<float, 2> jitter{};
     std::uint64_t frameIndex = 0;
     RenderExtent& temporalExtent;
     std::array<float, 16>& previousViewProjection;
+    std::array<float, 2>& previousJitter;
     bool& hasTemporalHistory;
 };
 

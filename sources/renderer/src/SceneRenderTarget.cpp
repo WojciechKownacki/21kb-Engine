@@ -49,6 +49,10 @@ bgfx::TextureHandle SceneRenderTarget::ColorTexture() const noexcept {
     return framebuffer_.ColorTexture();
 }
 
+bgfx::TextureHandle SceneRenderTarget::ResolvedColorTexture() const noexcept {
+    return framebuffer_.ResolvedColorTexture();
+}
+
 bgfx::TextureHandle SceneRenderTarget::DepthTexture() const noexcept {
     return framebuffer_.DepthTexture();
 }

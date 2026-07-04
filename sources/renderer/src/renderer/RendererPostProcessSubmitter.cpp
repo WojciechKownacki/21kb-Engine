@@ -14,6 +14,14 @@ namespace {
     return value ? "true" : "false";
 }
 
+[[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::FrameBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
 } // namespace
 
 bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProcessSubmitDesc& desc) {
@@ -28,10 +36,21 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
 
     const bool temporalHistoryValid = desc.hasTemporalHistory && desc.temporalExtent == desc.sceneDesc.target.viewport.extent;
     const std::array<float, 16> currentViewProjection = desc.sceneCamera == nullptr ? RendererMatrixMath::Identity() : RendererMatrixMath::ViewProjection(*desc.sceneCamera);
+    const std::array<float, 16> currentUnjitteredViewProjection = desc.unjitteredSceneCamera == nullptr
+        ? currentViewProjection
+        : RendererMatrixMath::ViewProjection(*desc.unjitteredSceneCamera);
     const std::array<float, 16> inverseCurrentViewProjection = RendererMatrixMath::Inverse(currentViewProjection);
-    const std::array<float, 16> previousViewProjection = temporalHistoryValid ? desc.previousViewProjection : currentViewProjection;
+    const std::array<float, 16> previousViewProjection = temporalHistoryValid ? desc.previousViewProjection : currentUnjitteredViewProjection;
+    const std::array<float, 2> previousJitter = temporalHistoryValid ? desc.previousJitter : desc.jitter;
+    const std::array<float, 4> historyJitterUvParams = {
+        previousJitter[0],
+        -previousJitter[1],
+        desc.jitter[0],
+        -desc.jitter[1],
+    };
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     const bool effectiveJitter = desc.jitter[0] != 0.0F || desc.jitter[1] != 0.0F;
+    const bgfx::TextureHandle sceneDepthTexture = desc.sceneDesc.SceneOverlayDepthTexture();
 
     {
         std::ostringstream message;
@@ -44,21 +63,40 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
                 << " effectiveJitter=" << BoolText(effectiveJitter)
                 << " jitterX=" << desc.jitter[0]
                 << " jitterY=" << desc.jitter[1]
-                << " sceneDepthValid=" << BoolText(bgfx::isValid(desc.sceneDesc.target.depthTexture))
+                << " sceneDepthValid=" << BoolText(bgfx::isValid(sceneDepthTexture))
+                << " targetDepth=" << HandleValue(desc.sceneDesc.target.depthTexture)
+                << " overlayDepth=" << HandleValue(desc.sceneDesc.editorOverlayDepthTexture)
+                << " sampledDepth=" << HandleValue(sceneDepthTexture)
                 << " temporalHistoryValid=" << BoolText(temporalHistoryValid)
                 << " hasTemporalHistory=" << BoolText(desc.hasTemporalHistory)
-                << " frameIndex=" << desc.frameIndex;
+                << " frameIndex=" << desc.frameIndex
+                << " temporalExtent=" << desc.temporalExtent.width << 'x' << desc.temporalExtent.height
+                << " targetExtent=" << desc.sceneDesc.target.viewport.extent.width << 'x' << desc.sceneDesc.target.viewport.extent.height
+                << " historyWriteIndex=" << static_cast<unsigned>(postProcessTarget.temporalHistoryWriteIndex)
+                << " historyFb=" << HandleValue(postProcessTarget.temporalHistoryFrameBuffer)
+                << " historyTex=" << HandleValue(postProcessTarget.temporalHistoryTexture)
+                << " previousHistoryTex=" << HandleValue(postProcessTarget.previousTemporalHistoryTexture)
+                << " currentVp8=" << currentViewProjection[8]
+                << " currentVp9=" << currentViewProjection[9]
+                << " currentUnjitteredVp8=" << currentUnjitteredViewProjection[8]
+                << " currentUnjitteredVp9=" << currentUnjitteredViewProjection[9]
+                << " previousVp8=" << previousViewProjection[8]
+                << " previousVp9=" << previousViewProjection[9]
+                << " previousJitterX=" << previousJitter[0]
+                << " previousJitterY=" << previousJitter[1]
+                << " historyJitterOffsetX=" << historyJitterUvParams[0]
+                << " historyJitterOffsetY=" << historyJitterUvParams[1];
         WriteRendererDebugLog("aa_trace", message.str());
     }
 
     const bgfx::TextureHandle scenePostProcessOutput = desc.postProcessRenderer.Submit(ScenePostProcessSubmitDesc{
         .sceneColor = desc.sceneDesc.target.colorTexture,
-        .sceneDepth = desc.sceneDesc.target.depthTexture,
+        .sceneDepth = sceneDepthTexture,
         .target = postProcessTarget,
         .viewIds = desc.viewportPlan.viewIds,
         .settings = postProcessSettings,
         .temporal = SceneTemporalReprojectionDesc{
-            .depthTexture = desc.sceneDesc.target.depthTexture,
+            .depthTexture = sceneDepthTexture,
             .currentViewProjection = currentViewProjection,
             .inverseCurrentViewProjection = inverseCurrentViewProjection,
             .previousViewProjection = previousViewProjection,
@@ -68,6 +106,7 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
                 postProcessSettings.temporalAntiAliasingEnabled ? 1.0F : 0.0F,
                 homogeneousDepth ? 1.0F : 0.0F,
             },
+            .historyJitterParams = historyJitterUvParams,
             .historyValid = temporalHistoryValid,
         },
     });
@@ -76,8 +115,21 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
     }
 
     desc.temporalExtent = desc.sceneDesc.target.viewport.extent;
-    desc.previousViewProjection = currentViewProjection;
+    desc.previousViewProjection = currentUnjitteredViewProjection;
+    desc.previousJitter = desc.jitter;
     desc.hasTemporalHistory = true;
+    {
+        std::ostringstream message;
+        message << "RendererPostProcessSubmitter temporal state updated"
+                << " frameIndex=" << desc.frameIndex
+                << " temporalExtent=" << desc.temporalExtent.width << 'x' << desc.temporalExtent.height
+                << " hasTemporalHistory=" << BoolText(desc.hasTemporalHistory)
+                << " storedVp8=" << desc.previousViewProjection[8]
+                << " storedVp9=" << desc.previousViewProjection[9]
+                << " storedJitterX=" << desc.previousJitter[0]
+                << " storedJitterY=" << desc.previousJitter[1];
+        WriteRendererDebugLog("aa_trace", message.str());
+    }
     return scenePostProcessOutput;
 }
 

@@ -25,6 +25,7 @@ public:
 
     [[nodiscard]] bgfx::FrameBufferHandle FrameBuffer() const noexcept;
     [[nodiscard]] bgfx::TextureHandle ColorTexture() const noexcept;
+    [[nodiscard]] bgfx::TextureHandle ResolvedColorTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle DepthTexture() const noexcept;
     [[nodiscard]] std::uint32_t Width() const noexcept;
     [[nodiscard]] std::uint32_t Height() const noexcept;
@@ -36,6 +37,7 @@ public:
 
 private:
     bgfx::TextureHandle colorTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle resolvedColorTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depthTexture_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
     SceneColorFormatSelection colorSelection_{};

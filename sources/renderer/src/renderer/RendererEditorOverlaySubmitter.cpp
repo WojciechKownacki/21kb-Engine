@@ -8,7 +8,6 @@ void RendererEditorOverlaySubmitter::Submit(
     const RenderSceneSubmitDesc& desc,
     const SceneRenderCamera* overlayCamera,
     bool selectionOutlineEnabled) {
-    editorPassSubmitter.SubmitSceneOverlays(viewportPlan, desc, desc.editorSceneOverlaysEnabled ? overlayCamera : nullptr);
     editorPassSubmitter.SubmitUiComposite(viewportPlan, desc, selectionOutlineEnabled);
     editorPassSubmitter.SubmitGizmoOverlay(viewportPlan, desc, desc.editorSceneOverlaysEnabled ? overlayCamera : nullptr);
 }

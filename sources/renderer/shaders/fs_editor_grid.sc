@@ -10,7 +10,6 @@ uniform vec4 u_editorGridParams;
 uniform vec4 u_editorGridOrigin;
 uniform vec4 u_editorGridWidths;
 uniform vec4 u_editorGridStyle;
-SAMPLER2D(s_editorGridSceneDepth, 0);
 uniform vec4 u_editorGridDepthParams;
 uniform mat4 u_editorGridViewProjection;
 
@@ -159,13 +158,6 @@ void main()
     float grid_depth = u_editorGridDepthParams.z > 0.5 ? grid_ndc_depth * 0.5 + 0.5 : grid_ndc_depth;
     grid_depth = clamp(grid_depth, 0.0, 1.0);
 
-    if (u_editorGridDepthParams.x > 0.5) {
-        vec2 depth_uv = vec2(v_texcoord0.x * 0.5 + 0.5, 0.5 - v_texcoord0.y * 0.5);
-        float scene_depth = texture2D(s_editorGridSceneDepth, depth_uv).x;
-        if (scene_depth > 0.000001 && grid_depth <= scene_depth + u_editorGridDepthParams.y) {
-            discard;
-        }
-    }
     gl_FragDepth = grid_depth;
 
     vec3 minor_color = vec3(0.28, 0.28, 0.28);

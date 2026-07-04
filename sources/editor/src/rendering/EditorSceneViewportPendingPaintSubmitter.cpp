@@ -25,6 +25,20 @@ namespace {
     return value ? "1" : "0";
 }
 
+[[nodiscard]] const char* AntiAliasingModeName(EditorAntiAliasingMode mode) noexcept {
+    switch (mode) {
+    case EditorAntiAliasingMode::None:
+        return "None";
+    case EditorAntiAliasingMode::Fxaa:
+        return "FXAA";
+    case EditorAntiAliasingMode::Taa:
+        return "TAA";
+    case EditorAntiAliasingMode::Msaa:
+        return "MSAA";
+    }
+    return "Unknown";
+}
+
 } // namespace
 
 EditorSceneBgfxViewport::PendingPaintSubmitter::PendingPaintSubmitter(EditorSceneBgfxViewport& viewport) noexcept
@@ -180,9 +194,11 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     bool finalCompositeActive = false;
     bool depthTextureValid = false;
     bool gridVisible = false;
+    bool postTargetsEnabled = false;
     std::uint8_t actualSceneMsaaSamples = 0U;
     for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
         postProcessActive = postProcessActive || (submission.desc.postProcessEnabled && submission.desc.postProcess.enabled);
+        postTargetsEnabled = postTargetsEnabled || submission.desc.postProcess.enabled;
         finalCompositeActive = finalCompositeActive || submission.desc.finalComposite.enabled;
         depthTextureValid = depthTextureValid || bgfx::isValid(submission.desc.target.depthTexture);
         gridVisible = gridVisible || submission.desc.editorGrid.visible;
@@ -214,6 +230,30 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
                 << " finalComposite=" << BoolText(finalCompositeActive)
                 << " grid=" << BoolText(gridVisible);
         viewport_.ReportAaTrace(message.str());
+    }
+    {
+        const EditorAntiAliasingMode uiMode = viewport_.backendSettings_ == nullptr
+            ? EditorAntiAliasingMode::None
+            : viewport_.backendSettings_->AntiAliasingMode();
+        std::ostringstream message;
+        message << "AA route"
+                << " ui=" << AntiAliasingModeName(uiMode)
+                << " rendererFxaa=" << BoolText(postProcessSettings.fxaaEnabled)
+                << " rendererTaa=" << BoolText(postProcessSettings.temporalAntiAliasingEnabled)
+                << " rendererJitter=" << BoolText(postProcessSettings.temporalJitterEnabled)
+                << " postProcess=" << BoolText(postProcessActive)
+                << " postTargets=" << BoolText(postTargetsEnabled)
+                << " finalComposite=" << BoolText(finalCompositeActive)
+                << " depth=" << BoolText(depthTextureValid)
+                << " targetMsaa=" << static_cast<unsigned>(actualSceneMsaaSamples)
+                << " rendererMsaa=" << static_cast<unsigned>(viewport_.rendererMsaaSamples_)
+                << " historyBlend=" << postProcessSettings.temporalHistoryBlend
+                << " bloom=" << BoolText(postProcessSettings.bloomEnabled)
+                << " tonemap=" << static_cast<int>(postProcessSettings.outputTransform.tonemap)
+                << " exposure=" << postProcessSettings.outputTransform.exposureStops
+                << " gamma=" << postProcessSettings.outputTransform.gamma
+                << " autoExposure=" << BoolText(postProcessSettings.outputTransform.autoExposure.enabled);
+        viewport_.ReportAaRouteTrace(message.str());
     }
     SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
         .submittedDrawCalls = stats.submittedDrawCallCount,

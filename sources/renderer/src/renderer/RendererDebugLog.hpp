@@ -26,7 +26,7 @@
 namespace kb::render {
 
 inline bool RendererDebugLogEnabled(std::string_view category) noexcept {
-    if (category == "aa_trace") {
+    if (category == "aa_trace" || category == "grid_trace") {
         return true;
     }
 #if defined(_WIN32)
@@ -56,6 +56,10 @@ inline std::filesystem::path RendererAaTraceLogPath() {
     return std::filesystem::current_path() / "aa_trace.log";
 }
 
+inline std::filesystem::path RendererGridTraceLogPath() {
+    return std::filesystem::current_path() / "grid_trace.log";
+}
+
 inline std::string RendererDebugLogNowMs() {
     const auto now = std::chrono::system_clock::now();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -76,26 +80,20 @@ inline void WriteRendererDebugLog(std::string_view category, std::string_view me
         line << RendererDebugLogNowMs()
              << " tid=" << RendererDebugLogThreadId()
              << " [" << category << "] " << message;
+        if (category == "aa_trace" || category == "grid_trace") {
+            const std::filesystem::path tracePath = category == "grid_trace"
+                ? RendererGridTraceLogPath()
+                : RendererAaTraceLogPath();
+            std::ofstream traceOutput{ tracePath, std::ios::out | std::ios::app };
+            if (traceOutput.is_open()) {
+                traceOutput << line.str() << '\n';
+            }
 #if defined(_WIN32)
-        if (category == "aa_trace") {
             std::string debugLine = line.str();
             debugLine.push_back('\n');
             OutputDebugStringA(debugLine.c_str());
-            static bool consoleAttachAttempted = false;
-            if (!consoleAttachAttempted) {
-                consoleAttachAttempted = true;
-                if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-                    FILE* stream = nullptr;
-                    static_cast<void>(freopen_s(&stream, "CONOUT$", "a", stderr));
-                }
-            }
-            std::fputs(debugLine.c_str(), stderr);
-            std::ofstream aaTraceOutput{ RendererAaTraceLogPath(), std::ios::out | std::ios::app };
-            if (aaTraceOutput.is_open()) {
-                aaTraceOutput << line.str() << '\n';
-            }
-        }
 #endif
+        }
         static std::mutex mutex;
         std::lock_guard lock{ mutex };
         const std::filesystem::path path = RendererDebugLogPath();
