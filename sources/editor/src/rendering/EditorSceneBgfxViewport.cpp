@@ -883,7 +883,16 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
 }
 
 bool EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept {
-    return viewportKey == kInspectorMaterialPreviewViewportKey || viewportKey == kMaterialEditorPreviewViewportKey;
+    // Used to gate material-preview surfaces only; every other surface (the Scene viewport included)
+    // got SWP_NOCOPYBITS on resize/reshow plus an explicit WM_ERASEBKGND black fill. That forces a
+    // full black frame every single time the surface's native child window actually commits a resize
+    // -- harmless when resizes were effectively continuous, but once resize target recreation got
+    // throttled (see EnsureHostSurfaceWindow's interactive-resize throttle) each throttled commit now
+    // sits behind a visibly isolated black flash instead of blending into constant repaint noise.
+    // Preserving bits everywhere means a resize briefly shows the previous frame stretched/cropped
+    // instead of black, which is what a GPU-presented viewport should do regardless of surface kind.
+    static_cast<void>(viewportKey);
+    return true;
 }
 
 LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
