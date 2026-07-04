@@ -24,6 +24,11 @@ struct SceneGridPassDesc {
 
 class SceneGridPass {
 public:
+    // World-space height of the grid plane. The grid never writes depth, so TAA motion
+    // vectors reproject depthless background pixels against this plane to give the grid
+    // correct parallax velocity.
+    static constexpr float kGridPlaneY = 0.0F;
+
     SceneGridPass() = default;
     ~SceneGridPass();
 

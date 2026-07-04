@@ -118,6 +118,7 @@ private:
             bgfx::setUniform(renderer_.inverseViewProjectionUniform_, desc.temporal.inverseCurrentViewProjection.data());
             bgfx::setUniform(renderer_.previousViewProjectionUniform_, desc.temporal.previousViewProjection.data());
             bgfx::setUniform(renderer_.temporalParamsUniform_, desc.temporal.jitterAndParams.data());
+            bgfx::setUniform(renderer_.postParams_, desc.temporal.backgroundPlaneParams.data());
             bgfx::setTexture(0, renderer_.depthSampler_, desc.sceneDepth);
             SubmitFullscreen(desc.viewIds.postProcessMotionVectors, renderer_.motionVectorsProgram_, renderer_.fullscreenVertexBuffer_);
         } else {
@@ -165,7 +166,6 @@ private:
             1.0F / settings.height,
         };
         bgfx::setUniform(renderer_.temporalParamsUniform_, temporalParams);
-        bgfx::setUniform(renderer_.postParams_, desc.temporal.historyJitterParams.data());
         bgfx::setTexture(0, renderer_.sourceSampler_, desc.sceneColor);
         bgfx::setTexture(1, renderer_.historySampler_, desc.target.previousTemporalHistoryTexture);
         bgfx::setTexture(2, renderer_.velocitySampler_, desc.target.motionVectorTexture);

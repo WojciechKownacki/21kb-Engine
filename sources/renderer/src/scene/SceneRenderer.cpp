@@ -179,6 +179,21 @@ void SceneRenderer::SubmitMeshPass(
     bgfx::setViewTransform(viewId, camera->view.data(), camera->projection.data());
     bgfx::setViewRect(viewId, 0, 0, width, height);
     bgfx::touch(viewId);
+    {
+        std::ostringstream message;
+        message << "Mesh pass view transform pass=" << MeshPassName(pass)
+                << " viewId=" << viewId
+                << " proj8(jitterX*2)=" << camera->projection[8]
+                << " proj9(jitterY*2)=" << camera->projection[9]
+                << " proj0=" << camera->projection[0]
+                << " proj5=" << camera->projection[5]
+                << " proj10=" << camera->projection[10]
+                << " proj14=" << camera->projection[14]
+                << " view12=" << camera->view[12]
+                << " view13=" << camera->view[13]
+                << " view14=" << camera->view[14];
+        WriteRendererDebugLog("mesh_taa_trace", message.str());
+    }
 
     if (meshSubmitter_ != nullptr) {
         lastSubmitStats_ = meshSubmitter_->Submit(

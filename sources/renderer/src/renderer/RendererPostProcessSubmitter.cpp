@@ -1,6 +1,7 @@
 #include "renderer/RendererPostProcessSubmitter.hpp"
 
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/overlay/SceneGridPass.hpp"
 #include "kb/render/post/ScenePostProcessRenderer.hpp"
 #include "renderer/RendererDebugLog.hpp"
 #include "renderer/RendererMatrixMath.hpp"
@@ -39,7 +40,10 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
     const std::array<float, 16> currentUnjitteredViewProjection = desc.unjitteredSceneCamera == nullptr
         ? currentViewProjection
         : RendererMatrixMath::ViewProjection(*desc.unjitteredSceneCamera);
-    const std::array<float, 16> inverseCurrentViewProjection = RendererMatrixMath::Inverse(currentViewProjection);
+    // Reprojection must be jitter-free on both ends: unprojecting with the jittered inverse
+    // leaks the current frame's jitter into the motion vectors, so the TAA resolve resamples
+    // history at a different sub-pixel offset every frame and static geometry wobbles.
+    const std::array<float, 16> inverseCurrentViewProjection = RendererMatrixMath::Inverse(currentUnjitteredViewProjection);
     const std::array<float, 16> previousViewProjection = temporalHistoryValid ? desc.previousViewProjection : currentUnjitteredViewProjection;
     const std::array<float, 2> previousJitter = temporalHistoryValid ? desc.previousJitter : desc.jitter;
     const std::array<float, 4> historyJitterUvParams = {
@@ -76,12 +80,20 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
                 << " historyFb=" << HandleValue(postProcessTarget.temporalHistoryFrameBuffer)
                 << " historyTex=" << HandleValue(postProcessTarget.temporalHistoryTexture)
                 << " previousHistoryTex=" << HandleValue(postProcessTarget.previousTemporalHistoryTexture)
+                << " currentVp0=" << currentViewProjection[0]
+                << " currentVp5=" << currentViewProjection[5]
                 << " currentVp8=" << currentViewProjection[8]
                 << " currentVp9=" << currentViewProjection[9]
+                << " currentVp10=" << currentViewProjection[10]
+                << " currentVp14=" << currentViewProjection[14]
                 << " currentUnjitteredVp8=" << currentUnjitteredViewProjection[8]
                 << " currentUnjitteredVp9=" << currentUnjitteredViewProjection[9]
+                << " previousVp0=" << previousViewProjection[0]
+                << " previousVp5=" << previousViewProjection[5]
                 << " previousVp8=" << previousViewProjection[8]
                 << " previousVp9=" << previousViewProjection[9]
+                << " previousVp10=" << previousViewProjection[10]
+                << " previousVp14=" << previousViewProjection[14]
                 << " previousJitterX=" << previousJitter[0]
                 << " previousJitterY=" << previousJitter[1]
                 << " historyJitterOffsetX=" << historyJitterUvParams[0]
@@ -97,7 +109,7 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
         .settings = postProcessSettings,
         .temporal = SceneTemporalReprojectionDesc{
             .depthTexture = sceneDepthTexture,
-            .currentViewProjection = currentViewProjection,
+            .currentViewProjection = currentUnjitteredViewProjection,
             .inverseCurrentViewProjection = inverseCurrentViewProjection,
             .previousViewProjection = previousViewProjection,
             .jitterAndParams = {
@@ -107,6 +119,12 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
                 homogeneousDepth ? 1.0F : 0.0F,
             },
             .historyJitterParams = historyJitterUvParams,
+            .backgroundPlaneParams = {
+                desc.sceneDesc.editorSceneOverlaysEnabled ? 1.0F : 0.0F,
+                SceneGridPass::kGridPlaneY,
+                0.0F,
+                0.0F,
+            },
             .historyValid = temporalHistoryValid,
         },
     });

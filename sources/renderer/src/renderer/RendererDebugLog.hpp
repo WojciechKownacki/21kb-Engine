@@ -26,7 +26,7 @@
 namespace kb::render {
 
 inline bool RendererDebugLogEnabled(std::string_view category) noexcept {
-    if (category == "aa_trace" || category == "grid_trace") {
+    if (category == "aa_trace" || category == "grid_trace" || category == "mesh_taa_trace") {
         return true;
     }
 #if defined(_WIN32)
@@ -60,6 +60,10 @@ inline std::filesystem::path RendererGridTraceLogPath() {
     return std::filesystem::current_path() / "grid_trace.log";
 }
 
+inline std::filesystem::path RendererMeshTaaTraceLogPath() {
+    return std::filesystem::current_path() / "mesh_taa_trace.log";
+}
+
 inline std::string RendererDebugLogNowMs() {
     const auto now = std::chrono::system_clock::now();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -80,10 +84,10 @@ inline void WriteRendererDebugLog(std::string_view category, std::string_view me
         line << RendererDebugLogNowMs()
              << " tid=" << RendererDebugLogThreadId()
              << " [" << category << "] " << message;
-        if (category == "aa_trace" || category == "grid_trace") {
+        if (category == "aa_trace" || category == "grid_trace" || category == "mesh_taa_trace") {
             const std::filesystem::path tracePath = category == "grid_trace"
                 ? RendererGridTraceLogPath()
-                : RendererAaTraceLogPath();
+                : (category == "mesh_taa_trace" ? RendererMeshTaaTraceLogPath() : RendererAaTraceLogPath());
             std::ofstream traceOutput{ tracePath, std::ios::out | std::ios::app };
             if (traceOutput.is_open()) {
                 traceOutput << line.str() << '\n';
