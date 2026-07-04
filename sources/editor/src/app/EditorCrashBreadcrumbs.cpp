@@ -47,7 +47,33 @@ std::mutex g_breadcrumbMutex;
 #endif
 }
 
+// EditorCrashBreadcrumbs::Write is called unconditionally from ~150+ sites across the per-frame
+// paint/submit path (it exists to leave a trail leading up to a crash, so it can't just be gated
+// off like the opt-in renderer debug traces). The previous implementation opened, wrote, and closed
+// a file handle -- plus re-checked/created its parent directory -- on every single call, which meant
+// every rendered frame paid for dozens of synchronous filesystem round trips regardless of scene
+// complexity. Keeping the handles open for the process lifetime and only flush()-ing (which just
+// pushes the already-buffered bytes out, not a full open/close) keeps the same crash-time durability
+// at a fraction of the cost.
+[[nodiscard]] std::ofstream& BreadcrumbStream() {
+    static std::ofstream stream = [] {
+        std::error_code error;
+        std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);
+        return std::ofstream{BreadcrumbPath(), std::ios::out | std::ios::app};
+    }();
+    return stream;
+}
+
+[[nodiscard]] std::ofstream& AaTraceStream() {
+    static std::ofstream stream{AaTracePath(), std::ios::out | std::ios::app};
+    return stream;
+}
+
 void AppendLine(std::string_view line) {
+    // Single mutex covers both persistent stream handles below -- they're shared across calls (and
+    // threads) now instead of each call getting its own throwaway ofstream, so every read/write on
+    // them has to be serialized here, not just the main breadcrumb log's.
+    std::lock_guard lock{g_breadcrumbMutex};
 #if defined(_WIN32)
     if (line.find("[aa_trace]") != std::string_view::npos) {
         std::string debugLine{line};
@@ -62,16 +88,14 @@ void AppendLine(std::string_view line) {
             }
         }
         std::fputs(debugLine.c_str(), stderr);
-        std::ofstream aaTraceOutput{AaTracePath(), std::ios::out | std::ios::app};
+        std::ofstream& aaTraceOutput = AaTraceStream();
         if (aaTraceOutput.is_open()) {
             aaTraceOutput << line << '\n';
+            aaTraceOutput.flush();
         }
     }
 #endif
-    std::lock_guard lock{g_breadcrumbMutex};
-    std::error_code error;
-    std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);
-    std::ofstream output{BreadcrumbPath(), std::ios::out | std::ios::app};
+    std::ofstream& output = BreadcrumbStream();
     if (!output.is_open()) {
         return;
     }

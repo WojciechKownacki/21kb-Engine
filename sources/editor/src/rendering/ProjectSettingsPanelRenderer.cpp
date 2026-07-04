@@ -150,7 +150,9 @@ struct TooltipContent {
     case ProjectSettingsTooltipKind::AntiAliasing:
         return TooltipContent{
             "Anti-Aliasing",
-            "Chooses exactly one AA path for the scene. TAA and FXAA run in post-process, while MSAA changes the render target setup.",
+            "Chooses exactly one AA path for the scene. TAA and FXAA run in post-process alongside your configured lighting path. "
+            "MSAA multisamples the render target instead; on a Deferred-lit project it also forces per-sample Forward shading for "
+            "this preview, since the G-buffer cannot be multisampled, so expect lower FPS than TAA/FXAA at the same resolution.",
         };
     case ProjectSettingsTooltipKind::MsaaSamples:
         return TooltipContent{

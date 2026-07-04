@@ -461,7 +461,11 @@ struct LightWireframeBasis {
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
     const bool msaaMode = renderBackendSettings.MsaaSamples() > 0U;
-    const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled() && !msaaMode;
+    // MSAA only replaces the AA method, not the rest of the pipeline: the scene target's resolved
+    // (single-sample) color already feeds the post-process chain the same way FXAA/TAA/no-AA do
+    // (see Renderer::SubmitSceneToViewport's ResolveSceneColorForSampling + postProcessChain_.Evaluate),
+    // so bloom/tonemap/selection outline must stay enabled under MSAA instead of being silently dropped.
+    const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
     kb::render::ScenePostProcessSettings postProcessSettings{};
     postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled();
     postProcessSettings.temporalAntiAliasingEnabled = renderBackendSettings.TemporalAntiAliasingEnabled();
@@ -470,6 +474,11 @@ struct LightWireframeBasis {
     postProcessSettings.outputTransform.autoExposure.enabled = renderProfile.autoExposureEnabled;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled = renderProfile.autoExposureEnabled;
     kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.Project().sceneLightingPath);
+    // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
+    // option today; falling back to Forward is the only way to honor the MSAA request. This is a
+    // real cost (per-sample forward shading instead of a single per-pixel deferred resolve), not a
+    // bug — see the AntiAliasingMode::Msaa tooltip in ProjectSettingsPanelRenderer for the user-facing
+    // explanation.
     const bool msaaForcesForward = msaaMode && lightingConfig.lightingPath == kb::render::SceneRenderLightingPath::Deferred;
     if (msaaForcesForward) {
         lightingConfig.lightingPath = kb::render::SceneRenderLightingPath::Forward;
