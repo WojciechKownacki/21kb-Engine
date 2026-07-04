@@ -11,7 +11,7 @@ void main()
 {
     float depth = texture2D(s_depth, v_texcoord0).x;
     if (depth <= 0.000001) {
-        gl_FragColor = vec4(0.5, 0.5, 0.0, 1.0);
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
@@ -25,5 +25,5 @@ void main()
     vec2 previousNdc = previousClip.xy / max(previousClip.w, 0.000001);
     vec2 previousUv = vec2(previousNdc.x * 0.5 + 0.5, 0.5 - previousNdc.y * 0.5);
     vec2 velocity = v_texcoord0 - previousUv;
-    gl_FragColor = vec4(velocity * 0.5 + 0.5, 0.0, 1.0);
+    gl_FragColor = vec4(velocity, 0.0, 1.0);
 }
