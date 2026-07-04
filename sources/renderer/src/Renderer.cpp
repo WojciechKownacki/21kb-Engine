@@ -1219,6 +1219,18 @@ const SceneRenderResourceMap* Renderer::SceneResourceMap() const noexcept {
     return sceneRenderer_ == nullptr ? nullptr : &sceneRenderer_->ResourceMap();
 }
 
+float Renderer::CurrentExposureLuminance() const noexcept {
+    return sceneExposureMeter_.CurrentLuminance();
+}
+
+bool Renderer::HasExposureHistory() const noexcept {
+    return sceneExposureMeter_.HasHistory();
+}
+
+void Renderer::PrimeExposureAdaptation(float luminance) noexcept {
+    sceneExposureMeter_.Prime(luminance);
+}
+
 SceneRenderSubmitStats Renderer::LastSceneSubmitStats() const noexcept {
     return lastSceneSubmitStats_;
 }

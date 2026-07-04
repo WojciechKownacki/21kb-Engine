@@ -613,11 +613,21 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
 }
 
 bool EditorSceneBgfxViewport::EnsureRenderer() {
+    bool hasPreservedExposure = false;
+    float preservedExposureLuminance = 0.0F;
     if (renderer_.IsInitialized()) {
         const std::uint64_t requestedGeneration = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
         if (rendererBackendGeneration_ == requestedGeneration) {
             return true;
         }
+        // A generation bump here (MSAA sample-count/mode change, backend switch) forces a full
+        // Shutdown()+Initialize() below purely because bgfx needs the device recreated -- it has
+        // nothing to do with the scene actually getting brighter or darker. Renderer::Shutdown()
+        // resets the auto-exposure meter, and its default metering mode reads back the actually
+        // rendered HDR frame; carrying the last adapted luminance across the reinit avoids the
+        // image visibly (and incorrectly) re-exposing from a neutral 0.18 baseline every time.
+        hasPreservedExposure = renderer_.HasExposureHistory();
+        preservedExposureLuminance = renderer_.CurrentExposureLuminance();
         ShutdownGpuResources();
     }
     if (!EnsureContextWindow()) {
@@ -639,6 +649,9 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     if (!renderer_.Initialize(surface, &config)) {
         SetFailureDetail("Renderer initialization failed for this viewport. Material preview and scene view cannot use separate bgfx renderer instances in the same process.");
         return false;
+    }
+    if (hasPreservedExposure) {
+        renderer_.PrimeExposureAdaptation(preservedExposureLuminance);
     }
 
     renderer_.SetRuntimeAssetDiscoveryEnabled(false);

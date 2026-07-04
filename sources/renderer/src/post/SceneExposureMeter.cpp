@@ -64,6 +64,14 @@ void SceneExposureMeter::Reset() noexcept {
     }
 }
 
+void SceneExposureMeter::Prime(float luminance) noexcept {
+    adaptedAverageLuminance_ = std::clamp(
+        luminance,
+        SceneExposureHistogramBuilder::kMinAverageLuminance,
+        SceneExposureHistogramBuilder::kMaxAverageLuminance);
+    hasHistory_ = true;
+}
+
 float SceneExposureMeter::Update(float meteredAverageLuminance, SceneExposureAdaptationDesc desc) noexcept {
     const float target = std::clamp(
         meteredAverageLuminance,
