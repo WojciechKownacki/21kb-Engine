@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "app/EditorWindowResizeInteraction.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
@@ -24,6 +25,12 @@ namespace {
 
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
+// Bounds how often an interactive resize drag is allowed to pay for a swapchain/render-target
+// recreation (each one is a driver-level allocation and, for the present target, a synchronous
+// bgfx::frame() stall). Between recreations the still-valid, slightly stale-sized target keeps
+// being rendered into/composited from; bgfx clamps view rects to the bound framebuffer's actual
+// resolution, so this only ever costs a briefly cropped/stretched image, never a correctness bug.
+constexpr std::chrono::milliseconds kInteractiveResizeTargetThrottle{90};
 constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
@@ -469,10 +476,27 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits) {
-    if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& requestedRect, bool preserveBits) {
+    if (surface.host == nullptr || RectWidth(requestedRect) == 0U || RectHeight(requestedRect) == 0U || !EnsureWindowClass()) {
         return false;
     }
+
+    RECT rect = requestedRect;
+    const bool alreadyCreated = surface.window != nullptr && IsWindow(surface.window) != 0;
+    const bool sizeChanged = RectWidth(surface.rect) != RectWidth(requestedRect) || RectHeight(surface.rect) != RectHeight(requestedRect);
+    if (sizeChanged && alreadyCreated && surface.hasLastInteractiveResizeCommitTime &&
+        EditorWindowResizeInteraction::IsWindowResizing(surface.host)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - surface.lastInteractiveResizeCommitTime < kInteractiveResizeTargetThrottle) {
+            // Hold the child window (and therefore its swapchain, resized right after this call) at
+            // its last committed size while dragging; only the position tracks live so the panel
+            // doesn't visibly lag if something other than its size is changing (e.g. a sibling panel
+            // resizing pushes this one over).
+            rect.right = rect.left + static_cast<LONG>(RectWidth(surface.rect));
+            rect.bottom = rect.top + static_cast<LONG>(RectHeight(surface.rect));
+        }
+    }
+    const bool committingResize = sizeChanged && RectWidth(rect) == RectWidth(requestedRect) && RectHeight(rect) == RectHeight(requestedRect);
 
     EnsureParentChildClipping(surface.host);
     preserveBits = preserveBits || ShouldPreserveHostSurfaceBits(surface.key);
@@ -601,6 +625,10 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
     }
 
     surface.rect = rect;
+    if (committingResize) {
+        surface.lastInteractiveResizeCommitTime = std::chrono::steady_clock::now();
+        surface.hasLastInteractiveResizeCommitTime = true;
+    }
     return true;
 }
 
@@ -646,6 +674,14 @@ bool EditorSceneBgfxViewport::EnsurePresentTarget(HostSurface& surface, std::uin
         SetFailureDetail("Present target creation was requested before the viewport renderer or native child surface was ready.");
         return false;
     }
+
+    // The interactive-resize throttle lives in EnsureHostSurfaceWindow, which holds surface.rect (and
+    // therefore surface.window's actual Win32 size) at its last committed size while throttled. Since
+    // this is always called with RectWidth/RectHeight(surface.rect) right after that, width/height
+    // here already reflect the same held-back size, so the swapchain and the native child window it's
+    // bound to can never disagree about how big they are (a prior version throttled only this call,
+    // leaving surface.window larger than the still-old swapchain in between -- Windows would then show
+    // the stale backbuffer stretched/duplicated inside the already-resized window).
     if (!surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
         .nativeWindow = surface.window,
         .width = width,

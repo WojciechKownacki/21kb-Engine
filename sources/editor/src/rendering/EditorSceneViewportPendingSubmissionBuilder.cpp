@@ -2,7 +2,9 @@
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "app/EditorWindowResizeInteraction.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <span>
@@ -11,6 +13,9 @@ namespace kb::editor {
 namespace {
 
 constexpr std::uint32_t kSceneSubmitClearRgba = 0x000000FFU;
+// Mirrors EditorSceneBgfxViewport's present-target throttle: bounds how often the offscreen scene
+// and post-process targets are torn down and rebuilt while a resize drag is in progress.
+constexpr std::chrono::milliseconds kInteractiveResizeTargetThrottle{90};
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
@@ -63,7 +68,7 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
         (!present.settings.postProcessEnabled && present.settings.lightingConfig.lightingPath != render::SceneRenderLightingPath::Deferred)
             ? present.settings.msaaSamples
             : 0U;
-    if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled, sceneMsaaSamples)) {
+    if (!EnsureSessionTargets(session, surface.host, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled, sceneMsaaSamples)) {
         EditorCrashBreadcrumbs::Write("viewport_submission", "EnsureSessionTargets failed");
         return false;
     }
@@ -79,6 +84,7 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
 
 bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
     ViewportSession& session,
+    HWND host,
     std::uint32_t renderWidth,
     std::uint32_t renderHeight,
     bool postProcessEnabled,
@@ -88,6 +94,20 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
         "EnsureSessionTargets begin " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight) +
             " post=" + (postProcessEnabled ? std::string{"1"} : std::string{"0"}) +
             " sceneMsaaSamples=" + std::to_string(msaaSamples));
+
+    const bool sceneTargetSizeChanged = session.sceneTarget.IsValid() &&
+        (session.sceneTarget.Width() != renderWidth || session.sceneTarget.Height() != renderHeight);
+    if (sceneTargetSizeChanged && session.hasLastSessionTargetResizeTime && EditorWindowResizeInteraction::IsWindowResizing(host)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - session.lastSessionTargetResizeTime < kInteractiveResizeTargetThrottle) {
+            // Keep rendering into the still-valid, previous-size scene/post-process targets this
+            // frame rather than tearing down and rebuilding the scene target plus up to 8
+            // post-process targets (and the bloom mip chain) on every intermediate panel size.
+            EditorCrashBreadcrumbs::Write("viewport_targets", "EnsureSessionTargets throttled, keeping stale size");
+            return true;
+        }
+    }
+
     const render::RenderExtent renderExtent{renderWidth, renderHeight};
     EditorCrashBreadcrumbs::Write("viewport_targets", "sceneTarget.Ensure begin");
     if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
@@ -98,6 +118,8 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
         EditorCrashBreadcrumbs::Write("viewport_targets", "sceneTarget.Ensure failed");
         return false;
     }
+    session.lastSessionTargetResizeTime = std::chrono::steady_clock::now();
+    session.hasLastSessionTargetResizeTime = true;
     {
         std::ostringstream message;
         message << "sceneTarget.Ensure end msaaSamples=" << static_cast<unsigned>(session.sceneTarget.MsaaSamples())
