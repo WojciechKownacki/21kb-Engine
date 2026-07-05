@@ -3622,8 +3622,8 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT82: Rotator-driven texture sample should route into Emissive");
     kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(bumpSampleNodeId, "a", 1U, "roughness"),
         "KBMAT-MAT82: BumpOffset-driven texture sample alpha should route into Roughness");
-    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "thinTranslucentOutput"),
-        "KBMAT-MAT82: ConstantBiasScale result should route into a color material output");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "alpha"),
+        "KBMAT-MAT82: ConstantBiasScale result should route into a scalar material output");
     kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(rotateAboutAxisNodeId, "result", 1U, "normal"),
         "KBMAT-MAT82: RotateAboutAxis result should route into a vector material output");
     const kb::render::RenderMaterialGraphCompileResult uvUtilityCompiled =
