@@ -306,12 +306,12 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return SIZE{ 420, 232 };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return SIZE{ 282, 468 };
+        return SIZE{ 282, 270 };
     case kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case kb::render::RenderMaterialGraphNodeKind::GetMaterialAttributes:
     case kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes:
-        return SIZE{ 282, 438 };
+        return SIZE{ 282, 230 };
     case kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         return SIZE{ 220, 96 };
     case kb::render::RenderMaterialGraphNodeKind::Add:
@@ -1072,25 +1072,14 @@ inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderM
         return {
             "baseColor",
             "normal",
-            "clearCoatNormal",
-            "bentNormal",
             "roughness",
             "metallic",
+            "specular",
             "emissive",
             "occlusion",
             "alpha",
             "alphaClipThreshold",
-            "specular",
-            "anisotropy",
-            "tangent",
             "tangentOutput",
-            "subsurfaceColor",
-            "clearCoat",
-            "clearCoatRoughness",
-            "refraction",
-            "surfaceThickness",
-            "thinTranslucentOutput",
-            "singleLayerWaterOutput",
             "attributes",
             "worldPositionOffset",
             "customizedUv0",

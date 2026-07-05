@@ -964,36 +964,6 @@ void RunForwardGraphRenderTest() {
     const RenderMaterialGraphShaderArtifactResult dielectricResult = cookGraph(buildWhiteGraph(false), 0x0804U);
     const RenderMaterialGraphShaderArtifactResult metalResult = cookGraph(buildWhiteGraph(true), 0x0805U);
 
-    const auto buildThinTranslucentAttributesGraph = [] {
-        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
-        RenderMaterialGraphNode blackBase{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
-        blackBase.parameter.defaultValueHint = "0 0 0 1";
-        RenderMaterialGraphNode thinOutput{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 140 };
-        thinOutput.parameter.defaultValueHint = "0.9 0.05 0.03 1";
-        graph.nodes.push_back(blackBase);
-        graph.nodes.push_back(thinOutput);
-        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeMaterialAttributes, .positionX = 220, .positionY = 70 });
-        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "baseColor"));
-        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "thinTranslucentOutput"));
-        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "attributes", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "attributes"));
-        return graph;
-    };
-    const RenderMaterialGraphShaderArtifactResult thinTranslucentResult = cookGraph(buildThinTranslucentAttributesGraph(), 0x0810U);
-
-    const auto buildSingleLayerWaterGraph = [] {
-        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
-        RenderMaterialGraphNode blackBase{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
-        blackBase.parameter.defaultValueHint = "0 0 0 1";
-        RenderMaterialGraphNode waterOutput{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 140 };
-        waterOutput.parameter.defaultValueHint = "0.03 0.08 0.9 1";
-        graph.nodes.push_back(blackBase);
-        graph.nodes.push_back(waterOutput);
-        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
-        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "singleLayerWaterOutput"));
-        return graph;
-    };
-    const RenderMaterialGraphShaderArtifactResult singleLayerWaterResult = cookGraph(buildSingleLayerWaterGraph(), 0x0811U);
-
     ForwardRenderHarness harness;
     if (!harness.Init()) {
         std::fprintf(stderr, "KBMAT-MAT08: Direct3D11 device unavailable; cannot run GPU forward render proof\n");
@@ -1006,11 +976,8 @@ void RunForwardGraphRenderTest() {
     const bgfx::ProgramHandle textureProgram = BuildGraphProgram(vsBytes, *textureResult.artifact);
     const bgfx::ProgramHandle boolTrueProgram = BuildGraphProgram(vsBytes, *boolTrueResult.artifact);
     const bgfx::ProgramHandle boolFalseProgram = BuildGraphProgram(vsBytes, *boolFalseResult.artifact);
-    const bgfx::ProgramHandle thinTranslucentProgram = BuildGraphProgram(vsBytes, *thinTranslucentResult.artifact);
-    const bgfx::ProgramHandle singleLayerWaterProgram = BuildGraphProgram(vsBytes, *singleLayerWaterResult.artifact);
     Require(bgfx::isValid(redProgram) && bgfx::isValid(blueProgram) && bgfx::isValid(textureProgram) &&
-            bgfx::isValid(boolTrueProgram) && bgfx::isValid(boolFalseProgram) &&
-            bgfx::isValid(thinTranslucentProgram) && bgfx::isValid(singleLayerWaterProgram),
+            bgfx::isValid(boolTrueProgram) && bgfx::isValid(boolFalseProgram),
         "KBMAT-MAT08: Forward graph programs must link on the real GPU backend");
 
     const ForwardRenderProbe red = harness.Render(redProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
@@ -1024,12 +991,6 @@ void RunForwardGraphRenderTest() {
     Require(red.a == 255U, "KBMAT-MAT08: Surface alpha must drive the rendered output alpha");
     Require(boolTrue.r > boolFalse.r + 64U && boolTrue.g > boolFalse.g + 64U && boolTrue.b > boolFalse.b + 64U,
         "KBMAT-MAT08: ConstantBool true/false must produce distinct GPU pixels through bool-to-color codegen");
-    const ForwardRenderProbe thinTranslucent = harness.Render(thinTranslucentProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
-    const ForwardRenderProbe singleLayerWater = harness.Render(singleLayerWaterProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
-    Require(thinTranslucent.r > thinTranslucent.g + 40U && thinTranslucent.r > thinTranslucent.b + 40U && thinTranslucent.r > 80U,
-        "KBMAT-MAT50: ThinTranslucentOutput through MaterialAttributes must render a red-dominant GPU pixel");
-    Require(singleLayerWater.b > singleLayerWater.r + 40U && singleLayerWater.b > singleLayerWater.g + 40U && singleLayerWater.b > 80U,
-        "KBMAT-MAT50: SingleLayerWaterOutput must render a blue-dominant GPU pixel");
 
     const std::uint32_t greenTexel = 0xff20c020U; // ABGR: opaque green
     bgfx::UniformHandle sampler = bgfx::createUniform(samplerName.c_str(), bgfx::UniformType::Sampler);

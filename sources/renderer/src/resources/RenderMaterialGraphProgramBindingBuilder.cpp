@@ -144,11 +144,7 @@ std::uint64_t RenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSourc
     HashBool(hash, shader.reflection.hasWorldPositionOffset);
     HashBool(hash, shader.reflection.hasCustomizedUv0);
     HashBool(hash, shader.reflection.hasDisplacement);
-    HashBool(hash, shader.reflection.hasClearCoatNormal);
-    HashBool(hash, shader.reflection.hasBentNormal);
     HashBool(hash, shader.reflection.hasTangentOutput);
-    HashBool(hash, shader.reflection.hasThinTranslucentOutput);
-    HashBool(hash, shader.reflection.hasSingleLayerWaterOutput);
     HashBool(hash, shader.reflection.usesSceneDepth);
     HashBool(hash, shader.reflection.usesSceneColor);
     HashU64(hash, static_cast<std::uint64_t>(shader.reflection.requiredVaryings.size()));
@@ -167,11 +163,7 @@ std::uint64_t RenderMaterialGraphPipelineStateKey(const RenderMaterialGraphShade
     HashBool(hash, shader.reflection.hasWorldPositionOffset);
     HashBool(hash, shader.reflection.hasCustomizedUv0);
     HashBool(hash, shader.reflection.hasDisplacement);
-    HashBool(hash, shader.reflection.hasClearCoatNormal);
-    HashBool(hash, shader.reflection.hasBentNormal);
     HashBool(hash, shader.reflection.hasTangentOutput);
-    HashBool(hash, shader.reflection.hasThinTranslucentOutput);
-    HashBool(hash, shader.reflection.hasSingleLayerWaterOutput);
     HashBool(hash, shader.reflection.usesSceneDepth);
     HashBool(hash, shader.reflection.usesSceneColor);
     HashU32(hash, static_cast<std::uint32_t>(shader.reflection.textures.size()));
