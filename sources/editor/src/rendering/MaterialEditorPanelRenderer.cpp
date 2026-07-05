@@ -26,10 +26,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -44,29 +46,34 @@ constexpr int kGraphNodeHeaderHeight = MaterialEditorPanelMetrics::GraphNodeHead
 constexpr int kGraphNodeBodyTopPadding = MaterialEditorPanelMetrics::GraphNodeBodyTopPadding;
 constexpr int kGraphNodePinRowHeight = MaterialEditorPanelMetrics::GraphNodePinRowHeight;
 constexpr int kGraphNodePinRadius = 6;
-constexpr int kGraphNodeCornerDiameter = 10;
+// Cosmic redesign: sharp, angular "sci-fi terminal" panels instead of rounded Blender-style nodes --
+// a small bevel (not a literal 0) keeps FillRoundedRect/StrokeRoundedRect's corner math well-defined.
+constexpr int kGraphNodeCornerDiameter = 3;
 constexpr int kGraphTitleFontSize = 11;
 constexpr int kGraphPinFontSize = 10;
 constexpr int kGraphMinTextPointSize = 9;
 
+// Cosmic redesign: one unified dark-blue/near-black "space station terminal" look for every node,
+// replacing Blender's per-category header tinting -- the user asked for every node to look the same.
 namespace BlenderGraphTheme {
-constexpr COLORREF Canvas = RGB(32, 32, 32);
-constexpr COLORREF GridDot = RGB(48, 48, 48);
-constexpr COLORREF GridDotMajor = RGB(66, 66, 66);
-constexpr COLORREF NodeBody = RGB(39, 39, 39);
-constexpr COLORREF NodeBodyBottom = RGB(34, 34, 34);
-constexpr COLORREF NodeOutline = RGB(16, 16, 16);
-constexpr COLORREF NodeOutlineSelected = RGB(245, 156, 36);
-constexpr COLORREF NodeShadow = RGB(2, 2, 2);
-constexpr COLORREF Text = RGB(224, 224, 224);
-constexpr COLORREF TextMuted = RGB(176, 176, 176);
-constexpr COLORREF Field = RGB(28, 28, 28);
-constexpr COLORREF FieldBorder = RGB(18, 18, 18);
-constexpr COLORREF FieldFocus = RGB(69, 120, 184);
-constexpr COLORREF SliderFill = RGB(58, 91, 126);
-constexpr COLORREF SliderFillFocus = RGB(67, 119, 176);
+constexpr COLORREF Canvas = RGB(6, 7, 13);
+constexpr COLORREF GridDot = RGB(40, 54, 82);
+constexpr COLORREF GridDotMajor = RGB(52, 70, 104);
+constexpr COLORREF NodeBody = RGB(11, 13, 20);
+constexpr COLORREF NodeBodyBottom = RGB(7, 8, 13);
+constexpr COLORREF NodeOutline = RGB(42, 58, 92);
+constexpr COLORREF NodeOutlineSelected = RGB(96, 210, 255);
+constexpr COLORREF NodeShadow = RGB(0, 0, 0);
+constexpr COLORREF NodeHeader = RGB(26, 42, 78);
+constexpr COLORREF Text = RGB(226, 232, 245);
+constexpr COLORREF TextMuted = RGB(158, 172, 200);
+constexpr COLORREF Field = RGB(15, 18, 27);
+constexpr COLORREF FieldBorder = RGB(30, 42, 66);
+constexpr COLORREF FieldFocus = RGB(69, 140, 210);
+constexpr COLORREF SliderFill = RGB(46, 84, 128);
+constexpr COLORREF SliderFillFocus = RGB(59, 128, 190);
 constexpr COLORREF LinkShadow = RGB(0, 0, 0);
-constexpr COLORREF LinkFallback = RGB(168, 168, 168);
+constexpr COLORREF LinkFallback = RGB(150, 168, 200);
 } // namespace BlenderGraphTheme
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
@@ -983,9 +990,255 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 
 [[nodiscard]] COLORREF GraphOutputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept;
 
-void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
-    GdiDrawing::FillRectColor(dc, canvas, BlenderGraphTheme::Canvas);
+// ---------------------------------------------------------------------------------------------
+// Cosmic graph backdrop: a deep-space skybox behind the node graph. It is deliberately NOT part of
+// the graph's pan/zoom space -- it reads as an infinitely distant sky, like a game's skybox, so it
+// never competes with node layout for attention. Two update tiers keep an animated scene cheap even
+// though the editor repaints at up to ~180 Hz while a material is open (MAT-72's continuous-repaint
+// path for live Time/Panner/Rotator preview animation, which this reuses for free):
+//   1) An offscreen bitmap holds the expensive GDI+ gradient work (nebula band, black hole,
+//      planets) and is only re-rendered a few times a second, not every paint.
+//   2) The starfield itself is drawn straight to the target DC every frame with plain GDI
+//      (SetPixel), which is cheap enough at a couple hundred stars to not need caching, and lets
+//      the stars drift/twinkle smoothly every frame instead of in visible steps.
+namespace CosmicTheme {
+constexpr COLORREF SkyTop = RGB(4, 5, 11);
+constexpr COLORREF SkyBottom = RGB(10, 14, 28);
+constexpr COLORREF NebulaCore = RGB(94, 66, 138);
+constexpr COLORREF NebulaEdge = RGB(46, 92, 138);
+} // namespace CosmicTheme
 
+struct CosmicStar {
+    float u = 0.0F;
+    float v = 0.0F;
+    float depth = 0.0F;
+    float phase = 0.0F;
+    float size = 0.0F;
+    COLORREF color = RGB(255, 255, 255);
+};
+
+[[nodiscard]] const std::vector<CosmicStar>& CosmicStarField() {
+    static const std::vector<CosmicStar> stars = [] {
+        std::vector<CosmicStar> generated;
+        constexpr int kStarCount = 240;
+        generated.reserve(kStarCount);
+        std::mt19937 rng(0x5B17A5U); // fixed seed: a stable, non-shifting field across sessions
+        std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+        for (int index = 0; index < kStarCount; ++index) {
+            CosmicStar star{};
+            star.u = unit(rng);
+            star.v = unit(rng);
+            star.depth = unit(rng);
+            star.phase = unit(rng) * 6.2831853F;
+            star.size = 0.5F + star.depth * 1.5F;
+            const float tint = unit(rng);
+            star.color = tint < 0.6F ? RGB(255, 255, 255) : (tint < 0.85F ? RGB(178, 200, 255) : RGB(255, 232, 196));
+            generated.push_back(star);
+        }
+        return generated;
+    }();
+    return stars;
+}
+
+void DrawCosmicPlanet(Gdiplus::Graphics& graphics, float centerX, float centerY, float radius, COLORREF litColor, COLORREF shadowColor, float time, bool ringed) {
+    constexpr float kLightAngle = 2.35F; // fixed light source direction shared by every planet
+    const float highlightX = std::cos(kLightAngle) * radius * 0.4F;
+    const float highlightY = std::sin(kLightAngle) * radius * 0.4F;
+
+    if (ringed) {
+        Gdiplus::GraphicsState ringState = graphics.Save();
+        graphics.TranslateTransform(centerX, centerY);
+        graphics.RotateTransform(16.0F + std::sin(time * 0.1F) * 3.0F);
+        Gdiplus::Pen ringPen(ToGdiplusColor(ScaleColor(litColor, 1.2F), 110U), std::max(1.0F, radius * 0.1F));
+        graphics.DrawEllipse(&ringPen, -radius * 2.0F, -radius * 0.5F, radius * 4.0F, radius * 1.0F);
+        graphics.Restore(ringState);
+    }
+
+    Gdiplus::GraphicsPath spherePath;
+    spherePath.AddEllipse(centerX - radius, centerY - radius, radius * 2.0F, radius * 2.0F);
+    Gdiplus::PathGradientBrush sphereBrush(&spherePath);
+    sphereBrush.SetCenterPoint(Gdiplus::PointF(centerX - highlightX, centerY - highlightY));
+    sphereBrush.SetCenterColor(ToGdiplusColor(ScaleColor(litColor, 1.3F)));
+    Gdiplus::Color surround[1] = { ToGdiplusColor(shadowColor) };
+    INT surroundCount = 1;
+    sphereBrush.SetSurroundColors(surround, &surroundCount);
+    graphics.FillPath(&sphereBrush, &spherePath);
+
+    // Faint cloud bands sweeping left-to-right over time reads as slow rotation about the vertical
+    // axis without needing a true 3D-perspective texture wrap.
+    Gdiplus::GraphicsState bandState = graphics.Save();
+    graphics.SetClip(&spherePath);
+    for (int band = 0; band < 4; ++band) {
+        const float phase = std::fmod((time * 0.05F) + (static_cast<float>(band) * 0.27F), 1.0F);
+        const float bandX = (centerX - radius) + (phase * radius * 2.0F);
+        const float bandWidth = radius * 0.3F;
+        Gdiplus::SolidBrush bandBrush(ToGdiplusColor(ScaleColor(shadowColor, 0.65F), 55U));
+        graphics.FillEllipse(&bandBrush, bandX - (bandWidth * 0.5F), centerY - radius, bandWidth, radius * 2.0F);
+    }
+    graphics.Restore(bandState);
+}
+
+void DrawCosmicBlackHole(Gdiplus::Graphics& graphics, float centerX, float centerY, float radius, float time) {
+    Gdiplus::GraphicsState diskState = graphics.Save();
+    graphics.TranslateTransform(centerX, centerY);
+    graphics.RotateTransform(30.0F + std::sin(time * 0.04F) * 4.0F);
+    for (int ring = 0; ring < 3; ++ring) {
+        const float ringRadius = radius * (1.7F + static_cast<float>(ring) * 0.6F);
+        const BYTE alpha = static_cast<BYTE>(std::clamp(96.0F - (static_cast<float>(ring) * 26.0F), 0.0F, 255.0F));
+        Gdiplus::Pen glowPen(ToGdiplusColor(RGB(255, 190, 130), alpha), std::max(1.0F, radius * 0.16F));
+        graphics.DrawEllipse(&glowPen, -ringRadius, -ringRadius * 0.3F, ringRadius * 2.0F, ringRadius * 0.6F);
+    }
+    graphics.Restore(diskState);
+
+    Gdiplus::SolidBrush haze(ToGdiplusColor(RGB(0, 0, 0), 150U));
+    graphics.FillEllipse(&haze, centerX - (radius * 1.3F), centerY - (radius * 1.3F), radius * 2.6F, radius * 2.6F);
+    Gdiplus::SolidBrush core(ToGdiplusColor(RGB(0, 0, 0)));
+    graphics.FillEllipse(&core, centerX - radius, centerY - radius, radius * 2.0F, radius * 2.0F);
+}
+
+// The slow-tier scene: sky gradient, nebula band, a distant black hole, and a couple of planets.
+// Rendered into an offscreen bitmap by DrawGraphGrid on a throttled cadence, never per-frame.
+void RenderCosmicSceneLayer(HDC memoryDc, int width, int height, float time) {
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(memoryDc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+
+    Gdiplus::LinearGradientBrush skyBrush(
+        Gdiplus::PointF(0.0F, 0.0F),
+        Gdiplus::PointF(0.0F, static_cast<float>(height)),
+        ToGdiplusColor(CosmicTheme::SkyTop),
+        ToGdiplusColor(CosmicTheme::SkyBottom));
+    graphics.FillRectangle(&skyBrush, 0, 0, width, height);
+
+    {
+        Gdiplus::GraphicsState nebulaState = graphics.Save();
+        graphics.TranslateTransform(static_cast<float>(width) * 0.5F, static_cast<float>(height) * 0.4F);
+        graphics.RotateTransform(-22.0F);
+        const float bandLength = static_cast<float>(std::max(width, height)) * 1.7F;
+        const float bandThickness = static_cast<float>(height) * 0.6F;
+        const Gdiplus::RectF bandRect(-bandLength * 0.5F, -bandThickness * 0.5F, bandLength, bandThickness);
+        Gdiplus::LinearGradientBrush bandBrush(bandRect, ToGdiplusColor(CosmicTheme::NebulaCore, 0U), ToGdiplusColor(CosmicTheme::NebulaCore, 0U), Gdiplus::LinearGradientModeVertical);
+        Gdiplus::Color bandColors[3] = {
+            ToGdiplusColor(CosmicTheme::NebulaCore, 0U),
+            ToGdiplusColor(CosmicTheme::NebulaEdge, 30U),
+            ToGdiplusColor(CosmicTheme::NebulaCore, 0U),
+        };
+        Gdiplus::REAL bandPositions[3] = { 0.0F, 0.5F, 1.0F };
+        bandBrush.SetInterpolationColors(bandColors, bandPositions, 3);
+        graphics.FillRectangle(&bandBrush, bandRect);
+        graphics.Restore(nebulaState);
+    }
+
+    const float minSpan = static_cast<float>(std::min(width, height));
+    DrawCosmicBlackHole(graphics, static_cast<float>(width) * 0.87F, static_cast<float>(height) * 0.15F, minSpan * 0.05F, time);
+    DrawCosmicPlanet(graphics, static_cast<float>(width) * 0.12F, static_cast<float>(height) * 0.8F, minSpan * 0.08F, RGB(198, 122, 84), RGB(84, 44, 34), time, false);
+    DrawCosmicPlanet(graphics, static_cast<float>(width) * 0.32F, static_cast<float>(height) * 0.14F, minSpan * 0.05F, RGB(122, 172, 214), RGB(38, 66, 96), time * 0.7F, true);
+}
+
+struct CosmicSceneCache {
+    HBITMAP bitmap = nullptr;
+    HDC memoryDc = nullptr;
+    int width = 0;
+    int height = 0;
+    std::chrono::steady_clock::time_point lastRegen{};
+    bool hasContent = false;
+};
+
+[[nodiscard]] CosmicSceneCache& CosmicCache() {
+    static CosmicSceneCache cache;
+    return cache;
+}
+
+// Stars are drawn directly (not cached) every call: cheap plain-GDI SetPixel calls, so they can
+// drift and twinkle smoothly every frame regardless of how often the slow-tier layer regenerates.
+void DrawCosmicStars(HDC dc, const RECT& canvas, float time) {
+    const int width = canvas.right - canvas.left;
+    const int height = canvas.bottom - canvas.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    for (const CosmicStar& star : CosmicStarField()) {
+        const float drift = 0.006F + (star.depth * 0.012F);
+        float u = std::fmod(star.u + (time * drift), 1.0F);
+        if (u < 0.0F) {
+            u += 1.0F;
+        }
+        const int x = canvas.left + static_cast<int>(u * static_cast<float>(width));
+        const int y = canvas.top + static_cast<int>(star.v * static_cast<float>(height));
+        const float twinkle = 0.5F + (0.5F * std::sin((time * (0.5F + star.depth)) + star.phase));
+        const auto channel = [twinkle](BYTE base) noexcept {
+            return static_cast<BYTE>(std::clamp(static_cast<float>(base) * twinkle, 0.0F, 255.0F));
+        };
+        const COLORREF shaded = RGB(channel(GetRValue(star.color)), channel(GetGValue(star.color)), channel(GetBValue(star.color)));
+        SetPixel(dc, x, y, shaded);
+        if (star.size > 1.5F) {
+            const COLORREF halo = RGB(channel(GetRValue(star.color)) / 2, channel(GetGValue(star.color)) / 2, channel(GetBValue(star.color)) / 2);
+            SetPixel(dc, x - 1, y, halo);
+            SetPixel(dc, x + 1, y, halo);
+            SetPixel(dc, x, y - 1, halo);
+            SetPixel(dc, x, y + 1, halo);
+        }
+    }
+}
+
+void DrawCosmicBackground(HDC dc, const RECT& canvas) {
+    const int width = canvas.right - canvas.left;
+    const int height = canvas.bottom - canvas.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const float time = std::chrono::duration<float>(now.time_since_epoch()).count();
+
+    CosmicSceneCache& cache = CosmicCache();
+    const bool sizeChanged = cache.width != width || cache.height != height;
+    constexpr std::chrono::milliseconds kSlowLayerInterval{ 140 };
+    const bool stale = !cache.hasContent || sizeChanged || (now - cache.lastRegen) >= kSlowLayerInterval;
+
+    if (sizeChanged) {
+        if (cache.memoryDc != nullptr) {
+            DeleteDC(cache.memoryDc);
+            cache.memoryDc = nullptr;
+        }
+        if (cache.bitmap != nullptr) {
+            DeleteObject(cache.bitmap);
+            cache.bitmap = nullptr;
+        }
+        HDC screenDc = GetDC(nullptr);
+        cache.bitmap = CreateCompatibleBitmap(screenDc, width, height);
+        cache.memoryDc = CreateCompatibleDC(screenDc);
+        ReleaseDC(nullptr, screenDc);
+        if (cache.memoryDc != nullptr && cache.bitmap != nullptr) {
+            SelectObject(cache.memoryDc, cache.bitmap);
+        }
+        cache.width = width;
+        cache.height = height;
+        cache.hasContent = false;
+    }
+
+    if (stale && cache.memoryDc != nullptr) {
+        RenderCosmicSceneLayer(cache.memoryDc, width, height, time);
+        cache.lastRegen = now;
+        cache.hasContent = true;
+    }
+
+    if (cache.hasContent && cache.memoryDc != nullptr) {
+        BitBlt(dc, canvas.left, canvas.top, width, height, cache.memoryDc, 0, 0, SRCCOPY);
+    } else {
+        GdiDrawing::FillRectColor(dc, canvas, CosmicTheme::SkyBottom);
+    }
+
+    DrawCosmicStars(dc, canvas, time);
+}
+// ---------------------------------------------------------------------------------------------
+
+void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
+    DrawCosmicBackground(dc, canvas);
+
+    // A faint alignment grid still helps line up nodes; kept low-opacity so the sky stays the
+    // visual backdrop and the nodes -- not the grid, not the sky -- stay the thing your eye lands on.
     const int minorSpacing = std::clamp(ScaleMetric(20, zoom), 8, 80);
     const int majorSpacing = minorSpacing * 4;
     const int minorStartX = canvas.left + ((panX % minorSpacing) + minorSpacing) % minorSpacing;
@@ -995,7 +1248,7 @@ void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, 
 
     for (int x = minorStartX; x < canvas.right; x += minorSpacing) {
         for (int y = minorStartY; y < canvas.bottom; y += minorSpacing) {
-            SetPixel(dc, x, y, BlenderGraphTheme::GridDot);
+            GdiDrawing::FillRectAlpha(dc, RECT{ x, y, x + 1, y + 1 }, BlenderGraphTheme::GridDot, 60U);
         }
     }
 
@@ -1345,46 +1598,10 @@ void DrawGraphPin(
 }
 
 [[nodiscard]] COLORREF GraphNodeHeaderColor(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return RGB(98, 58, 51);
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
-        return RGB(91, 74, 47);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return RGB(91, 73, 35);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
-    case kb::render::RenderMaterialGraphNodeKind::Uv:
-    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
-    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
-    case kb::render::RenderMaterialGraphNodeKind::Normalize:
-    case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
-    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
-        return RGB(55, 73, 96);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-    case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
-        return RGB(68, 68, 68);
-    case kb::render::RenderMaterialGraphNodeKind::Reroute:
-    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
-    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
-    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
-    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
-    case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
-    case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
-        return RGB(61, 86, 76);
-    case kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall:
-        return RGB(68, 72, 104);
-    default:
-        return RGB(54, 64, 78);
-    }
+    // Every node shares the same deep-space-blue header now -- the per-category tinting Blender uses
+    // was replaced with one uniform cosmic look, per the redesign brief.
+    static_cast<void>(kind);
+    return BlenderGraphTheme::NodeHeader;
 }
 
 void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body, float scale) {
@@ -1858,7 +2075,7 @@ void DrawGraphNode(
     const RECT inner{ rect.left + 2, rect.top + 2, rect.right - 2, rect.bottom - 2 };
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, rect.top + headerHeight, inner.right, inner.bottom }, inner, bodyTop, bodyBottom, std::max(2, cornerDiameter - 2));
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, inner.top, inner.right, rect.top + headerHeight }, inner, headerTop, headerBottom, std::max(2, cornerDiameter - 2));
-    GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(18, 18, 18));
+    GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(58, 96, 148));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
 
     std::string title = node.parameter.displayName.empty() ? GraphNodeTitle(node.kind) : node.parameter.displayName;
