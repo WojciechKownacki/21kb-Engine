@@ -289,35 +289,8 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float metallic = clamp(surface.metallic, 0.0, 1.0);\n";
             wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
-            if (shader.reflection.hasBentNormal) {
-                wrapper += "    vec3 bentNormalRaw = basisTangent * surface.bentNormal.x + basisBitangent * surface.bentNormal.y + basisNormal * surface.bentNormal.z;\n";
-                wrapper += "    vec3 worldBentNormal = dot(bentNormalRaw, bentNormalRaw) > 0.0001 ? normalize(bentNormalRaw) : worldNormal;\n";
-                wrapper += "    vec3 bentHalfRaw = ctx.lightVector + ctx.viewDir;\n";
-                wrapper += "    vec3 bentHalf = dot(bentHalfRaw, bentHalfRaw) > 0.0001 ? normalize(bentHalfRaw) : worldNormal;\n";
-                wrapper += "    occlusion *= clamp(dot(worldBentNormal, bentHalf) * 0.5 + 0.5, 0.0, 1.0);\n";
-            }
-            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, occlusion);\n";
-            if (shader.reflection.shadingModel == RenderMaterialShadingModel::Subsurface) {
-                wrapper += "    float subsurfaceThickness = clamp(surface.surfaceThickness, 0.0, 1.0);\n";
-                wrapper += "    float subsurfaceWrap = pow(clamp(1.0 - dot(worldNormal, ctx.viewDir), 0.0, 1.0), 2.0);\n";
-                wrapper += "    lighting += surface.subsurfaceColor * (0.15 + 0.85 * subsurfaceWrap) * (0.25 + 0.75 * subsurfaceThickness) * (1.0 - metallic);\n";
-            }
-            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ClearCoat || shader.reflection.hasClearCoatNormal) {
-                wrapper += "    vec3 clearCoatNormalRaw = basisTangent * surface.clearCoatNormal.x + basisBitangent * surface.clearCoatNormal.y + basisNormal * surface.clearCoatNormal.z;\n";
-                wrapper += "    vec3 worldClearCoatNormal = dot(clearCoatNormalRaw, clearCoatNormalRaw) > 0.0001 ? normalize(clearCoatNormalRaw) : worldNormal;\n";
-                wrapper += "    vec3 coatHalfRaw = ctx.lightVector + ctx.viewDir;\n";
-                wrapper += "    vec3 coatHalf = dot(coatHalfRaw, coatHalfRaw) > 0.0001 ? normalize(coatHalfRaw) : worldNormal;\n";
-                wrapper += "    float coat = clamp(surface.clearCoat, 0.0, 1.0);\n";
-                wrapper += "    float coatPower = mix(128.0, 8.0, clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
-                wrapper += "    lighting += vec3_splat(pow(max(dot(worldClearCoatNormal, coatHalf), 0.0), coatPower) * coat * 0.25);\n";
-            }
-            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ThinTranslucent || shader.reflection.hasThinTranslucentOutput) {
-                wrapper += "    lighting += surface.thinTranslucentOutput.rgb * clamp(surface.thinTranslucentOutput.a, 0.0, 1.0);\n";
-            }
-            if (shader.reflection.shadingModel == RenderMaterialShadingModel::SingleLayerWater || shader.reflection.hasSingleLayerWaterOutput) {
-                wrapper += "    float waterWeight = clamp(surface.singleLayerWaterOutput.a, 0.0, 1.0);\n";
-                wrapper += "    lighting = mix(lighting, lighting * (1.0 - 0.25 * waterWeight) + surface.singleLayerWaterOutput.rgb, waterWeight);\n";
-            }
+            wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
+            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion);\n";
             wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
         }
     }
@@ -431,11 +404,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.hasWorldPositionOffset ? 1U : 0U);
     HashU64(hash, reflection.hasCustomizedUv0 ? 1U : 0U);
     HashU64(hash, reflection.hasDisplacement ? 1U : 0U);
-    HashU64(hash, reflection.hasClearCoatNormal ? 1U : 0U);
-    HashU64(hash, reflection.hasBentNormal ? 1U : 0U);
     HashU64(hash, reflection.hasTangentOutput ? 1U : 0U);
-    HashU64(hash, reflection.hasThinTranslucentOutput ? 1U : 0U);
-    HashU64(hash, reflection.hasSingleLayerWaterOutput ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.
