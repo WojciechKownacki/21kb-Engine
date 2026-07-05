@@ -48,7 +48,7 @@ float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     return lightScatter * viewScatter * energyFactor;
 }
 
-vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     vec4 dirKind = u_lightDirKind[lightIndex];
     vec4 positionRange = u_lightPositionRange[lightIndex];
@@ -84,14 +84,14 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
     float lDotH = max(dot(lightVector, halfVector), 0.0);
-    vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
+    vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = KbFresnelSchlick(hDotV, f0);
     float distribution = KbDistributionGgx(nDotH, roughness);
     float geometry = KbGeometrySchlickGgx(nDotV, roughness) * KbGeometrySchlickGgx(nDotL, roughness);
-    vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
+    vec3 specularTerm = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * KbDiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
-    return (diffuse + specular) * radiance * nDotL;
+    return (diffuse + specularTerm) * radiance * nDotL;
 }
 
 vec3 KbEnvironmentColor(vec3 direction)
@@ -102,14 +102,14 @@ vec3 KbEnvironmentColor(vec3 direction)
     return u_environmentParams.x < 1.5 ? constantColor : hemisphereColor;
 }
 
-vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     if (u_environmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
     }
 
     float nDotV = max(dot(normal, viewDir), 0.0);
-    vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
+    vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = KbFresnelSchlickRoughness(nDotV, f0, roughness);
     vec3 diffuseEnv = KbEnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
@@ -118,13 +118,13 @@ vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metalli
     return diffuseEnv + specularEnv;
 }
 
-vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
-    vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, occlusion);
+    vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
     for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
         if (float(lightIndex) < u_lightParams.x) {
-            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, occlusion);
+            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion);
         }
     }
     return lighting;
