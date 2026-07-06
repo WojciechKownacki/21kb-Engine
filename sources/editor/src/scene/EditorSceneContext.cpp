@@ -97,6 +97,73 @@ namespace {
 constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
 constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
 
+struct MaterialGraphContextMenuKeyboardRow {
+    bool category = false;
+    std::size_t categoryIndex = 0U;
+    MaterialEditorGraphMenuCommand command = MaterialEditorGraphMenuCommand::None;
+    int contentTop = 0;
+    int height = kMaterialEditorGraphMenuCommandHeight;
+};
+
+[[nodiscard]] std::vector<MaterialGraphContextMenuKeyboardRow> MaterialGraphContextMenuKeyboardRows(const EditorSceneContext& sceneContext) {
+    std::vector<MaterialGraphContextMenuKeyboardRow> rows;
+    int contentTop = 0;
+    const std::size_t selectedGraphNodeCount = sceneContext.SelectedMaterialGraphNodeIds().size();
+    const bool hasSelectedGraphComment = sceneContext.SelectedMaterialGraphCommentId() != 0U;
+    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
+        rows.reserve(commands.size());
+        for (const MaterialEditorGraphMenuCommand command : commands) {
+            if (MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment)) {
+                rows.push_back(MaterialGraphContextMenuKeyboardRow{
+                    .category = false,
+                    .categoryIndex = 0U,
+                    .command = command,
+                    .contentTop = contentTop,
+                    .height = kMaterialEditorGraphMenuCommandHeight,
+                });
+            }
+            contentTop += kMaterialEditorGraphMenuCommandHeight;
+        }
+        return rows;
+    }
+
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
+    for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
+        rows.push_back(MaterialGraphContextMenuKeyboardRow{
+            .category = true,
+            .categoryIndex = categoryIndex,
+            .command = MaterialEditorGraphMenuCommand::None,
+            .contentTop = contentTop,
+            .height = kMaterialEditorGraphMenuCategoryHeight,
+        });
+        contentTop += kMaterialEditorGraphMenuCategoryHeight;
+        if (!sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
+            continue;
+        }
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favorites);
+        for (const MaterialEditorGraphMenuCommand command : commands) {
+            if (MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment)) {
+                rows.push_back(MaterialGraphContextMenuKeyboardRow{
+                    .category = false,
+                    .categoryIndex = categoryIndex,
+                    .command = command,
+                    .contentTop = contentTop,
+                    .height = kMaterialEditorGraphMenuCommandHeight,
+                });
+            }
+            contentTop += kMaterialEditorGraphMenuCommandHeight;
+        }
+    }
+    return rows;
+}
+
+[[nodiscard]] bool IsMaterialGraphContextMenuRowHovered(const EditorSceneContext& sceneContext, const MaterialGraphContextMenuKeyboardRow& row) noexcept {
+    return row.category
+        ? sceneContext.IsMaterialGraphContextMenuCategoryHovered(row.categoryIndex)
+        : sceneContext.IsMaterialGraphContextMenuCommandHovered(row.categoryIndex, row.command);
+}
+
 
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
     return std::ranges::find(entities, entity) != entities.end();
@@ -2441,30 +2508,21 @@ std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMater
 }
 
 const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
-    EditorCrashBreadcrumbs::WriteValue("material_preview_scene", "begin asset", id.value);
     const kb::render::RenderMaterialAssetData* workingCopy = nullptr;
     if (materialEditor_.OpenAssetId() == id && materialEditor_.WorkingCopy().has_value()) {
         workingCopy = &*materialEditor_.WorkingCopy();
-        EditorCrashBreadcrumbs::Write(
-            "material_preview_scene",
-            "using working copy nodes=" + std::to_string(workingCopy->graph.nodes.size()) +
-                " links=" + std::to_string(workingCopy->graph.links.size()));
         materialNodePreviewWorkingCopy_.reset();
         if (materialPreviewNodePreviewEnabled_) {
-            EditorCrashBreadcrumbs::Write("material_preview_scene", "node preview build begin");
             materialNodePreviewWorkingCopy_ =
                 EditorMaterialNodePreviewBuilder::Build(*materialEditor_.WorkingCopy(), materialEditor_.SelectedNodeId());
             if (materialNodePreviewWorkingCopy_.has_value()) {
                 workingCopy = &*materialNodePreviewWorkingCopy_;
-                EditorCrashBreadcrumbs::Write("material_preview_scene", "node preview working copy active");
             }
         }
     } else {
         materialNodePreviewWorkingCopy_.reset();
-        EditorCrashBreadcrumbs::Write("material_preview_scene", "using source material");
     }
     const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy);
-    EditorCrashBreadcrumbs::Write("material_preview_scene", "end");
     return previewScene;
 }
 
@@ -2728,6 +2786,28 @@ void EditorSceneContext::SetMaterialGraphCanvasViewport(int width, int height) n
     if (height > 0) {
         materialGraphCanvasHeight_ = height;
     }
+}
+
+void EditorSceneContext::SetMaterialGraphCanvasViewport(int left, int top, int width, int height) noexcept {
+    materialGraphCanvasLeft_ = left;
+    materialGraphCanvasTop_ = top;
+    SetMaterialGraphCanvasViewport(width, height);
+}
+
+int EditorSceneContext::MaterialGraphCanvasLeft() const noexcept {
+    return materialGraphCanvasLeft_;
+}
+
+int EditorSceneContext::MaterialGraphCanvasTop() const noexcept {
+    return materialGraphCanvasTop_;
+}
+
+int EditorSceneContext::MaterialGraphCanvasWidth() const noexcept {
+    return materialGraphCanvasWidth_;
+}
+
+int EditorSceneContext::MaterialGraphCanvasHeight() const noexcept {
+    return materialGraphCanvasHeight_;
 }
 
 bool EditorSceneContext::IsMaterialEditorFindFocused() const noexcept {
@@ -3013,22 +3093,11 @@ bool EditorSceneContext::DragMaterialGraphNode(int x, int y) {
             },
         });
     }
-    const auto kbPerfMoveStart = std::chrono::steady_clock::now();
     if (!materialEditor_.MoveGraphNodes(positions)) {
         return false;
     }
-    const auto kbPerfMoveMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfMoveStart).count();
     materialGraphDragChanged_ = true;
-    const auto kbPerfDiagStart = std::chrono::steady_clock::now();
     materialEditor_.ClearDiagnostics();
-    const auto kbPerfDiagMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDiagStart).count();
-    {
-        std::ostringstream kbPerfLine;
-        kbPerfLine << "DragMaterialGraphNode nodeCount=" << positions.size()
-                   << " moveGraphNodes=" << kbPerfMoveMicros << "us"
-                   << " clearDiagnostics=" << kbPerfDiagMicros << "us";
-        EditorCrashBreadcrumbs::Write("perf_node_drag", kbPerfLine.str());
-    }
     return true;
 }
 
@@ -3221,7 +3290,6 @@ bool EditorSceneContext::BeginMaterialGraphPan(int x, int y) noexcept {
 }
 
 bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
-    const auto kbPerfPanStart = std::chrono::steady_clock::now();
     if (!materialGraphPanning_) {
         return false;
     }
@@ -3233,10 +3301,6 @@ bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
     materialGraphPanMoved_ = true;
     materialGraphPanX_ = newPanX;
     materialGraphPanY_ = newPanY;
-    const auto kbPerfPanMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPanStart).count();
-    std::ostringstream kbPerfPanLine;
-    kbPerfPanLine << "DragMaterialGraphPan panX=" << newPanX << " panY=" << newPanY << " took=" << kbPerfPanMicros << "us";
-    EditorCrashBreadcrumbs::Write("perf_pan", kbPerfPanLine.str());
     return true;
 }
 
@@ -4263,6 +4327,7 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     materialGraphContextMenuY_ = y;
     materialGraphContextMenuGraphX_ = graphX;
     materialGraphContextMenuGraphY_ = graphY;
+    materialGraphContextMenuScrollOffset_ = 0;
     materialGraphContextMenuExpandedMask_ = 0U;
     materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
@@ -4271,6 +4336,11 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     materialGraphContextMenuPinFilterNodeId_ = 0U;
     materialGraphContextMenuPinFilterPin_.clear();
     materialGraphContextMenuPinFilterOutput_ = true;
+    const int menuHeight = MaterialEditorGraphContextMenuHeight(*this);
+    const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
+    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - menuHeight);
+    materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
+    materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
     return true;
 }
 
@@ -4284,6 +4354,7 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
     materialGraphContextMenuY_ = y;
     materialGraphContextMenuGraphX_ = graphX;
     materialGraphContextMenuGraphY_ = graphY;
+    materialGraphContextMenuScrollOffset_ = 0;
     materialGraphContextMenuExpandedMask_ = 0U;
     materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
@@ -4292,6 +4363,11 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
     materialGraphContextMenuPinFilterPin_ = materialGraphPendingConnectionPin_;
     materialGraphContextMenuPinFilterOutput_ = materialGraphPendingConnectionOutput_;
     materialGraphContextMenuPinFilterActive_ = true;
+    const int menuHeight = MaterialEditorGraphContextMenuHeight(*this);
+    const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
+    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - menuHeight);
+    materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
+    materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
     return true;
 }
 
@@ -4300,6 +4376,7 @@ bool EditorSceneContext::CloseMaterialGraphContextMenu() noexcept {
         return false;
     }
     materialGraphContextMenuAssetId_ = {};
+    materialGraphContextMenuScrollOffset_ = 0;
     materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
     materialGraphContextMenuSearchQuery_.clear();
@@ -4330,6 +4407,92 @@ int EditorSceneContext::MaterialGraphContextMenuGraphY() const noexcept {
     return materialGraphContextMenuGraphY_;
 }
 
+int EditorSceneContext::MaterialGraphContextMenuScrollOffset() const noexcept {
+    return materialGraphContextMenuScrollOffset_;
+}
+
+bool EditorSceneContext::SetMaterialGraphContextMenuScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (materialGraphContextMenuScrollOffset_ == clamped) {
+        return false;
+    }
+    materialGraphContextMenuScrollOffset_ = clamped;
+    return true;
+}
+
+bool EditorSceneContext::ScrollMaterialGraphContextMenu(int wheelDelta, int maxOffset) noexcept {
+    if (!IsMaterialGraphContextMenuOpen() || maxOffset <= 0) {
+        return false;
+    }
+    const int direction = wheelDelta > 0 ? -1 : 1;
+    return SetMaterialGraphContextMenuScrollOffset(
+        materialGraphContextMenuScrollOffset_ + direction * kMaterialEditorGraphMenuCommandHeight * 3,
+        maxOffset);
+}
+
+bool EditorSceneContext::MoveMaterialGraphContextMenuKeyboardSelection(int direction) {
+    if (!IsMaterialGraphContextMenuOpen() || direction == 0) {
+        return false;
+    }
+    const std::vector<MaterialGraphContextMenuKeyboardRow> rows = MaterialGraphContextMenuKeyboardRows(*this);
+    if (rows.empty()) {
+        return ClearMaterialGraphContextMenuHover();
+    }
+
+    std::ptrdiff_t currentIndex = -1;
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        if (IsMaterialGraphContextMenuRowHovered(*this, rows[index])) {
+            currentIndex = static_cast<std::ptrdiff_t>(index);
+            break;
+        }
+    }
+    const std::size_t nextIndex = currentIndex < 0
+        ? (direction > 0 ? 0U : rows.size() - 1U)
+        : static_cast<std::size_t>((currentIndex + direction + static_cast<std::ptrdiff_t>(rows.size())) %
+              static_cast<std::ptrdiff_t>(rows.size()));
+    const MaterialGraphContextMenuKeyboardRow& selected = rows[nextIndex];
+    bool changed = SetMaterialGraphContextMenuHover(selected.categoryIndex, selected.command);
+
+    const RECT menu = MaterialEditorPanelRenderer::GraphContextMenuRect(*this);
+    const RECT viewport = MaterialEditorGraphContextMenuViewportRect(menu);
+    const int viewportHeight = std::max(0L, viewport.bottom - viewport.top);
+    const int maxScroll = MaterialEditorGraphContextMenuMaxScroll(*this);
+    int scrollOffset = materialGraphContextMenuScrollOffset_;
+    if (selected.contentTop < scrollOffset) {
+        scrollOffset = selected.contentTop;
+    } else if (selected.contentTop + selected.height > scrollOffset + viewportHeight) {
+        scrollOffset = selected.contentTop + selected.height - viewportHeight;
+    }
+    changed = SetMaterialGraphContextMenuScrollOffset(scrollOffset, maxScroll) || changed;
+    return changed;
+}
+
+bool EditorSceneContext::ActivateMaterialGraphContextMenuKeyboardSelection() {
+    if (!IsMaterialGraphContextMenuOpen()) {
+        return false;
+    }
+    const std::vector<MaterialGraphContextMenuKeyboardRow> rows = MaterialGraphContextMenuKeyboardRows(*this);
+    if (rows.empty()) {
+        return false;
+    }
+
+    const MaterialGraphContextMenuKeyboardRow* selected = nullptr;
+    for (const MaterialGraphContextMenuKeyboardRow& row : rows) {
+        if (IsMaterialGraphContextMenuRowHovered(*this, row)) {
+            selected = &row;
+            break;
+        }
+    }
+    if (selected == nullptr) {
+        selected = &rows.front();
+        static_cast<void>(SetMaterialGraphContextMenuHover(selected->categoryIndex, selected->command));
+    }
+    if (selected->category) {
+        return ToggleMaterialGraphContextMenuCategory(selected->categoryIndex);
+    }
+    return ExecuteMaterialGraphContextMenuCommand(selected->command);
+}
+
 std::string_view EditorSceneContext::MaterialGraphContextMenuSearchQuery() const noexcept {
     return materialGraphContextMenuSearchQuery_;
 }
@@ -4339,6 +4502,7 @@ void EditorSceneContext::SetMaterialGraphContextMenuSearchQuery(std::string quer
         query.resize(64U);
     }
     materialGraphContextMenuSearchQuery_ = std::move(query);
+    materialGraphContextMenuScrollOffset_ = 0;
 }
 
 void EditorSceneContext::AppendMaterialGraphContextMenuSearchText(wchar_t character) {
@@ -4347,16 +4511,19 @@ void EditorSceneContext::AppendMaterialGraphContextMenuSearchText(wchar_t charac
     }
     materialGraphContextMenuSearchQuery_.push_back(static_cast<char>(character));
     materialGraphContextMenuExpandedMask_ = 0U;
+    materialGraphContextMenuScrollOffset_ = 0;
 }
 
 void EditorSceneContext::BackspaceMaterialGraphContextMenuSearch() {
     if (!materialGraphContextMenuSearchQuery_.empty()) {
         materialGraphContextMenuSearchQuery_.pop_back();
+        materialGraphContextMenuScrollOffset_ = 0;
     }
 }
 
 void EditorSceneContext::ClearMaterialGraphContextMenuSearch() noexcept {
     materialGraphContextMenuSearchQuery_.clear();
+    materialGraphContextMenuScrollOffset_ = 0;
 }
 
 const std::vector<MaterialEditorGraphMenuCommand>& EditorSceneContext::MaterialGraphPaletteFavoriteCommands() const noexcept {
@@ -4432,6 +4599,7 @@ bool EditorSceneContext::ToggleMaterialGraphContextMenuCategory(std::size_t cate
         return false;
     }
     materialGraphContextMenuExpandedMask_ ^= (1U << categoryIndex);
+    materialGraphContextMenuScrollOffset_ = 0;
     return true;
 }
 
@@ -6170,19 +6338,15 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
 }
 
 void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync begin");
     if (scene_ == nullptr || !materialEditor_.OpenAssetId().IsValid() || !materialEditor_.WorkingCopy().has_value() || !materialEditor_.Dirty()) {
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync clear no scene/open/working/dirty");
         ClearMaterialEditorWorkingCopyRuntimePreview();
         return;
     }
 
     const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
-    EditorCrashBreadcrumbs::WriteValue("material_runtime_preview", "open asset", openAsset.value);
     kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(openAsset);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "source metadata missing or invalid");
         ClearMaterialEditorWorkingCopyRuntimePreview();
         return;
     }
@@ -6199,7 +6363,6 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     if (materialRuntimePreviewAssetId_ == openAsset && materialRuntimePreviewContentHash_ == runtimeContentHash) {
         std::error_code existsError;
         if (!materialRuntimePreviewPath_.empty() && std::filesystem::exists(materialRuntimePreviewPath_, existsError)) {
-            EditorCrashBreadcrumbs::Write("material_runtime_preview", "runtime preview already current");
             return;
         }
     }
@@ -6208,7 +6371,6 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // live runtime preview, keep rendering that last-good material and only kick a recook so the
     // cook service reports Stale (with the failure reason) instead of dropping to a black/error frame.
     if (materialEditor_.DiagnosticsHaveError() && materialRuntimePreviewAssetId_ == openAsset) {
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "diagnostic error keeping last good");
         if (materialGraphCookService_ != nullptr) {
             static_cast<void>(materialGraphCookService_->RequestCook(
                 openAsset,
@@ -6225,9 +6387,7 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     const std::filesystem::path runtimePath = materialRuntimePreviewPath_.empty()
         ? SceneMaterialWorkingCopyRuntimePath(openAsset)
         : materialRuntimePreviewPath_;
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "save runtime path=" + runtimePath.generic_string());
     if (!kb::render::RenderMaterialAssetWriter::Save(runtimePath, *materialEditor_.WorkingCopy())) {
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "save runtime failed");
         console_.Warning("Materials", "Material graph live preview could not write its runtime working copy.");
         return;
     }
@@ -6247,7 +6407,6 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     }
 
     static_cast<void>(manager.RegisterAsset(std::move(runtimeMetadata)));
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "registered runtime asset");
     static_cast<void>(manager.Unload(openAsset));
     materialRuntimePreviewAssetId_ = openAsset;
     materialRuntimePreviewPath_ = runtimePath;
@@ -6256,18 +6415,14 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // The working copy changed: kick a debounced GPU cook so the preview and scene render the
     // authored graph program (not the CPU PBR fallback) on the next frame (MAT-30/32/33).
     if (materialGraphCookService_ != nullptr) {
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "request cook begin");
         static_cast<void>(materialGraphCookService_->RequestCook(
             openAsset,
             *materialEditor_.WorkingCopy(),
             MaterialPreviewGraphBuildContext(openAsset, materialPreviewScene_->SceneSettings())));
-        EditorCrashBreadcrumbs::Write("material_runtime_preview", "request cook end");
     }
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync end");
 }
 
 void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "clear begin");
     if (scene_ != nullptr && materialRuntimePreviewAssetId_.IsValid()) {
         kb::assets::AssetManager& manager = scene_->Assets().Manager();
         if (materialRuntimePreviewSourceMetadata_.has_value()) {
@@ -6285,7 +6440,6 @@ void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
     materialRuntimePreviewSourceMetadata_.reset();
     materialRuntimePreviewPath_.clear();
     materialRuntimePreviewContentHash_ = 0U;
-    EditorCrashBreadcrumbs::Write("material_runtime_preview", "clear end");
 }
 
 bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {

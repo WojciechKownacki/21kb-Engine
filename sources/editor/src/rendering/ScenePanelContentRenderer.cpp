@@ -1,7 +1,6 @@
 #include "rendering/ScenePanelContentRenderer.hpp"
 
 #if defined(_WIN32)
-#include "app/EditorCrashBreadcrumbs.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
@@ -23,7 +22,6 @@
 #include <array>
 #include <cmath>
 #include <optional>
-#include <sstream>
 #include <vector>
 
 namespace kb::editor {
@@ -33,38 +31,6 @@ constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
 constexpr std::size_t kEcsOverlayTopSystemCount = 4U;
-
-[[nodiscard]] const char* BoolText(bool value) noexcept {
-    return value ? "1" : "0";
-}
-
-[[nodiscard]] const char* AntiAliasingModeName(EditorAntiAliasingMode mode) noexcept {
-    switch (mode) {
-    case EditorAntiAliasingMode::None:
-        return "None";
-    case EditorAntiAliasingMode::Fxaa:
-        return "FXAA";
-    case EditorAntiAliasingMode::Taa:
-        return "TAA";
-    case EditorAntiAliasingMode::Msaa:
-        return "MSAA";
-    }
-    return "Unknown";
-}
-
-[[nodiscard]] const char* LightingPathName(kb::render::SceneRenderLightingPath path) noexcept {
-    switch (path) {
-    case kb::render::SceneRenderLightingPath::Forward:
-        return "Forward";
-    case kb::render::SceneRenderLightingPath::ClusteredForwardPlus:
-        return "ForwardPlus";
-    case kb::render::SceneRenderLightingPath::Deferred:
-        return "Deferred";
-    case kb::render::SceneRenderLightingPath::VisibilityBuffer:
-        return "VisibilityBuffer";
-    }
-    return "Unknown";
-}
 
 struct SceneViewportRenderProfileDesc {
     kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
@@ -500,26 +466,6 @@ struct LightWireframeBasis {
             gizmo.draggedAxis = sceneContext.Gizmo().draggedAxis;
             gizmo.mode = static_cast<std::uint8_t>(sceneContext.Gizmo().toolMode);
         }
-    }
-
-    {
-        std::ostringstream message;
-        message << "BuildViewportPresentSettings panelId=" << panelId
-                << " uiMode=" << AntiAliasingModeName(renderBackendSettings.AntiAliasingMode())
-                << " uiFxaa=" << BoolText(renderBackendSettings.FxaaEnabled())
-                << " uiTaa=" << BoolText(renderBackendSettings.TemporalAntiAliasingEnabled())
-                << " uiMsaaSamples=" << static_cast<unsigned>(renderBackendSettings.MsaaSamples())
-                << " postProcessEnabled=" << BoolText(postProcessEnabled)
-                << " msaaForcesPostProcessOff=" << BoolText(msaaMode && renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled())
-                << " lightingPath=" << LightingPathName(lightingConfig.lightingPath)
-                << " msaaForcesForward=" << BoolText(msaaForcesForward)
-                << " overrideFxaa=" << BoolText(postProcessSettings.fxaaEnabled)
-                << " overrideTaa=" << BoolText(postProcessSettings.temporalAntiAliasingEnabled)
-                << " overrideJitter=" << BoolText(postProcessSettings.temporalJitterEnabled)
-                << " overrideBloom=" << BoolText(postProcessSettings.bloomEnabled)
-                << " autoExposure=" << BoolText(postProcessSettings.outputTransform.autoExposure.enabled)
-                << " renderSize=" << renderWidth << 'x' << renderHeight;
-        EditorCrashBreadcrumbs::Write("aa_trace", message.str());
     }
 
     return EditorSceneBgfxViewport::PresentSettings{

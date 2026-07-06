@@ -3868,6 +3868,30 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT87: ColorRamp should persist edited stops in the runtime hint format");
     kb::editor::tests::Require(colorRampEditor.ConnectGraphPins(colorRampNodeId, "value", 1U, "baseColor"),
         "KBMAT-MAT87: Edited ColorRamp should route into Base Color");
+    std::ostringstream colorRampSerialized;
+    kb::render::RenderMaterialAssetWriter::Write(colorRampSerialized, *colorRampEditor.WorkingCopy());
+    std::istringstream colorRampSerializedInput{ colorRampSerialized.str() };
+    const kb::render::RenderMaterialAssetParseResult colorRampParsed =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(colorRampSerializedInput);
+    const kb::render::RenderMaterialGraphNode* parsedColorRampNode =
+        colorRampParsed.asset.has_value()
+            ? kb::render::FindRenderMaterialGraphNode(colorRampParsed.asset->graph, colorRampNodeId)
+            : nullptr;
+    std::string colorRampParseDiagnostics;
+    for (const kb::render::RenderMaterialAssetParseDiagnostic& diagnostic : colorRampParsed.diagnostics) {
+        colorRampParseDiagnostics += " line=" + std::to_string(diagnostic.line) + " field=" + diagnostic.field + " msg=" + diagnostic.message;
+    }
+    const std::string colorRampRoundTripMessage =
+        "KBMAT-MAT87: ColorRamp graph metadata should round-trip through .kbmat writer/loader; asset=" +
+        std::string{ colorRampParsed.asset.has_value() ? "yes" : "no" } +
+        " diagnostics=" + std::to_string(colorRampParsed.diagnostics.size()) +
+        " node=" + std::string{ parsedColorRampNode != nullptr ? "yes" : "no" } +
+        " hint='" + (parsedColorRampNode != nullptr ? parsedColorRampNode->parameter.defaultValueHint : std::string{}) + "'" +
+        colorRampParseDiagnostics;
+    kb::editor::tests::Require(colorRampParsed.Succeeded() &&
+            parsedColorRampNode != nullptr &&
+            parsedColorRampNode->parameter.defaultValueHint == "0.25 0.1 0.2 0.3 0.75 0.8 0.6 0.4",
+        colorRampRoundTripMessage.c_str());
     const kb::render::RenderMaterialGraphCompileResult colorRampCompiled =
         kb::render::CompileRenderMaterialGraphToShaderSource(
             colorRampEditor.WorkingCopy()->graph,
@@ -4157,7 +4181,7 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
     std::uint32_t textureNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 220, 80, &colorNodeId),
         "KBMAT-MAT59: Material Editor should create a color node for pin compatibility tests");
-    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, 460, 80, &textureNodeId),
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, 560, 80, &textureNodeId),
         "KBMAT-MAT59: Material Editor should create a texture node for pin compatibility tests");
 
     const kb::render::RenderMaterialGraphDocument& graph = materialEditor.WorkingCopy()->graph;
@@ -4196,12 +4220,17 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
     const POINT colorAlphaPin = kb::editor::MaterialEditorPanelOutputPinPoint(*colorRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 4U, colorOutputPinCount);
     const std::optional<kb::editor::MaterialEditorGraphPinHit> colorAlphaHit =
         kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graphAfterConnect, colorAlphaPin.x, colorAlphaPin.y);
+    const std::string colorAlphaHitDetail = colorAlphaHit.has_value()
+        ? " actual pin=" + colorAlphaHit->pin + " type=" + std::to_string(static_cast<int>(colorAlphaHit->type))
+        : " actual pin=<none>";
+    const std::string colorAlphaHitMessage =
+        "KBMAT-MAT59: Graph pin hit-test should expose Constant Color's alpha channel output pin;" + colorAlphaHitDetail;
     kb::editor::tests::Require(colorAlphaHit.has_value() &&
             colorAlphaHit->nodeId == colorNodeId &&
             colorAlphaHit->direction == kb::editor::MaterialEditorGraphPinDirection::Output &&
             colorAlphaHit->pin == "a" &&
             colorAlphaHit->type == kb::render::RenderMaterialGraphPinType::Float,
-        "KBMAT-MAT59: Graph pin hit-test should expose Constant Color's alpha channel output pin");
+        colorAlphaHitMessage.c_str());
 
     const std::optional<RECT> textureRect = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graphAfterConnect, textureNodeId);
     kb::editor::tests::Require(textureRect.has_value(), "KBMAT-MAT59: Texture node rect should resolve for pin hit-test");

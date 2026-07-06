@@ -417,6 +417,7 @@ void AddGraphMigrationDiagnostic(
             node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
             node->kind == RenderMaterialGraphNodeKind::ConstantColor ||
             node->kind == RenderMaterialGraphNodeKind::CollectionParameter ||
+            node->kind == RenderMaterialGraphNodeKind::ColorRamp ||
             node->kind == RenderMaterialGraphNodeKind::Uv ||
             node->kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
             node->kind == RenderMaterialGraphNodeKind::StaticSwitch ||

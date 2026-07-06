@@ -190,6 +190,7 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         node.kind == RenderMaterialGraphNodeKind::StaticSwitch ||
         node.kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
         node.kind == RenderMaterialGraphNodeKind::CollectionParameter ||
+        node.kind == RenderMaterialGraphNodeKind::ColorRamp ||
         node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
         node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
         node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
