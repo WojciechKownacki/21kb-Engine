@@ -293,7 +293,10 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
         return SIZE{ 238, 142 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
     case kb::render::RenderMaterialGraphNodeKind::TextureObject:
-        return SIZE{ 220, 118 };
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return SIZE{ 300, 162 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
         return SIZE{ 160, 66 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
@@ -301,7 +304,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
         return SIZE{ 238, 142 };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
-        return SIZE{ 196, 112 };
+        return SIZE{ 218, 176 };
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
         return SIZE{ 220, 88 };
     case kb::render::RenderMaterialGraphNodeKind::Reroute:
@@ -322,6 +325,9 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return SIZE{ 164, 52 };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
         return SIZE{ 420, 232 };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return SIZE{ 282, 270 };
@@ -412,6 +418,28 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     default:
         return SIZE{ MaterialEditorPanelMetrics::GraphNodeWidth, MaterialEditorPanelMetrics::GraphNodeHeight };
     }
+}
+#endif
+
+#if defined(_WIN32)
+inline bool MaterialEditorPanelIsTextureSamplePreviewNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray;
+}
+
+inline bool MaterialEditorPanelIsTextureObjectPreviewNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
+}
+
+inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return MaterialEditorPanelIsTextureSamplePreviewNode(kind) ||
+        MaterialEditorPanelIsTextureObjectPreviewNode(kind);
 }
 #endif
 
@@ -1348,7 +1376,7 @@ inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::Ren
         return POINT{ node.right - pinInset, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
     }
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    if (kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+    if (!MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
         const int bodyTop = node.top + headerHeight;
         const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
         const int rowHeight = std::min(
@@ -1379,12 +1407,30 @@ inline RECT MaterialEditorPanelTextureSamplePreviewRect(const RECT& node) noexce
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::TextureSample);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
     const int headerBottom = node.top + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    const int horizontalMargin = MaterialEditorPanelScaled(80, scale);
-    const int left = node.left + horizontalMargin;
-    const int right = node.right - horizontalMargin;
-    const int top = headerBottom + MaterialEditorPanelScaled(8, scale);
-    const int bottom = node.bottom - MaterialEditorPanelScaled(10, scale);
-    return RECT{ left, top, std::max(left + MaterialEditorPanelScaled(96, scale), right), std::max(top + MaterialEditorPanelScaled(96, scale), bottom) };
+    const int left = node.left + MaterialEditorPanelScaled(58, scale);
+    const int right = node.right - MaterialEditorPanelScaled(92, scale);
+    const int top = headerBottom + MaterialEditorPanelScaled(10, scale);
+    const int bottom = node.bottom - MaterialEditorPanelScaled(42, scale);
+    return RECT{
+        left,
+        top,
+        std::max(left + MaterialEditorPanelScaled(72, scale), right),
+        std::max(top + MaterialEditorPanelScaled(52, scale), bottom),
+    };
+}
+
+inline RECT MaterialEditorPanelTextureSamplePickerRect(const RECT& node) noexcept {
+    const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::TextureSample);
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
+    const RECT preview = MaterialEditorPanelTextureSamplePreviewRect(node);
+    const int top = preview.bottom + MaterialEditorPanelScaled(5, scale);
+    const int bottom = node.bottom - MaterialEditorPanelScaled(9, scale);
+    return RECT{
+        preview.left,
+        top,
+        preview.right,
+        std::max(top + MaterialEditorPanelScaled(20, scale), bottom),
+    };
 }
 
 inline bool MaterialEditorPanelIsConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
@@ -1652,24 +1698,24 @@ inline RECT MaterialEditorPanelColorRampGradientRect(const RECT& node) noexcept 
 }
 
 inline RECT MaterialEditorPanelTextureParameterRect(const RECT& node) noexcept {
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
-    const int left = node.left + MaterialEditorPanelScaled(26, scale);
-    const int top = node.top
-        + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale)
-        + MaterialEditorPanelScaled(54, scale);
-    const int right = node.right - MaterialEditorPanelScaled(56, scale);
-    const int bottom = top + MaterialEditorPanelScaled(92, scale);
-    return RECT{ left, top, right, bottom };
+    const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ParameterTexture);
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
+    const int headerBottom = node.top + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
+    return RECT{
+        node.left + MaterialEditorPanelScaled(28, scale),
+        headerBottom + MaterialEditorPanelScaled(8, scale),
+        node.right - MaterialEditorPanelScaled(56, scale),
+        node.bottom - MaterialEditorPanelScaled(10, scale),
+    };
 }
 
 inline std::uint32_t MaterialEditorPanelTextureValueNodeId(
     const kb::render::RenderMaterialGraphDocument& graph,
     const kb::render::RenderMaterialGraphNode& node) noexcept {
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
-        node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+    if (MaterialEditorPanelIsTextureObjectPreviewNode(node.kind)) {
         return node.id;
     }
-    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+    if (!MaterialEditorPanelIsTextureSamplePreviewNode(node.kind)) {
         return 0U;
     }
     for (const kb::render::RenderMaterialGraphLink& link : graph.links) {
@@ -1677,7 +1723,7 @@ inline std::uint32_t MaterialEditorPanelTextureValueNodeId(
             continue;
         }
         const kb::render::RenderMaterialGraphNode* source = kb::render::FindRenderMaterialGraphNode(graph, link.fromNodeId);
-        if (source != nullptr && source->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture && link.fromPin == "texture") {
+        if (source != nullptr && MaterialEditorPanelIsTextureObjectPreviewNode(source->kind) && link.fromPin == "texture") {
             return source->id;
         }
     }
@@ -1968,25 +2014,20 @@ inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphTextureSam
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
     for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
-        if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
-            node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
-            node.kind != kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        if (!MaterialEditorPanelIsTexturePreviewNode(node.kind)) {
             continue;
         }
         const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
         if (!rect.has_value()) {
             continue;
         }
-        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample &&
-            MaterialEditorPanelPointInRect(MaterialEditorPanelTextureSamplePreviewRect(*rect), x, y)) {
+        if (MaterialEditorPanelIsTextureSamplePreviewNode(node.kind) &&
+            (MaterialEditorPanelPointInRect(MaterialEditorPanelTextureSamplePreviewRect(*rect), x, y) ||
+                MaterialEditorPanelPointInRect(MaterialEditorPanelTextureSamplePickerRect(*rect), x, y))) {
             const std::uint32_t textureNodeId = MaterialEditorPanelTextureValueNodeId(graphView, node);
             return textureNodeId == 0U ? node.id : textureNodeId;
         }
-        if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
-            MaterialEditorPanelPointInRect(MaterialEditorPanelTextureParameterRect(*rect), x, y)) {
-            return node.id;
-        }
-        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject &&
+        if (MaterialEditorPanelIsTextureObjectPreviewNode(node.kind) &&
             MaterialEditorPanelPointInRect(MaterialEditorPanelTextureParameterRect(*rect), x, y)) {
             return node.id;
         }
