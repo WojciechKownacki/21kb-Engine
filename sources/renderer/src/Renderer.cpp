@@ -1029,7 +1029,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             lastSceneExposureStats_.push_back(RendererExposureSubmitter::Submit(
                 sceneExposureMeter_,
                 postProcessOutput,
-                desc,
+                sampledSceneDesc,
                 viewportPlan,
                 renderScene,
                 effectiveLightingConfig,
