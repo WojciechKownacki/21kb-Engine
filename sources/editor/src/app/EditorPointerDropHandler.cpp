@@ -134,6 +134,8 @@ namespace {
     }
 
     sceneContext.SetMaterialGraphCanvasViewport(
+        layout.graphCanvas.left,
+        layout.graphCanvas.top,
         MaterialEditorPanelRectWidth(layout.graphCanvas),
         MaterialEditorPanelRectHeight(layout.graphCanvas));
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
