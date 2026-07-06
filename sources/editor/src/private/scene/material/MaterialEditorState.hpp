@@ -1829,9 +1829,7 @@ public:
             }
         }
 
-        if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
-            node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
-            node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        if (IsGraphTextureAssetNode(node->kind)) {
             properties.push_back(MaterialEditorGraphNodeProperty{
                 .nodeId = node->id,
                 .stableId = "texture.asset",
@@ -3937,6 +3935,18 @@ private:
             return 1U;
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] static bool IsGraphTextureAssetNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
     }
 
     [[nodiscard]] static std::uint64_t GraphNodeTextureAssetId(
