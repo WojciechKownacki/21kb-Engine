@@ -17,8 +17,10 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <vector>
 
 #include <bx/math.h>
@@ -377,7 +379,16 @@ EditorPaintDispatcher::EditorPaintDispatcher(
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
+        const auto kbPerfPaintStart = std::chrono::steady_clock::now();
         renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), dockController_.ActiveDrag(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
+        const auto kbPerfPaintMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPaintStart).count();
+        {
+            std::ostringstream kbPerfPaintLine;
+            kbPerfPaintLine << "main window Paint took " << kbPerfPaintMicros << "us"
+                            << " materialGraphNodeDragging=" << (sceneContext_.IsMaterialGraphNodeDragging() ? 1 : 0)
+                            << " materialGraphPanning=" << (sceneContext_.IsMaterialGraphPanning() ? 1 : 0);
+            EditorCrashBreadcrumbs::Write("perf_paint", kbPerfPaintLine.str());
+        }
         const DockPointerDrag* activeDrag = dockController_.ActiveDrag();
         const bool draggingSplitter = activeDrag != nullptr && activeDrag->kind == DockHitKind::Splitter;
         if (EditorWindowResizeInteraction::IsWindowResizing(mainWindow_) || draggingSplitter) {
