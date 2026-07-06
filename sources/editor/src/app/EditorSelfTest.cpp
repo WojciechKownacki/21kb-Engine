@@ -933,6 +933,10 @@ void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
         const SIZE size = MaterialEditorPanelGraphNodeSize(kind);
         return RECT{ 40, 40, 40 + size.cx, 40 + size.cy };
     };
+    auto nodeRectForNode = [](const kb::render::RenderMaterialGraphNode& node) {
+        const SIZE size = MaterialEditorPanelGraphNodeSize(node);
+        return RECT{ 40, 40, 40 + size.cx, 40 + size.cy };
+    };
     auto checkOutputSpacing = [&](kb::render::RenderMaterialGraphNodeKind kind, std::size_t count, const char* label) {
         const RECT rect = nodeRectFor(kind);
         int previousY = std::numeric_limits<int>::min();
@@ -1000,6 +1004,54 @@ void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
     }
     report.Check(allCatalogInputsSpaced, "Every catalog node kind keeps readable input pin spacing");
     report.Check(allCatalogOutputsSpaced, "Every catalog node kind keeps readable output pin spacing");
+
+    kb::render::RenderMaterialGraphNode denseCustom{
+        .id = 80U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CustomCode,
+    };
+    for (std::uint32_t index = 0U; index < 8U; ++index) {
+        denseCustom.customCode.inputs.push_back(kb::render::RenderMaterialGraphCustomPin{
+            .name = "Input" + std::to_string(index),
+            .type = kb::render::RenderMaterialGraphPinType::Float4,
+        });
+    }
+    const RECT denseCustomRect = nodeRectForNode(denseCustom);
+    bool denseCustomInputsSpaced = true;
+    int previousCustomInputY = std::numeric_limits<int>::min();
+    for (std::size_t index = 0U; index < denseCustom.customCode.inputs.size(); ++index) {
+        const POINT pin = MaterialEditorPanelInputPinPoint(denseCustomRect, denseCustom.kind, index);
+        if (index > 0U && pin.y - previousCustomInputY < 15) {
+            denseCustomInputsSpaced = false;
+        }
+        previousCustomInputY = pin.y;
+    }
+    report.Check(denseCustomInputsSpaced, "CustomCode dynamic input pins resize the node before they overlap");
+
+    kb::render::RenderMaterialGraphNode denseFunction{
+        .id = 81U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall,
+    };
+    for (std::uint32_t index = 0U; index < 6U; ++index) {
+        denseFunction.customCode.inputs.push_back(kb::render::RenderMaterialGraphCustomPin{
+            .name = "In" + std::to_string(index),
+            .type = kb::render::RenderMaterialGraphPinType::Float4,
+        });
+        denseFunction.customCode.outputs.push_back(kb::render::RenderMaterialGraphCustomPin{
+            .name = "Out" + std::to_string(index),
+            .type = kb::render::RenderMaterialGraphPinType::Float4,
+        });
+    }
+    const RECT denseFunctionRect = nodeRectForNode(denseFunction);
+    bool denseFunctionOutputsSpaced = true;
+    int previousFunctionOutputY = std::numeric_limits<int>::min();
+    for (std::size_t index = 0U; index < denseFunction.customCode.outputs.size(); ++index) {
+        const POINT pin = MaterialEditorPanelOutputPinPoint(denseFunctionRect, denseFunction.kind, index, denseFunction.customCode.outputs.size());
+        if (index > 0U && pin.y - previousFunctionOutputY < 15) {
+            denseFunctionOutputsSpaced = false;
+        }
+        previousFunctionOutputY = pin.y;
+    }
+    report.Check(denseFunctionOutputsSpaced, "MaterialFunctionCall dynamic output pins resize the node before they overlap");
 }
 
 void RunInspectorLightComponentSuite(Report& report) {
