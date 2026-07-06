@@ -37,6 +37,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -774,6 +775,233 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
         "ColorRamp watcher exposes gradient stop color editing from the graph node");
 }
 
+void RunMaterialGraphTextureNodeSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0x7E570U };
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    struct TextureNodeCase {
+        std::uint32_t id;
+        kb::render::RenderMaterialGraphNodeKind kind;
+        int x;
+        int y;
+        const char* stableId;
+        const char* displayName;
+    };
+    const std::array<TextureNodeCase, 4U> sampleNodes{ {
+        { 50U, kb::render::RenderMaterialGraphNodeKind::TextureSample, 80, 120, "", "Texture Sample" },
+        { 52U, kb::render::RenderMaterialGraphNodeKind::TextureSampleCube, 560, 120, "", "Texture Sample Cube" },
+        { 53U, kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume, 80, 390, "", "Texture Sample Volume" },
+        { 54U, kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray, 560, 390, "", "Texture Sample Array" },
+    } };
+    const std::array<TextureNodeCase, 5U> textureValueNodes{ {
+        { 51U, kb::render::RenderMaterialGraphNodeKind::ParameterTexture, 80, 700, "albedo", "Albedo Texture" },
+        { 55U, kb::render::RenderMaterialGraphNodeKind::TextureObject, 390, 700, "", "Texture Object" },
+        { 56U, kb::render::RenderMaterialGraphNodeKind::TextureObjectCube, 700, 700, "", "Texture Object Cube" },
+        { 57U, kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume, 80, 900, "", "Texture Object Volume" },
+        { 58U, kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray, 390, 900, "", "Texture Object Array" },
+    } };
+    for (const TextureNodeCase& nodeCase : sampleNodes) {
+        material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+            .id = nodeCase.id,
+            .kind = nodeCase.kind,
+            .positionX = nodeCase.x,
+            .positionY = nodeCase.y,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = nodeCase.stableId,
+                .displayName = nodeCase.displayName,
+            },
+        });
+    }
+    for (const TextureNodeCase& nodeCase : textureValueNodes) {
+        material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+            .id = nodeCase.id,
+            .kind = nodeCase.kind,
+            .positionX = nodeCase.x,
+            .positionY = nodeCase.y,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = nodeCase.stableId,
+                .displayName = nodeCase.displayName,
+            },
+        });
+    }
+    context.MaterialEditor().Open(materialId, material);
+
+    const RECT content{ 0, 0, 1280, 1180 };
+    const std::optional<RECT> textureRect =
+        MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 50U, context, materialId);
+    const std::optional<RECT> parameterRect =
+        MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 51U, context, materialId);
+    report.Check(textureRect.has_value() && parameterRect.has_value(), "Texture graph UX test resolves texture node rects");
+    if (!textureRect.has_value() || !parameterRect.has_value()) {
+        return;
+    }
+
+    const RECT preview = MaterialEditorPanelTextureSamplePreviewRect(*textureRect);
+    const RECT picker = MaterialEditorPanelTextureSamplePickerRect(*textureRect);
+    report.Check(
+        preview.left >= textureRect->left &&
+            preview.top > textureRect->top &&
+            preview.right <= textureRect->right &&
+            preview.bottom < textureRect->bottom,
+        "TextureSample preview stays inside the node frame");
+    report.Check(
+        picker.left == preview.left &&
+            picker.right == preview.right &&
+            picker.top >= preview.bottom &&
+            picker.bottom <= textureRect->bottom,
+        "TextureSample picker footer is a separate in-node row below the preview");
+    const std::optional<std::uint32_t> footerHit =
+        MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, picker.left + 2, picker.top + 2);
+    report.Check(footerHit.has_value() && *footerHit == 50U, "TextureSample picker footer opens the texture asset picker");
+
+    const RECT parameterValue = MaterialEditorPanelTextureParameterRect(*parameterRect);
+    report.Check(
+        parameterValue.left >= parameterRect->left &&
+            parameterValue.top > parameterRect->top &&
+            parameterValue.right <= parameterRect->right &&
+            parameterValue.bottom <= parameterRect->bottom,
+        "ParameterTexture value picker stays inside the node frame");
+
+    for (const TextureNodeCase& nodeCase : sampleNodes) {
+        const std::optional<RECT> rect =
+            MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, nodeCase.id, context, materialId);
+        report.Check(rect.has_value(), "Texture sample family node resolves a graph rect");
+        if (!rect.has_value()) {
+            continue;
+        }
+        const RECT familyPreview = MaterialEditorPanelTextureSamplePreviewRect(*rect);
+        const RECT familyPicker = MaterialEditorPanelTextureSamplePickerRect(*rect);
+        report.Check(
+            familyPreview.left >= rect->left &&
+                familyPreview.top > rect->top &&
+                familyPreview.right <= rect->right &&
+                familyPreview.bottom < rect->bottom &&
+                familyPicker.left == familyPreview.left &&
+                familyPicker.right == familyPreview.right &&
+                familyPicker.bottom <= rect->bottom,
+            "Texture sample family keeps preview and picker inside the node");
+        const std::optional<std::uint32_t> hit =
+            MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, familyPicker.left + 2, familyPicker.top + 2);
+        report.Check(hit.has_value() && *hit == nodeCase.id, "Texture sample family footer hit-tests to the editable texture node");
+        report.Check(
+            context.SetMaterialGraphTextureSampleAsset(materialId, nodeCase.id, kb::assets::AssetId{}),
+            "Texture sample family accepts texture asset edits");
+        const std::vector<MaterialEditorGraphNodeProperty> properties =
+            context.MaterialEditor().GraphNodeProperties(nodeCase.id);
+        report.Check(
+            std::any_of(properties.begin(), properties.end(), [](const MaterialEditorGraphNodeProperty& property) {
+                return property.stableId == "texture.asset" &&
+                    property.kind == MaterialEditorGraphNodePropertyKind::TextureAsset;
+            }),
+            "Texture sample family exposes texture asset details property");
+    }
+
+    for (const TextureNodeCase& nodeCase : textureValueNodes) {
+        const std::optional<RECT> rect =
+            MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, nodeCase.id, context, materialId);
+        report.Check(rect.has_value(), "Texture object family node resolves a graph rect");
+        if (!rect.has_value()) {
+            continue;
+        }
+        const RECT valueRect = MaterialEditorPanelTextureParameterRect(*rect);
+        report.Check(
+            valueRect.left >= rect->left &&
+                valueRect.top > rect->top &&
+                valueRect.right <= rect->right &&
+                valueRect.bottom <= rect->bottom,
+            "Texture object family keeps preview and picker inside the node");
+        const std::optional<std::uint32_t> hit =
+            MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, valueRect.left + 2, valueRect.top + 2);
+        report.Check(hit.has_value() && *hit == nodeCase.id, "Texture object family hit-tests to the editable texture node");
+        report.Check(
+            context.SetMaterialGraphTextureSampleAsset(materialId, nodeCase.id, kb::assets::AssetId{}),
+            "Texture object family accepts texture asset edits");
+        const std::vector<MaterialEditorGraphNodeProperty> properties =
+            context.MaterialEditor().GraphNodeProperties(nodeCase.id);
+        report.Check(
+            std::any_of(properties.begin(), properties.end(), [](const MaterialEditorGraphNodeProperty& property) {
+                return property.stableId == "texture.asset" &&
+                    property.kind == MaterialEditorGraphNodePropertyKind::TextureAsset;
+            }),
+            "Texture object family exposes texture asset details property");
+    }
+}
+
+void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
+    auto nodeRectFor = [](kb::render::RenderMaterialGraphNodeKind kind) {
+        const SIZE size = MaterialEditorPanelGraphNodeSize(kind);
+        return RECT{ 40, 40, 40 + size.cx, 40 + size.cy };
+    };
+    auto checkOutputSpacing = [&](kb::render::RenderMaterialGraphNodeKind kind, std::size_t count, const char* label) {
+        const RECT rect = nodeRectFor(kind);
+        int previousY = std::numeric_limits<int>::min();
+        bool spaced = true;
+        for (std::size_t index = 0U; index < count; ++index) {
+            const POINT pin = MaterialEditorPanelOutputPinPoint(rect, kind, index, count);
+            if (index > 0U && pin.y - previousY < 15) {
+                spaced = false;
+            }
+            previousY = pin.y;
+        }
+        report.Check(spaced, label);
+    };
+    auto checkInputSpacing = [&](kb::render::RenderMaterialGraphNodeKind kind, std::size_t count, const char* label) {
+        const RECT rect = nodeRectFor(kind);
+        int previousY = std::numeric_limits<int>::min();
+        bool spaced = true;
+        for (std::size_t index = 0U; index < count; ++index) {
+            const POINT pin = MaterialEditorPanelInputPinPoint(rect, kind, index);
+            if (index > 0U && pin.y - previousY < 15) {
+                spaced = false;
+            }
+            previousY = pin.y;
+        }
+        report.Check(spaced, label);
+    };
+
+    checkOutputSpacing(
+        kb::render::RenderMaterialGraphNodeKind::CollectionParameter,
+        8U,
+        "CollectionParameter output pins keep readable spacing");
+    checkInputSpacing(
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        14U,
+        "MaterialOutput input pins keep readable spacing");
+    checkInputSpacing(
+        kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes,
+        11U,
+        "SetMaterialAttributes input pins keep readable spacing");
+
+    bool allCatalogInputsSpaced = true;
+    bool allCatalogOutputsSpaced = true;
+    for (const kb::render::RenderMaterialGraphNodeKind kind : kb::render::AllRenderMaterialGraphNodeKinds()) {
+        const RECT rect = nodeRectFor(kind);
+        const std::vector<std::string> inputPins = kb::render::RenderMaterialGraphNodeInputPinNames(kind);
+        int previousInputY = std::numeric_limits<int>::min();
+        for (std::size_t index = 0U; index < inputPins.size(); ++index) {
+            const POINT pin = MaterialEditorPanelInputPinPoint(rect, kind, index);
+            if (index > 0U && pin.y - previousInputY < 15) {
+                allCatalogInputsSpaced = false;
+                break;
+            }
+            previousInputY = pin.y;
+        }
+        const std::vector<std::string> outputPins = kb::render::RenderMaterialGraphNodeOutputPinNames(kind);
+        int previousOutputY = std::numeric_limits<int>::min();
+        for (std::size_t index = 0U; index < outputPins.size(); ++index) {
+            const POINT pin = MaterialEditorPanelOutputPinPoint(rect, kind, index, outputPins.size());
+            if (index > 0U && pin.y - previousOutputY < 15) {
+                allCatalogOutputsSpaced = false;
+                break;
+            }
+            previousOutputY = pin.y;
+        }
+    }
+    report.Check(allCatalogInputsSpaced, "Every catalog node kind keeps readable input pin spacing");
+    report.Check(allCatalogOutputsSpaced, "Every catalog node kind keeps readable output pin spacing");
+}
+
 void RunInspectorLightComponentSuite(Report& report) {
     EditorSceneContext context;
     const kb::scene::SceneEntity lightEntity = context.CreateLightObject(kb::scene::LightKind::Point);
@@ -1108,7 +1336,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -1129,6 +1357,8 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
     RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);
+    RunSuiteInScratch(report, "material_graph_texture_nodes", &RunMaterialGraphTextureNodeSuite);
+    RunSuiteInScratch(report, "material_graph_dense_node_layout", &RunMaterialGraphDenseNodeLayoutSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
