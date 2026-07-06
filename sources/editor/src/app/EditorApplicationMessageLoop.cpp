@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <vector>
 
 #include <bx/math.h>
@@ -463,18 +465,49 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
     auto previousTick = std::chrono::steady_clock::now();
     auto nextEditorFrame = previousTick;
     const auto editorFrameInterval = EditorFrameInterval();
+    auto kbPerfLastPumpEnd = std::chrono::steady_clock::now();
     while (state.running) {
+        const auto kbPerfPumpStart = std::chrono::steady_clock::now();
         int pumpedMessages = 0;
+        int kbPerfMouseMoveCount = 0;
+        int kbPerfPaintCount = 0;
         while (pumpedMessages < kMaxMessagesPerPump && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
             ++pumpedMessages;
+            if (message.message == WM_MOUSEMOVE) {
+                ++kbPerfMouseMoveCount;
+            } else if (message.message == WM_PAINT) {
+                ++kbPerfPaintCount;
+            }
             if (message.message == WM_QUIT) {
                 state.running = false;
                 break;
             }
             CoalesceConsecutiveMouseMoveMessages(message);
             TranslateMessage(&message);
+            const auto kbPerfDispatchStart = std::chrono::steady_clock::now();
             DispatchMessageW(&message);
+            const auto kbPerfDispatchMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDispatchStart).count();
+            if (kbPerfDispatchMicros > 1000) {
+                std::ostringstream kbPerfSlowDispatchLine;
+                kbPerfSlowDispatchLine << "Slow DispatchMessageW message=0x" << std::hex << message.message << std::dec
+                                       << " wparam=" << message.wParam
+                                       << " lparam=" << message.lParam
+                                       << " took=" << kbPerfDispatchMicros << "us";
+                EditorCrashBreadcrumbs::Write("perf_slowmsg", kbPerfSlowDispatchLine.str());
+            }
         }
+        const auto kbPerfPumpEnd = std::chrono::steady_clock::now();
+        if (pumpedMessages > 0) {
+            std::ostringstream kbPerfLoopLine;
+            kbPerfLoopLine << "MessageLoop pump pumped=" << pumpedMessages
+                           << " mouseMoves=" << kbPerfMouseMoveCount
+                           << " paints=" << kbPerfPaintCount
+                           << " hitCap=" << (pumpedMessages >= kMaxMessagesPerPump ? 1 : 0)
+                           << " pumpDuration=" << std::chrono::duration_cast<std::chrono::microseconds>(kbPerfPumpEnd - kbPerfPumpStart).count() << "us"
+                           << " sinceLastPumpEnd=" << std::chrono::duration_cast<std::chrono::microseconds>(kbPerfPumpStart - kbPerfLastPumpEnd).count() << "us";
+            EditorCrashBreadcrumbs::Write("perf_loop", kbPerfLoopLine.str());
+        }
+        kbPerfLastPumpEnd = kbPerfPumpEnd;
         if (!state.running) {
             break;
         }
@@ -490,7 +523,14 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         previousTick = currentTick;
         TickPlayMode(state, deltaSeconds);
         static_cast<void>(TickPointerDragFrame(state));
+        const auto kbPerfTickFrameStart = std::chrono::steady_clock::now();
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
+        const auto kbPerfTickFrameMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfTickFrameStart).count();
+        if (kbPerfTickFrameMicros > 500) {
+            std::ostringstream kbPerfTickLine;
+            kbPerfTickLine << "TickEditorFrame took=" << kbPerfTickFrameMicros << "us presented=" << (sceneFramePresented ? 1 : 0);
+            EditorCrashBreadcrumbs::Write("perf_tickframe", kbPerfTickLine.str());
+        }
         nextEditorFrame = currentTick + editorFrameInterval;
 
         if (state.playMode.IsPaused()) {
@@ -499,14 +539,10 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             }
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, kPausedToolbarAnimationIntervalMs, QS_ALLINPUT));
         } else if (!state.playMode.IsPlaying() && !sceneFramePresented) {
-            // Keep the editor rendering continuously while a material is open so time-driven graph nodes
-            // (Time / Panner / Rotator) animate live in the preview and scene, instead of freezing on a
-            // single frame; otherwise fall back to event-driven idle to save CPU.
+            // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
+            // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
+            // carried by the per-frame preview presents in TickEditorFrame.
             if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid()) {
-                state.sceneContext.MarkSceneRenderDirty();
-                if (state.window != nullptr) {
-                    InvalidateRect(state.window, nullptr, FALSE);
-                }
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {
                 WaitMessage();

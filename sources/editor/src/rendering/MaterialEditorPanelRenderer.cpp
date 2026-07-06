@@ -1,6 +1,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -30,10 +31,12 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -56,9 +59,6 @@ constexpr int kGraphMinTextPointSize = 9;
 // Cosmic redesign: one unified dark-blue/near-black "space station terminal" look for every node,
 // replacing Blender's per-category header tinting -- the user asked for every node to look the same.
 namespace BlenderGraphTheme {
-constexpr COLORREF Canvas = RGB(6, 7, 13);
-constexpr COLORREF GridDot = RGB(40, 54, 82);
-constexpr COLORREF GridDotMajor = RGB(52, 70, 104);
 constexpr COLORREF NodeBody = RGB(11, 13, 20);
 constexpr COLORREF NodeBodyBottom = RGB(7, 8, 13);
 constexpr COLORREF NodeOutline = RGB(42, 58, 92);
@@ -74,6 +74,13 @@ constexpr COLORREF SliderFill = RGB(46, 84, 128);
 constexpr COLORREF SliderFillFocus = RGB(59, 128, 190);
 constexpr COLORREF LinkShadow = RGB(0, 0, 0);
 constexpr COLORREF LinkFallback = RGB(150, 168, 200);
+constexpr COLORREF Canvas = RGB(6, 7, 13);
+constexpr COLORREF GridDot = RGB(40, 54, 82);
+constexpr COLORREF GridDotMajor = RGB(52, 70, 104);
+// GridDot alpha-blended over Canvas at 60/255, precomputed: SetPixelV is a single cheap GDI call,
+// while GdiDrawing::FillRectAlpha allocates a whole compatible DC + bitmap per call -- ruinous for
+// the thousands of minor-grid dots drawn per repaint (measured ~35ms/frame from this alone).
+constexpr COLORREF GridDotBlended = RGB(14, 18, 29);
 } // namespace BlenderGraphTheme
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
@@ -105,10 +112,34 @@ void EnsureMaterialGraphFontRegistered() {
     return -MulDiv(clampedPointSize, GetDeviceCaps(dc, LOGPIXELSY), 72);
 }
 
-void DrawGraphText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
-    EnsureMaterialGraphFontRegistered();
+// The node graph can draw dozens of text labels per repaint (a node's title plus one label per
+// pin -- a Material Output node alone has 14). CreateFontW/DeleteObject per call used to dominate
+// node-drawing time; logical height only depends on point size and the DC's DPI (constant for the
+// window's lifetime absent a DPI change), so cache fonts by (logical height, weight) instead.
+// Session-static and intentionally never deleted, same rationale as other long-lived GDI resources
+// in this file: font handles are cheap to keep and there are only a handful of distinct sizes/weights.
+struct GraphTextFontStats {
+    std::uint64_t hitCount = 0U;
+    std::uint64_t missCount = 0U;
+    std::size_t distinctKeys = 0U;
+};
+
+[[nodiscard]] GraphTextFontStats& GraphTextFontCacheStats() {
+    static GraphTextFontStats stats;
+    return stats;
+}
+
+[[nodiscard]] HFONT GraphTextFont(HDC dc, int pointSize, int weight) {
+    static std::unordered_map<std::int64_t, HFONT> fonts;
+    const int logicalHeight = GraphTextLogicalHeight(dc, pointSize);
+    const std::int64_t key = (static_cast<std::int64_t>(logicalHeight) << 32) | static_cast<std::int64_t>(weight);
+    if (const auto found = fonts.find(key); found != fonts.end()) {
+        ++GraphTextFontCacheStats().hitCount;
+        return found->second;
+    }
+    ++GraphTextFontCacheStats().missCount;
     HFONT font = CreateFontW(
-        GraphTextLogicalHeight(dc, pointSize),
+        logicalHeight,
         0,
         0,
         0,
@@ -122,13 +153,18 @@ void DrawGraphText(HDC dc, RECT rect, const char* text, COLORREF color, int poin
         CLEARTYPE_NATURAL_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE,
         L"Segoe UI");
-    {
-        const ScopedGdiObject selectedFont(dc, font);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, color);
-        DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
-    }
-    DeleteObject(font);
+    fonts.emplace(key, font);
+    GraphTextFontCacheStats().distinctKeys = fonts.size();
+    return font;
+}
+
+void DrawGraphText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    EnsureMaterialGraphFontRegistered();
+    HFONT font = GraphTextFont(dc, pointSize, weight);
+    const ScopedGdiObject selectedFont(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasized) {
@@ -239,12 +275,31 @@ void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneCont
 
 void DrawVerticalGradient(HDC dc, const RECT& rect, COLORREF top, COLORREF bottom) {
     const int height = RectHeight(rect);
-    if (height <= 0) {
+    const int width = RectWidth(rect);
+    if (height <= 0 || width <= 0) {
         return;
     }
+    // The gradient used to be painted one CreateSolidBrush+FillRect per scanline (100+ GDI object
+    // allocations per node) and, after that, via GradientFill -- which turned out to not be
+    // hardware-accelerated on this machine's driver and cost about as much. Computing the lerped
+    // column in plain memory and stretching it onto the target in a single StretchDIBits call
+    // avoids GDI object churn and any driver-dependent gradient path entirely.
+    std::vector<std::uint32_t> column(static_cast<std::size_t>(height));
     for (int y = 0; y < height; ++y) {
-        GdiDrawing::FillRectColor(dc, RECT{ rect.left, rect.top + y, rect.right, rect.top + y + 1 }, LerpColor(top, bottom, y, height));
+        const COLORREF blended = LerpColor(top, bottom, y, height);
+        column[static_cast<std::size_t>(y)] = (static_cast<std::uint32_t>(GetRValue(blended)) << 16U) |
+            (static_cast<std::uint32_t>(GetGValue(blended)) << 8U) | static_cast<std::uint32_t>(GetBValue(blended));
     }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 1;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const int oldMode = SetStretchBltMode(dc, COLORONCOLOR);
+    static_cast<void>(StretchDIBits(dc, rect.left, rect.top, width, height, 0, 0, 1, height, column.data(), &info, DIB_RGB_COLORS, SRCCOPY));
+    SetStretchBltMode(dc, oldMode);
 }
 
 void FillRoundedRect(HDC dc, const RECT& rect, COLORREF fill, int cornerDiameter) {
@@ -282,10 +337,11 @@ void AddRoundedRectPath(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect,
     path.CloseFigure();
 }
 
-void FillRoundedRectAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, int cornerDiameter) {
-    HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+// Takes an already-constructed Gdiplus::Graphics: DrawGraphNodeFrame calls this three times per
+// node (a layered drop shadow) and Gdiplus::Graphics construction is expensive enough that doing
+// it per-call, per-shadow-layer, per-node dominated node-drawing time -- the same issue as the
+// per-pin Graphics construction fixed earlier.
+void FillRoundedRectAlpha(Gdiplus::Graphics& graphics, const RECT& rect, COLORREF color, BYTE alpha, int cornerDiameter) {
     Gdiplus::GraphicsPath path;
     AddRoundedRectPath(
         path,
@@ -300,12 +356,27 @@ void FillRoundedRectAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, 
     graphics.FillPath(&brush, &path);
 }
 
+// Convenience overload for the low-frequency call sites (comment/composite boxes, drawn once each
+// per repaint, not per-node) that don't already have a Graphics handy.
+void FillRoundedRectAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, int cornerDiameter) {
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    FillRoundedRectAlpha(graphics, rect, color, alpha, cornerDiameter);
+}
+
 void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& clip, COLORREF top, COLORREF bottom, int cornerDiameter) {
+    // The node corner radius is 1-2px (kGraphNodeCornerDiameter=3, minus inset) -- visually a hard
+    // corner. CreateRoundRectRgn+ExtSelectClipRgn(RGN_AND) combines a fresh region with whatever
+    // complex clip region is already active on the DC (the graph canvas clip, and above that the
+    // back buffer's dirty-rect clip), which is a real region-boolean cost, not a cheap rect compare
+    // -- called twice per node, it dominated node-drawing time during a full-window repaint (the
+    // common case while dragging, since the drag invalidates the whole window). A plain rect clip
+    // is visually indistinguishable at this radius and is a trivial rect-intersect, no region object.
+    static_cast<void>(cornerDiameter);
     const int savedDc = SaveDC(dc);
-    HRGN region = CreateRoundRectRgn(clip.left, clip.top, clip.right + 1, clip.bottom + 1, cornerDiameter, cornerDiameter);
-    ExtSelectClipRgn(dc, region, RGN_AND);
+    IntersectClipRect(dc, clip.left, clip.top, clip.right, clip.bottom);
     DrawVerticalGradient(dc, rect, top, bottom);
-    DeleteObject(region);
     RestoreDC(dc, savedDc);
 }
 
@@ -991,254 +1062,63 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 [[nodiscard]] COLORREF GraphOutputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept;
 
 // ---------------------------------------------------------------------------------------------
-// Cosmic graph backdrop: a deep-space skybox behind the node graph. It is deliberately NOT part of
-// the graph's pan/zoom space -- it reads as an infinitely distant sky, like a game's skybox, so it
-// never competes with node layout for attention. Two update tiers keep an animated scene cheap even
-// though the editor repaints at up to ~180 Hz while a material is open (MAT-72's continuous-repaint
-// path for live Time/Panner/Rotator preview animation, which this reuses for free):
-//   1) An offscreen bitmap holds the expensive GDI+ gradient work (nebula band, black hole,
-//      planets) and is only re-rendered a few times a second, not every paint.
-//   2) The starfield itself is drawn straight to the target DC every frame with plain GDI
-//      (SetPixel), which is cheap enough at a couple hundred stars to not need caching, and lets
-//      the stars drift/twinkle smoothly every frame instead of in visible steps.
-namespace CosmicTheme {
-constexpr COLORREF SkyTop = RGB(4, 5, 11);
-constexpr COLORREF SkyBottom = RGB(10, 14, 28);
-constexpr COLORREF NebulaCore = RGB(94, 66, 138);
-constexpr COLORREF NebulaEdge = RGB(46, 92, 138);
-} // namespace CosmicTheme
-
-struct CosmicStar {
-    float u = 0.0F;
-    float v = 0.0F;
-    float depth = 0.0F;
-    float phase = 0.0F;
-    float size = 0.0F;
-    COLORREF color = RGB(255, 255, 255);
+// Plain 2D grid backdrop: a solid canvas fill plus a minor/major dot grid that pans and scales
+// with the view.
+//
+// The minor dots (the bulk of the pattern -- e.g. ~2800 of them for a full graph canvas at a
+// typical zoom) are baked into a small tiled pattern-brush bitmap once per minorSpacing value
+// (i.e. once per zoom level, not once per frame) and stamped with a single FillRect: GDI tiles
+// and positions the brush natively, so this replaces thousands of per-pixel GDI calls with one.
+// Panning just moves the brush origin -- no rebuild. The sparser major dots (1/16th as many)
+// stay a plain per-dot loop; that was never the bottleneck.
+struct GraphGridPatternCache {
+    HBITMAP tileBitmap = nullptr;
+    HBRUSH brush = nullptr;
+    int minorSpacing = 0;
+    std::uint64_t hitCount = 0U;
+    std::uint64_t rebuildCount = 0U;
 };
 
-[[nodiscard]] const std::vector<CosmicStar>& CosmicStarField() {
-    static const std::vector<CosmicStar> stars = [] {
-        std::vector<CosmicStar> generated;
-        constexpr int kStarCount = 240;
-        generated.reserve(kStarCount);
-        std::mt19937 rng(0x5B17A5U); // fixed seed: a stable, non-shifting field across sessions
-        std::uniform_real_distribution<float> unit(0.0F, 1.0F);
-        for (int index = 0; index < kStarCount; ++index) {
-            CosmicStar star{};
-            star.u = unit(rng);
-            star.v = unit(rng);
-            star.depth = unit(rng);
-            star.phase = unit(rng) * 6.2831853F;
-            star.size = 0.5F + star.depth * 1.5F;
-            const float tint = unit(rng);
-            star.color = tint < 0.6F ? RGB(255, 255, 255) : (tint < 0.85F ? RGB(178, 200, 255) : RGB(255, 232, 196));
-            generated.push_back(star);
-        }
-        return generated;
-    }();
-    return stars;
-}
-
-void DrawCosmicPlanet(Gdiplus::Graphics& graphics, float centerX, float centerY, float radius, COLORREF litColor, COLORREF shadowColor, float time, bool ringed) {
-    constexpr float kLightAngle = 2.35F; // fixed light source direction shared by every planet
-    const float highlightX = std::cos(kLightAngle) * radius * 0.4F;
-    const float highlightY = std::sin(kLightAngle) * radius * 0.4F;
-
-    if (ringed) {
-        Gdiplus::GraphicsState ringState = graphics.Save();
-        graphics.TranslateTransform(centerX, centerY);
-        graphics.RotateTransform(16.0F + std::sin(time * 0.1F) * 3.0F);
-        Gdiplus::Pen ringPen(ToGdiplusColor(ScaleColor(litColor, 1.2F), 110U), std::max(1.0F, radius * 0.1F));
-        graphics.DrawEllipse(&ringPen, -radius * 2.0F, -radius * 0.5F, radius * 4.0F, radius * 1.0F);
-        graphics.Restore(ringState);
-    }
-
-    Gdiplus::GraphicsPath spherePath;
-    spherePath.AddEllipse(centerX - radius, centerY - radius, radius * 2.0F, radius * 2.0F);
-    Gdiplus::PathGradientBrush sphereBrush(&spherePath);
-    sphereBrush.SetCenterPoint(Gdiplus::PointF(centerX - highlightX, centerY - highlightY));
-    sphereBrush.SetCenterColor(ToGdiplusColor(ScaleColor(litColor, 1.3F)));
-    Gdiplus::Color surround[1] = { ToGdiplusColor(shadowColor) };
-    INT surroundCount = 1;
-    sphereBrush.SetSurroundColors(surround, &surroundCount);
-    graphics.FillPath(&sphereBrush, &spherePath);
-
-    // Faint cloud bands sweeping left-to-right over time reads as slow rotation about the vertical
-    // axis without needing a true 3D-perspective texture wrap.
-    Gdiplus::GraphicsState bandState = graphics.Save();
-    graphics.SetClip(&spherePath);
-    for (int band = 0; band < 4; ++band) {
-        const float phase = std::fmod((time * 0.05F) + (static_cast<float>(band) * 0.27F), 1.0F);
-        const float bandX = (centerX - radius) + (phase * radius * 2.0F);
-        const float bandWidth = radius * 0.3F;
-        Gdiplus::SolidBrush bandBrush(ToGdiplusColor(ScaleColor(shadowColor, 0.65F), 55U));
-        graphics.FillEllipse(&bandBrush, bandX - (bandWidth * 0.5F), centerY - radius, bandWidth, radius * 2.0F);
-    }
-    graphics.Restore(bandState);
-}
-
-void DrawCosmicBlackHole(Gdiplus::Graphics& graphics, float centerX, float centerY, float radius, float time) {
-    Gdiplus::GraphicsState diskState = graphics.Save();
-    graphics.TranslateTransform(centerX, centerY);
-    graphics.RotateTransform(30.0F + std::sin(time * 0.04F) * 4.0F);
-    for (int ring = 0; ring < 3; ++ring) {
-        const float ringRadius = radius * (1.7F + static_cast<float>(ring) * 0.6F);
-        const BYTE alpha = static_cast<BYTE>(std::clamp(96.0F - (static_cast<float>(ring) * 26.0F), 0.0F, 255.0F));
-        Gdiplus::Pen glowPen(ToGdiplusColor(RGB(255, 190, 130), alpha), std::max(1.0F, radius * 0.16F));
-        graphics.DrawEllipse(&glowPen, -ringRadius, -ringRadius * 0.3F, ringRadius * 2.0F, ringRadius * 0.6F);
-    }
-    graphics.Restore(diskState);
-
-    Gdiplus::SolidBrush haze(ToGdiplusColor(RGB(0, 0, 0), 150U));
-    graphics.FillEllipse(&haze, centerX - (radius * 1.3F), centerY - (radius * 1.3F), radius * 2.6F, radius * 2.6F);
-    Gdiplus::SolidBrush core(ToGdiplusColor(RGB(0, 0, 0)));
-    graphics.FillEllipse(&core, centerX - radius, centerY - radius, radius * 2.0F, radius * 2.0F);
-}
-
-// The slow-tier scene: sky gradient, nebula band, a distant black hole, and a couple of planets.
-// Rendered into an offscreen bitmap by DrawGraphGrid on a throttled cadence, never per-frame.
-void RenderCosmicSceneLayer(HDC memoryDc, int width, int height, float time) {
-    HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(memoryDc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-
-    Gdiplus::LinearGradientBrush skyBrush(
-        Gdiplus::PointF(0.0F, 0.0F),
-        Gdiplus::PointF(0.0F, static_cast<float>(height)),
-        ToGdiplusColor(CosmicTheme::SkyTop),
-        ToGdiplusColor(CosmicTheme::SkyBottom));
-    graphics.FillRectangle(&skyBrush, 0, 0, width, height);
-
-    {
-        Gdiplus::GraphicsState nebulaState = graphics.Save();
-        graphics.TranslateTransform(static_cast<float>(width) * 0.5F, static_cast<float>(height) * 0.4F);
-        graphics.RotateTransform(-22.0F);
-        const float bandLength = static_cast<float>(std::max(width, height)) * 1.7F;
-        const float bandThickness = static_cast<float>(height) * 0.6F;
-        const Gdiplus::RectF bandRect(-bandLength * 0.5F, -bandThickness * 0.5F, bandLength, bandThickness);
-        Gdiplus::LinearGradientBrush bandBrush(bandRect, ToGdiplusColor(CosmicTheme::NebulaCore, 0U), ToGdiplusColor(CosmicTheme::NebulaCore, 0U), Gdiplus::LinearGradientModeVertical);
-        Gdiplus::Color bandColors[3] = {
-            ToGdiplusColor(CosmicTheme::NebulaCore, 0U),
-            ToGdiplusColor(CosmicTheme::NebulaEdge, 30U),
-            ToGdiplusColor(CosmicTheme::NebulaCore, 0U),
-        };
-        Gdiplus::REAL bandPositions[3] = { 0.0F, 0.5F, 1.0F };
-        bandBrush.SetInterpolationColors(bandColors, bandPositions, 3);
-        graphics.FillRectangle(&bandBrush, bandRect);
-        graphics.Restore(nebulaState);
-    }
-
-    const float minSpan = static_cast<float>(std::min(width, height));
-    DrawCosmicBlackHole(graphics, static_cast<float>(width) * 0.87F, static_cast<float>(height) * 0.15F, minSpan * 0.05F, time);
-    DrawCosmicPlanet(graphics, static_cast<float>(width) * 0.12F, static_cast<float>(height) * 0.8F, minSpan * 0.08F, RGB(198, 122, 84), RGB(84, 44, 34), time, false);
-    DrawCosmicPlanet(graphics, static_cast<float>(width) * 0.32F, static_cast<float>(height) * 0.14F, minSpan * 0.05F, RGB(122, 172, 214), RGB(38, 66, 96), time * 0.7F, true);
-}
-
-struct CosmicSceneCache {
-    HBITMAP bitmap = nullptr;
-    HDC memoryDc = nullptr;
-    int width = 0;
-    int height = 0;
-    std::chrono::steady_clock::time_point lastRegen{};
-    bool hasContent = false;
-};
-
-[[nodiscard]] CosmicSceneCache& CosmicCache() {
-    static CosmicSceneCache cache;
+[[nodiscard]] GraphGridPatternCache& GraphGridPattern() {
+    static GraphGridPatternCache cache;
     return cache;
 }
 
-// Stars are drawn directly (not cached) every call: cheap plain-GDI SetPixel calls, so they can
-// drift and twinkle smoothly every frame regardless of how often the slow-tier layer regenerates.
-void DrawCosmicStars(HDC dc, const RECT& canvas, float time) {
-    const int width = canvas.right - canvas.left;
-    const int height = canvas.bottom - canvas.top;
-    if (width <= 0 || height <= 0) {
+void EnsureGraphGridPattern(GraphGridPatternCache& cache, int minorSpacing) {
+    if (cache.brush != nullptr && cache.minorSpacing == minorSpacing) {
+        ++cache.hitCount;
         return;
     }
-    for (const CosmicStar& star : CosmicStarField()) {
-        const float drift = 0.006F + (star.depth * 0.012F);
-        float u = std::fmod(star.u + (time * drift), 1.0F);
-        if (u < 0.0F) {
-            u += 1.0F;
-        }
-        const int x = canvas.left + static_cast<int>(u * static_cast<float>(width));
-        const int y = canvas.top + static_cast<int>(star.v * static_cast<float>(height));
-        const float twinkle = 0.5F + (0.5F * std::sin((time * (0.5F + star.depth)) + star.phase));
-        const auto channel = [twinkle](BYTE base) noexcept {
-            return static_cast<BYTE>(std::clamp(static_cast<float>(base) * twinkle, 0.0F, 255.0F));
-        };
-        const COLORREF shaded = RGB(channel(GetRValue(star.color)), channel(GetGValue(star.color)), channel(GetBValue(star.color)));
-        SetPixel(dc, x, y, shaded);
-        if (star.size > 1.5F) {
-            const COLORREF halo = RGB(channel(GetRValue(star.color)) / 2, channel(GetGValue(star.color)) / 2, channel(GetBValue(star.color)) / 2);
-            SetPixel(dc, x - 1, y, halo);
-            SetPixel(dc, x + 1, y, halo);
-            SetPixel(dc, x, y - 1, halo);
-            SetPixel(dc, x, y + 1, halo);
-        }
+    ++cache.rebuildCount;
+    if (cache.brush != nullptr) {
+        DeleteObject(cache.brush);
+        cache.brush = nullptr;
     }
-}
-
-void DrawCosmicBackground(HDC dc, const RECT& canvas) {
-    const int width = canvas.right - canvas.left;
-    const int height = canvas.bottom - canvas.top;
-    if (width <= 0 || height <= 0) {
+    if (cache.tileBitmap != nullptr) {
+        DeleteObject(cache.tileBitmap);
+        cache.tileBitmap = nullptr;
+    }
+    HDC screenDc = GetDC(nullptr);
+    HDC tileDc = CreateCompatibleDC(screenDc);
+    cache.tileBitmap = CreateCompatibleBitmap(screenDc, minorSpacing, minorSpacing);
+    ReleaseDC(nullptr, screenDc);
+    if (tileDc == nullptr || cache.tileBitmap == nullptr) {
+        if (tileDc != nullptr) {
+            DeleteDC(tileDc);
+        }
         return;
     }
-
-    const auto now = std::chrono::steady_clock::now();
-    const float time = std::chrono::duration<float>(now.time_since_epoch()).count();
-
-    CosmicSceneCache& cache = CosmicCache();
-    const bool sizeChanged = cache.width != width || cache.height != height;
-    constexpr std::chrono::milliseconds kSlowLayerInterval{ 140 };
-    const bool stale = !cache.hasContent || sizeChanged || (now - cache.lastRegen) >= kSlowLayerInterval;
-
-    if (sizeChanged) {
-        if (cache.memoryDc != nullptr) {
-            DeleteDC(cache.memoryDc);
-            cache.memoryDc = nullptr;
-        }
-        if (cache.bitmap != nullptr) {
-            DeleteObject(cache.bitmap);
-            cache.bitmap = nullptr;
-        }
-        HDC screenDc = GetDC(nullptr);
-        cache.bitmap = CreateCompatibleBitmap(screenDc, width, height);
-        cache.memoryDc = CreateCompatibleDC(screenDc);
-        ReleaseDC(nullptr, screenDc);
-        if (cache.memoryDc != nullptr && cache.bitmap != nullptr) {
-            SelectObject(cache.memoryDc, cache.bitmap);
-        }
-        cache.width = width;
-        cache.height = height;
-        cache.hasContent = false;
-    }
-
-    if (stale && cache.memoryDc != nullptr) {
-        RenderCosmicSceneLayer(cache.memoryDc, width, height, time);
-        cache.lastRegen = now;
-        cache.hasContent = true;
-    }
-
-    if (cache.hasContent && cache.memoryDc != nullptr) {
-        BitBlt(dc, canvas.left, canvas.top, width, height, cache.memoryDc, 0, 0, SRCCOPY);
-    } else {
-        GdiDrawing::FillRectColor(dc, canvas, CosmicTheme::SkyBottom);
-    }
-
-    DrawCosmicStars(dc, canvas, time);
+    HGDIOBJ previousBitmap = SelectObject(tileDc, cache.tileBitmap);
+    const RECT tileRect{ 0, 0, minorSpacing, minorSpacing };
+    GdiDrawing::FillRectColor(tileDc, tileRect, BlenderGraphTheme::Canvas);
+    SetPixelV(tileDc, 0, 0, BlenderGraphTheme::GridDotBlended);
+    SelectObject(tileDc, previousBitmap);
+    DeleteDC(tileDc);
+    cache.brush = CreatePatternBrush(cache.tileBitmap);
+    cache.minorSpacing = minorSpacing;
 }
-// ---------------------------------------------------------------------------------------------
 
 void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
-    DrawCosmicBackground(dc, canvas);
-
-    // A faint alignment grid still helps line up nodes; kept low-opacity so the sky stays the
-    // visual backdrop and the nodes -- not the grid, not the sky -- stay the thing your eye lands on.
     const int minorSpacing = std::clamp(ScaleMetric(20, zoom), 8, 80);
     const int majorSpacing = minorSpacing * 4;
     const int minorStartX = canvas.left + ((panX % minorSpacing) + minorSpacing) % minorSpacing;
@@ -1246,10 +1126,16 @@ void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, 
     const int majorStartX = canvas.left + ((panX % majorSpacing) + majorSpacing) % majorSpacing;
     const int majorStartY = canvas.top + ((panY % majorSpacing) + majorSpacing) % majorSpacing;
 
-    for (int x = minorStartX; x < canvas.right; x += minorSpacing) {
-        for (int y = minorStartY; y < canvas.bottom; y += minorSpacing) {
-            GdiDrawing::FillRectAlpha(dc, RECT{ x, y, x + 1, y + 1 }, BlenderGraphTheme::GridDot, 60U);
-        }
+    GraphGridPatternCache& patternCache = GraphGridPattern();
+    EnsureGraphGridPattern(patternCache, minorSpacing);
+    if (patternCache.brush != nullptr) {
+        POINT previousOrigin{};
+        SetBrushOrgEx(dc, minorStartX, minorStartY, &previousOrigin);
+        RECT canvasRect = canvas;
+        FillRect(dc, &canvasRect, patternCache.brush);
+        SetBrushOrgEx(dc, previousOrigin.x, previousOrigin.y, nullptr);
+    } else {
+        GdiDrawing::FillRectColor(dc, canvas, BlenderGraphTheme::Canvas);
     }
 
     for (int x = majorStartX; x < canvas.right; x += majorSpacing) {
@@ -1258,6 +1144,7 @@ void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, 
         }
     }
 }
+// ---------------------------------------------------------------------------------------------
 
 [[nodiscard]] float GraphBezierHandleDistance(POINT from, POINT to) noexcept {
     const float distanceX = static_cast<float>(std::abs(static_cast<int>(to.x - from.x)));
@@ -1267,11 +1154,9 @@ void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, 
     return std::clamp(naturalHandle, 10.0F, 96.0F);
 }
 
-void DrawGraphBezier(HDC dc, POINT from, POINT to, COLORREF color, int width) {
-    HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+// Takes an already-configured Gdiplus::Graphics (see DrawGraphPin/FillRoundedRectAlpha above for
+// why): a graph with many links used to construct one Gdiplus::Graphics per link, per repaint.
+void DrawGraphBezier(Gdiplus::Graphics& graphics, POINT from, POINT to, COLORREF color, int width) {
     Gdiplus::Pen shadowPen(ToGdiplusColor(BlenderGraphTheme::LinkShadow, 96U), static_cast<Gdiplus::REAL>(std::max(1, width + 2)));
     Gdiplus::Pen haloPen(ToGdiplusColor(color, 50U), static_cast<Gdiplus::REAL>(std::max(1, width + 1)));
     Gdiplus::Pen pen(ToGdiplusColor(color, 232U), static_cast<Gdiplus::REAL>(std::max(1, width)));
@@ -1298,7 +1183,7 @@ void DrawGraphBezier(HDC dc, POINT from, POINT to, COLORREF color, int width) {
 }
 
 void DrawGraphLink(
-    HDC dc,
+    Gdiplus::Graphics& graphics,
     const RECT& fromNode,
     const RECT& toNode,
     std::string_view fromPin,
@@ -1316,7 +1201,7 @@ void DrawGraphLink(
     const POINT from = OutputPinPoint(fromNode, fromGraphNode.kind, outputIndex, outputPins.size());
     const POINT to = InputPinPoint(toNode, toGraphNode, toPin);
     DrawGraphBezier(
-        dc,
+        graphics,
         from,
         to,
         outputPins.empty() ? BlenderGraphTheme::LinkFallback : GraphOutputPinColor(fromGraphNode, fromPin),
@@ -1434,42 +1319,44 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
 
 namespace {
 
-void DrawGraphPin(
-    HDC dc,
-    POINT point,
-    COLORREF color,
-    float scale,
-    const RECT& clip,
-    bool tinted = false,
-    MaterialEditorGraphPinDragState dragState = MaterialEditorGraphPinDragState::None) {
-    const int r = std::max(3, ScaleMetric(kGraphNodePinRadius, scale));
-    const COLORREF edge = RGB(9, 9, 9);
-    const COLORREF outer = ScaleColor(color, tinted ? 0.64F : 0.78F);
-    const COLORREF face = tinted ? color : ScaleColor(color, 1.06F);
+// Pin appearance only varies with (color, tinted, radius-in-pixels) -- the color comes from a
+// small fixed enum palette (GraphPinTypeColor) and the radius is already an integer pixel count
+// (ScaleMetric rounds it). A node graph draws one pin per input/output slot -- a Material Output
+// node alone has 14 -- and each pin previously did 5 antialiased Gdiplus FillEllipse calls (shadow,
+// edge, outer ring, face, shine), which dominated node-drawing time. Render the static (non-drag-
+// ring) appearance once per distinct (color, tinted, radius) into a small cached Gdiplus::Bitmap
+// and composite it with a single DrawImage thereafter.
+constexpr int kGraphPinSpritePadding = 3;
 
+struct GraphPinSpriteCache {
+    std::unordered_map<std::uint64_t, std::unique_ptr<Gdiplus::Bitmap>> sprites;
+};
+
+[[nodiscard]] GraphPinSpriteCache& GraphPinSprites() {
+    static GraphPinSpriteCache cache;
+    return cache;
+}
+
+[[nodiscard]] Gdiplus::Bitmap* BuildGraphPinSprite(COLORREF color, bool tinted, int r, float insetScale) {
     HeroIconGdiplusRuntime::EnsureStarted();
-    Gdiplus::Graphics graphics(dc);
+    const int size = (r * 2) + (kGraphPinSpritePadding * 2);
+    auto sprite = std::make_unique<Gdiplus::Bitmap>(size, size, PixelFormat32bppPARGB);
+    Gdiplus::Graphics graphics(sprite.get());
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-    const int clipLeft = static_cast<int>(clip.left);
-    const int clipTop = static_cast<int>(clip.top);
-    const int clipWidth = std::max(0, static_cast<int>(clip.right - clip.left));
-    const int clipHeight = std::max(0, static_cast<int>(clip.bottom - clip.top));
-    graphics.SetClip(Gdiplus::Rect(
-        clipLeft,
-        clipTop,
-        clipWidth,
-        clipHeight));
 
+    const COLORREF edge = RGB(9, 9, 9);
+    const COLORREF outer = ScaleColor(color, tinted ? 0.64F : 0.78F);
+    const COLORREF face = tinted ? color : ScaleColor(color, 1.06F);
     const float diameter = static_cast<float>(r * 2);
     const Gdiplus::RectF outerRect{
-        static_cast<float>(point.x - r),
-        static_cast<float>(point.y - r),
+        static_cast<float>(kGraphPinSpritePadding),
+        static_cast<float>(kGraphPinSpritePadding),
         diameter,
         diameter,
     };
-    const float inset = std::max(1.0F, scale);
+    const float inset = std::max(1.0F, insetScale);
     const Gdiplus::RectF innerRect{
         outerRect.X + inset,
         outerRect.Y + inset,
@@ -1482,8 +1369,8 @@ void DrawGraphPin(
     Gdiplus::SolidBrush faceBrush(ToGdiplusColor(face));
     Gdiplus::SolidBrush shineBrush(ToGdiplusColor(RGB(255, 255, 255), 40U));
     Gdiplus::RectF shadowRect = outerRect;
-    shadowRect.X += std::max(1.0F, scale);
-    shadowRect.Y += std::max(1.0F, scale);
+    shadowRect.X += std::max(1.0F, insetScale);
+    shadowRect.Y += std::max(1.0F, insetScale);
     graphics.FillEllipse(&shadowBrush, shadowRect);
     graphics.FillEllipse(&edgeBrush, outerRect);
     graphics.FillEllipse(&outerBrush, innerRect);
@@ -1503,6 +1390,46 @@ void DrawGraphPin(
             std::max(1.0F, coreRect.Width * 0.72F),
             std::max(1.0F, coreRect.Height * 0.42F),
         });
+    return sprite.release();
+}
+
+[[nodiscard]] Gdiplus::Bitmap& GraphPinSprite(COLORREF color, bool tinted, int r, float insetScale) {
+    GraphPinSpriteCache& cache = GraphPinSprites();
+    const std::uint64_t key = (static_cast<std::uint64_t>(color) << 24U) |
+        (static_cast<std::uint64_t>(tinted ? 1U : 0U) << 16U) |
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(r) & 0xFFFFU);
+    auto found = cache.sprites.find(key);
+    if (found == cache.sprites.end()) {
+        found = cache.sprites.emplace(key, std::unique_ptr<Gdiplus::Bitmap>(BuildGraphPinSprite(color, tinted, r, insetScale))).first;
+    }
+    return *found->second;
+}
+
+void DrawGraphPin(
+    Gdiplus::Graphics& graphics,
+    POINT point,
+    COLORREF color,
+    float scale,
+    bool tinted = false,
+    MaterialEditorGraphPinDragState dragState = MaterialEditorGraphPinDragState::None) {
+    const int r = std::max(3, ScaleMetric(kGraphNodePinRadius, scale));
+    const float inset = std::max(1.0F, scale);
+    Gdiplus::Bitmap& sprite = GraphPinSprite(color, tinted, r, inset);
+    const float spriteSize = static_cast<float>((r * 2) + (kGraphPinSpritePadding * 2));
+    graphics.DrawImage(
+        &sprite,
+        Gdiplus::RectF{
+            static_cast<float>(point.x - r - kGraphPinSpritePadding),
+            static_cast<float>(point.y - r - kGraphPinSpritePadding),
+            spriteSize,
+            spriteSize,
+        });
+    const Gdiplus::RectF outerRect{
+        static_cast<float>(point.x - r),
+        static_cast<float>(point.y - r),
+        static_cast<float>(r * 2),
+        static_cast<float>(r * 2),
+    };
     if (dragState != MaterialEditorGraphPinDragState::None) {
         const COLORREF ringColor = dragState == MaterialEditorGraphPinDragState::Compatible
             ? RGB(92, 210, 126)
@@ -1604,7 +1531,7 @@ void DrawGraphPin(
     return BlenderGraphTheme::NodeHeader;
 }
 
-void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body, float scale) {
+void DrawGraphNodeFrame(HDC dc, Gdiplus::Graphics& graphics, const RECT& rect, COLORREF body, float scale) {
     const int cornerDiameter = ScaleMetric(kGraphNodeCornerDiameter, scale);
     const int outerSpread = ScaleMetric(7, scale);
     const int middleSpread = ScaleMetric(4, scale);
@@ -1612,19 +1539,19 @@ void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body, float scale) {
     const int contactSpread = ScaleMetric(3, scale);
 
     FillRoundedRectAlpha(
-        dc,
+        graphics,
         RECT{ rect.left - outerSpread, rect.top - outerSpread, rect.right + outerSpread, rect.bottom + outerSpread },
         BlenderGraphTheme::NodeShadow,
         26U,
         cornerDiameter + outerSpread);
     FillRoundedRectAlpha(
-        dc,
+        graphics,
         RECT{ rect.left - middleSpread, rect.top - middleSpread, rect.right + middleSpread, rect.bottom + middleSpread },
         BlenderGraphTheme::NodeShadow,
         42U,
         cornerDiameter + middleSpread);
     FillRoundedRectAlpha(
-        dc,
+        graphics,
         RECT{ rect.left - contactSpread, rect.top + contactDrop, rect.right + contactSpread, rect.bottom + contactDrop + contactSpread },
         BlenderGraphTheme::NodeShadow,
         72U,
@@ -2071,13 +1998,27 @@ void DrawGraphNode(
     const COLORREF headerTop = ScaleColor(GraphNodeHeaderColor(node.kind), selected ? 1.12F : 1.0F);
     const COLORREF headerBottom = ScaleColor(headerTop, 0.86F);
     const COLORREF border = selected ? BlenderGraphTheme::NodeOutlineSelected : BlenderGraphTheme::NodeOutline;
-    DrawGraphNodeFrame(dc, rect, body, scale);
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics nodeGraphics(dc);
+    nodeGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    nodeGraphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    nodeGraphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    nodeGraphics.SetClip(Gdiplus::Rect(
+        static_cast<int>(clip.left),
+        static_cast<int>(clip.top),
+        std::max(0, static_cast<int>(clip.right - clip.left)),
+        std::max(0, static_cast<int>(clip.bottom - clip.top))));
+
+    const auto kbPerfFrameStart = std::chrono::steady_clock::now();
+    DrawGraphNodeFrame(dc, nodeGraphics, rect, body, scale);
     const RECT inner{ rect.left + 2, rect.top + 2, rect.right - 2, rect.bottom - 2 };
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, rect.top + headerHeight, inner.right, inner.bottom }, inner, bodyTop, bodyBottom, std::max(2, cornerDiameter - 2));
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, inner.top, inner.right, rect.top + headerHeight }, inner, headerTop, headerBottom, std::max(2, cornerDiameter - 2));
     GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(58, 96, 148));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
+    const auto kbPerfFrameMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfFrameStart).count();
 
+    const auto kbPerfTitleStart = std::chrono::steady_clock::now();
     std::string title = node.parameter.displayName.empty() ? GraphNodeTitle(node.kind) : node.parameter.displayName;
     const std::string_view supportTag = kb::render::RenderMaterialGraphNodeSupportShortTag(node.kind);
     if (!supportTag.empty()) {
@@ -2088,20 +2029,24 @@ void DrawGraphNode(
     DrawGraphText(dc, RECT{ rect.left + ScaleMetric(12, scale), rect.top, rect.right - ScaleMetric(12, scale), rect.top + headerHeight }, title.c_str(), RGB(242, 242, 242), ScaleMetric(kGraphTitleFontSize, scale), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     const std::vector<MaterialEditorGraphDiagnosticMarker> diagnosticMarkers = MarkersForNode(sceneContext, node.id);
     DrawGraphDiagnosticMarker(dc, rect, diagnosticMarkers, scale);
+    const auto kbPerfTitleMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfTitleStart).count();
+
+    const auto kbPerfPreviewStart = std::chrono::steady_clock::now();
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
     DrawConstantValue(dc, rect, node, sceneContext);
+    const auto kbPerfPreviewMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPreviewStart).count();
 
+    const auto kbPerfPinsStart = std::chrono::steady_clock::now();
     const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node);
     if (!inputPins.empty()) {
         for (std::size_t index = 0; index < inputPins.size(); ++index) {
             const POINT scaledPin = InputPinPoint(rect, node, inputPins[index].first);
             DrawGraphPin(
-                dc,
+                nodeGraphics,
                 scaledPin,
                 GraphInputPinColor(node, inputPins[index].first),
                 scale,
-                clip,
                 false,
                 GraphPinDragStateForNode(graph, sceneContext, assetId, node, inputPins[index].first, false));
             const bool textureSample = node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample;
@@ -2128,11 +2073,10 @@ void DrawGraphNode(
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
         const POINT output = OutputPinPoint(rect, node.kind, index, outputPins.size());
         DrawGraphPin(
-            dc,
+            nodeGraphics,
             output,
             GraphOutputPinColor(node, outputPins[index].first),
             scale,
-            clip,
             GraphOutputPinTinted(node.kind, outputPins[index].first),
             GraphPinDragStateForNode(graph, sceneContext, assetId, node, outputPins[index].first, true));
         RECT outputLabelRect{
@@ -2166,6 +2110,19 @@ void DrawGraphNode(
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
+    const auto kbPerfPinsMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPinsStart).count();
+    std::ostringstream kbPerfNodeLine;
+    kbPerfNodeLine << "DrawGraphNode kind=" << static_cast<int>(node.kind)
+                   << " scale=" << scale
+                   << " rectW=" << (rect.right - rect.left)
+                   << " rectH=" << (rect.bottom - rect.top)
+                   << " inputPins=" << inputPins.size()
+                   << " outputPins=" << outputPins.size()
+                   << " frame=" << kbPerfFrameMicros << "us"
+                   << " title=" << kbPerfTitleMicros << "us"
+                   << " preview=" << kbPerfPreviewMicros << "us"
+                   << " pins=" << kbPerfPinsMicros << "us";
+    EditorCrashBreadcrumbs::Write("perf_drawnode", kbPerfNodeLine.str());
 }
 
 void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) {
@@ -2224,8 +2181,12 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
             pendingColor = RGB(231, 88, 88);
         }
     }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics pendingLinkGraphics(dc);
+    pendingLinkGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    pendingLinkGraphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     DrawGraphBezier(
-        dc,
+        pendingLinkGraphics,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? anchor : cursor,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? cursor : anchor,
         pendingColor,
@@ -2341,7 +2302,9 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
 
 void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMaterialAssetData& material, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, std::uint32_t selectedNodeId) {
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    const auto kbPerfGridStart = std::chrono::steady_clock::now();
     DrawGraphGrid(dc, layout.graphCanvas, sceneContext.MaterialGraphZoom(), sceneContext.MaterialGraphPanX(), sceneContext.MaterialGraphPanY());
+    const auto kbPerfGridMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfGridStart).count();
 
     const kb::render::RenderMaterialGraphDocument& graph = material.graph;
     const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
@@ -2351,6 +2314,7 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
 
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, layout.graphCanvas.left, layout.graphCanvas.top, layout.graphCanvas.right, layout.graphCanvas.bottom);
+    const auto kbPerfCompositeStart = std::chrono::steady_clock::now();
     for (const kb::render::RenderMaterialGraphCompositeSubgraph& composite : graphView.composites) {
         const std::optional<RECT> compositeRect = MaterialEditorPanelRenderer::GraphCompositeRect(content, graphView, composite.id, sceneContext);
         if (compositeRect.has_value()) {
@@ -2363,6 +2327,12 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
             DrawGraphCommentBox(dc, *commentRect, comment, sceneContext.IsMaterialGraphCommentSelected(comment.id));
         }
     }
+    const auto kbPerfCompositeMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfCompositeStart).count();
+    const auto kbPerfLinkStart = std::chrono::steady_clock::now();
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics linkGraphics(dc);
+    linkGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    linkGraphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     for (const kb::render::RenderMaterialGraphLink& link : graphView.links) {
         if (GraphNodeHiddenByCollapsedComposite(graphView, link.fromNodeId) ||
             GraphNodeHiddenByCollapsedComposite(graphView, link.toNodeId)) {
@@ -2374,10 +2344,12 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
             const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(graphView, link.fromNodeId);
             const kb::render::RenderMaterialGraphNode* toNode = kb::render::FindRenderMaterialGraphNode(graphView, link.toNodeId);
             if (fromNode != nullptr && toNode != nullptr) {
-                DrawGraphLink(dc, *from, *to, link.fromPin, link.toPin, *fromNode, *toNode);
+                DrawGraphLink(linkGraphics, *from, *to, link.fromPin, link.toPin, *fromNode, *toNode);
             }
         }
     }
+    const auto kbPerfLinkMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfLinkStart).count();
+    const auto kbPerfNodeStart = std::chrono::steady_clock::now();
     for (const kb::render::RenderMaterialGraphNode& node : graphView.nodes) {
         if (GraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
             continue;
@@ -2396,10 +2368,27 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
                 sceneContext);
         }
     }
+    const auto kbPerfNodeMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfNodeStart).count();
+    const auto kbPerfOverlayStart = std::chrono::steady_clock::now();
     DrawGraphBoxSelection(dc, sceneContext);
     DrawPendingGraphConnection(dc, content, graphView, sceneContext, assetId);
     DrawGraphContextMenu(dc, sceneContext);
+    const auto kbPerfOverlayMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfOverlayStart).count();
     RestoreDC(dc, savedDc);
+    std::ostringstream kbPerfCanvasLine;
+    kbPerfCanvasLine << "DrawGraphCanvas nodeCount=" << graphView.nodes.size()
+                     << " linkCount=" << graphView.links.size()
+                     << " canvasW=" << (layout.graphCanvas.right - layout.graphCanvas.left)
+                     << " canvasH=" << (layout.graphCanvas.bottom - layout.graphCanvas.top)
+                     << " zoom=" << sceneContext.MaterialGraphZoom()
+                     << " gridCacheHits=" << GraphGridPattern().hitCount
+                     << " gridCacheRebuilds=" << GraphGridPattern().rebuildCount
+                     << " grid=" << kbPerfGridMicros << "us"
+                     << " composites=" << kbPerfCompositeMicros << "us"
+                     << " links=" << kbPerfLinkMicros << "us"
+                     << " nodes=" << kbPerfNodeMicros << "us"
+                     << " overlays=" << kbPerfOverlayMicros << "us";
+    EditorCrashBreadcrumbs::Write("perf_canvasbreak", kbPerfCanvasLine.str());
 }
 
 struct MaterialEditorDocumentView {
@@ -2484,13 +2473,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
 
     if (metadata.type == "RenderMaterial") {
         if (sceneContext.MaterialEditor().OpenAssetId() == metadata.id && sceneContext.MaterialEditor().WorkingCopy().has_value()) {
-            std::vector<std::string> diagnostics;
-            diagnostics.reserve(sceneContext.MaterialEditor().Diagnostics().size() + 1U);
-            diagnostics.push_back(std::string{ "Info graph.state " } + std::string{ sceneContext.MaterialEditor().GraphRuntimeStateName() } +
-                ": active material shader path.");
-            for (const std::string& diagnostic : sceneContext.MaterialEditor().Diagnostics()) {
-                diagnostics.push_back(diagnostic);
-            }
+            std::vector<std::string> diagnostics = sceneContext.MaterialEditor().Diagnostics();
             return MaterialEditorDocumentView{
                 .material = sceneContext.MaterialEditor().WorkingCopy(),
                 .assetKind = "Material",
@@ -2974,9 +2957,11 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
 }
 
 void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const auto kbPerfReadStart = std::chrono::steady_clock::now();
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const std::optional<MaterialEditorDocumentView> document = ReadDocumentView(sceneContext, metadata);
     const EditorMaterialPreviewTelemetry telemetry = sceneContext.MaterialPreviewTelemetry();
+    const auto kbPerfReadMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfReadStart).count();
 
     if (!document.has_value()) {
         DrawGraphGrid(dc, layout.graphCanvas);
@@ -2984,17 +2969,26 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         return;
     }
 
+    const auto kbPerfCanvasStart = std::chrono::steady_clock::now();
     if (document->material.has_value()) {
         DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else {
         DrawGraphGrid(dc, layout.graphCanvas);
         DrawText(dc, layout.graphCanvas, "Material document could not be parsed.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
+    const auto kbPerfCanvasMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfCanvasStart).count();
     const EditorMaterialGraphCookBanner cookBanner =
         MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
+    const auto kbPerfPreviewStart = std::chrono::steady_clock::now();
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
+    const auto kbPerfPreviewMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPreviewStart).count();
+    const auto kbPerfDiagPanelStart = std::chrono::steady_clock::now();
     DrawDiagnosticsPanel(dc, layout, *document);
+    const auto kbPerfDiagPanelMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDiagPanelStart).count();
+    std::int64_t kbPerfGatherMicros = 0;
+    std::int64_t kbPerfDetailsPanelMicros = 0;
     if (sceneContext.MaterialEditor().InfoPanelVisible()) {
+        const auto kbPerfGatherStart = std::chrono::steady_clock::now();
         const std::vector<MaterialEditorGraphNodeProperty> nodeProperties =
             metadata.type == "RenderMaterialInstance"
                 ? std::vector<MaterialEditorGraphNodeProperty>{}
@@ -3022,16 +3016,39 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         if (document->material.has_value()) {
             details.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(document->material->desc, metadata.id.value);
         }
+        kbPerfGatherMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfGatherStart).count();
+        const auto kbPerfDetailsPanelStart = std::chrono::steady_clock::now();
         DrawDetailsPanel(
             dc,
             layout,
             details);
+        kbPerfDetailsPanelMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDetailsPanelStart).count();
+    }
+    std::ostringstream kbPerfBreakdownLine;
+    kbPerfBreakdownLine << "DrawMaterialContent readDoc=" << kbPerfReadMicros << "us"
+                        << " graphCanvas=" << kbPerfCanvasMicros << "us"
+                        << " previewOverlay=" << kbPerfPreviewMicros << "us"
+                        << " diagnosticsPanel=" << kbPerfDiagPanelMicros << "us"
+                        << " detailsGather=" << kbPerfGatherMicros << "us"
+                        << " detailsPanelDraw=" << kbPerfDetailsPanelMicros << "us"
+                        << " fontCacheHits=" << GraphTextFontCacheStats().hitCount
+                        << " fontCacheMisses=" << GraphTextFontCacheStats().missCount
+                        << " fontCacheDistinctKeys=" << GraphTextFontCacheStats().distinctKeys;
+    EditorCrashBreadcrumbs::Write("perf_matbreak", kbPerfBreakdownLine.str());
+    {
+        const EditorTexturePreviewScaledCacheStats textureCacheStats = EditorTexturePreviewService::ScaledCacheStats();
+        std::ostringstream kbPerfTextureCacheLine;
+        kbPerfTextureCacheLine << "TexturePreviewScaledCache hits=" << textureCacheStats.hitCount
+                              << " misses=" << textureCacheStats.missCount
+                              << " entries=" << textureCacheStats.entryCount;
+        EditorCrashBreadcrumbs::Write("perf_texcache", kbPerfTextureCacheLine.str());
     }
 }
 
 } // namespace
 
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
+    const auto kbPerfMatPaintStart = std::chrono::steady_clock::now();
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
     DrawHeader(dc, content, sceneContext, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
@@ -3047,7 +3064,19 @@ void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const Edito
         return;
     }
 
+    const auto kbPerfDrawMaterialStart = std::chrono::steady_clock::now();
     DrawMaterialContent(dc, content, sceneContext, *metadata);
+    const auto kbPerfMatPaintMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfMatPaintStart).count();
+    const auto kbPerfDrawMaterialMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDrawMaterialStart).count();
+    std::uint32_t kbPerfNodeCount = 0U;
+    if (const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = sceneContext.MaterialEditor().WorkingCopy(); workingCopy.has_value()) {
+        kbPerfNodeCount = static_cast<std::uint32_t>(workingCopy->graph.nodes.size());
+    }
+    std::ostringstream kbPerfMatLine;
+    kbPerfMatLine << "MaterialEditorPanelRenderer::Paint total=" << kbPerfMatPaintMicros << "us"
+                  << " drawMaterialContent=" << kbPerfDrawMaterialMicros << "us"
+                  << " nodeCount=" << kbPerfNodeCount;
+    EditorCrashBreadcrumbs::Write("perf_matpaint", kbPerfMatLine.str());
 }
 
 std::optional<RECT> MaterialEditorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
