@@ -441,6 +441,26 @@ inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGr
     return MaterialEditorPanelIsTextureSamplePreviewNode(kind) ||
         MaterialEditorPanelIsTextureObjectPreviewNode(kind);
 }
+
+inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) noexcept {
+    SIZE size = MaterialEditorPanelGraphNodeSize(node.kind);
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        const std::size_t inputCount = node.customCode.inputs.size();
+        const std::size_t outputCount = node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode && node.customCode.outputs.empty()
+            ? 1U
+            : node.customCode.outputs.size();
+        const std::size_t rowCount = std::max(inputCount, outputCount);
+        if (rowCount > 0U) {
+            const LONG requiredHeight = static_cast<LONG>(MaterialEditorPanelMetrics::GraphNodeHeaderHeight +
+                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding +
+                static_cast<int>(rowCount) * MaterialEditorPanelMetrics::GraphNodePinRowHeight +
+                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding);
+            size.cy = std::max(size.cy, requiredHeight);
+        }
+    }
+    return size;
+}
 #endif
 
 /// Dedicated Material Editor panel. The selected material document is presented as
@@ -2116,7 +2136,7 @@ inline std::optional<RECT> MaterialEditorPanelGraphNodeRectWithView(
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const RECT canvas = layout.graphCanvas;
     const float clampedZoom = std::clamp(zoom, 0.25F, 2.0F);
-    const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(target->kind);
+    const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(*target);
     const int nodeWidth = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cx), clampedZoom);
     const int nodeHeight = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cy), clampedZoom);
 
