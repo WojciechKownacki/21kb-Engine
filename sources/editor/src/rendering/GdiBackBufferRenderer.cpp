@@ -136,6 +136,11 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
         return;
     }
 
+    // Clip the painter to the dirty rect and blit only that region back: the retained buffer
+    // already holds the last frame everywhere else. Partial invalidations then cost a partial
+    // repaint instead of a full-window workspace redraw.
+    const int savedClip = SaveDC(memoryDc);
+    IntersectClipRect(memoryDc, paintRect.left, paintRect.top, paintRect.right, paintRect.bottom);
     paint(
         GdiBackBufferPaintContext{
             .dc = memoryDc,
@@ -145,8 +150,9 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
             .height = height,
         },
         context);
+    RestoreDC(memoryDc, savedClip);
 
-    BitBlt(targetDc, 0, 0, width, height, memoryDc, 0, 0, SRCCOPY);
+    BitBlt(targetDc, paintRect.left, paintRect.top, paintWidth, paintHeight, memoryDc, paintRect.left, paintRect.top, SRCCOPY);
 }
 
 } // namespace kb::editor

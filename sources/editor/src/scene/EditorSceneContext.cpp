@@ -77,6 +77,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <exception>
@@ -3012,11 +3013,22 @@ bool EditorSceneContext::DragMaterialGraphNode(int x, int y) {
             },
         });
     }
+    const auto kbPerfMoveStart = std::chrono::steady_clock::now();
     if (!materialEditor_.MoveGraphNodes(positions)) {
         return false;
     }
+    const auto kbPerfMoveMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfMoveStart).count();
     materialGraphDragChanged_ = true;
+    const auto kbPerfDiagStart = std::chrono::steady_clock::now();
     materialEditor_.ClearDiagnostics();
+    const auto kbPerfDiagMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfDiagStart).count();
+    {
+        std::ostringstream kbPerfLine;
+        kbPerfLine << "DragMaterialGraphNode nodeCount=" << positions.size()
+                   << " moveGraphNodes=" << kbPerfMoveMicros << "us"
+                   << " clearDiagnostics=" << kbPerfDiagMicros << "us";
+        EditorCrashBreadcrumbs::Write("perf_node_drag", kbPerfLine.str());
+    }
     return true;
 }
 
@@ -3209,6 +3221,7 @@ bool EditorSceneContext::BeginMaterialGraphPan(int x, int y) noexcept {
 }
 
 bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
+    const auto kbPerfPanStart = std::chrono::steady_clock::now();
     if (!materialGraphPanning_) {
         return false;
     }
@@ -3220,6 +3233,10 @@ bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
     materialGraphPanMoved_ = true;
     materialGraphPanX_ = newPanX;
     materialGraphPanY_ = newPanY;
+    const auto kbPerfPanMicros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - kbPerfPanStart).count();
+    std::ostringstream kbPerfPanLine;
+    kbPerfPanLine << "DragMaterialGraphPan panX=" << newPanX << " panY=" << newPanY << " took=" << kbPerfPanMicros << "us";
+    EditorCrashBreadcrumbs::Write("perf_pan", kbPerfPanLine.str());
     return true;
 }
 

@@ -98,6 +98,7 @@ struct SmokeOptions {
     float autoExposureLuminance = 0.18F;
     float autoExposureBiasStops = 0.0F;
     std::string screenshotPath;
+    kb::render::SceneRenderLightingPath lightingPath = kb::render::SceneRenderLightingPath::Forward;
 };
 
 struct ScreenshotValidationStats {
@@ -106,6 +107,12 @@ struct ScreenshotValidationStats {
     std::uint32_t distinctColorCount = 0;
     std::uint32_t minLuma = 255;
     std::uint32_t maxLuma = 0;
+    std::uint64_t sumR = 0;
+    std::uint64_t sumG = 0;
+    std::uint64_t sumB = 0;
+    std::uint32_t maxLumaR = 0;
+    std::uint32_t maxLumaG = 0;
+    std::uint32_t maxLumaB = 0;
 };
 
 struct CapturedScreenshot {
@@ -414,10 +421,18 @@ void ExerciseWindowEvent(HWND window, std::uint32_t frameCount) {
         const auto r = static_cast<std::uint8_t>(pixels[pixel * kPixelStride + 2U]);
         const std::uint32_t luma = (static_cast<std::uint32_t>(r) * 54U + static_cast<std::uint32_t>(g) * 183U + static_cast<std::uint32_t>(b) * 19U) / 256U;
         stats.minLuma = std::min(stats.minLuma, luma);
-        stats.maxLuma = std::max(stats.maxLuma, luma);
+        if (luma > stats.maxLuma) {
+            stats.maxLuma = luma;
+            stats.maxLumaR = r;
+            stats.maxLumaG = g;
+            stats.maxLumaB = b;
+        }
         if (luma > 24U) {
             ++stats.brightPixelCount;
         }
+        stats.sumR += r;
+        stats.sumG += g;
+        stats.sumB += b;
         if (colors.size() < 512U) {
             colors.insert((static_cast<std::uint32_t>(r) << 16U) | (static_cast<std::uint32_t>(g) << 8U) | static_cast<std::uint32_t>(b));
         }
@@ -591,6 +606,10 @@ void ExerciseWindowEvent(HWND window, std::uint32_t frameCount) {
             }
         } else if (strncmp(arg, kScreenshotPrefix, kScreenshotPrefixLength) == 0) {
             options.screenshotPath = arg + kScreenshotPrefixLength;
+        } else if (strcmp(arg, "--lighting-path=deferred") == 0) {
+            options.lightingPath = kb::render::SceneRenderLightingPath::Deferred;
+        } else if (strcmp(arg, "--lighting-path=forward") == 0) {
+            options.lightingPath = kb::render::SceneRenderLightingPath::Forward;
         }
     }
 
@@ -648,6 +667,7 @@ int main(int argc, char** argv) {
     });
     renderer.SetDefaultSceneLightingConfig(kb::render::SceneRenderLightingConfig{
         .maxForwardLights = 4U,
+        .lightingPath = options.lightingPath,
         .ambientColor = {0.18F, 0.18F, 0.18F},
         .ambientIntensity = 0.45F,
         .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
@@ -941,6 +961,43 @@ int main(int argc, char** argv) {
                     }
                     if (options.validateScreenshot) {
                         const ScreenshotValidationStats stats = AnalyzeBgraPixels(capture.bgraPixels);
+                        std::fprintf(
+                            stdout,
+                            "kb_render_smoke: brightness lightingPath=%d samples=%u bright=%u colors=%u luma=[%u,%u] avgRGB=[%.2f,%.2f,%.2f] maxLumaRGB=[%u,%u,%u]\n",
+                            static_cast<int>(options.lightingPath),
+                            stats.sampledPixelCount,
+                            stats.brightPixelCount,
+                            stats.distinctColorCount,
+                            stats.minLuma,
+                            stats.maxLuma,
+                            stats.sampledPixelCount > 0U ? static_cast<double>(stats.sumR) / stats.sampledPixelCount : 0.0,
+                            stats.sampledPixelCount > 0U ? static_cast<double>(stats.sumG) / stats.sampledPixelCount : 0.0,
+                            stats.sampledPixelCount > 0U ? static_cast<double>(stats.sumB) / stats.sampledPixelCount : 0.0,
+                            stats.maxLumaR,
+                            stats.maxLumaG,
+                            stats.maxLumaB);
+                        std::fflush(stdout);
+                        {
+                            const std::array<CapturedScreenshot, kMaterialTextureVariantPhaseCount> regions = ExtractMaterialTextureVariantRegionCaptures(capture);
+                            const std::array<const char*, kMaterialTextureVariantPhaseCount> regionNames{ "baseline", "roughness", "metallic", "normal" };
+                            for (std::size_t regionIndex = 0; regionIndex < regions.size(); ++regionIndex) {
+                                const ScreenshotValidationStats regionStats = AnalyzeBgraPixels(regions[regionIndex].bgraPixels);
+                                std::fprintf(
+                                    stdout,
+                                    "kb_render_smoke: region=%s lightingPath=%d avgRGB=[%.2f,%.2f,%.2f] maxLumaRGB=[%u,%u,%u] luma=[%u,%u]\n",
+                                    regionNames[regionIndex],
+                                    static_cast<int>(options.lightingPath),
+                                    regionStats.sampledPixelCount > 0U ? static_cast<double>(regionStats.sumR) / regionStats.sampledPixelCount : 0.0,
+                                    regionStats.sampledPixelCount > 0U ? static_cast<double>(regionStats.sumG) / regionStats.sampledPixelCount : 0.0,
+                                    regionStats.sampledPixelCount > 0U ? static_cast<double>(regionStats.sumB) / regionStats.sampledPixelCount : 0.0,
+                                    regionStats.maxLumaR,
+                                    regionStats.maxLumaG,
+                                    regionStats.maxLumaB,
+                                    regionStats.minLuma,
+                                    regionStats.maxLuma);
+                            }
+                            std::fflush(stdout);
+                        }
                         if (!ScreenshotLooksRendered(stats)) {
                             std::fprintf(
                                 stderr,
