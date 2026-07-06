@@ -66,7 +66,7 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ScriptEditor, DockArea::Center));
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
-        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Right));
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Center));
     }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;

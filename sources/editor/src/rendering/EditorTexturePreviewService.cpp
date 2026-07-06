@@ -26,6 +26,8 @@ namespace kb::editor {
 namespace {
 
 constexpr std::array<char, 8> kImportedAssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
+constexpr std::size_t kScaledPreviewMaxEntries = 96U;
+constexpr std::size_t kScaledPreviewMaxBytes = 64U * 1024U * 1024U;
 
 class ScopedComStream {
 public:
@@ -273,6 +275,9 @@ private:
 struct ScaledPreviewEntry {
     HDC dc = nullptr;
     HBITMAP bitmap = nullptr;
+    HGDIOBJ previousBitmap = nullptr;
+    std::size_t byteSize = 0U;
+    std::uint64_t lastUsed = 0U;
 
     ScaledPreviewEntry() = default;
     ScaledPreviewEntry(const ScaledPreviewEntry&) = delete;
@@ -285,8 +290,14 @@ struct ScaledPreviewEntry {
             Reset();
             dc = other.dc;
             bitmap = other.bitmap;
+            previousBitmap = other.previousBitmap;
+            byteSize = other.byteSize;
+            lastUsed = other.lastUsed;
             other.dc = nullptr;
             other.bitmap = nullptr;
+            other.previousBitmap = nullptr;
+            other.byteSize = 0U;
+            other.lastUsed = 0U;
         }
         return *this;
     }
@@ -296,26 +307,53 @@ struct ScaledPreviewEntry {
 
 private:
     void Reset() noexcept {
-        if (dc != nullptr) {
-            DeleteDC(dc);
-            dc = nullptr;
+        if (dc != nullptr && previousBitmap != nullptr) {
+            SelectObject(dc, previousBitmap);
+            previousBitmap = nullptr;
         }
         if (bitmap != nullptr) {
             DeleteObject(bitmap);
             bitmap = nullptr;
         }
+        if (dc != nullptr) {
+            DeleteDC(dc);
+            dc = nullptr;
+        }
+        byteSize = 0U;
+        lastUsed = 0U;
+    }
+};
+
+struct ScaledPreviewKey {
+    std::uintptr_t image = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+
+    [[nodiscard]] bool operator==(const ScaledPreviewKey& other) const noexcept {
+        return image == other.image && width == other.width && height == other.height;
+    }
+};
+
+struct ScaledPreviewKeyHash {
+    [[nodiscard]] std::size_t operator()(const ScaledPreviewKey& key) const noexcept {
+        std::size_t hash = static_cast<std::size_t>(key.image);
+        hash ^= static_cast<std::size_t>(key.width) + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        hash ^= static_cast<std::size_t>(key.height) + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        return hash;
     }
 };
 
 class ScaledPreviewCache {
 public:
     [[nodiscard]] HDC DcFor(const EditorTexturePreviewImage& image, int width, int height) {
-        const auto imageKey = reinterpret_cast<std::uintptr_t>(&image);
-        const std::uint64_t key = static_cast<std::uint64_t>(imageKey) ^
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(width)) << 32U) ^
-            static_cast<std::uint64_t>(static_cast<std::uint32_t>(height));
+        const ScaledPreviewKey key{
+            .image = reinterpret_cast<std::uintptr_t>(&image),
+            .width = static_cast<std::uint32_t>(width),
+            .height = static_cast<std::uint32_t>(height),
+        };
         if (const auto found = entries_.find(key); found != entries_.end()) {
             ++hitCount_;
+            found->second.lastUsed = ++useClock_;
             return found->second.dc;
         }
         ++missCount_;
@@ -330,6 +368,9 @@ public:
 
         ScaledPreviewEntry entry;
         HDC screenDc = GetDC(nullptr);
+        if (screenDc == nullptr) {
+            return nullptr;
+        }
         entry.dc = CreateCompatibleDC(screenDc);
         void* bits = nullptr;
         entry.bitmap = CreateDIBSection(screenDc, &targetInfo, DIB_RGB_COLORS, &bits, nullptr, 0U);
@@ -337,7 +378,12 @@ public:
         if (entry.dc == nullptr || entry.bitmap == nullptr) {
             return nullptr;
         }
-        SelectObject(entry.dc, entry.bitmap);
+        entry.previousBitmap = SelectObject(entry.dc, entry.bitmap);
+        if (entry.previousBitmap == nullptr) {
+            return nullptr;
+        }
+        entry.byteSize = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * sizeof(std::uint32_t);
+        entry.lastUsed = ++useClock_;
 
         BITMAPINFO sourceInfo{};
         sourceInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -348,14 +394,19 @@ public:
         sourceInfo.bmiHeader.biCompression = BI_RGB;
         const int oldMode = SetStretchBltMode(entry.dc, HALFTONE);
         SetBrushOrgEx(entry.dc, 0, 0, nullptr);
-        static_cast<void>(StretchDIBits(
+        const int stretchedLines = StretchDIBits(
             entry.dc, 0, 0, width, height,
             0, 0, image.width, image.height,
-            image.bgra.data(), &sourceInfo, DIB_RGB_COLORS, SRCCOPY));
+            image.bgra.data(), &sourceInfo, DIB_RGB_COLORS, SRCCOPY);
         SetStretchBltMode(entry.dc, oldMode);
+        if (stretchedLines <= 0) {
+            return nullptr;
+        }
 
         const HDC result = entry.dc;
+        byteCount_ += entry.byteSize;
         entries_.emplace(key, std::move(entry));
+        TrimToBudget();
         return result;
     }
 
@@ -371,10 +422,29 @@ public:
         return entries_.size();
     }
 
+    [[nodiscard]] std::size_t ByteCount() const noexcept {
+        return byteCount_;
+    }
+
 private:
-    std::unordered_map<std::uint64_t, ScaledPreviewEntry> entries_;
+    void TrimToBudget() {
+        while (entries_.size() > 1U && (entries_.size() > kScaledPreviewMaxEntries || byteCount_ > kScaledPreviewMaxBytes)) {
+            auto evict = entries_.begin();
+            for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+                if (it->second.lastUsed < evict->second.lastUsed) {
+                    evict = it;
+                }
+            }
+            byteCount_ -= std::min(byteCount_, evict->second.byteSize);
+            entries_.erase(evict);
+        }
+    }
+
+    std::unordered_map<ScaledPreviewKey, ScaledPreviewEntry, ScaledPreviewKeyHash> entries_;
     std::uint64_t hitCount_ = 0U;
     std::uint64_t missCount_ = 0U;
+    std::uint64_t useClock_ = 0U;
+    std::size_t byteCount_ = 0U;
 };
 
 [[nodiscard]] ScaledPreviewCache& TextureScaledPreviewCache() {
@@ -394,11 +464,40 @@ EditorTexturePreviewScaledCacheStats EditorTexturePreviewService::ScaledCacheSta
         .hitCount = cache.HitCount(),
         .missCount = cache.MissCount(),
         .entryCount = cache.EntryCount(),
+        .byteCount = cache.ByteCount(),
     };
 }
 
 const EditorTexturePreviewImage* EditorTexturePreviewService::PreviewFor(const kb::assets::AssetMetadata& metadata) {
     return TextureCache().PreviewFor(metadata);
+}
+
+void DrawDirectScaledPreview(HDC dc, RECT target, const EditorTexturePreviewImage& image) {
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    const int oldMode = SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, nullptr);
+    static_cast<void>(StretchDIBits(
+        dc,
+        target.left,
+        target.top,
+        target.right - target.left,
+        target.bottom - target.top,
+        0,
+        0,
+        image.width,
+        image.height,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+    SetStretchBltMode(dc, oldMode);
 }
 
 void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border) {
@@ -410,6 +509,8 @@ void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorT
 
     if (const HDC scaledDc = TextureScaledPreviewCache().DcFor(image, width, height); scaledDc != nullptr) {
         BitBlt(dc, target.left, target.top, width, height, scaledDc, 0, 0, SRCCOPY);
+    } else {
+        DrawDirectScaledPreview(dc, target, image);
     }
 
     if (border) {

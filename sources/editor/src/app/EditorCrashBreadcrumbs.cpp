@@ -1,7 +1,6 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 
 #include <chrono>
-#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -27,10 +26,6 @@ std::mutex g_breadcrumbMutex;
 
 [[nodiscard]] std::filesystem::path BreadcrumbPath() {
     return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
-}
-
-[[nodiscard]] std::filesystem::path AaTracePath() {
-    return std::filesystem::current_path() / "aa_trace.log";
 }
 
 [[nodiscard]] std::string NowMs() {
@@ -64,37 +59,11 @@ std::mutex g_breadcrumbMutex;
     return stream;
 }
 
-[[nodiscard]] std::ofstream& AaTraceStream() {
-    static std::ofstream stream{AaTracePath(), std::ios::out | std::ios::app};
-    return stream;
-}
-
 void AppendLine(std::string_view line) {
     // Single mutex covers both persistent stream handles below -- they're shared across calls (and
     // threads) now instead of each call getting its own throwaway ofstream, so every read/write on
     // them has to be serialized here, not just the main breadcrumb log's.
     std::lock_guard lock{g_breadcrumbMutex};
-#if defined(_WIN32)
-    if (line.find("[aa_trace]") != std::string_view::npos) {
-        std::string debugLine{line};
-        debugLine.push_back('\n');
-        OutputDebugStringA(debugLine.c_str());
-        static bool consoleAttachAttempted = false;
-        if (!consoleAttachAttempted) {
-            consoleAttachAttempted = true;
-            if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-                FILE* stream = nullptr;
-                static_cast<void>(freopen_s(&stream, "CONOUT$", "a", stderr));
-            }
-        }
-        std::fputs(debugLine.c_str(), stderr);
-        std::ofstream& aaTraceOutput = AaTraceStream();
-        if (aaTraceOutput.is_open()) {
-            aaTraceOutput << line << '\n';
-            aaTraceOutput.flush();
-        }
-    }
-#endif
     std::ofstream& output = BreadcrumbStream();
     if (!output.is_open()) {
         return;

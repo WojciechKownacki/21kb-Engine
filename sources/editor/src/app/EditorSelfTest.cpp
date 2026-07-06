@@ -6,6 +6,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
@@ -594,6 +595,47 @@ void RunMaterialGraphContextMenuSuite(Report& report) {
     context.MaterialEditor().Open(materialId, material);
 
     report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 240, -160, 96), "Open material graph context menu in headless editor context");
+    report.Check(MaterialEditorGraphContextMenuMaxScroll(context) == 0, "Collapsed material graph context menu does not require scrolling");
+    report.Check(context.ToggleMaterialGraphContextMenuCategory(6U), "Expand Utility category in material graph context menu");
+    const int utilityMenuMaxScroll = MaterialEditorGraphContextMenuMaxScroll(context);
+    report.Check(utilityMenuMaxScroll > 0, "Expanded Utility node palette exposes a scroll range");
+    const RECT utilityMenuRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
+    const RECT utilityViewport = MaterialEditorGraphContextMenuViewportRect(utilityMenuRect);
+    const MaterialEditorGraphContextMenuHit topHitBeforeScroll =
+        MaterialEditorPanelRenderer::GraphContextMenuHit(context, utilityMenuRect.left + 40, utilityViewport.top + 11);
+    report.Check(
+        topHitBeforeScroll.kind == MaterialEditorGraphContextMenuHitKind::Category && topHitBeforeScroll.categoryIndex == 0U,
+        "Unscrolled material graph context menu hit-tests the first visible category");
+    report.Check(context.ScrollMaterialGraphContextMenu(-120, utilityMenuMaxScroll), "Mouse wheel scrolls expanded material graph context menu");
+    report.Check(context.MaterialGraphContextMenuScrollOffset() > 0, "Material graph context menu stores non-zero scroll offset");
+    report.Check(context.SetMaterialGraphContextMenuScrollOffset(utilityMenuMaxScroll, utilityMenuMaxScroll), "Material graph context menu can scroll to the bottom");
+    const MaterialEditorGraphContextMenuHit topHitAfterScroll =
+        MaterialEditorPanelRenderer::GraphContextMenuHit(context, utilityMenuRect.left + 40, utilityViewport.top + 11);
+    report.Check(
+        !(topHitAfterScroll.kind == MaterialEditorGraphContextMenuHitKind::Category && topHitAfterScroll.categoryIndex == 0U),
+        "Scrolled material graph context menu hit-test follows the visible rows instead of stale unscrolled rows");
+    report.Check(context.SetMaterialGraphContextMenuScrollOffset(0, utilityMenuMaxScroll), "Reset material graph context menu scroll before command execution");
+    context.SetMaterialGraphCanvasViewport(0, 0, 1000, 720);
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 500, -160, 96), "Open material graph context menu near the bottom of a large canvas");
+    const int actualMenuHeight = MaterialEditorGraphContextMenuHeight(context);
+    report.Check(
+        context.MaterialGraphContextMenuY() == 720 - actualMenuHeight,
+        "Material graph context menu clamps against its actual visible height instead of the maximum palette height");
+    context.SetMaterialGraphCanvasViewport(100, 100, 260, 300);
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 350, 390, -160, 96), "Open material graph context menu in a constrained canvas");
+    const RECT constrainedMenuRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
+    report.Check(
+        constrainedMenuRect.left >= 100 &&
+            constrainedMenuRect.top >= 100 &&
+            constrainedMenuRect.right <= 360 &&
+            constrainedMenuRect.bottom <= 400,
+        "Material graph context menu is clamped inside a small graph canvas");
+    report.Check(context.MoveMaterialGraphContextMenuKeyboardSelection(1), "Keyboard Down selects the first material graph context-menu row");
+    report.Check(context.ActivateMaterialGraphContextMenuKeyboardSelection(), "Keyboard Enter activates the selected material graph context-menu category");
+    report.Check(context.IsMaterialGraphContextMenuCategoryExpanded(0U), "Keyboard Enter expands a selected material graph context-menu category");
+    context.SetMaterialGraphContextMenuSearchQuery("pixel depth");
+    report.Check(context.ActivateMaterialGraphContextMenuKeyboardSelection(), "Keyboard Enter creates the first matching searched material graph node");
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 250, 250, -120, 128), "Reopen material graph context menu after keyboard command execution");
     report.Check(context.ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand::CreatePixelDepth),
         "Execute PixelDepth through material graph context-menu command path");
     const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = context.MaterialEditor().WorkingCopy();
@@ -607,6 +649,129 @@ void RunMaterialGraphContextMenuSuite(Report& report) {
         : std::vector<kb::render::RenderMaterialGraphNode>::const_iterator{};
     report.Check(workingCopy.has_value() && pixelDepth != workingCopy->graph.nodes.end(),
         "PixelDepth context-menu command leaves a real node in the material graph working copy");
+}
+
+void RunMaterialGraphColorWatcherSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0xC010U };
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 40U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = -240,
+        .positionY = 40,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "RGB",
+            .defaultValueHint = "0.25 0.5 0.75",
+        },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 41U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 20,
+        .positionY = 40,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "RGBA",
+            .defaultValueHint = "0.9 0.2 0.1 0.6",
+            .hasRange = true,
+            .rangeMin = 0.0F,
+            .rangeMax = 1.0F,
+        },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 42U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = -240,
+        .positionY = 220,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "brandTint",
+            .displayName = "Brand Tint",
+            .defaultValueHint = "0.1 0.2 0.3 1",
+            .overrideSupported = true,
+        },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 43U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ColorRamp,
+        .positionX = 20,
+        .positionY = 240,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "Color Ramp",
+            .defaultValueHint = "0 0 0 0 1 1 0.8 0.2",
+        },
+    });
+    material.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "brandTint",
+        .type = kb::render::RenderMaterialParameterType::Color,
+        .numbers = { 0.4F, 0.5F, 0.6F, 1.0F },
+    });
+    context.MaterialEditor().Open(materialId, material);
+
+    const RECT content{ 0, 0, 960, 720 };
+    const std::optional<RECT> rgbRect = MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 40U, context, materialId);
+    const std::optional<RECT> rgbaRect = MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 41U, context, materialId);
+    const std::optional<RECT> parameterRect = MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 42U, context, materialId);
+    const std::optional<RECT> rampRect = MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 43U, context, materialId);
+    report.Check(rgbRect.has_value() && rgbaRect.has_value() && parameterRect.has_value() && rampRect.has_value(),
+        "Material graph color watcher test resolves all color node rects");
+    if (!rgbRect.has_value() || !rgbaRect.has_value() || !parameterRect.has_value() || !rampRect.has_value()) {
+        return;
+    }
+
+    const SIZE rgbSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantVector);
+    const SIZE rgbaSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantColor);
+    const SIZE parameterSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ParameterColor);
+    report.Check(rgbSize.cx >= 220 && rgbSize.cy >= 110, "RGB node reserves production space for a color watcher");
+    report.Check(rgbaSize.cx >= 230 && rgbaSize.cy >= 138, "RGBA node reserves production space for a four-channel color watcher");
+    report.Check(parameterSize.cx == rgbaSize.cx && parameterSize.cy == rgbaSize.cy, "Color parameter node shares the RGBA watcher layout");
+
+    const RECT rgbSwatch = MaterialEditorPanelColorWatcherSwatchRect(*rgbRect, kb::render::RenderMaterialGraphNodeKind::ConstantVector);
+    const std::optional<MaterialEditorGraphColorWatcherHit> rgbHit =
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbSwatch.left + 3, rgbSwatch.top + 3);
+    report.Check(rgbHit.has_value() &&
+            rgbHit->target == MaterialEditorGraphColorWatcherTarget::ConstantRgb &&
+            rgbHit->value.numbers[0] > 0.24F &&
+            !rgbHit->applyImmediately,
+        "RGB node swatch hit-test opens the color watcher picker with parsed RGB values");
+
+    const RECT rgbaChip = MaterialEditorPanelColorWatcherPaletteChipRect(*rgbaRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 3U);
+    const std::optional<MaterialEditorGraphColorWatcherHit> rgbaPaletteHit =
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbaChip.left + 2, rgbaChip.top + 2);
+    report.Check(rgbaPaletteHit.has_value() &&
+            rgbaPaletteHit->target == MaterialEditorGraphColorWatcherTarget::ConstantColor &&
+            rgbaPaletteHit->applyImmediately &&
+            rgbaPaletteHit->value.numbers[0] == 1.0F &&
+            rgbaPaletteHit->value.numbers[1] == 0.0F,
+        "RGBA node palette chip hit-test applies a reusable color swatch immediately");
+
+    const RECT parameterSwatch = MaterialEditorPanelColorWatcherSwatchRect(*parameterRect, kb::render::RenderMaterialGraphNodeKind::ParameterColor);
+    const std::optional<MaterialEditorGraphColorWatcherHit> parameterHit =
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, parameterSwatch.left + 3, parameterSwatch.top + 3);
+    report.Check(parameterHit.has_value() &&
+            parameterHit->target == MaterialEditorGraphColorWatcherTarget::ParameterColor &&
+            parameterHit->stableId == "brandTint" &&
+            parameterHit->value.numbers[0] > 0.39F &&
+            parameterHit->value.numbers[2] > 0.59F,
+        "ParameterColor watcher reads the graph parameter override as its single source of displayed truth");
+
+    const RECT rgbGreen = MaterialEditorPanelColorWatcherChannelRect(*rgbRect, kb::render::RenderMaterialGraphNodeKind::ConstantVector, 1U, 3U);
+    const std::optional<MaterialEditorGraphConstantValueHit> rgbChannel =
+        MaterialEditorPanelRenderer::GraphConstantValueAt(content, material.graph, context, materialId, rgbGreen.left + 2, rgbGreen.top + 2);
+    report.Check(rgbChannel.has_value() &&
+            rgbChannel->nodeId == 40U &&
+            rgbChannel->componentIndex == 1U &&
+            rgbChannel->type == kb::render::RenderMaterialParameterType::Vec3,
+        "RGB watcher channel fields still hit-test as editable constant components");
+
+    const RECT rampGradient = MaterialEditorPanelColorRampGradientRect(*rampRect);
+    const std::optional<MaterialEditorGraphColorWatcherHit> rampHit =
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rampGradient.left + 2, rampGradient.top + 2);
+    report.Check(rampHit.has_value() &&
+            rampHit->target == MaterialEditorGraphColorWatcherTarget::ColorRampStop &&
+            rampHit->propertyId == "colorRamp.stop0.color",
+        "ColorRamp watcher exposes gradient stop color editing from the graph node");
 }
 
 void RunInspectorLightComponentSuite(Report& report) {
@@ -943,7 +1108,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -963,6 +1128,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
+    RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);

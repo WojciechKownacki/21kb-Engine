@@ -302,6 +302,11 @@ public:
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta) noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept;
     void SetMaterialGraphCanvasViewport(int width, int height) noexcept;
+    void SetMaterialGraphCanvasViewport(int left, int top, int width, int height) noexcept;
+    [[nodiscard]] int MaterialGraphCanvasLeft() const noexcept;
+    [[nodiscard]] int MaterialGraphCanvasTop() const noexcept;
+    [[nodiscard]] int MaterialGraphCanvasWidth() const noexcept;
+    [[nodiscard]] int MaterialGraphCanvasHeight() const noexcept;
     [[nodiscard]] bool IsMaterialEditorFindFocused() const noexcept;
     void FocusMaterialEditorFind(bool focused) noexcept;
     void SetMaterialEditorFindQuery(std::string query);
@@ -414,6 +419,11 @@ public:
     [[nodiscard]] int MaterialGraphContextMenuY() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuGraphX() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuGraphY() const noexcept;
+    [[nodiscard]] int MaterialGraphContextMenuScrollOffset() const noexcept;
+    [[nodiscard]] bool SetMaterialGraphContextMenuScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] bool ScrollMaterialGraphContextMenu(int wheelDelta, int maxOffset) noexcept;
+    [[nodiscard]] bool MoveMaterialGraphContextMenuKeyboardSelection(int direction);
+    [[nodiscard]] bool ActivateMaterialGraphContextMenuKeyboardSelection();
     [[nodiscard]] std::string_view MaterialGraphContextMenuSearchQuery() const noexcept;
     void SetMaterialGraphContextMenuSearchQuery(std::string query);
     void AppendMaterialGraphContextMenuSearchText(wchar_t character);
@@ -653,6 +663,8 @@ private:
     int materialGraphPanY_ = 0;
     int materialGraphCanvasWidth_ = 1280;
     int materialGraphCanvasHeight_ = 720;
+    int materialGraphCanvasLeft_ = 0;
+    int materialGraphCanvasTop_ = 0;
     kb::assets::AssetId materialGraphDragAssetId_{};
     std::uint32_t materialGraphDragNodeId_ = 0U;
     int materialGraphDragStartX_ = 0;
@@ -715,6 +727,7 @@ private:
     int materialGraphContextMenuY_ = 0;
     int materialGraphContextMenuGraphX_ = 0;
     int materialGraphContextMenuGraphY_ = 0;
+    int materialGraphContextMenuScrollOffset_ = 0;
     std::uint32_t materialGraphContextMenuExpandedMask_ = 0U;
     std::size_t materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     MaterialEditorGraphMenuCommand materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;

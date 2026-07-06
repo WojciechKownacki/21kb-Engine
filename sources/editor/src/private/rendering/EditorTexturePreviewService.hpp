@@ -8,6 +8,7 @@
 #include <Windows.h>
 #endif
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -25,6 +26,7 @@ struct EditorTexturePreviewScaledCacheStats {
     std::uint64_t hitCount = 0U;
     std::uint64_t missCount = 0U;
     std::size_t entryCount = 0U;
+    std::size_t byteCount = 0U;
 };
 
 class EditorTexturePreviewService {

@@ -259,6 +259,49 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     };
 }
 
+[[nodiscard]] std::string GraphColorValueText(const MaterialEditorParameterValue& value, bool alpha) {
+    std::string text = MaterialEditorPanelFloat(value.numbers[0]) + " " +
+        MaterialEditorPanelFloat(value.numbers[1]) + " " +
+        MaterialEditorPanelFloat(value.numbers[2]);
+    if (alpha) {
+        text += " " + MaterialEditorPanelFloat(value.numbers[3]);
+    }
+    return text;
+}
+
+[[nodiscard]] bool ApplyGraphColorWatcherHit(
+    HWND owner,
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId materialId,
+    const MaterialEditorGraphColorWatcherHit& hit) {
+    MaterialEditorParameterValue value = hit.value;
+    if (!hit.applyImmediately) {
+        const std::optional<std::array<float, 4U>> picked = ShowGraphColorPicker(owner, hit.value);
+        if (!picked.has_value()) {
+            return false;
+        }
+        value.numbers = *picked;
+    }
+
+    switch (hit.target) {
+    case MaterialEditorGraphColorWatcherTarget::ConstantRgb:
+        return sceneContext.SetMaterialGraphConstantValue(materialId, hit.nodeId, GraphColorValueText(value, false));
+    case MaterialEditorGraphColorWatcherTarget::ConstantColor:
+        return sceneContext.SetMaterialGraphNodeColorPropertyValue(materialId, hit.nodeId, "constant.color", value.numbers);
+    case MaterialEditorGraphColorWatcherTarget::ParameterColor:
+        return sceneContext.SetMaterialEditorGraphParameterValue(
+            materialId,
+            hit.stableId,
+            kb::render::RenderMaterialParameterType::Color,
+            GraphColorValueText(value, true));
+    case MaterialEditorGraphColorWatcherTarget::ColorRampStop:
+        return sceneContext.SetMaterialGraphNodeColorPropertyValue(materialId, hit.nodeId, hit.propertyId, value.numbers);
+    case MaterialEditorGraphColorWatcherTarget::None:
+        break;
+    }
+    return false;
+}
+
 } // namespace
 
 EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
@@ -358,6 +401,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
                 const MaterialEditorPanelLayout menuLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
                 sceneContext_.SetMaterialGraphCanvasViewport(
+                    menuLayout.graphCanvas.left,
+                    menuLayout.graphCanvas.top,
                     MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
                     MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
                 const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
@@ -578,6 +623,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (result.accepted) {
                         static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, *textureSampleNodeId, result.assetId));
                     }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
+                        MaterialEditorPanelRenderer::GraphColorWatcherAt(*materialEditorContent, *material, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
+                    static_cast<void>(ApplyGraphColorWatcherHit(mainWindow_, sceneContext_, materialId, *colorWatcher));
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
                 }

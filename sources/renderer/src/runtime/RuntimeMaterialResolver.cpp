@@ -2191,17 +2191,17 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         } else {
             resolved.renderMode = RuntimeMaterialRenderMode::CpuPbrFlatteningFallback;
             resolved.cpuFallbackReason = RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable;
-                resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
-                    .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
-                    .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
-                    .assetId = metadata.id,
-                    .parentAssetId = parentMetadata->id,
-                    .path = ResolveAssetPhysicalPath(manager, metadata),
-                    .message = "Material instance graph has no GPU program; falling back to CPU PBR flattening.",
-                });
-                AppendGraphValidationDiagnostics(resolved, resolved.material.graphDiagnostics, metadata.id, ResolveAssetPhysicalPath(manager, metadata));
-            }
+            resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
+                .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                .assetId = metadata.id,
+                .parentAssetId = parentMetadata->id,
+                .path = ResolveAssetPhysicalPath(manager, metadata),
+                .message = "Material instance graph has no GPU program; falling back to CPU PBR flattening.",
+            });
+            AppendGraphValidationDiagnostics(resolved, resolved.material.graphDiagnostics, metadata.id, ResolveAssetPhysicalPath(manager, metadata));
         }
+    }
     for (RuntimeMaterialResolveDiagnostic& diagnostic : resolved.diagnostics) {
         if (!diagnostic.parentAssetId.IsValid()) {
             diagnostic.parentAssetId = parentMetadata->id;

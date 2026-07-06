@@ -82,9 +82,24 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
 
     const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (materialEditorContent.has_value() && Contains(*materialEditorContent, x, y)) {
+        if (sceneContext_.IsMaterialGraphContextMenuOpen() &&
+            Contains(MaterialEditorPanelRenderer::GraphContextMenuRect(sceneContext_), x, y)) {
+            const bool scrolled = sceneContext_.ScrollMaterialGraphContextMenu(
+                wheelDelta,
+                MaterialEditorGraphContextMenuMaxScroll(sceneContext_));
+            if (scrolled) {
+                InvalidateRect(messageWindow_, nullptr, FALSE);
+                if (messageWindow_ != mainWindow_) {
+                    InvalidateRect(mainWindow_, nullptr, FALSE);
+                }
+            }
+            return true;
+        }
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (Contains(layout.graphCanvas, x, y)) {
             sceneContext_.SetMaterialGraphCanvasViewport(
+                layout.graphCanvas.left,
+                layout.graphCanvas.top,
                 MaterialEditorPanelRectWidth(layout.graphCanvas),
                 MaterialEditorPanelRectHeight(layout.graphCanvas));
             return sceneContext_.ZoomMaterialGraph(wheelDelta, x - layout.graphCanvas.left, y - layout.graphCanvas.top);
