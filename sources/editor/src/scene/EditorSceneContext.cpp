@@ -240,6 +240,25 @@ struct MaterialGraphContextMenuKeyboardRow {
     return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
 }
 
+[[nodiscard]] bool IsMaterialGraphTextureSampleNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray;
+}
+
+[[nodiscard]] bool IsMaterialGraphTextureObjectNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
+}
+
+[[nodiscard]] bool IsMaterialGraphTextureAssetNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return IsMaterialGraphTextureSampleNode(kind) || IsMaterialGraphTextureObjectNode(kind);
+}
+
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     if (!metadata.physicalPath.empty()) {
         return metadata.physicalPath;
@@ -3680,16 +3699,13 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
             break;
         }
     }
-    if (node == nullptr ||
-        (node->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
-            node->kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
-            node->kind != kb::render::RenderMaterialGraphNodeKind::TextureObject)) {
+    if (node == nullptr || !IsMaterialGraphTextureAssetNode(node->kind)) {
         return false;
     }
     if (node->parameter.stableId.empty()) {
         if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
             node->parameter.stableId = "texture" + std::to_string(node->id);
-        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        } else if (IsMaterialGraphTextureObjectNode(node->kind)) {
             node->parameter.stableId = "textureObject" + std::to_string(node->id);
         } else {
             node->parameter.stableId = "textureSample" + std::to_string(node->id);
@@ -3698,7 +3714,7 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
     if (node->parameter.displayName.empty()) {
         if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
             node->parameter.displayName = "Texture " + std::to_string(node->id);
-        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        } else if (IsMaterialGraphTextureObjectNode(node->kind)) {
             node->parameter.displayName = "Texture Object " + std::to_string(node->id);
         } else {
             node->parameter.displayName = "Texture Sample " + std::to_string(node->id);
