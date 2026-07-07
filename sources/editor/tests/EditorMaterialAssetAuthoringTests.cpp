@@ -40,6 +40,7 @@
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorRenderer.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #if defined(_WIN32)
@@ -6519,6 +6520,52 @@ void RunMaterialImguiNodeEditorModelMappingTest() {
     kb::editor::tests::Require(
         kb::editor::MaterialImguiPinId(2U, kb::render::RenderMaterialGraphNodeKind::TextureSample, "color", kb::editor::MaterialImguiPinDirection::Output) == firstLink.startPin,
         "KBMAT-IMGUI-0001: Stable graph pin ids must produce deterministic ImGui pin ids");
+
+    const std::optional<kb::editor::MaterialImguiNodeEditorGraphLinkRequest> forwardLink =
+        kb::editor::ResolveMaterialImguiNewLink(
+            model,
+            kb::editor::MaterialImguiNodeEditorNewLink{
+                .startPin = firstLink.startPin,
+                .endPin = firstLink.endPin,
+            });
+    kb::editor::tests::Require(
+        forwardLink.has_value() &&
+            forwardLink->fromNodeId == 2U &&
+            forwardLink->fromPin == "color" &&
+            forwardLink->toNodeId == 3U &&
+            forwardLink->toPin == "color",
+        "KBMAT-IMGUI-0001: ImGui new-link resolver should emit graph output-to-input links");
+
+    const std::optional<kb::editor::MaterialImguiNodeEditorGraphLinkRequest> reversedDrag =
+        kb::editor::ResolveMaterialImguiNewLink(
+            model,
+            kb::editor::MaterialImguiNodeEditorNewLink{
+                .startPin = firstLink.endPin,
+                .endPin = firstLink.startPin,
+            });
+    kb::editor::tests::Require(
+        reversedDrag.has_value() &&
+            reversedDrag->fromNodeId == 2U &&
+            reversedDrag->fromPin == "color" &&
+            reversedDrag->toNodeId == 3U &&
+            reversedDrag->toPin == "color",
+        "KBMAT-IMGUI-0001: ImGui new-link resolver should normalize input-to-output drags");
+
+    const std::optional<kb::editor::MaterialImguiNodeEditorGraphLinkRequest> deletedLink =
+        kb::editor::ResolveMaterialImguiDeletedLink(
+            model,
+            kb::editor::MaterialImguiNodeEditorDeletedLink{
+                .link = firstLink.editorId,
+                .startPin = {},
+                .endPin = {},
+            });
+    kb::editor::tests::Require(
+        deletedLink.has_value() &&
+            deletedLink->fromNodeId == 2U &&
+            deletedLink->fromPin == "color" &&
+            deletedLink->toNodeId == 3U &&
+            deletedLink->toPin == "color",
+        "KBMAT-IMGUI-0001: ImGui deleted-link resolver should map editor links back to graph endpoints");
 }
 
 } // namespace

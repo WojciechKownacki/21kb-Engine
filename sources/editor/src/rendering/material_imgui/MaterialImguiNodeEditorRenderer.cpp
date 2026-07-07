@@ -156,6 +156,48 @@ void SubmitLinks(const MaterialImguiNodeEditorModel& model) {
 
 } // namespace
 
+std::optional<MaterialImguiNodeEditorGraphLinkRequest> ResolveMaterialImguiNewLink(
+    const MaterialImguiNodeEditorModel& model,
+    const MaterialImguiNodeEditorNewLink& link) noexcept {
+    const MaterialImguiPin* startPin = model.FindPin(link.startPin);
+    const MaterialImguiPin* endPin = model.FindPin(link.endPin);
+    if (startPin == nullptr || endPin == nullptr || startPin->direction == endPin->direction) {
+        return std::nullopt;
+    }
+
+    const MaterialImguiPin* output = startPin;
+    const MaterialImguiPin* input = endPin;
+    if (startPin->direction == MaterialImguiPinDirection::Input) {
+        output = endPin;
+        input = startPin;
+    }
+    return MaterialImguiNodeEditorGraphLinkRequest{
+        .fromNodeId = output->nodeId,
+        .fromPin = output->name,
+        .toNodeId = input->nodeId,
+        .toPin = input->name,
+    };
+}
+
+std::optional<MaterialImguiNodeEditorGraphLinkRequest> ResolveMaterialImguiDeletedLink(
+    const MaterialImguiNodeEditorModel& model,
+    const MaterialImguiNodeEditorDeletedLink& link) noexcept {
+    if (const MaterialImguiLink* graphLink = model.FindLink(link.link); graphLink != nullptr) {
+        return MaterialImguiNodeEditorGraphLinkRequest{
+            .fromNodeId = graphLink->fromNodeId,
+            .fromPin = graphLink->fromPin,
+            .toNodeId = graphLink->toNodeId,
+            .toPin = graphLink->toPin,
+        };
+    }
+    return ResolveMaterialImguiNewLink(
+        model,
+        MaterialImguiNodeEditorNewLink{
+            .startPin = link.startPin,
+            .endPin = link.endPin,
+        });
+}
+
 void MaterialImguiNodeEditorRenderer::EditorContextDeleter::operator()(ed::EditorContext* context) const noexcept {
     ed::DestroyEditor(context);
 }
