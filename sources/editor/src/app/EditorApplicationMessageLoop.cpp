@@ -16,6 +16,7 @@
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorRenderer.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 
@@ -258,6 +259,67 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return presented;
 }
 
+[[nodiscard]] bool PresentMaterialGraphImgui(EditorApplicationState& state, HWND host, const std::optional<RECT>& materialEditorContent) {
+    if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0 || !materialEditorContent.has_value()) {
+        return false;
+    }
+
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+    if (RectWidth(layout.graphCanvas) == 0U || RectHeight(layout.graphCanvas) == 0U) {
+        return false;
+    }
+
+    const std::optional<MaterialImguiNodeEditorModel> model =
+        MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(*materialEditorContent, state.sceneContext);
+    if (!model.has_value()) {
+        return false;
+    }
+
+    const kb::assets::AssetId assetId = state.sceneContext.MaterialEditor().OpenAssetId();
+    state.sceneViewport.PresentMaterialGraphImgui(
+        host,
+        layout.graphCanvas,
+        *model,
+        [&state, assetId](const MaterialImguiNodeEditorModel& frameModel, const MaterialImguiNodeEditorFrameResult& result) {
+            if (result.acceptedNewLink.has_value()) {
+                if (const std::optional<MaterialImguiNodeEditorGraphLinkRequest> request =
+                        ResolveMaterialImguiNewLink(frameModel, *result.acceptedNewLink)) {
+                    if (state.sceneContext.BeginMaterialGraphPinConnection(assetId, request->fromNodeId, request->fromPin, true, 0, 0)) {
+                        static_cast<void>(state.sceneContext.CompleteMaterialGraphPinConnection(assetId, request->toNodeId, request->toPin, true));
+                    }
+                }
+            }
+
+            for (const MaterialImguiNodeEditorDeletedLink& deletedLink : result.acceptedDeletedLinks) {
+                if (const std::optional<MaterialImguiNodeEditorGraphLinkRequest> request =
+                        ResolveMaterialImguiDeletedLink(frameModel, deletedLink)) {
+                    static_cast<void>(state.sceneContext.DisconnectMaterialGraphLink(
+                        assetId,
+                        request->fromNodeId,
+                        request->fromPin,
+                        request->toNodeId,
+                        request->toPin));
+                }
+            }
+
+            if (!result.movedNodes.empty()) {
+                std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>> positions;
+                positions.reserve(result.movedNodes.size());
+                for (const MaterialImguiNodeEditorMovedNode& movedNode : result.movedNodes) {
+                    positions.push_back({
+                        movedNode.nodeId,
+                        {
+                            movedNode.positionX,
+                            movedNode.positionY,
+                        },
+                    });
+                }
+                static_cast<void>(state.sceneContext.MoveMaterialGraphNodesTo(assetId, positions));
+            }
+        });
+    return true;
+}
+
 [[nodiscard]] bool PresentMainHost(EditorApplicationState& state, bool refreshToolbar) {
     if (state.window == nullptr || IsWindowVisible(state.window) == 0) {
         return false;
@@ -306,14 +368,15 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         state.floatingWindows,
         state.metrics);
     const bool previewPresented = PresentMaterialPreview(state, state.window, inspector, materialEditor);
+    const bool materialGraphPresented = PresentMaterialGraphImgui(state, state.window, materialEditor);
     state.sceneViewport.EndPaintLayout();
-    if (scenePresented || previewPresented) {
+    if (scenePresented || previewPresented || materialGraphPresented) {
         state.sceneViewport.ClearPresentRequest();
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();
     }
-    return scenePresented || previewPresented;
+    return scenePresented || previewPresented || materialGraphPresented;
 }
 
 [[nodiscard]] bool PresentFloatingHosts(EditorApplicationState& state, bool refreshToolbar) {
@@ -349,14 +412,15 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             state.floatingWindows,
             state.metrics);
         const bool previewPresented = PresentMaterialPreview(state, window, inspector, materialEditor);
+        const bool materialGraphPresented = PresentMaterialGraphImgui(state, window, materialEditor);
         state.sceneViewport.EndPaintLayout();
-        if (scenePresented || previewPresented) {
+        if (scenePresented || previewPresented || materialGraphPresented) {
             state.sceneViewport.ClearPresentRequest();
         }
         if (scenePresented) {
             state.sceneContext.AcknowledgeSceneRenderSubmitted();
         }
-        presented = scenePresented || previewPresented || presented;
+        presented = scenePresented || previewPresented || materialGraphPresented || presented;
     }
     return presented;
 }
