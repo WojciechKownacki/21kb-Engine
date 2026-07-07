@@ -13,8 +13,14 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+#include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -22,6 +28,35 @@ namespace kb::editor {
 namespace {
 
 constexpr std::string_view kMaterialExtension = ".kbmat";
+
+[[nodiscard]] std::filesystem::path MaterialGatewayDebugLogPath() {
+    return std::filesystem::temp_directory_path() / "_material_graph_debug.log";
+}
+
+void WriteMaterialGatewayDebugLog(std::string_view message) {
+    try {
+        std::ofstream output{ MaterialGatewayDebugLogPath(), std::ios::out | std::ios::app };
+        if (output.is_open()) {
+            output << "[MaterialGraph] " << message << '\n';
+        }
+#if defined(_WIN32)
+        std::string debugLine{ "[MaterialGraph] " };
+        debugLine += message;
+        debugLine.push_back('\n');
+        OutputDebugStringA(debugLine.c_str());
+#endif
+    } catch (...) {
+    }
+}
+
+[[nodiscard]] bool GraphOutputHasNormalLink(const kb::render::RenderMaterialAssetData& asset) noexcept {
+    for (const kb::render::RenderMaterialGraphLink& link : asset.graph.links) {
+        if (link.toNodeId == 1U && link.toPin == "normal") {
+            return true;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -90,12 +125,43 @@ std::optional<kb::render::RenderMaterialInstanceAssetData> EditorMaterialAssetGa
 }
 
 bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset) {
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(id);
     const std::optional<std::filesystem::path> path = ResolveFile(scene, id);
     if (!path.has_value()) {
+        std::ostringstream row;
+        row << "gateway-write-material-failed-resolve asset=" << id.value;
+        if (metadata != nullptr) {
+            row << " type=" << metadata->type
+                << " virtualPath=" << metadata->virtualPath.generic_string()
+                << " physicalPath=" << metadata->physicalPath.generic_string();
+        }
+        WriteMaterialGatewayDebugLog(row.str());
         return false;
     }
+    {
+        std::ostringstream row;
+        row << "gateway-write-material asset=" << id.value
+            << " path=" << path->generic_string()
+            << " nodes=" << asset.graph.nodes.size()
+            << " links=" << asset.graph.links.size()
+            << " outputNormalLinked=" << (GraphOutputHasNormalLink(asset) ? "true" : "false");
+        if (metadata != nullptr) {
+            row << " type=" << metadata->type
+                << " virtualPath=" << metadata->virtualPath.generic_string()
+                << " physicalPath=" << metadata->physicalPath.generic_string();
+        }
+        WriteMaterialGatewayDebugLog(row.str());
+    }
     if (!kb::render::RenderMaterialAssetWriter::Save(*path, asset)) {
+        WriteMaterialGatewayDebugLog("gateway-write-material-save-failed asset=" + std::to_string(id.value) + " path=" + path->generic_string());
         return false;
+    }
+    {
+        std::ostringstream row;
+        row << "gateway-write-material-save-ok asset=" << id.value
+            << " path=" << path->generic_string()
+            << " exists=" << (std::filesystem::exists(*path) ? "true" : "false");
+        WriteMaterialGatewayDebugLog(row.str());
     }
     static_cast<void>(scene.Assets().Manager().Unload(id));
     static_cast<void>(scene.Assets().Discover());

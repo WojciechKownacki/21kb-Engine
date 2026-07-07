@@ -28,11 +28,10 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
-
-#include <CommDlg.h>
 
 #include <algorithm>
 #include <array>
@@ -235,28 +234,33 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return {};
 }
 
+[[nodiscard]] EditorTextureAssetPickerFilter TexturePickerFilterForNodeKind(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
+        return EditorTextureAssetPickerFilter::TextureCube;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return EditorTextureAssetPickerFilter::TextureVolume;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return EditorTextureAssetPickerFilter::Texture2DArray;
+    default:
+        return EditorTextureAssetPickerFilter::Texture2D;
+    }
+}
+
+[[nodiscard]] EditorTextureAssetPickerFilter TexturePickerFilterForNodeId(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId) noexcept {
+    const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(graph, nodeId);
+    return node == nullptr ? EditorTextureAssetPickerFilter::Texture2D : TexturePickerFilterForNodeKind(node->kind);
+}
+
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
     HWND owner,
     const MaterialEditorParameterValue& value) {
-    static COLORREF customColors[16]{};
-    CHOOSECOLORW chooseColor{};
-    chooseColor.lStructSize = sizeof(chooseColor);
-    chooseColor.hwndOwner = owner;
-    chooseColor.lpCustColors = customColors;
-    chooseColor.Flags = CC_FULLOPEN | CC_RGBINIT;
-    chooseColor.rgbResult = RGB(
-        std::clamp(static_cast<int>(value.numbers[0] * 255.0F), 0, 255),
-        std::clamp(static_cast<int>(value.numbers[1] * 255.0F), 0, 255),
-        std::clamp(static_cast<int>(value.numbers[2] * 255.0F), 0, 255));
-    if (!ChooseColorW(&chooseColor)) {
-        return std::nullopt;
-    }
-    return std::array<float, 4U>{
-        static_cast<float>(GetRValue(chooseColor.rgbResult)) / 255.0F,
-        static_cast<float>(GetGValue(chooseColor.rgbResult)) / 255.0F,
-        static_cast<float>(GetBValue(chooseColor.rgbResult)) / 255.0F,
-        value.numbers[3],
-    };
+    return EditorMaterialColorPickerDialog::Show(owner, "Material Graph Color", value.numbers);
 }
 
 [[nodiscard]] std::string GraphColorValueText(const MaterialEditorParameterValue& value, bool alpha) {
@@ -442,7 +446,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
             sceneContext_.AssetBrowser().ClearSelection();
-            sceneContext_.ClearHierarchySelection();
             sceneContext_.FocusMaterialGraph(true);
             EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
             const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
@@ -509,7 +512,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                                 mainWindow_,
                                 MakeEditorDarkTheme(),
                                 sceneContext_,
-                                TextureGraphAssetId(*material, property->nodeId));
+                                TextureGraphAssetId(*material, property->nodeId),
+                                TexturePickerFilterForNodeId(material->graph, property->nodeId));
                             if (result.accepted) {
                                 static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, property->nodeId, result.assetId));
                             }
@@ -564,7 +568,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                                 mainWindow_,
                                 MakeEditorDarkTheme(),
                                 sceneContext_,
-                                kb::assets::AssetId{ textureParameter->value.assetId });
+                                kb::assets::AssetId{ textureParameter->value.assetId },
+                                EditorTextureAssetPickerFilter::Texture2D);
                             if (result.accepted) {
                                 static_cast<void>(sceneContext_.SetMaterialInstanceEditorTextureParameterValue(
                                     materialId,
@@ -619,7 +624,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         mainWindow_,
                         MakeEditorDarkTheme(),
                         sceneContext_,
-                        TextureGraphAssetId(*material, *textureSampleNodeId));
+                        TextureGraphAssetId(*material, *textureSampleNodeId),
+                        TexturePickerFilterForNodeId(material->graph, *textureSampleNodeId));
                     if (result.accepted) {
                         static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, *textureSampleNodeId, result.assetId));
                     }

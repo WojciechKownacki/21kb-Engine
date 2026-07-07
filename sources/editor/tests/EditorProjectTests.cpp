@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 
 namespace {
@@ -53,12 +54,20 @@ private:
     return iter == descriptor.plugins.end() ? std::string{} : iter->binaryPath;
 }
 
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output << text;
+}
+
 void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
     std::filesystem::create_directories(TempRoot(), error);
     kb::editor::tests::Require(!error, "Editor project bootstrap test temp root could not be created");
 
+    kb::editor::EditorProjectPaths::SetProjectFile({});
     const ScopedCurrentPath currentPath{ TempRoot() };
 
     const kb::editor::EditorProjectBootstrapResult created = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
@@ -107,6 +116,41 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(reopened.succeeded, "Editor project bootstrap did not reopen an existing project descriptor");
     kb::editor::tests::Require(!reopened.created, "Editor project bootstrap should not recreate an existing descriptor");
 
+    kb::editor::EditorProjectPaths::SetProjectFile({});
+    std::filesystem::current_path(TempRoot().parent_path(), error);
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
+void RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest() {
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+    const std::filesystem::path repoRoot = TempRoot() / "DevRepo";
+    const std::filesystem::path repoProject = repoRoot / "Project";
+    const std::filesystem::path buildProject = repoRoot / "build" / "bin" / "Debug" / "Project";
+    const std::filesystem::path launchDir = repoRoot / "build" / "bin" / "Debug";
+    std::filesystem::create_directories(launchDir, error);
+    kb::editor::tests::Require(!error, "Editor project path launch dir could not be created");
+    WriteTextFile(repoRoot / "sources" / "editor" / "src" / "project" / "EditorProjectPaths.cpp", "// sentinel\n");
+
+    kb::project::ProjectDescriptor repoDescriptor{};
+    repoDescriptor.name = "RepoProject";
+    repoDescriptor.contentRoot = "Assets";
+    repoDescriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
+    kb::project::ProjectDescriptor buildDescriptor = repoDescriptor;
+    buildDescriptor.name = "BuildProject";
+    kb::editor::tests::Require(kb::project::ProjectManager::CreateProject(repoProject / "Project.21kbproject", repoDescriptor),
+        "Editor project path test could not create repository project");
+    kb::editor::tests::Require(kb::project::ProjectManager::CreateProject(buildProject / "Project.21kbproject", buildDescriptor),
+        "Editor project path test could not create stale build project");
+
+    kb::editor::EditorProjectPaths::SetProjectFile({});
+    const ScopedCurrentPath currentPath{ launchDir };
+    kb::editor::tests::Require(kb::editor::EditorProjectPaths::ProjectRoot() == repoProject,
+        "Editor project paths should prefer the repository Project over build/bin/Debug/Project when launched from a build tree");
+    kb::editor::tests::Require(kb::editor::EditorProjectPaths::ProjectFile() == repoProject / "Project.21kbproject",
+        "Editor project descriptor path should resolve to the repository project from build/bin/Debug");
+
+    kb::editor::EditorProjectPaths::SetProjectFile({});
     std::filesystem::current_path(TempRoot().parent_path(), error);
     std::filesystem::remove_all(TempRoot(), error);
 }
@@ -124,6 +168,7 @@ namespace kb::editor::tests {
 
 void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
+    RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
     RunDefaultSceneFactorySeedsEmptySceneTest();
 }
 

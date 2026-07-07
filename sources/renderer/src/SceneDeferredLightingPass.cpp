@@ -88,6 +88,7 @@ bool SceneDeferredLightingPass::Initialize() {
 
     WriteRendererDebugLog("deferred_lighting", "Initialize begin");
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_deferred_lighting.sc");
+    static_cast<void>(debugNormalPresentPass_.Initialize());
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
     normalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
     materialSampler_ = bgfx::createUniform("s_gbufferMaterial", bgfx::UniformType::Sampler);
@@ -111,12 +112,14 @@ bool SceneDeferredLightingPass::Initialize() {
     {
         std::ostringstream message;
         message << "Initialize handles program=" << HandleValue(program_)
+                << " debugNormalPresent=" << (debugNormalPresentPass_.IsInitialized() ? "true" : "false")
                 << " albedoSampler=" << HandleValue(albedoSampler_)
                 << " normalSampler=" << HandleValue(normalSampler_)
                 << " materialSampler=" << HandleValue(materialSampler_)
                 << " depthSampler=" << HandleValue(depthSampler_)
                 << " renderer=" << static_cast<int>(bgfx::getRendererType());
         WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }
     if (!IsInitialized()) {
         WriteRendererDebugLog("deferred_lighting", "Initialize failed; shutting down");
@@ -221,6 +224,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
     }
+    debugNormalPresentPass_.Shutdown();
 }
 
 bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc, SceneRenderSubmitStats& stats) const {
@@ -232,6 +236,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " renderScene=" << (desc.renderScene != nullptr ? "true" : "false")
                 << " extent=" << desc.extent.width << 'x' << desc.extent.height;
         WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
         return false;
     }
 
@@ -265,6 +270,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " lightsPath=" << static_cast<int>(desc.lightingConfig.lightingPath)
                 << " envMode=" << static_cast<int>(desc.lightingConfig.environmentMode);
         WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }
 
     bgfx::TransientVertexBuffer vertices{};
@@ -279,6 +285,35 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setViewClear(desc.viewId, BGFX_CLEAR_COLOR, desc.clearRgba);
     bgfx::touch(desc.viewId);
 
+    if (desc.lightingConfig.debugView == SceneRenderDebugView::GBufferNormal) {
+        FullscreenTextureOutputTransform debugTransform{};
+        debugTransform.gamma = 1.0F;
+        debugTransform.tonemap = FullscreenTextureTonemapOperator::None;
+        debugTransform.colorGradingLutStrength = 0.0F;
+        const bool submitted = debugNormalPresentPass_.Submit(FullscreenTexturePassDesc{
+            .viewId = desc.viewId,
+            .sourceTexture = desc.gbuffer->NormalTexture(),
+            .frameBuffer = desc.frameBuffer,
+            .extent = desc.extent,
+            .outputTransform = debugTransform,
+            .clearRgba = desc.clearRgba,
+            .clearTarget = true,
+            .viewName = "KB GBuffer Normal Debug",
+        });
+        std::ostringstream message;
+        message << "GBufferNormal debug submit"
+                << " submitted=" << (submitted ? "true" : "false")
+                << " normalTex=" << HandleValue(desc.gbuffer->NormalTexture())
+                << " programReady=" << (debugNormalPresentPass_.IsInitialized() ? "true" : "false");
+        WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
+        if (!submitted) {
+            return false;
+        }
+        ++stats.submittedDrawCallCount;
+        return true;
+    }
+
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(*desc.renderScene, lightingStats, desc.lightingConfig, desc.camera);
     {
@@ -290,6 +325,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " lightParams=(" << lighting.params[0] << ',' << lighting.params[1] << ',' << lighting.params[2] << ',' << lighting.params[3] << ')'
                 << " ambient=(" << lighting.ambient[0] << ',' << lighting.ambient[1] << ',' << lighting.ambient[2] << ',' << lighting.ambient[3] << ')';
         WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }
     bgfx::setUniform(lightDirKindUniform_, lighting.dirKind.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightPositionRangeUniform_, lighting.positionRange.data(), kMaxSceneForwardPlusLights);
@@ -318,6 +354,19 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     static const std::array<float, 4> disabledShadowParams{};
     bgfx::setUniform(shadowViewProjUniform_, shadowValid ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, shadowValid ? desc.shadowMap->params.data() : disabledShadowParams.data());
+    {
+        std::ostringstream message;
+        message << "bind-gbuffer viewId=" << desc.viewId
+                << " albedoTex=" << HandleValue(desc.gbuffer->AlbedoTexture())
+                << " normalTex=" << HandleValue(desc.gbuffer->NormalTexture())
+                << " materialTex=" << HandleValue(desc.gbuffer->MaterialTexture())
+                << " depthTex=" << HandleValue(desc.gbuffer->DepthTexture())
+                << " shadowValid=" << (shadowValid ? "true" : "false")
+                << " shadowTex=" << HandleValue(shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_)
+                << " camera=(" << cameraPosition[0] << ',' << cameraPosition[1] << ',' << cameraPosition[2] << ',' << cameraPosition[3] << ')'
+                << " depthHomogeneous=" << (SceneDepthPolicy::HomogeneousDepth() ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
+    }
     bgfx::setTexture(0U, albedoSampler_, desc.gbuffer->AlbedoTexture());
     bgfx::setTexture(1U, normalSampler_, desc.gbuffer->NormalTexture());
     bgfx::setTexture(2U, materialSampler_, desc.gbuffer->MaterialTexture());
@@ -334,12 +383,13 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         message << "Submit end ok drawCalls=" << stats.submittedDrawCallCount
                 << " state=0x" << std::hex << (BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) << std::dec;
         WriteRendererDebugLog("deferred_lighting", message.str());
+        WriteRendererMaterialGraphDebugLog("deferred", message.str());
     }
     return true;
 }
 
 bool SceneDeferredLightingPass::IsInitialized() const noexcept {
-    return bgfx::isValid(program_) && bgfx::isValid(albedoSampler_) &&
+    return bgfx::isValid(program_) && debugNormalPresentPass_.IsInitialized() && bgfx::isValid(albedoSampler_) &&
         bgfx::isValid(normalSampler_) && bgfx::isValid(materialSampler_) && bgfx::isValid(depthSampler_) &&
         bgfx::isValid(lightDirKindUniform_) && bgfx::isValid(lightPositionRangeUniform_) &&
         bgfx::isValid(lightColorIntensityUniform_) && bgfx::isValid(lightSpotUniform_) &&

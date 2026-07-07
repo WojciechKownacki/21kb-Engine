@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <array>
 #include <bgfx/bgfx.h>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -108,6 +109,32 @@ public:
         (a[2] + b[2] + c[2]) / 3.0F,
     };
     return (normal[0] * center[0]) + (normal[1] * center[1]) + (normal[2] * center[2]);
+}
+
+[[nodiscard]] bool SphereTangentsFollowUvDirection(const kb::render::RenderMeshAssetData& sphere) {
+    std::uint32_t checked = 0U;
+    for (const kb::render::RenderStaticMeshVertexP3N3T4UV2& vertex : sphere.tangentVertices) {
+        const float radius = std::sqrt((vertex.x * vertex.x) + (vertex.z * vertex.z));
+        if (radius < 0.2F) {
+            continue;
+        }
+
+        const float tangentLength = std::sqrt((vertex.tx * vertex.tx) + (vertex.ty * vertex.ty) + (vertex.tz * vertex.tz));
+        if (tangentLength <= 0.0001F) {
+            return false;
+        }
+        const float tx = vertex.tx / tangentLength;
+        const float ty = vertex.ty / tangentLength;
+        const float tz = vertex.tz / tangentLength;
+        const float expectedX = -vertex.z / radius;
+        const float expectedZ = vertex.x / radius;
+        const float alignment = (tx * expectedX) + (tz * expectedZ);
+        if (alignment < 0.96F || std::abs(ty) > 0.08F || vertex.tw >= 0.0F) {
+            return false;
+        }
+        ++checked;
+    }
+    return checked > 128U;
 }
 
 [[nodiscard]] kb::render::RenderMaterialGraphLink MakeInspectorMaterialGraphLink(
@@ -981,6 +1008,7 @@ void RunMaterialPreviewMeshFactoryTest() {
     const kb::render::RenderMeshAssetData sphere = kb::editor::EditorMaterialPreviewMeshFactory::BuildSphere();
     kb::editor::tests::Require(sphere.desc.vertexCount > 0U, "Material preview sphere did not generate vertices");
     kb::editor::tests::Require(sphere.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !sphere.tangentVertices.empty(), "Material preview sphere must provide tangents for the PBR shader");
+    kb::editor::tests::Require(SphereTangentsFollowUvDirection(sphere), "Material preview sphere tangents must follow UV direction for normal maps");
     kb::editor::tests::Require(sphere.desc.indexCount > 0U, "Material preview sphere did not generate indices");
     kb::editor::tests::Require(sphere.desc.materialSlotCount == 1U, "Material preview sphere should expose one material slot");
     kb::editor::tests::Require(sphere.bounds.radius > 0.0F, "Material preview sphere did not produce bounds");
@@ -1147,6 +1175,12 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
         kb::project::ProjectSceneLightingPath::Deferred);
     kb::editor::tests::Require(deferredPreviewLighting.lightingPath == kb::render::SceneRenderLightingPath::Deferred,
         "Material preview lighting should inherit Deferred from Project Settings");
+    kb::editor::EditorMaterialPreviewSceneSettings normalDebugSettings = kb::editor::EditorMaterialPreviewSceneSettings::Defaults();
+    normalDebugSettings.normalDebugView = true;
+    const kb::render::SceneRenderLightingConfig normalDebugPreviewLighting =
+        kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(normalDebugSettings);
+    kb::editor::tests::Require(normalDebugPreviewLighting.debugView == kb::render::SceneRenderDebugView::GBufferNormal,
+        "Material preview normal debug mode should request the GBuffer normal view");
     const kb::render::SceneRenderLightingConfig forwardPlusPreviewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(
         kb::editor::EditorMaterialPreviewSceneSettings::Defaults(),
         kb::project::ProjectSceneLightingPath::ForwardPlus);
@@ -1531,13 +1565,15 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(layout.infoButton.right <= layout.previewPrimitiveButton.left &&
             layout.previewPrimitiveButton.right <= layout.previewSceneButton.left &&
             layout.previewSceneButton.right <= layout.previewQualityButton.left &&
-            layout.previewQualityButton.right <= layout.previewNodeButton.left &&
+            layout.previewQualityButton.right <= layout.previewNormalButton.left &&
+            layout.previewNormalButton.right <= layout.previewNodeButton.left &&
             layout.previewNodeButton.right <= layout.applyButton.left,
         "KBMAT-PREVIEW-0003: Material Editor preview commands should sit before Apply To Selection without overlap");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewPrimitiveButton.left + 2, layout.previewPrimitiveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewPrimitive, "KBMAT-PREVIEW-0001: Material Editor should hit-test the preview primitive command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewSceneButton.left + 2, layout.previewSceneButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewScene, "KBMAT-PREVIEW-0003: Material Editor should hit-test the preview scene settings command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewQualityButton.left + 2, layout.previewQualityButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewQuality, "KBMAT-MAT52: Material Editor should hit-test the preview quality command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewNormalButton.left + 2, layout.previewNormalButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewNormal, "KBMAT-NORMAL-0001: Material Editor should hit-test the GBuffer normal debug command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewNodeButton.left + 2, layout.previewNodeButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewNode, "KBMAT-PREVIEW-0004: Material Editor should hit-test the per-node preview command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.applyButton.left + 2, layout.applyButton.top + 2) == kb::editor::MaterialEditorPanelCommand::ApplyToSelection, "Material Editor should hit-test the Apply To Selection command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
@@ -1545,7 +1581,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewFrame.left + 2, layout.previewFrame.bottom + 14) == kb::editor::MaterialEditorPanelCommand::None,
         "Material Editor should not keep dead asset badge/link hitboxes under the preview overlay");
-    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 9U, "KBMAT-PREVIEW-0003: Material Editor toolbar should expose real preview controls only");
+    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 10U, "KBMAT-PREVIEW-0003: Material Editor toolbar should expose real preview controls only");
     for (const kb::editor::MaterialEditorPanelCommand command : kb::editor::kMaterialEditorPanelToolbarCommands) {
         const std::string name{ kb::editor::MaterialEditorPanelCommandName(command) };
         kb::editor::tests::Require(!name.empty() && name != "None", "KBMAT-1002: every Material Editor toolbar button must expose a real command label");
