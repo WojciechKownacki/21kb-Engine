@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1310,6 +1311,71 @@ void AddShaderGenerationDiagnostic(
     default:
         return false;
     }
+}
+
+[[nodiscard]] bool NormalUnpackFeedsSurfaceNormal(const RenderMaterialGraphDocument& graph, std::uint32_t normalUnpackNodeId) noexcept {
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (link.fromNodeId != normalUnpackNodeId ||
+            link.fromPin != "normal" ||
+            link.toPin != "normal") {
+            continue;
+        }
+        const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
+        if (toNode != nullptr && toNode->kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool TextureSampleFeedsSurfaceNormal(
+    const RenderMaterialGraphDocument& graph,
+    std::uint32_t textureSampleNodeId) noexcept {
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (link.fromNodeId != textureSampleNodeId ||
+            link.fromPin != "color" ||
+            link.toPin != "color") {
+            continue;
+        }
+        const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
+        if (toNode != nullptr &&
+            toNode->kind == RenderMaterialGraphNodeKind::NormalUnpack &&
+            NormalUnpackFeedsSurfaceNormal(graph, toNode->id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool TextureObjectFeedsSurfaceNormal(
+    const RenderMaterialGraphDocument& graph,
+    std::uint32_t textureObjectNodeId) noexcept {
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (link.fromNodeId != textureObjectNodeId ||
+            link.fromPin != "texture" ||
+            link.toPin != "texture") {
+            continue;
+        }
+        const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
+        if (toNode != nullptr &&
+            IsTextureSampleNode(toNode->kind) &&
+            TextureSampleFeedsSurfaceNormal(graph, toNode->id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool TextureNodeFeedsSurfaceNormal(
+    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphNode& node) noexcept {
+    if (IsTextureSampleNode(node.kind)) {
+        return TextureSampleFeedsSurfaceNormal(graph, node.id);
+    }
+    if (IsTextureObjectNode(node.kind)) {
+        return TextureObjectFeedsSurfaceNormal(graph, node.id);
+    }
+    return false;
 }
 
 [[nodiscard]] RenderMaterialGraphTextureDimension TextureDimensionForNode(RenderMaterialGraphNodeKind kind) noexcept {
@@ -2698,6 +2764,15 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
         : std::string{};
 }
 
+[[nodiscard]] std::string EffectiveTextureRoleForNode(
+    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphNode& node) {
+    if (TextureNodeFeedsSurfaceNormal(graph, node)) {
+        return "normal";
+    }
+    return EffectiveTextureRoleForNode(node);
+}
+
 [[nodiscard]] RenderMaterialTextureColorSpace EffectiveTextureColorSpaceForNode(
     const RenderMaterialGraphNode& node,
     std::string_view role) noexcept {
@@ -2708,6 +2783,16 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
         return ExpectedColorSpaceForTextureRole(role).value_or(RenderMaterialTextureColorSpace::Srgb);
     }
     return RenderMaterialTextureColorSpace::Unknown;
+}
+
+[[nodiscard]] RenderMaterialTextureColorSpace EffectiveTextureColorSpaceForNode(
+    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphNode& node,
+    std::string_view role) noexcept {
+    if (TextureNodeFeedsSurfaceNormal(graph, node)) {
+        return RenderMaterialTextureColorSpace::Linear;
+    }
+    return EffectiveTextureColorSpaceForNode(node, role);
 }
 
 [[nodiscard]] std::string TextureAssetFieldName(const std::string& stableId) {
@@ -5929,11 +6014,21 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     const RenderMaterialGraphDocument& sourceGraph,
     RenderMaterialGraphBuildContext context) {
     g_renderMaterialGraphCompileInvocationCount.fetch_add(1U, std::memory_order_relaxed);
+    {
+        std::ostringstream row;
+        row << "compile-start asset=" << context.assetId
+            << " sourcePath=" << context.sourcePath
+            << " nodes=" << sourceGraph.nodes.size()
+            << " links=" << sourceGraph.links.size()
+            << " stage=" << static_cast<int>(context.shaderStage);
+        WriteRendererMaterialGraphDebugLog("compile", row.str());
+    }
     RenderMaterialGraphCompileResult result{};
     RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(sourceGraph, context);
     result.diagnostics = std::move(inlineResult.diagnostics);
     if (!inlineResult.Succeeded()) {
         AttachDiagnosticContext(sourceGraph, context, result.diagnostics);
+        WriteRendererMaterialGraphDebugLog("compile", "compile-failed inline-functions diagnostics=" + std::to_string(result.diagnostics.size()));
         return result;
     }
 
@@ -5946,6 +6041,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         std::make_move_iterator(ir.diagnostics.begin()),
         std::make_move_iterator(ir.diagnostics.end()));
     if (!ir.Succeeded()) {
+        WriteRendererMaterialGraphDebugLog("compile", "compile-failed ir diagnostics=" + std::to_string(result.diagnostics.size()));
         return result;
     }
 
@@ -6009,6 +6105,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         }
     }
     if (outputNode == nullptr) {
+        WriteRendererMaterialGraphDebugLog("compile", "compile-failed no MaterialOutput node");
         return result;
     }
 
@@ -6130,11 +6227,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::TextureSampleVolume:
         case RenderMaterialGraphNodeKind::TextureSample2DArray:
             if (!HasInputLink(graph, node.id, "texture")) {
-                const std::string textureRole = EffectiveTextureRoleForNode(node);
+                const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
                 textureEntries.push_back({
                     ParameterUniformName(node, "_texture"),
                     StableParameterId(node),
-                    EffectiveTextureColorSpaceForNode(node, textureRole),
+                    EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                     node.parameter.samplerState,
                     TextureDimensionForNode(node.kind),
                 });
@@ -6143,11 +6240,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             break;
         case RenderMaterialGraphNodeKind::TextureSampleCube:
             if (!HasInputLink(graph, node.id, "texture")) {
-                const std::string textureRole = EffectiveTextureRoleForNode(node);
+                const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
                 textureEntries.push_back({
                     ParameterUniformName(node, "_texture"),
                     StableParameterId(node),
-                    EffectiveTextureColorSpaceForNode(node, textureRole),
+                    EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                     node.parameter.samplerState,
                     TextureDimensionForNode(node.kind),
                 });
@@ -6158,11 +6255,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::TextureObjectCube:
         case RenderMaterialGraphNodeKind::TextureObjectVolume:
         case RenderMaterialGraphNodeKind::TextureObject2DArray: {
-            const std::string textureRole = EffectiveTextureRoleForNode(node);
+            const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
             textureEntries.push_back({
                 ParameterUniformName(node, "_texture"),
                 StableParameterId(node),
-                EffectiveTextureColorSpaceForNode(node, textureRole),
+                EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                 node.parameter.samplerState,
                 TextureDimensionForNode(node.kind),
             });
@@ -6475,6 +6572,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         specularExpr = compileOutput("specular", RenderMaterialGraphPinType::Float, "0.5");
         tangentOutputExpr = compileOutput("tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
     }
+    {
+        std::ostringstream row;
+        row << "compile-surface-expr useAttributes=" << (useMaterialAttributes ? "true" : "false")
+            << " outputNode=" << outputNode->id
+            << " normalLinked=" << (HasInputLink(graph, outputNode->id, "normal") ? "true" : "false")
+            << " normalExpr=" << (normalExpr.empty() ? "<attributes-or-empty>" : normalExpr);
+        WriteRendererMaterialGraphDebugLog("compile", row.str());
+    }
 
     std::unordered_set<std::uint32_t> emittedCustomFunctionDefinitions;
     AppendCustomCodeFunctionDefinitions(source, cg.functionDefinitions, emittedCustomFunctionDefinitions);
@@ -6603,6 +6708,24 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         .sourceHash = hash,
         .reflection = std::move(reflection),
     };
+    {
+        std::ostringstream row;
+        row << "compile-ok asset=" << context.assetId
+            << " sourceHash=" << result.shader.sourceHash
+            << " textures=" << result.shader.reflection.textures.size()
+            << " uniforms=" << result.shader.reflection.uniforms.size()
+            << " varyings=" << result.shader.reflection.requiredVaryings.size()
+            << " hasTangentOutput=" << (result.shader.reflection.hasTangentOutput ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("compile", row.str());
+    }
+    for (const RenderMaterialGraphReflectionTexture& texture : result.shader.reflection.textures) {
+        std::ostringstream row;
+        row << "compile-texture sampler=" << texture.samplerName
+            << " stableId=" << texture.stableId
+            << " slot=" << texture.slot
+            << " colorSpace=" << TextureColorSpaceName(texture.colorSpace);
+        WriteRendererMaterialGraphDebugLog("compile", row.str());
+    }
     return result;
 }
 
@@ -6900,8 +7023,8 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
             }
         }
         if (textureObjectParameterSlot || textureSampleLocalSlot) {
-            const std::string textureRole = EffectiveTextureRoleForNode(node);
-            const RenderMaterialTextureColorSpace textureColorSpace = EffectiveTextureColorSpaceForNode(node, textureRole);
+            const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
+            const RenderMaterialTextureColorSpace textureColorSpace = EffectiveTextureColorSpaceForNode(graph, node, textureRole);
             const std::optional<RenderMaterialTextureColorSpace> expectedForRole = ExpectedColorSpaceForTextureRole(textureRole);
             if (!expectedForRole.has_value()) {
                 AddGraphDiagnostic(
@@ -8678,13 +8801,13 @@ RenderMaterialTypeSchema BuildRenderMaterialGraphParameterSchema(
         const std::string stableId = StableParameterId(node);
         const std::string displayName = DisplayNameForParameter(node);
         if (IsTextureObjectNode(node.kind) || IsTextureSampleNode(node.kind)) {
-            const std::string textureRole = EffectiveTextureRoleForNode(node);
+            const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
             schema.textureSlots.push_back(RenderMaterialTextureSlotSchema{
                 .name = displayName,
                 .role = textureRole,
                 .assetIdFieldName = TextureAssetFieldName(stableId),
                 .pathFieldName = TexturePathFieldName(stableId),
-                .expectedColorSpace = EffectiveTextureColorSpaceForNode(node, textureRole),
+                .expectedColorSpace = EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                 .runtimeSupport = RenderMaterialFeatureSupport::Supported,
                 .description = node.parameter.description,
                 .fallbackDescription = node.parameter.defaultValueHint,

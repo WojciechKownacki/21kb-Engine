@@ -138,6 +138,7 @@ public:
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
     void MarkSceneDocumentDirty() noexcept;
+    [[nodiscard]] bool SaveOpenDocuments();
     [[nodiscard]] bool SaveDirtySceneDocument(std::string_view reason);
     void DiscardDirtySceneDocument(std::string_view reason);
     [[nodiscard]] bool PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution);
@@ -273,6 +274,9 @@ public:
     [[nodiscard]] bool MaterialPreviewNodePreviewEnabled() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewNodePreviewEnabled(bool enabled) noexcept;
     [[nodiscard]] bool ToggleMaterialPreviewNodePreview() noexcept;
+    [[nodiscard]] bool MaterialPreviewNormalDebugViewEnabled() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewNormalDebugViewEnabled(bool enabled);
+    [[nodiscard]] bool ToggleMaterialPreviewNormalDebugView();
     // Per-project graph shader cache root shared by the cook service and every renderer (preview
     // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;

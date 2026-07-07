@@ -534,6 +534,26 @@ void RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest() {
     Require(NearlyEqual(resolved.desc.baseColor[0], 1.0F) && NearlyEqual(resolved.desc.baseColor[3], 0.42F), "KBMAT-RUNTIME: Material Output graph factors were not applied to base color/alpha");
     Require(NearlyEqual(resolved.desc.roughnessFactor, 1.0F) && NearlyEqual(resolved.desc.metallicFactor, 1.0F), "KBMAT-RUNTIME: Material Output scalar channels were not evaluated");
 
+    RenderMaterialAssetData textureObjectNormal{};
+    textureObjectNormal.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::TextureObject, "normalObject"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::NormalUnpack),
+    };
+    textureObjectNormal.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureObject, 2U, "texture", RenderMaterialGraphNodeKind::TextureSample, 3U, "texture"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::NormalUnpack, 4U, "color"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::NormalUnpack, 4U, "normal", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"),
+    };
+    textureObjectNormal.graphParameterValues = {
+        MakeTextureGraphValue("normalObject", 202U),
+    };
+    const ResolvedRuntimeMaterialDesc textureObjectResolved =
+        RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, textureObjectNormal);
+    Require(textureObjectResolved.desc.normalTextureAssetId == 202U,
+        "KBMAT-RUNTIME: TextureObject through TextureSample and Normal Unpack did not drive Material Output Normal texture");
+
     RenderMaterialAssetData disconnected{};
     disconnected.desc.baseColor[0] = 0.75F;
     disconnected.graph.nodes = {
