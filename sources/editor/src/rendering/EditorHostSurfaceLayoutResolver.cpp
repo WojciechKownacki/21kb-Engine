@@ -5,6 +5,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "engine/scene/SceneAssets.hpp"
 
 #include <optional>
 #include <span>
@@ -39,6 +40,25 @@ void AppendMaterialPreview(
     layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
         .viewportKey = key,
         .bounds = *rect,
+    });
+}
+
+void AppendMaterialGraph(
+    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout>& layouts,
+    const RECT& content,
+    const EditorSceneContext& sceneContext) {
+    const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
+    if (!assetId.IsValid()) {
+        return;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        return;
+    }
+
+    layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+        .viewportKey = kMaterialEditorGraphImguiViewportKey,
+        .bounds = MaterialEditorPanelRenderer::ResolveLayout(content).graphCanvas,
     });
 }
 
@@ -99,6 +119,7 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
                 layouts,
                 kMaterialEditorPreviewViewportKey,
                 MaterialEditorPanelRenderer::MaterialPreviewRect(content, sceneContext));
+            AppendMaterialGraph(layouts, content, sceneContext);
         }
     }
 

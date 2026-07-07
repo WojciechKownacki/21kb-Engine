@@ -9,6 +9,9 @@
 #include "kb/render/resources/NativeWindowFramebuffer.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/imgui/EditorImguiBgfxRenderer.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorRenderer.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <bgfx/bgfx.h>
@@ -101,6 +104,7 @@ public:
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
+    void PresentMaterialGraphImgui(HWND parent, const RECT& rect, const MaterialImguiNodeEditorModel& model);
     [[nodiscard]] bool IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept;
     void Hide() noexcept;
 
@@ -185,6 +189,13 @@ private:
         std::vector<const PendingPresent*> presents;
     };
 
+    struct PendingImguiGraphPresent {
+        HWND host = nullptr;
+        std::uint64_t viewportKey = 0;
+        RECT surfaceRect{};
+        MaterialImguiNodeEditorModel model{};
+    };
+
     class PendingPresentBatchBuilder {
     public:
         [[nodiscard]] static std::vector<PendingPresentBatch> Build(std::span<const PendingPresent> pendingPresents);
@@ -203,6 +214,8 @@ private:
         [[nodiscard]] bool BuildPendingSubmissions(std::span<const PendingPresentBatch> batches);
         [[nodiscard]] bool PrepareHostSurfaceBatch(const PendingPresentBatch& batch, HostSurface*& surface);
         [[nodiscard]] bool AppendHostSubmissions(const PendingPresentBatch& batch, const HostSurface& surface);
+        [[nodiscard]] bool PrepareImguiGraphSurface(const PendingImguiGraphPresent& present, HostSurface*& surface);
+        [[nodiscard]] bool SubmitImguiGraphPresents();
         [[nodiscard]] bool SubmitPreparedSubmissions();
 
         EditorSceneBgfxViewport& viewport_;
@@ -297,9 +310,12 @@ private:
     std::string failureDetail_{};
     std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;
+    EditorImguiBgfxRenderer imguiRenderer_;
+    MaterialImguiNodeEditorRenderer materialGraphImguiRenderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;
     std::vector<PendingPresent> pendingPresents_;
+    std::vector<PendingImguiGraphPresent> pendingImguiGraphPresents_;
     std::vector<render::Renderer::SceneFrameSubmission> pendingSubmissions_;
 #endif
 };

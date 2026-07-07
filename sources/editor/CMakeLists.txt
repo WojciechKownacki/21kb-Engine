@@ -481,6 +481,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconKind.hpp
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
+    src/private/rendering/imgui/EditorImguiBgfxRenderer.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_imgui/MaterialImguiNodeEditorModel.hpp
@@ -629,6 +630,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorBgfxBackendSelector.cpp
     src/rendering/EditorGdiRenderer.cpp
     src/rendering/EditorHostSurfaceLayoutResolver.cpp
+    src/rendering/imgui/EditorImguiBgfxRenderer.cpp
     src/rendering/EditorPanelContentResolver.cpp
     src/rendering/EditorRenderBackendSettings.cpp
     src/rendering/EditorSceneBgfxViewport.cpp

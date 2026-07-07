@@ -5,6 +5,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -487,6 +488,9 @@ public:
     /// std::nullopt when no material document is selected. Consumed by the editor frame
     /// loop to present the bgfx preview into this panel (mirrors the Inspector preview path).
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static std::optional<MaterialImguiNodeEditorModel> BuildImguiNodeEditorModel(
+        const RECT& content,
+        const EditorSceneContext& sceneContext);
     [[nodiscard]] static MaterialEditorPanelCommand CommandAt(const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static MaterialEditorPanelDiagnosticRows DiagnosticRows(const kb::render::RenderMaterialAssetParseResult& result);
     [[nodiscard]] static MaterialEditorPanelDetailsRows DetailsRows(const std::vector<MaterialEditorParameter>& parameters, std::uint32_t selectedNodeId);

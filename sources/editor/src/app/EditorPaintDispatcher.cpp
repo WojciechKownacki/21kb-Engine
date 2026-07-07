@@ -148,6 +148,30 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool PresentMaterialGraphImgui(
+    EditorSceneBgfxViewport& sceneViewport,
+    HWND host,
+    const std::optional<RECT>& materialEditor,
+    EditorSceneContext& sceneContext) {
+    if (!materialEditor.has_value() || RectWidth(*materialEditor) == 0U || RectHeight(*materialEditor) == 0U) {
+        return false;
+    }
+
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditor);
+    if (RectWidth(layout.graphCanvas) == 0U || RectHeight(layout.graphCanvas) == 0U) {
+        return false;
+    }
+
+    const std::optional<MaterialImguiNodeEditorModel> model =
+        MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(*materialEditor, sceneContext);
+    if (!model.has_value()) {
+        return false;
+    }
+
+    sceneViewport.PresentMaterialGraphImgui(host, layout.graphCanvas, *model);
+    return true;
+}
+
 void AppendMaterialPreviewLayout(
     std::vector<EditorSceneBgfxViewport::HostSurfaceLayout>& layouts,
     std::uint64_t viewportKey,
@@ -158,6 +182,18 @@ void AppendMaterialPreviewLayout(
             .bounds = *preview,
         });
     }
+}
+
+void AppendMaterialGraphImguiLayout(
+    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout>& layouts,
+    const std::optional<RECT>& materialEditor) {
+    if (!materialEditor.has_value() || RectWidth(*materialEditor) == 0U || RectHeight(*materialEditor) == 0U) {
+        return;
+    }
+    layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+        .viewportKey = kMaterialEditorGraphImguiViewportKey,
+        .bounds = MaterialEditorPanelRenderer::ResolveLayout(*materialEditor).graphCanvas,
+    });
 }
 
 [[nodiscard]] std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> ResolvePaintHostSurfaceLayouts(
@@ -233,6 +269,9 @@ void AppendMaterialPreviewLayout(
         layouts,
         kMaterialEditorPreviewViewportKey,
         materialEditor.has_value() ? MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditor, sceneContext) : std::nullopt);
+    if (materialEditor.has_value() && MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(*materialEditor, sceneContext).has_value()) {
+        AppendMaterialGraphImguiLayout(layouts, materialEditor);
+    }
     return layouts;
 }
 
@@ -287,6 +326,7 @@ void AppendMaterialPreviewLayout(
             kMaterialEditorPreviewViewportKey,
             materialEditor.has_value() ? MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditor, sceneContext) : std::nullopt,
             forcePreviewPresent);
+    const bool materialGraphPresented = PresentMaterialGraphImgui(sceneViewport, paintWindow, materialEditor, sceneContext);
     if (paintWindow == mainWindow) {
         RECT client{};
         GetClientRect(mainWindow, &client);
@@ -324,13 +364,13 @@ void AppendMaterialPreviewLayout(
         }
     }
     sceneViewport.EndPaintLayout();
-    if (scenePresented || coldPreviewPresented) {
+    if (scenePresented || coldPreviewPresented || materialGraphPresented) {
         sceneViewport.ClearPresentRequest();
     }
     if (scenePresented) {
         sceneContext.AcknowledgeSceneRenderSubmitted();
     }
-    return scenePresented || coldPreviewPresented;
+    return scenePresented || coldPreviewPresented || materialGraphPresented;
 }
 
 } // namespace

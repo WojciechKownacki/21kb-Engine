@@ -13,6 +13,9 @@ This directory contains external dependencies used by 21kb-Engine.
 bgfx copyright and license notices must be retained in source distributions.
 For binary distributions, the bgfx copyright notice, license conditions and
 disclaimer must be reproduced in the documentation and/or other materials.
+The editor ImGui bgfx bridge uses the `vs_ocornut_imgui` and `fs_ocornut_imgui`
+embedded shader binaries from `third_party/bgfx/examples/common/imgui` under
+the same bgfx BSD 2-Clause license.
 
 ## bgfx.cmake vendor bundle
 

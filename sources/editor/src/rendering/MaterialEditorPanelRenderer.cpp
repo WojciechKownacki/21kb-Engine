@@ -3411,6 +3411,34 @@ std::optional<RECT> MaterialEditorPanelRenderer::MaterialPreviewRect(const RECT&
     return RECT{ frame.left + 1, frame.top + 1, frame.right - 1, frame.bottom - 1 };
 }
 
+std::optional<MaterialImguiNodeEditorModel> MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(
+    const RECT& content,
+    const EditorSceneContext& sceneContext) {
+    static_cast<void>(content);
+
+    const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
+    if (!assetId.IsValid()) {
+        return std::nullopt;
+    }
+
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
+        return std::nullopt;
+    }
+
+    const std::optional<MaterialEditorDocumentView> document = ReadDocumentView(sceneContext, *metadata);
+    if (!document.has_value() || !document->material.has_value()) {
+        return std::nullopt;
+    }
+
+    const kb::render::RenderMaterialGraphDocument& graph = document->material->graph;
+    const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
+        ? kb::render::MakeDefaultRenderMaterialGraphDocument()
+        : kb::render::RenderMaterialGraphDocument{};
+    const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+    return BuildMaterialImguiNodeEditorModel(graphView);
+}
+
 } // namespace kb::editor
 
 #endif

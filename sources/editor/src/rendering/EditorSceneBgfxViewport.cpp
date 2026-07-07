@@ -316,6 +316,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     backendSettings_ = nullptr;
     rendererBackendGeneration_ = 0;
     pendingPresents_.clear();
+    pendingImguiGraphPresents_.clear();
     pendingSubmissions_.clear();
     presentRequested_ = true;
     renderFailed_ = false;
@@ -331,6 +332,7 @@ void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
 void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
     pendingPresents_.clear();
+    pendingImguiGraphPresents_.clear();
     pendingSubmissions_.clear();
     failureDetail_.clear();
     sessionStore_.MarkHostNotPresented(parent);
@@ -344,6 +346,7 @@ void EditorSceneBgfxViewport::EndPaintLayout() {
 
     hostSurfaceStore_.HideUnpresentedForHost(paintParent_);
     pendingPresents_.clear();
+    pendingImguiGraphPresents_.clear();
     pendingSubmissions_.clear();
     paintParent_ = nullptr;
 }
@@ -385,6 +388,31 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
 
 void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings) {
     Present(nullptr, parent, rect, scene, EditorTheme{}, settings);
+}
+
+void EditorSceneBgfxViewport::PresentMaterialGraphImgui(HWND parent, const RECT& rect, const MaterialImguiNodeEditorModel& model) {
+    if (renderFailed_) {
+        return;
+    }
+    if (parent == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U) {
+        return;
+    }
+
+    const RECT clipped = ClipRectToClient(parent, rect);
+    if (RectWidth(clipped) == 0U || RectHeight(clipped) == 0U) {
+        return;
+    }
+    if (!EnsureRenderer()) {
+        FailRender("Material graph ImGui surface could not initialize the shared editor renderer.");
+        return;
+    }
+
+    pendingImguiGraphPresents_.push_back(PendingImguiGraphPresent{
+        .host = parent,
+        .viewportKey = kMaterialEditorGraphImguiViewportKey,
+        .surfaceRect = clipped,
+        .model = model,
+    });
 }
 
 bool EditorSceneBgfxViewport::IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept {
@@ -713,6 +741,7 @@ void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
 }
 
 void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
+    imguiRenderer_.Shutdown();
     ShutdownSessionFramebuffers();
     renderer_.Shutdown();
     hostSurfaceStore_.DestroyWindows();
@@ -733,7 +762,7 @@ void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
 
 bool EditorSceneBgfxViewport::SubmitPendingPaint() {
     pendingSubmissions_.clear();
-    if (pendingPresents_.empty()) {
+    if (pendingPresents_.empty() && pendingImguiGraphPresents_.empty()) {
         return true;
     }
 

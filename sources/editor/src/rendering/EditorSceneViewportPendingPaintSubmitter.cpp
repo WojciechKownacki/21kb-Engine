@@ -1,8 +1,11 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
+#include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+
+#include <imgui.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -11,6 +14,8 @@
 
 namespace kb::editor {
 namespace {
+
+constexpr bgfx::ViewId kMaterialGraphImguiViewId = render::ViewId::Max - 1U;
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::RectWidth(rect);
@@ -47,6 +52,12 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const Pend
     const std::vector<PendingPresentBatch> batches = PendingPresentBatchBuilder::Build(pendingPresents);
     if (!BuildPendingSubmissions(std::span<const PendingPresentBatch>{batches.data(), batches.size()})) {
         return false;
+    }
+    for (const PendingImguiGraphPresent& present : viewport_.pendingImguiGraphPresents_) {
+        HostSurface* surface = nullptr;
+        if (!PrepareImguiGraphSurface(present, surface)) {
+            return false;
+        }
     }
     if (!SubmitPreparedSubmissions()) {
         return false;
@@ -110,8 +121,91 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::AppendHostSubmissions(const
     return true;
 }
 
+bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareImguiGraphSurface(
+    const PendingImguiGraphPresent& present,
+    HostSurface*& surface) {
+    surface = viewport_.EnsureHostSurface(present.host, present.viewportKey);
+    if (surface == nullptr) {
+        viewport_.SetFailureDetail("Could not allocate or resolve the host surface entry for the material graph ImGui present.");
+        return false;
+    }
+    viewport_.hostSurfaceStore_.MarkLayoutActive(*surface);
+    if (surface->presentedInCurrentPaint) {
+        return true;
+    }
+
+    if (!viewport_.EnsureHostSurfaceWindow(*surface, present.surfaceRect, true)) {
+        viewport_.SetFailureDetail("Native child window creation or update failed for the material graph ImGui present.");
+        return false;
+    }
+    if (!viewport_.EnsurePresentTarget(*surface, RectWidth(surface->rect), RectHeight(surface->rect))) {
+        return false;
+    }
+    surface->presentedInCurrentPaint = true;
+    return true;
+}
+
+bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() {
+    if (viewport_.pendingImguiGraphPresents_.empty()) {
+        return true;
+    }
+    if (!viewport_.imguiRenderer_.Initialize()) {
+        viewport_.SetFailureDetail("Material graph ImGui bgfx renderer initialization failed.");
+        return false;
+    }
+
+    bool submittedAny = false;
+    for (const PendingImguiGraphPresent& present : viewport_.pendingImguiGraphPresents_) {
+        HostSurface* surface = viewport_.FindHostSurface(present.host, present.viewportKey);
+        if (surface == nullptr || !surface->presentTarget.IsValid()) {
+            viewport_.SetFailureDetail("Material graph ImGui present target was missing at submit time.");
+            viewport_.imguiRenderer_.ClearCurrentContext();
+            return false;
+        }
+
+        const std::uint32_t width = RectWidth(surface->rect);
+        const std::uint32_t height = RectHeight(surface->rect);
+        if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F)) {
+            viewport_.SetFailureDetail("Material graph ImGui frame setup failed.");
+            viewport_.imguiRenderer_.ClearCurrentContext();
+            return false;
+        }
+
+        ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(static_cast<float>(width), static_cast<float>(height)), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+        const bool open = ImGui::Begin(
+            "MaterialGraphImguiHost",
+            nullptr,
+            ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoBringToFrontOnFocus |
+                ImGuiWindowFlags_NoNavFocus);
+        if (open) {
+            static_cast<void>(viewport_.materialGraphImguiRenderer_.Render(
+                present.model,
+                ImVec2(static_cast<float>(width), static_cast<float>(height))));
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+
+        if (!viewport_.imguiRenderer_.SubmitFrame(kMaterialGraphImguiViewId, surface->presentTarget.FrameBuffer())) {
+            viewport_.SetFailureDetail("Material graph ImGui draw data submission failed.");
+            viewport_.imguiRenderer_.ClearCurrentContext();
+            return false;
+        }
+        submittedAny = true;
+    }
+    return submittedAny;
+}
+
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions() {
-    if (viewport_.pendingSubmissions_.empty()) {
+    const bool hasSceneSubmissions = !viewport_.pendingSubmissions_.empty();
+    const bool hasImguiSubmissions = !viewport_.pendingImguiGraphPresents_.empty();
+    if (!hasSceneSubmissions && !hasImguiSubmissions) {
         return true;
     }
     if (viewport_.backendSettings_ != nullptr) {
@@ -146,10 +240,13 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
         return false;
     }
 
-    const bool submitted = viewport_.renderer_.SubmitScenes(viewport_.pendingSubmissions_);
+    const bool submitted = !hasSceneSubmissions || viewport_.renderer_.SubmitScenes(viewport_.pendingSubmissions_);
+    const bool imguiSubmitted = submitted && SubmitImguiGraphPresents();
     viewport_.renderer_.EndFrame();
-    if (!submitted) {
-        viewport_.SetFailureDetail("Renderer SubmitScenes failed while presenting queued editor viewports.");
+    if (!submitted || !imguiSubmitted) {
+        if (!submitted) {
+            viewport_.SetFailureDetail("Renderer SubmitScenes failed while presenting queued editor viewports.");
+        }
         return false;
     }
     for (const PendingPresent& present : viewport_.pendingPresents_) {
