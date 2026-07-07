@@ -29,7 +29,7 @@ constexpr bgfx::ViewId kMaterialGraphImguiViewId = render::ViewId::Max - 1U;
     return value ? "1" : "0";
 }
 
-[[nodiscard]] EditorImguiInputState ImguiInputForSurface(HWND host, const RECT& surfaceRect) noexcept {
+[[nodiscard]] EditorImguiInputState ImguiInputForSurface(HWND host, const RECT& surfaceRect, float mouseWheel) noexcept {
     EditorImguiInputState input{};
     POINT cursor{};
     if (host != nullptr && GetCursorPos(&cursor) != 0 && ScreenToClient(host, &cursor) != 0) {
@@ -40,6 +40,7 @@ constexpr bgfx::ViewId kMaterialGraphImguiViewId = render::ViewId::Max - 1U;
     input.leftMouseDown = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
     input.rightMouseDown = (GetKeyState(VK_RBUTTON) & 0x8000) != 0;
     input.middleMouseDown = (GetKeyState(VK_MBUTTON) & 0x8000) != 0;
+    input.mouseWheel = mouseWheel;
     return input;
 }
 
@@ -179,7 +180,9 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
 
         const std::uint32_t width = RectWidth(surface->rect);
         const std::uint32_t height = RectHeight(surface->rect);
-        if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F, ImguiInputForSurface(present.host, surface->rect))) {
+        const float mouseWheel = surface->imguiMouseWheel;
+        surface->imguiMouseWheel = 0.0F;
+        if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F, ImguiInputForSurface(present.host, surface->rect, mouseWheel))) {
             viewport_.SetFailureDetail("Material graph ImGui frame setup failed.");
             viewport_.imguiRenderer_.ClearCurrentContext();
             return false;

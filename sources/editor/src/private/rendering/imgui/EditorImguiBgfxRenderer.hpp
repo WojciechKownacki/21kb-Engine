@@ -19,6 +19,7 @@ struct EditorImguiInputState {
     bool leftMouseDown = false;
     bool rightMouseDown = false;
     bool middleMouseDown = false;
+    float mouseWheel = 0.0F;
 };
 
 class EditorImguiBgfxRenderer {

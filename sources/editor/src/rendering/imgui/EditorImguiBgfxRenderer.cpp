@@ -142,6 +142,9 @@ bool EditorImguiBgfxRenderer::BeginFrame(
     io.AddMouseButtonEvent(0, input.leftMouseDown);
     io.AddMouseButtonEvent(1, input.rightMouseDown);
     io.AddMouseButtonEvent(2, input.middleMouseDown);
+    if (input.mouseWheel != 0.0F) {
+        io.AddMouseWheelEvent(0.0F, input.mouseWheel);
+    }
     ImGui::NewFrame();
     return true;
 }

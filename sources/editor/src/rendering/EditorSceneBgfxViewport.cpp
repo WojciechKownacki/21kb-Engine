@@ -929,10 +929,63 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         }
         return TRUE;
     }
-    case WM_NCHITTEST:
-        return HTTRANSPARENT;
-    case WM_MOUSEACTIVATE:
-        return MA_NOACTIVATE;
+    case WM_NCHITTEST: {
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        return surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey ? HTCLIENT : HTTRANSPARENT;
+    }
+    case WM_MOUSEACTIVATE: {
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        return surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey ? MA_ACTIVATE : MA_NOACTIVATE;
+    }
+    case WM_MOUSEWHEEL: {
+        HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
+            surface->imguiMouseWheel += static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / static_cast<float>(WHEEL_DELTA);
+            if (surface->host != nullptr) {
+                InvalidateRect(surface->host, nullptr, FALSE);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN: {
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
+            SetCapture(window);
+            if (surface->host != nullptr) {
+                InvalidateRect(surface->host, nullptr, FALSE);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONUP: {
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
+            if (GetCapture() == window) {
+                ReleaseCapture();
+            }
+            if (surface->host != nullptr) {
+                InvalidateRect(surface->host, nullptr, FALSE);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_MOUSEMOVE: {
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
+            if (surface->host != nullptr) {
+                InvalidateRect(surface->host, nullptr, FALSE);
+            }
+            return 0;
+        }
+        break;
+    }
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);

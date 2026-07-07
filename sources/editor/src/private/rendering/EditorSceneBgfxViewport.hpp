@@ -126,6 +126,7 @@ private:
         bool presentedInCurrentPaint = false;
         bool layoutActiveInCurrentPaint = false;
         bool hasLayoutBounds = false;
+        float imguiMouseWheel = 0.0F;
         render::NativeWindowFramebuffer presentTarget;
     };
 
