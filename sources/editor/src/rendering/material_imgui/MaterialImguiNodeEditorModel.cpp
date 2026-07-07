@@ -170,11 +170,46 @@ ImVec4 MaterialImguiNodeHeaderColor(render::RenderMaterialGraphNodeKind kind) no
     }
 }
 
+[[nodiscard]] bool IsTextureFamilyNode(render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case render::RenderMaterialGraphNodeKind::TextureSample:
+    case render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case render::RenderMaterialGraphNodeKind::ParameterTexture:
+    case render::RenderMaterialGraphNodeKind::TextureObject:
+    case render::RenderMaterialGraphNodeKind::TextureObjectCube:
+    case render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] std::string MaterialImguiNodeKindTitle(render::RenderMaterialGraphNodeKind kind) {
+    switch (kind) {
+    case render::RenderMaterialGraphNodeKind::TextureSample: return "Image Texture";
+    case render::RenderMaterialGraphNodeKind::TextureSampleCube: return "Cube Texture";
+    case render::RenderMaterialGraphNodeKind::TextureSampleVolume: return "Volume Texture";
+    case render::RenderMaterialGraphNodeKind::TextureSample2DArray: return "Texture Array";
+    case render::RenderMaterialGraphNodeKind::ParameterTexture: return "Image Parameter";
+    case render::RenderMaterialGraphNodeKind::TextureObject: return "Texture Object";
+    case render::RenderMaterialGraphNodeKind::TextureObjectCube: return "Texture Cube Object";
+    case render::RenderMaterialGraphNodeKind::TextureObjectVolume: return "Texture Volume Object";
+    case render::RenderMaterialGraphNodeKind::TextureObject2DArray: return "Texture Array Object";
+    default: return std::string{ render::RenderMaterialGraphNodeKindName(kind) };
+    }
+}
+
 std::string MaterialImguiNodeTitle(const render::RenderMaterialGraphNode& node) {
+    if (IsTextureFamilyNode(node.kind)) {
+        return MaterialImguiNodeKindTitle(node.kind);
+    }
     if (!node.parameter.displayName.empty()) {
         return node.parameter.displayName;
     }
-    return std::string{ render::RenderMaterialGraphNodeKindName(node.kind) };
+    return MaterialImguiNodeKindTitle(node.kind);
 }
 
 MaterialImguiNodeEditorModel BuildMaterialImguiNodeEditorModel(const render::RenderMaterialGraphDocument& graph) {

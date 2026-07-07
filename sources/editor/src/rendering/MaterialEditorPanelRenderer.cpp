@@ -15,6 +15,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
@@ -1741,39 +1742,11 @@ void DrawGraphCompositeBox(HDC dc, const RECT& rect, const kb::render::RenderMat
     return "textureSample" + std::to_string(node.id);
 }
 
-[[nodiscard]] bool TextureNodeDisplayNameIsGenerated(const kb::render::RenderMaterialGraphNode& node) {
-    const std::string id = std::to_string(node.id);
-    switch (node.kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return node.parameter.displayName == "Texture " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
-        return node.parameter.displayName == "Texture Object " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
-        return node.parameter.displayName == "Texture Object Cube " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
-        return node.parameter.displayName == "Texture Object Volume " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
-        return node.parameter.displayName == "Texture Object 2D Array " + id ||
-            node.parameter.displayName == "Texture Object Array " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return node.parameter.displayName == "Texture Sample " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
-        return node.parameter.displayName == "Texture Sample Cube " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
-        return node.parameter.displayName == "Texture Sample Volume " + id;
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
-        return node.parameter.displayName == "Texture Sample 2D Array " + id ||
-            node.parameter.displayName == "Texture Sample Array " + id;
-    default:
-        return false;
-    }
-}
-
 [[nodiscard]] std::string GraphNodeDisplayTitle(const kb::render::RenderMaterialGraphNode& node) {
-    if (node.parameter.displayName.empty()) {
+    if (MaterialEditorPanelIsTexturePreviewNode(node.kind)) {
         return GraphNodeTitle(node.kind);
     }
-    if (MaterialEditorPanelIsTexturePreviewNode(node.kind) && TextureNodeDisplayNameIsGenerated(node)) {
+    if (node.parameter.displayName.empty()) {
         return GraphNodeTitle(node.kind);
     }
     return node.parameter.displayName;
@@ -2715,6 +2688,7 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+    const MaterialImguiNodeEditorModel imguiGraphView = BuildMaterialImguiNodeEditorModel(graphView);
 
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, layout.graphCanvas.left, layout.graphCanvas.top, layout.graphCanvas.right, layout.graphCanvas.bottom);
@@ -2739,7 +2713,7 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
         std::max(0, static_cast<int>(layout.graphCanvas.bottom - layout.graphCanvas.top))));
     linkGraphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     linkGraphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    for (const kb::render::RenderMaterialGraphLink& link : graphView.links) {
+    for (const MaterialImguiLink& link : imguiGraphView.links) {
         if (GraphNodeHiddenByCollapsedComposite(graphView, link.fromNodeId) ||
             GraphNodeHiddenByCollapsedComposite(graphView, link.toNodeId)) {
             continue;
@@ -2754,11 +2728,15 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
             }
         }
     }
-    for (const kb::render::RenderMaterialGraphNode& node : graphView.nodes) {
-        if (GraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
+    for (const MaterialImguiNode& imguiNode : imguiGraphView.nodes) {
+        if (GraphNodeHiddenByCollapsedComposite(graphView, imguiNode.nodeId)) {
             continue;
         }
-        const std::optional<RECT> nodeRect = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
+        const kb::render::RenderMaterialGraphNode* graphNode = kb::render::FindRenderMaterialGraphNode(graphView, imguiNode.nodeId);
+        if (graphNode == nullptr) {
+            continue;
+        }
+        const std::optional<RECT> nodeRect = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, imguiNode.nodeId, sceneContext, assetId);
         if (nodeRect.has_value()) {
             DrawGraphNode(
                 dc,
@@ -2766,8 +2744,8 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
                 layout.graphCanvas,
                 graph,
                 assetId,
-                node,
-                sceneContext.IsMaterialGraphNodeSelected(node.id) || node.id == selectedNodeId,
+                *graphNode,
+                sceneContext.IsMaterialGraphNodeSelected(imguiNode.nodeId) || imguiNode.nodeId == selectedNodeId,
                 graph.nodes.empty() ? nullptr : &material,
                 sceneContext);
         }

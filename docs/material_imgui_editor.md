@@ -23,9 +23,15 @@ is a view/controller layer over that data, not a new material format.
 - `MaterialImguiNodeEditorRenderer` owns an `ax::NodeEditor::EditorContext`,
   submits nodes/pins/links to the ImGui node editor, applies the dark material
   graph style, and reports accepted link-create/link-delete interactions.
+- The current GDI Material Editor graph paint path now builds a
+  `MaterialImguiNodeEditorModel` before drawing nodes and links. This keeps the
+  visible editor on the same node/pin/link model as the ImGui path while the
+  Win32/bgfx ImGui host is being integrated.
 - Pin colors and node header colors are derived from existing material graph
   types, so the visual language stays consistent with the current material
   compiler/runtime.
+- Texture-family node titles intentionally show the node type, not the selected
+  texture asset name or path.
 - `KBMAT-IMGUI-0001` locks the mapping with a TextureSample -> NormalUnpack ->
   MaterialOutput fixture.
 
