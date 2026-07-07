@@ -1,0 +1,193 @@
+#include "rendering/material_imgui/MaterialImguiNodeEditorRenderer.hpp"
+
+#include <imgui.h>
+#include <imgui_node_editor.h>
+
+#include <algorithm>
+#include <array>
+
+namespace kb::editor {
+namespace {
+
+namespace ed = ax::NodeEditor;
+
+[[nodiscard]] ImVec4 WithAlpha(ImVec4 color, float alpha) noexcept {
+    color.w = alpha;
+    return color;
+}
+
+void PushMaterialNodeEditorStyle() {
+    ed::PushStyleColor(ed::StyleColor_Bg, ImVec4(0.025F, 0.032F, 0.044F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_Grid, ImVec4(0.17F, 0.22F, 0.29F, 0.32F));
+    ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.045F, 0.058F, 0.076F, 0.98F));
+    ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.20F, 0.25F, 0.31F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_HovNodeBorder, ImVec4(0.30F, 0.87F, 0.82F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_SelNodeBorder, ImVec4(0.20F, 0.95F, 0.88F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_HovLinkBorder, ImVec4(0.95F, 0.75F, 0.25F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_SelLinkBorder, ImVec4(1.0F, 0.82F, 0.30F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_PinRect, ImVec4(0.95F, 0.95F, 0.95F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_PinRectBorder, ImVec4(0.02F, 0.025F, 0.03F, 1.0F));
+
+    ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(10.0F, 8.0F, 10.0F, 10.0F));
+    ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0F);
+    ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.25F);
+    ed::PushStyleVar(ed::StyleVar_SelectedNodeBorderWidth, 2.0F);
+    ed::PushStyleVar(ed::StyleVar_PinRadius, 5.5F);
+    ed::PushStyleVar(ed::StyleVar_LinkStrength, 82.0F);
+    ed::PushStyleVar(ed::StyleVar_SourceDirection, ImVec2(1.0F, 0.0F));
+    ed::PushStyleVar(ed::StyleVar_TargetDirection, ImVec2(-1.0F, 0.0F));
+}
+
+void PopMaterialNodeEditorStyle() {
+    ed::PopStyleVar(8);
+    ed::PopStyleColor(10);
+}
+
+void DrawSocket(const MaterialImguiPin& pin) {
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    const float radius = 4.5F;
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddCircleFilled(ImVec2(cursor.x + radius, cursor.y + ImGui::GetTextLineHeight() * 0.5F), radius, ImGui::ColorConvertFloat4ToU32(pin.color), 16);
+    drawList->AddCircle(ImVec2(cursor.x + radius, cursor.y + ImGui::GetTextLineHeight() * 0.5F), radius + 1.0F, ImGui::ColorConvertFloat4ToU32(ImVec4(0.02F, 0.025F, 0.03F, 1.0F)), 16, 1.0F);
+    ImGui::Dummy(ImVec2(radius * 2.0F + 4.0F, ImGui::GetTextLineHeight()));
+}
+
+void DrawInputPin(const MaterialImguiPin& pin) {
+    ed::BeginPin(pin.editorId, ed::PinKind::Input);
+    ImGui::BeginGroup();
+    DrawSocket(pin);
+    ImGui::SameLine(0.0F, 4.0F);
+    ImGui::TextUnformatted(pin.label.c_str());
+    ImGui::EndGroup();
+    ed::EndPin();
+}
+
+void DrawOutputPin(const MaterialImguiPin& pin, float rowWidth) {
+    ed::BeginPin(pin.editorId, ed::PinKind::Output);
+    ImGui::BeginGroup();
+    const ImVec2 textSize = ImGui::CalcTextSize(pin.label.c_str());
+    const float socketWidth = 14.0F;
+    const float available = std::max(32.0F, rowWidth - textSize.x - socketWidth);
+    ImGui::Dummy(ImVec2(available, 1.0F));
+    ImGui::SameLine(0.0F, 0.0F);
+    ImGui::TextUnformatted(pin.label.c_str());
+    ImGui::SameLine(0.0F, 4.0F);
+    DrawSocket(pin);
+    ImGui::EndGroup();
+    ed::EndPin();
+}
+
+void DrawNodeHeader(const MaterialImguiNode& node) {
+    const ImVec4 header = node.headerColor;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95F, 0.98F, 1.0F, 1.0F));
+    ImGui::PushStyleColor(ImGuiCol_Header, WithAlpha(header, 0.95F));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, WithAlpha(header, 1.0F));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, WithAlpha(header, 1.0F));
+    ImGui::Selectable(node.title.c_str(), false, ImGuiSelectableFlags_Disabled, ImVec2(188.0F, 24.0F));
+    ImGui::PopStyleColor(4);
+}
+
+void DrawMaterialNode(const MaterialImguiNode& node) {
+    ed::BeginNode(node.editorId);
+    ImGui::PushID(static_cast<int>(node.nodeId));
+    DrawNodeHeader(node);
+    ImGui::Spacing();
+
+    constexpr float rowWidth = 210.0F;
+    const std::size_t rows = std::max(node.inputs.size(), node.outputs.size());
+    for (std::size_t row = 0U; row < rows; ++row) {
+        ImGui::BeginGroup();
+        if (row < node.inputs.size()) {
+            DrawInputPin(node.inputs[row]);
+        } else {
+            ImGui::Dummy(ImVec2(76.0F, ImGui::GetTextLineHeight()));
+        }
+        ImGui::EndGroup();
+        ImGui::SameLine(0.0F, 10.0F);
+        ImGui::BeginGroup();
+        if (row < node.outputs.size()) {
+            DrawOutputPin(node.outputs[row], rowWidth);
+        } else {
+            ImGui::Dummy(ImVec2(118.0F, ImGui::GetTextLineHeight()));
+        }
+        ImGui::EndGroup();
+    }
+
+    ImGui::PopID();
+    ed::EndNode();
+}
+
+void SubmitLinks(const MaterialImguiNodeEditorModel& model) {
+    for (const MaterialImguiLink& link : model.links) {
+        ed::Link(link.editorId, link.startPin, link.endPin, link.color, 2.6F);
+    }
+}
+
+[[nodiscard]] MaterialImguiNodeEditorFrameResult GatherInteractions() {
+    MaterialImguiNodeEditorFrameResult result{};
+
+    if (ed::BeginCreate(ImVec4(0.95F, 0.75F, 0.25F, 1.0F), 2.5F)) {
+        ed::PinId startPin{};
+        ed::PinId endPin{};
+        if (ed::QueryNewLink(&startPin, &endPin) && startPin && endPin && ed::AcceptNewItem()) {
+            result.acceptedNewLink = MaterialImguiNodeEditorNewLink{ .startPin = startPin, .endPin = endPin };
+        }
+    }
+    ed::EndCreate();
+
+    if (ed::BeginDelete()) {
+        ed::LinkId link{};
+        ed::PinId startPin{};
+        ed::PinId endPin{};
+        while (ed::QueryDeletedLink(&link, &startPin, &endPin)) {
+            if (ed::AcceptDeletedItem()) {
+                result.acceptedDeletedLinks.push_back(MaterialImguiNodeEditorDeletedLink{
+                    .link = link,
+                    .startPin = startPin,
+                    .endPin = endPin,
+                });
+            }
+        }
+    }
+    ed::EndDelete();
+
+    return result;
+}
+
+} // namespace
+
+void MaterialImguiNodeEditorRenderer::EditorContextDeleter::operator()(ed::EditorContext* context) const noexcept {
+    ed::DestroyEditor(context);
+}
+
+MaterialImguiNodeEditorRenderer::MaterialImguiNodeEditorRenderer()
+    : context_(ed::CreateEditor()) {
+}
+
+MaterialImguiNodeEditorRenderer::~MaterialImguiNodeEditorRenderer() = default;
+
+MaterialImguiNodeEditorRenderer::MaterialImguiNodeEditorRenderer(MaterialImguiNodeEditorRenderer&&) noexcept = default;
+
+MaterialImguiNodeEditorRenderer& MaterialImguiNodeEditorRenderer::operator=(MaterialImguiNodeEditorRenderer&&) noexcept = default;
+
+MaterialImguiNodeEditorFrameResult MaterialImguiNodeEditorRenderer::Render(
+    const MaterialImguiNodeEditorModel& model,
+    const ImVec2& size) {
+    ed::SetCurrentEditor(context_.get());
+    PushMaterialNodeEditorStyle();
+    ed::Begin("MaterialGraphImguiNodeEditor", size);
+
+    for (const MaterialImguiNode& node : model.nodes) {
+        ed::SetNodePosition(node.editorId, ImVec2(static_cast<float>(node.positionX), static_cast<float>(node.positionY)));
+        DrawMaterialNode(node);
+    }
+    SubmitLinks(model);
+    MaterialImguiNodeEditorFrameResult result = GatherInteractions();
+
+    ed::End();
+    PopMaterialNodeEditorStyle();
+    ed::SetCurrentEditor(nullptr);
+    return result;
+}
+
+} // namespace kb::editor

@@ -15,6 +15,11 @@ target_include_directories(kb_imgui_node_editor
         ../../third_party/imgui-node-editor
 )
 
+target_compile_definitions(kb_imgui_node_editor
+    PUBLIC
+        IMGUI_DISABLE_OBSOLETE_KEYIO
+)
+
 if(MSVC)
     target_compile_options(kb_imgui_node_editor PRIVATE /W0 /EHsc /FS)
 else()
@@ -479,6 +484,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_imgui/MaterialImguiNodeEditorModel.hpp
+    src/private/rendering/material_imgui/MaterialImguiNodeEditorRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
@@ -669,6 +675,7 @@ add_executable(kb_editor WIN32
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/material_imgui/MaterialImguiNodeEditorModel.cpp
+    src/rendering/material_imgui/MaterialImguiNodeEditorRenderer.cpp
     src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
@@ -1069,6 +1076,7 @@ if(BUILD_TESTING)
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
         src/rendering/material_imgui/MaterialImguiNodeEditorModel.cpp
+        src/rendering/material_imgui/MaterialImguiNodeEditorRenderer.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
