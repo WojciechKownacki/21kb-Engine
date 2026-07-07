@@ -9,6 +9,15 @@ struct ImGuiContext;
 
 namespace kb::editor {
 
+struct EditorImguiInputState {
+    float mouseX = -3.402823466e+38F;
+    float mouseY = -3.402823466e+38F;
+    bool mouseVisible = false;
+    bool leftMouseDown = false;
+    bool rightMouseDown = false;
+    bool middleMouseDown = false;
+};
+
 class EditorImguiBgfxRenderer {
 public:
     EditorImguiBgfxRenderer() = default;
@@ -20,7 +29,11 @@ public:
     [[nodiscard]] bool Initialize();
     void Shutdown() noexcept;
 
-    [[nodiscard]] bool BeginFrame(std::uint32_t width, std::uint32_t height, float deltaSeconds);
+    [[nodiscard]] bool BeginFrame(
+        std::uint32_t width,
+        std::uint32_t height,
+        float deltaSeconds,
+        const EditorImguiInputState& input = {});
     [[nodiscard]] bool SubmitFrame(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer);
     void ClearCurrentContext() noexcept;
 

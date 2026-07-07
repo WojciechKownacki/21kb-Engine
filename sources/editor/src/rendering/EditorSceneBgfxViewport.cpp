@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <string>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -390,7 +391,11 @@ void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect, const kb::s
     Present(nullptr, parent, rect, scene, EditorTheme{}, settings);
 }
 
-void EditorSceneBgfxViewport::PresentMaterialGraphImgui(HWND parent, const RECT& rect, const MaterialImguiNodeEditorModel& model) {
+void EditorSceneBgfxViewport::PresentMaterialGraphImgui(
+    HWND parent,
+    const RECT& rect,
+    const MaterialImguiNodeEditorModel& model,
+    MaterialGraphImguiFrameHandler frameHandler) {
     if (renderFailed_) {
         return;
     }
@@ -412,6 +417,7 @@ void EditorSceneBgfxViewport::PresentMaterialGraphImgui(HWND parent, const RECT&
         .viewportKey = kMaterialEditorGraphImguiViewportKey,
         .surfaceRect = clipped,
         .model = model,
+        .frameHandler = std::move(frameHandler),
     });
 }
 

@@ -29,6 +29,20 @@ constexpr bgfx::ViewId kMaterialGraphImguiViewId = render::ViewId::Max - 1U;
     return value ? "1" : "0";
 }
 
+[[nodiscard]] EditorImguiInputState ImguiInputForSurface(HWND host, const RECT& surfaceRect) noexcept {
+    EditorImguiInputState input{};
+    POINT cursor{};
+    if (host != nullptr && GetCursorPos(&cursor) != 0 && ScreenToClient(host, &cursor) != 0) {
+        input.mouseX = static_cast<float>(cursor.x - surfaceRect.left);
+        input.mouseY = static_cast<float>(cursor.y - surfaceRect.top);
+        input.mouseVisible = true;
+    }
+    input.leftMouseDown = (GetKeyState(VK_LBUTTON) & 0x8000) != 0;
+    input.rightMouseDown = (GetKeyState(VK_RBUTTON) & 0x8000) != 0;
+    input.middleMouseDown = (GetKeyState(VK_MBUTTON) & 0x8000) != 0;
+    return input;
+}
+
 [[nodiscard]] const char* AntiAliasingModeName(EditorAntiAliasingMode mode) noexcept {
     switch (mode) {
     case EditorAntiAliasingMode::None:
@@ -165,7 +179,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
 
         const std::uint32_t width = RectWidth(surface->rect);
         const std::uint32_t height = RectHeight(surface->rect);
-        if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F)) {
+        if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F, ImguiInputForSurface(present.host, surface->rect))) {
             viewport_.SetFailureDetail("Material graph ImGui frame setup failed.");
             viewport_.imguiRenderer_.ClearCurrentContext();
             return false;
@@ -184,13 +198,18 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
                 ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoNavFocus);
+        MaterialImguiNodeEditorFrameResult frameResult{};
         if (open) {
-            static_cast<void>(viewport_.materialGraphImguiRenderer_.Render(
+            frameResult = viewport_.materialGraphImguiRenderer_.Render(
                 present.model,
-                ImVec2(static_cast<float>(width), static_cast<float>(height))));
+                ImVec2(static_cast<float>(width), static_cast<float>(height)));
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
+
+        if (present.frameHandler) {
+            present.frameHandler(present.model, frameResult);
+        }
 
         if (!viewport_.imguiRenderer_.SubmitFrame(kMaterialGraphImguiViewId, surface->presentTarget.FrameBuffer())) {
             viewport_.SetFailureDetail("Material graph ImGui draw data submission failed.");

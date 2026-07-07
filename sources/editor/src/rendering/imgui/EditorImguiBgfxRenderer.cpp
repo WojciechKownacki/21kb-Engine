@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdint>
 #include <cstring>
 
@@ -83,7 +84,11 @@ void EditorImguiBgfxRenderer::Shutdown() noexcept {
     }
 }
 
-bool EditorImguiBgfxRenderer::BeginFrame(std::uint32_t width, std::uint32_t height, float deltaSeconds) {
+bool EditorImguiBgfxRenderer::BeginFrame(
+    std::uint32_t width,
+    std::uint32_t height,
+    float deltaSeconds,
+    const EditorImguiInputState& input) {
     if (!IsInitialized() || width == 0U || height == 0U) {
         return false;
     }
@@ -93,6 +98,10 @@ bool EditorImguiBgfxRenderer::BeginFrame(std::uint32_t width, std::uint32_t heig
     io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
     io.DisplayFramebufferScale = ImVec2(1.0F, 1.0F);
     io.DeltaTime = std::max(1.0F / 240.0F, deltaSeconds);
+    io.AddMousePosEvent(input.mouseVisible ? input.mouseX : -FLT_MAX, input.mouseVisible ? input.mouseY : -FLT_MAX);
+    io.AddMouseButtonEvent(0, input.leftMouseDown);
+    io.AddMouseButtonEvent(1, input.rightMouseDown);
+    io.AddMouseButtonEvent(2, input.middleMouseDown);
     ImGui::NewFrame();
     return true;
 }

@@ -75,6 +75,9 @@ public:
         std::uint64_t viewportKey = 0;
         RECT bounds{};
     };
+    using MaterialGraphImguiFrameHandler = std::function<void(
+        const MaterialImguiNodeEditorModel&,
+        const MaterialImguiNodeEditorFrameResult&)>;
 
     ~EditorSceneBgfxViewport();
 
@@ -104,7 +107,11 @@ public:
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
-    void PresentMaterialGraphImgui(HWND parent, const RECT& rect, const MaterialImguiNodeEditorModel& model);
+    void PresentMaterialGraphImgui(
+        HWND parent,
+        const RECT& rect,
+        const MaterialImguiNodeEditorModel& model,
+        MaterialGraphImguiFrameHandler frameHandler = {});
     [[nodiscard]] bool IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept;
     void Hide() noexcept;
 
@@ -194,6 +201,7 @@ private:
         std::uint64_t viewportKey = 0;
         RECT surfaceRect{};
         MaterialImguiNodeEditorModel model{};
+        MaterialGraphImguiFrameHandler frameHandler{};
     };
 
     class PendingPresentBatchBuilder {

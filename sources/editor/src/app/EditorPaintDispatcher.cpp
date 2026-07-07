@@ -168,7 +168,32 @@ namespace {
         return false;
     }
 
-    sceneViewport.PresentMaterialGraphImgui(host, layout.graphCanvas, *model);
+    const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
+    sceneViewport.PresentMaterialGraphImgui(
+        host,
+        layout.graphCanvas,
+        *model,
+        [&sceneContext, assetId](const MaterialImguiNodeEditorModel& frameModel, const MaterialImguiNodeEditorFrameResult& result) {
+            if (result.acceptedNewLink.has_value()) {
+                if (const std::optional<MaterialImguiNodeEditorGraphLinkRequest> request =
+                        ResolveMaterialImguiNewLink(frameModel, *result.acceptedNewLink)) {
+                    if (sceneContext.BeginMaterialGraphPinConnection(assetId, request->fromNodeId, request->fromPin, true, 0, 0)) {
+                        static_cast<void>(sceneContext.CompleteMaterialGraphPinConnection(assetId, request->toNodeId, request->toPin, true));
+                    }
+                }
+            }
+            for (const MaterialImguiNodeEditorDeletedLink& deletedLink : result.acceptedDeletedLinks) {
+                if (const std::optional<MaterialImguiNodeEditorGraphLinkRequest> request =
+                        ResolveMaterialImguiDeletedLink(frameModel, deletedLink)) {
+                    static_cast<void>(sceneContext.DisconnectMaterialGraphLink(
+                        assetId,
+                        request->fromNodeId,
+                        request->fromPin,
+                        request->toNodeId,
+                        request->toPin));
+                }
+            }
+        });
     return true;
 }
 
