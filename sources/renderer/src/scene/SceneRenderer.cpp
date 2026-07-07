@@ -51,6 +51,7 @@ namespace {
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
     };
 }
 
@@ -150,6 +151,7 @@ void SceneRenderer::SubmitMeshPass(
                 << " shadows=" << (effectiveLightingConfig.shadowsEnabled ? "true" : "false")
                 << " gpuDrivenOverride=" << (gpuDrivenSupportOverride != nullptr ? "true" : "false");
         WriteRendererDebugLog("scene_renderer", message.str());
+        WriteRendererMaterialGraphDebugLog("scene", message.str());
     }
     if (!initialized_ || camera == nullptr || viewportWidth == 0U || viewportHeight == 0U) {
         lastSubmitStats_ = SceneMeshSubmitter::ValidateResourcesInto(
@@ -237,6 +239,7 @@ void SceneRenderer::SubmitMeshPass(
                 << " diagnostics=" << lastDiagnostics_.events.size()
                 << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
         WriteRendererDebugLog("scene_renderer", message.str());
+        WriteRendererMaterialGraphDebugLog("scene", message.str());
     }
 }
 

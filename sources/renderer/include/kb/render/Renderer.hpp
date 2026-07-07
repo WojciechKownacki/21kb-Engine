@@ -272,6 +272,7 @@ private:
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
     std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;
+    std::optional<SceneRenderDebugView> lastRuntimeMaterialDebugView_;
     std::string graphShaderCacheRoot_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = true;

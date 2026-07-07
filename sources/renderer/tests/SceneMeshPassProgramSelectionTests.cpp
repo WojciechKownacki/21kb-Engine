@@ -5,7 +5,9 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/scene/MeshPassType.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
+#include "../src/scene/cache/SceneMaterialTextureDependencySignature.hpp"
 #include "../src/scene/submit/SceneMeshPassResources.hpp"
 
 #include <bgfx/bgfx.h>
@@ -383,10 +385,50 @@ void RunSceneMeshDrawCommandKeyProgramInvalidationTest() {
         "KBMAT-MAT07: An unchanged graph program key must reuse the cached draw command");
 }
 
+void RunSceneMaterialTextureDependencySignatureIncludesGraphTexturesTest() {
+    RenderMaterialResource material{};
+    material.graphProgram.active = true;
+    material.graphProgram.textures.push_back(RenderMaterialGraphTextureBinding{
+        .samplerName = "s_normalSample",
+        .stableId = "normalSample",
+        .slot = 8U,
+        .textureAssetId = 0xBACE02U,
+        .colorSpace = RenderTextureColorSpace::Linear,
+    });
+
+    SceneRenderResourceMap resourceMap;
+    resourceMap.BindTexture(0xBACE02U, RenderTextureColorSpace::Linear, RenderTextureHandle{ detail::MakeRenderHandleValue(11U, 1U) });
+    const std::uint64_t first = SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
+        .material = &material,
+        .resources = nullptr,
+        .resourceMap = &resourceMap,
+    });
+
+    resourceMap.BindTexture(0xBACE02U, RenderTextureColorSpace::Linear, RenderTextureHandle{ detail::MakeRenderHandleValue(12U, 1U) });
+    const std::uint64_t rebound = SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
+        .material = &material,
+        .resources = nullptr,
+        .resourceMap = &resourceMap,
+    });
+    Require(first != rebound,
+        "KBMAT-MAT07: Graph texture resource changes must invalidate the scene draw command texture dependency signature");
+
+    material.graphProgram.textures[0].colorSpace = RenderTextureColorSpace::Srgb;
+    resourceMap.BindTexture(0xBACE02U, RenderTextureColorSpace::Srgb, RenderTextureHandle{ detail::MakeRenderHandleValue(13U, 1U) });
+    const std::uint64_t srgb = SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
+        .material = &material,
+        .resources = nullptr,
+        .resourceMap = &resourceMap,
+    });
+    Require(srgb != rebound,
+        "KBMAT-MAT07: Graph texture color-space changes must invalidate the scene draw command texture dependency signature");
+}
+
 } // namespace
 
 void RunSceneMeshPassProgramSelectionTests() {
     RunSceneMeshDrawCommandKeyProgramInvalidationTest();
+    RunSceneMaterialTextureDependencySignatureIncludesGraphTexturesTest();
     RunSceneMeshPassProgramSelectionTest();
 }
 

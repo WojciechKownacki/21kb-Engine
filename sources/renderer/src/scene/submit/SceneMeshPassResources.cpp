@@ -2,12 +2,14 @@
 
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "renderer/RendererDebugLog.hpp"
 #include "scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -101,6 +103,14 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
     default:
         return "BaseOpaque";
     }
+}
+
+[[nodiscard]] std::string_view GraphRuntimeColorSpaceName(RenderTextureColorSpace colorSpace) noexcept {
+    switch (colorSpace) {
+    case RenderTextureColorSpace::Srgb: return "Srgb";
+    case RenderTextureColorSpace::Linear: return "Linear";
+    }
+    return "Linear";
 }
 
 [[nodiscard]] bool IsGraphCapablePass(MeshPassType pass) noexcept {
@@ -451,6 +461,18 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
         ++programBindStats_.programSwitchCount;
         lastBoundProgram_ = resolution.program;
     }
+    if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+        std::ostringstream row;
+        row << "resolve-pass pass=" << GraphMeshPassName(pass)
+            << " status=" << static_cast<int>(resolution.status)
+            << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
+            << " fellBackToBuiltin=" << (resolution.fellBackToBuiltin ? "true" : "false")
+            << " sourceHash=" << material->graphProgram.graphSourceHash
+            << " programHandle=" << (bgfx::isValid(resolution.program) ? std::to_string(resolution.program.idx) : std::string{ "invalid" })
+            << " textures=" << material->graphProgram.textures.size()
+            << " uniforms=" << material->graphProgram.uniforms.size();
+        WriteRendererMaterialGraphDebugLog("gpu", row.str());
+    }
     return resolution;
 }
 
@@ -469,6 +491,10 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         .normalTexture = fallbackNormalTexture_,
     };
     if (resolution.graphProgram && material != nullptr) {
+        WriteRendererMaterialGraphDebugLog(
+            "gpu",
+            "bind-graph-pass pass=" + GraphMeshPassName(desc.pass) +
+                " graphSourceHash=" + std::to_string(material->graphProgram.graphSourceHash));
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
         bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
@@ -509,6 +535,26 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             const bgfx::TextureHandle handle = (textureResource != nullptr && bgfx::isValid(textureResource->texture))
                 ? textureResource->texture
                 : fallbackWhiteTexture_;
+            {
+                std::ostringstream row;
+                row << "setTexture sampler=" << graphTexture.samplerName
+                    << " stableId=" << graphTexture.stableId
+                    << " slot=" << graphTexture.slot
+                    << " assetId=" << graphTexture.textureAssetId
+                    << " colorSpace=" << GraphRuntimeColorSpaceName(graphTexture.colorSpace)
+                    << " resolvedHandle=" << resolved.value
+                    << " textureResource=" << (textureResource != nullptr ? "true" : "false")
+                    << " bgfxHandle=" << (bgfx::isValid(handle) ? std::to_string(handle.idx) : std::string{ "invalid" })
+                    << " fallbackWhite=" << ((textureResource == nullptr || !bgfx::isValid(textureResource->texture)) ? "true" : "false");
+                if (textureResource != nullptr) {
+                    row << " resourceSize=" << textureResource->width << 'x' << textureResource->height
+                        << " resourceFormat=" << static_cast<int>(textureResource->format)
+                        << " resourceColorSpace=" << GraphRuntimeColorSpaceName(textureResource->colorSpace)
+                        << " resourceVersion=" << textureResource->version;
+                }
+                row << " samplerFlags=" << graphTexture.samplerFlags;
+                WriteRendererMaterialGraphDebugLog("gpu", row.str());
+            }
 
             bgfx::UniformHandle& sampler = graphSamplerUniforms_[graphTexture.samplerName];
             if (!bgfx::isValid(sampler)) {
@@ -558,6 +604,18 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         desc.resources,
         desc.resourceMap,
         fallbacks);
+    if (material != nullptr) {
+        std::ostringstream row;
+        row << "fallback-bind pass=" << GraphMeshPassName(desc.pass)
+            << " materialGraphActive=" << (material->graphProgram.active ? "true" : "false")
+            << " albedoAssetId=" << material->albedoTextureAssetId
+            << " normalAssetId=" << material->normalTextureAssetId
+            << " normalScale=" << material->normalScale
+            << " albedoTex=" << (bgfx::isValid(materialBinding.albedoTexture) ? std::to_string(materialBinding.albedoTexture.idx) : std::string{ "invalid" })
+            << " normalTex=" << (bgfx::isValid(materialBinding.normalTexture) ? std::to_string(materialBinding.normalTexture.idx) : std::string{ "invalid" })
+            << " params=(" << materialBinding.params[0] << ',' << materialBinding.params[1] << ',' << materialBinding.params[2] << ',' << materialBinding.params[3] << ')';
+        WriteRendererMaterialGraphDebugLog("gpu", row.str());
+    }
     bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
     bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());

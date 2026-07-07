@@ -25,6 +25,14 @@
 namespace kb::editor {
 namespace {
 
+[[nodiscard]] RECT IntersectRectOrEmpty(const RECT& a, const RECT& b) noexcept {
+    RECT clipped{};
+    if (IntersectRect(&clipped, &a, &b) == 0) {
+        return {};
+    }
+    return clipped;
+}
+
 [[nodiscard]] const char* LevelLabel(EditorConsoleLevel level) noexcept {
     switch (level) {
     case EditorConsoleLevel::Info:
@@ -302,6 +310,7 @@ void PanelContentRenderer::Paint(
 
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, contentClip.left, contentClip.top, contentClip.right, contentClip.bottom);
+    const RECT visibleContent = IntersectRectOrEmpty(content, contentClip);
 
     switch (panel.kind) {
     case DockPanelKind::Hierarchy:
@@ -311,7 +320,7 @@ void PanelContentRenderer::Paint(
         InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::MaterialEditor:
-        MaterialEditorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        MaterialEditorPanelRenderer{}.Paint(dc, visibleContent, theme, sceneContext);
         break;
     case DockPanelKind::Assets:
         ProjectFilesPanelRenderer{}.Paint(dc, content, overlayBounds, theme, sceneContext);

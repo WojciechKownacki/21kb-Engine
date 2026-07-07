@@ -128,6 +128,21 @@ void EmitProgramUnavailableDiagnostic(
     return handle.idx;
 }
 
+[[nodiscard]] std::string_view VertexFormatName(RenderVertexFormat format) noexcept {
+    switch (format) {
+    case RenderVertexFormat::P3C3: return "P3C3";
+    case RenderVertexFormat::P3N3UV2: return "P3N3UV2";
+    case RenderVertexFormat::P3N3T4UV2: return "P3N3T4UV2";
+    case RenderVertexFormat::SkinnedP3N3T4UV2J4W4: return "SkinnedP3N3T4UV2J4W4";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] bool VertexFormatHasTangent(RenderVertexFormat format) noexcept {
+    return format == RenderVertexFormat::P3N3T4UV2 ||
+        format == RenderVertexFormat::SkinnedP3N3T4UV2J4W4;
+}
+
 } // namespace
 
 void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc& desc) {
@@ -225,6 +240,29 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .sceneColorTexture = desc.sceneColorTexture,
         });
         const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
+        if (command.materialResource != nullptr && command.materialResource->graphProgram.active) {
+            std::ostringstream row;
+            row << "draw-graph pass=" << MeshPassName(desc.pass)
+                << " viewId=" << desc.viewId
+                << " meshAsset=" << command.meshAssetId
+                << " materialAsset=" << command.materialAssetId
+                << " instances=" << availableInstances << '/' << instanceCount
+                << " meshVertexFormat=" << VertexFormatName(command.meshResource->vertexFormat)
+                << " meshHasTangent=" << (VertexFormatHasTangent(command.meshResource->vertexFormat) ? "true" : "false")
+                << " meshStride=" << RenderStaticMeshVertexStride(command.meshResource->vertexFormat)
+                << " vb=" << HandleValue(command.meshResource->vertexBuffer)
+                << " ib=" << HandleValue(command.meshResource->indexBuffer)
+                << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
+                << " fallback=" << (resolution.fellBackToBuiltin ? "true" : "false")
+                << " status=" << static_cast<int>(resolution.status)
+                << " program=" << HandleValue(program)
+                << " graphHash=" << command.materialResource->graphProgram.graphSourceHash
+                << " textures=" << command.materialResource->graphProgram.textures.size()
+                << " normalTextureAssetId=" << command.materialResource->normalTextureAssetId
+                << " normalScale=" << command.materialResource->normalScale
+                << " state=0x" << std::hex << command.state << std::dec;
+            WriteRendererMaterialGraphDebugLog("draw", row.str());
+        }
         EmitGraphProgramDiagnostic(desc.diagnostics, command, resolution);
         if (!bgfx::isValid(program)) {
             if (meshDrawDebugLogEnabled) {

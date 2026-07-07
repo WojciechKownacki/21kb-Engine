@@ -1,4 +1,5 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -9,6 +10,8 @@
 
 namespace kb::render {
 namespace {
+
+constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 4ULL;
 
 void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     for (const char ch : value) {
@@ -62,6 +65,86 @@ void AddArtifactDiagnostic(
         .backend = std::move(backend),
         .message = std::move(message),
     });
+}
+
+[[nodiscard]] std::string SanitizeShaderDumpToken(std::string_view value) {
+    std::string output;
+    output.reserve(value.size());
+    for (const char ch : value) {
+        const bool ok = (ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') ||
+            ch == '_' ||
+            ch == '-';
+        output.push_back(ok ? ch : '_');
+    }
+    return output.empty() ? std::string{ "unknown" } : output;
+}
+
+void DumpMaterialGraphShaderSource(
+    const RenderMaterialGraphShaderSource& shader,
+    std::string_view pass,
+    std::string_view stage,
+    std::string_view source) {
+    try {
+        const std::filesystem::path path = RendererMaterialGraphDebugLogPath(
+            "_shader_" +
+            std::to_string(shader.sourceHash) +
+            "_" +
+            SanitizeShaderDumpToken(pass) +
+            "_" +
+            SanitizeShaderDumpToken(stage) +
+            ".sc");
+        {
+            std::ofstream output{ path, std::ios::out | std::ios::binary | std::ios::trunc };
+            if (output.is_open()) {
+                output << source;
+            }
+        }
+        std::ostringstream row;
+        row << "shader-dump pass=" << pass
+            << " stage=" << stage
+            << " sourceHash=" << shader.sourceHash
+            << " path=" << path.generic_string()
+            << " bytes=" << source.size()
+            << " containsSurfaceNormal=" << (source.find("surface.normal") != std::string_view::npos ? "true" : "false")
+            << " containsWorldNormal=" << (source.find("worldNormal") != std::string_view::npos ? "true" : "false")
+            << " containsTextureSample3=" << (source.find("u_textureSample3_texture") != std::string_view::npos ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("artifact", row.str());
+    } catch (...) {
+    }
+}
+
+void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
+    if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
+        wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
+        wrapper += "    basisNormal = dot(basisNormal, basisNormal) > 0.0001 ? basisNormal : normalize(v_normal);\n";
+        wrapper += "    basisNormal = dot(basisNormal, v_normal) < 0.0 ? -basisNormal : basisNormal;\n";
+    } else {
+        wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
+    }
+    wrapper += "    vec3 vertexTangent = normalize(v_tangent - basisNormal * dot(basisNormal, v_tangent));\n";
+    wrapper += "    vec3 fallbackAxis = abs(basisNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
+    wrapper += "    vec3 fallbackTangent = normalize(cross(fallbackAxis, basisNormal));\n";
+    wrapper += "    vertexTangent = dot(vertexTangent, vertexTangent) > 0.0001 ? vertexTangent : fallbackTangent;\n";
+    wrapper += "    float vertexHandedness = dot(cross(basisNormal, vertexTangent), v_bitangent) < 0.0 ? -1.0 : 1.0;\n";
+    wrapper += "    vec3 vertexBitangent = normalize(cross(basisNormal, vertexTangent) * vertexHandedness);\n";
+    wrapper += "    vec3 dp1 = dFdx(v_worldPos);\n";
+    wrapper += "    vec3 dp2 = dFdy(v_worldPos);\n";
+    wrapper += "    vec2 duv1 = dFdx(v_texcoord0);\n";
+    wrapper += "    vec2 duv2 = dFdy(v_texcoord0);\n";
+    wrapper += "    vec3 dp2perp = cross(dp2, basisNormal);\n";
+    wrapper += "    vec3 dp1perp = cross(basisNormal, dp1);\n";
+    wrapper += "    vec3 derivativeTangent = dp2perp * duv1.x + dp1perp * duv2.x;\n";
+    wrapper += "    vec3 derivativeBitangent = dp2perp * duv1.y + dp1perp * duv2.y;\n";
+    wrapper += "    float derivativeBasisLength = max(dot(derivativeTangent, derivativeTangent), dot(derivativeBitangent, derivativeBitangent));\n";
+    wrapper += "    vec3 basisTangent = vertexTangent;\n";
+    wrapper += "    vec3 basisBitangent = vertexBitangent;\n";
+    wrapper += "    if (derivativeBasisLength > 0.000001)\n    {\n";
+    wrapper += "        float derivativeInvLength = inversesqrt(derivativeBasisLength);\n";
+    wrapper += "        basisTangent = derivativeTangent * derivativeInvLength;\n";
+    wrapper += "        basisBitangent = derivativeBitangent * derivativeInvLength;\n";
+    wrapper += "    }\n";
 }
 
 } // namespace
@@ -232,21 +315,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         }
         if (gbufferPass) {
-            if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
-                wrapper += "    vec3 geometryNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
-                wrapper += "    geometryNormal = dot(geometryNormal, geometryNormal) > 0.0001 ? geometryNormal : normalize(v_normal);\n";
-                wrapper += "    geometryNormal = dot(geometryNormal, v_normal) < 0.0 ? -geometryNormal : geometryNormal;\n";
-                wrapper += "    vec3 geometryTangent = normalize(v_tangent - geometryNormal * dot(geometryNormal, v_tangent));\n";
-                wrapper += "    geometryTangent = dot(geometryTangent, geometryTangent) > 0.0001 ? geometryTangent : normalize(v_tangent);\n";
-                wrapper += "    vec3 geometryBitangent = normalize(cross(geometryNormal, geometryTangent));\n";
-                wrapper += "    vec3 basisNormal = geometryNormal;\n";
-                wrapper += "    vec3 basisTangent = geometryTangent;\n";
-                wrapper += "    vec3 basisBitangent = geometryBitangent;\n";
-            } else {
-                wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
-                wrapper += "    vec3 basisTangent = normalize(v_tangent);\n";
-                wrapper += "    vec3 basisBitangent = normalize(v_bitangent);\n";
-            }
+            AppendMaterialGraphTangentBasis(wrapper, shader);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
@@ -263,21 +332,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
         } else {
             // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
-            if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
-                wrapper += "    vec3 geometryNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
-                wrapper += "    geometryNormal = dot(geometryNormal, geometryNormal) > 0.0001 ? geometryNormal : normalize(v_normal);\n";
-                wrapper += "    geometryNormal = dot(geometryNormal, v_normal) < 0.0 ? -geometryNormal : geometryNormal;\n";
-                wrapper += "    vec3 geometryTangent = normalize(v_tangent - geometryNormal * dot(geometryNormal, v_tangent));\n";
-                wrapper += "    geometryTangent = dot(geometryTangent, geometryTangent) > 0.0001 ? geometryTangent : normalize(v_tangent);\n";
-                wrapper += "    vec3 geometryBitangent = normalize(cross(geometryNormal, geometryTangent));\n";
-                wrapper += "    vec3 basisNormal = geometryNormal;\n";
-                wrapper += "    vec3 basisTangent = geometryTangent;\n";
-                wrapper += "    vec3 basisBitangent = geometryBitangent;\n";
-            } else {
-                wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
-                wrapper += "    vec3 basisTangent = normalize(v_tangent);\n";
-                wrapper += "    vec3 basisBitangent = normalize(v_bitangent);\n";
-            }
+            AppendMaterialGraphTangentBasis(wrapper, shader);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
@@ -295,6 +350,7 @@ std::string BuildGraphFragmentWrapperSource(
         }
     }
     wrapper += "}\n";
+    DumpMaterialGraphShaderSource(shader, pass, "fragment", wrapper);
     return wrapper;
 }
 
@@ -381,6 +437,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    v_color0 = ctx.vertexColor;\n";
     vs += "    v_preSkinnedNormal = preSkinnedNormal;\n";
     vs += "}\n";
+    DumpMaterialGraphShaderSource(shader, "vertex", "vertex", vs);
     return vs;
 }
 
@@ -458,6 +515,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
 
     std::uint64_t artifactHash = 1469598103934665603ULL;
     HashU64(artifactHash, artifact.graphSourceHash);
+    HashU64(artifactHash, kMaterialGraphShaderWrapperVersion);
     HashU64(artifactHash, artifact.wrapperHash);
     HashU64(artifactHash, artifact.dependencyHash);
     HashU64(artifactHash, artifact.reflectionHash);
@@ -467,6 +525,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     // The per-binary cache key combines the wrapper, its dependencies and the material type version,
     // so any of those changing forces a recompile rather than serving a stale binary.
     std::uint64_t cookKey = 1469598103934665603ULL;
+    HashU64(cookKey, kMaterialGraphShaderWrapperVersion);
     HashU64(cookKey, artifact.wrapperHash);
     HashU64(cookKey, artifact.dependencyHash);
     HashU64(cookKey, artifact.materialTypeVersion);

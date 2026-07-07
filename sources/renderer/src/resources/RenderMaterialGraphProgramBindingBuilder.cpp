@@ -1,5 +1,8 @@
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "renderer/RendererDebugLog.hpp"
+
+#include <sstream>
 
 namespace kb::render {
 
@@ -31,6 +34,7 @@ namespace {
 
 constexpr std::uint64_t kGraphProgramFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kGraphProgramFnvPrime = 1099511628211ULL;
+constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 4ULL;
 
 void HashByte(std::uint64_t& hash, std::uint8_t value) noexcept {
     hash ^= value;
@@ -123,6 +127,33 @@ void HashString(std::uint64_t& hash, const std::string& value) noexcept {
         : RenderTextureColorSpace::Linear;
 }
 
+[[nodiscard]] std::string_view MaterialGraphDebugColorSpaceName(RenderMaterialTextureColorSpace colorSpace) noexcept {
+    switch (colorSpace) {
+    case RenderMaterialTextureColorSpace::Srgb: return "Srgb";
+    case RenderMaterialTextureColorSpace::Linear: return "Linear";
+    case RenderMaterialTextureColorSpace::Unknown: return "Unknown";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] std::string_view MaterialGraphDebugRuntimeColorSpaceName(RenderTextureColorSpace colorSpace) noexcept {
+    switch (colorSpace) {
+    case RenderTextureColorSpace::Srgb: return "Srgb";
+    case RenderTextureColorSpace::Linear: return "Linear";
+    }
+    return "Linear";
+}
+
+[[nodiscard]] std::string_view MaterialGraphDebugTextureDimensionName(RenderMaterialGraphTextureDimension dimension) noexcept {
+    switch (dimension) {
+    case RenderMaterialGraphTextureDimension::Texture2D: return "Texture2D";
+    case RenderMaterialGraphTextureDimension::TextureCube: return "TextureCube";
+    case RenderMaterialGraphTextureDimension::Texture3D: return "Texture3D";
+    case RenderMaterialGraphTextureDimension::Texture2DArray: return "Texture2DArray";
+    }
+    return "Texture2D";
+}
+
 [[nodiscard]] const RenderMaterialGraphParameterValue* FindParameterValue(
     std::span<const RenderMaterialGraphParameterValue> values,
     const std::string& stableId) noexcept {
@@ -139,6 +170,7 @@ void HashString(std::uint64_t& hash, const std::string& value) noexcept {
 std::uint64_t RenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept {
     std::uint64_t hash = kGraphProgramFnvOffset;
     HashU64(hash, shader.sourceHash);
+    HashU64(hash, kMaterialGraphShaderWrapperVersion);
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.shadingModel));
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.blendMode));
     HashBool(hash, shader.reflection.hasWorldPositionOffset);
@@ -197,6 +229,19 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.alphaMode = AlphaModeForBlendMode(shader.reflection.blendMode);
     binding.translucencyBlend = TranslucencyBlendForBlendMode(shader.reflection.blendMode);
 
+    {
+        std::ostringstream row;
+        row << "build-binding materialTypeId=" << materialTypeId
+            << " version=" << materialTypeVersion
+            << " sourceHash=" << shader.sourceHash
+            << " variantKey=" << binding.variantKey
+            << " uniforms=" << shader.reflection.uniforms.size()
+            << " textures=" << shader.reflection.textures.size()
+            << " requiredVaryings=" << shader.reflection.requiredVaryings.size()
+            << " generatedVS=" << (binding.requiresGeneratedVertexShader ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("binding", row.str());
+    }
+
     binding.uniforms.reserve(shader.reflection.uniforms.size());
     for (const RenderMaterialGraphReflectionUniform& uniform : shader.reflection.uniforms) {
         RenderMaterialGraphUniformBinding uniformBinding{
@@ -234,6 +279,15 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
             uniformBinding.value[2] = value->numbers[2];
             uniformBinding.value[3] = value->numbers[3];
         }
+        {
+            std::ostringstream row;
+            row << "uniform name=" << uniformBinding.name
+                << " stableId=" << uniformBinding.stableId
+                << " kind=" << RenderMaterialGraphNodeKindName(uniform.kind)
+                << " value=(" << uniformBinding.value[0] << "," << uniformBinding.value[1] << ","
+                << uniformBinding.value[2] << "," << uniformBinding.value[3] << ")";
+            WriteRendererMaterialGraphDebugLog("binding", row.str());
+        }
         binding.uniforms.push_back(std::move(uniformBinding));
     }
 
@@ -258,6 +312,19 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
                 .pin = texture.stableId,
                 .message = "Material graph texture binding '" + texture.stableId + "' has no resolved texture asset; the runtime must bind a fallback texture.",
             });
+        }
+        {
+            std::ostringstream row;
+            row << "texture sampler=" << textureBinding.samplerName
+                << " stableId=" << textureBinding.stableId
+                << " slot=" << textureBinding.slot
+                << " reflectedColorSpace=" << MaterialGraphDebugColorSpaceName(texture.colorSpace)
+                << " runtimeColorSpace=" << MaterialGraphDebugRuntimeColorSpaceName(textureBinding.colorSpace)
+                << " dimension=" << MaterialGraphDebugTextureDimensionName(textureBinding.dimension)
+                << " assetId=" << textureBinding.textureAssetId
+                << " resolved=" << (textureBinding.resolved ? "true" : "false")
+                << " samplerFlags=" << textureBinding.samplerFlags;
+            WriteRendererMaterialGraphDebugLog("binding", row.str());
         }
         binding.textures.push_back(std::move(textureBinding));
     }

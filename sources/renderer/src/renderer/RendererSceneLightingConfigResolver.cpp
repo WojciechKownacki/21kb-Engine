@@ -33,6 +33,7 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
     };
 }
 

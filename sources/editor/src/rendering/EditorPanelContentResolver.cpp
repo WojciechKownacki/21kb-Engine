@@ -6,6 +6,14 @@
 namespace kb::editor {
 namespace {
 
+[[nodiscard]] RECT IntersectRectOrEmpty(const RECT& a, const RECT& b) noexcept {
+    RECT clipped{};
+    if (IntersectRect(&clipped, &a, &b) == 0) {
+        return {};
+    }
+    return clipped;
+}
+
 [[nodiscard]] DockLayout BuildLayout(HWND window, const EditorDockModel& dockModel, const EditorMetrics& metrics) {
     RECT client{};
     GetClientRect(window, &client);
@@ -69,7 +77,7 @@ std::optional<EditorResolvedPanelContent> EditorPanelContentResolver::ResolvePan
         const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
         if (panel != nullptr && panelLayout.active && panel->kind == kind) {
             return EditorResolvedPanelContent{
-                .content = GdiDrawing::ToRect(panelLayout.content),
+                .content = IntersectRectOrEmpty(GdiDrawing::ToRect(panelLayout.content), GdiDrawing::ToRect(panelLayout.contentClip)),
                 .panelId = panelLayout.panelId,
             };
         }

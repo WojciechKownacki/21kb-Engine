@@ -91,7 +91,7 @@ namespace {
         .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
-        .postProcessEnabled = previewSettings.postProcessEnabled,
+        .postProcessEnabled = previewSettings.postProcessEnabled && !previewSettings.normalDebugView,
         .selectionMaskEnabled = false,
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,

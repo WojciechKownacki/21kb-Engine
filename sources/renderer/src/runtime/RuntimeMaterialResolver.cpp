@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -664,6 +665,19 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     return nullptr;
 }
 
+[[nodiscard]] bool IsRuntimeTextureObjectNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
 [[nodiscard]] std::string StableGraphParameterIdForRuntime(const RenderMaterialGraphNode& node) {
     if (!node.parameter.stableId.empty()) {
         return node.parameter.stableId;
@@ -673,6 +687,20 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
         return "texture" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::TextureSample:
         return "textureSample" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObject:
+        return "textureObject" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        return "textureSampleCube" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+        return "textureObjectCube" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        return "textureSampleVolume" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return "textureObjectVolume" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return "textureSample2DArray" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return "textureObject2DArray" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::ParameterScalar:
         return "scalar" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::ParameterVector:
@@ -755,7 +783,7 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     if (const RenderMaterialGraphLink* textureInput = FindGraphInputLink(materialAsset.graph, textureSample.id, "texture");
         textureInput != nullptr) {
         const RenderMaterialGraphNode* source = FindRenderMaterialGraphNode(materialAsset.graph, textureInput->fromNodeId);
-        if (source != nullptr && source->kind == RenderMaterialGraphNodeKind::ParameterTexture) {
+        if (source != nullptr && IsRuntimeTextureObjectNode(source->kind)) {
             return GraphTextureValueAssetId(materialAsset.graphParameterValues, StableGraphParameterIdForRuntime(*source));
         }
         return std::nullopt;
@@ -1678,6 +1706,9 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
     if (const std::optional<MaterialGraphRuntimeValue> normal = EvaluateMaterialOutputInput(materialAsset, *output, "normal");
         normal.has_value() && normal->authored && normal->textureAssetId != 0U) {
         desc.normalTextureAssetId = normal->textureAssetId;
+        WriteRendererMaterialGraphDebugLog("runtime", "pbr-fallback-normal-from-graph textureAssetId=" + std::to_string(normal->textureAssetId));
+    } else {
+        WriteRendererMaterialGraphDebugLog("runtime", "pbr-fallback-normal-missing-or-unresolved");
     }
     if (const std::optional<MaterialGraphRuntimeValue> roughness = EvaluateMaterialOutputInput(materialAsset, *output, "roughness")) {
         if (roughness->authored) {
@@ -1898,6 +1929,12 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     ApplyMaterialOutputGraphToPbrDesc(resolved.desc, materialAsset);
 
     if (HasGraphAuthoringData(materialAsset.graph)) {
+        WriteRendererMaterialGraphDebugLog(
+            "runtime",
+            "resolve-graph asset=" + std::to_string(materialMetadata.id.value) +
+                " nodes=" + std::to_string(materialAsset.graph.nodes.size()) +
+                " links=" + std::to_string(materialAsset.graph.links.size()) +
+                " values=" + std::to_string(materialAsset.graphParameterValues.size()));
         RuntimeMaterialFunctionLibraryBuildResult functionLibrary = BuildRuntimeMaterialFunctionLibrary(manager, materialAsset.graph);
         resolved.graphDiagnostics = std::move(functionLibrary.diagnostics);
         std::vector<RenderMaterialGraphDiagnostic> collectionDiagnostics =
@@ -1924,6 +1961,10 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
             graphCompile.diagnostics.begin(),
             graphCompile.diagnostics.end());
         if (graphCompile.Succeeded()) {
+            WriteRendererMaterialGraphDebugLog(
+                "runtime",
+                "resolve-graph-compile-ok asset=" + std::to_string(materialMetadata.id.value) +
+                    " sourceHash=" + std::to_string(graphCompile.shader.sourceHash));
             std::uint64_t materialTypeId = 1469598103934665603ULL;
             for (const char ch : materialAsset.materialType) {
                 materialTypeId ^= static_cast<unsigned char>(ch);
@@ -1943,7 +1984,22 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                 bindingResult.diagnostics.end());
             if (!bindingHasError) {
                 resolved.graphProgram = std::move(bindingResult.binding);
+                WriteRendererMaterialGraphDebugLog(
+                    "runtime",
+                    "resolve-graph-binding-ok asset=" + std::to_string(materialMetadata.id.value) +
+                        " textures=" + std::to_string(resolved.graphProgram.textures.size()) +
+                        " uniforms=" + std::to_string(resolved.graphProgram.uniforms.size()));
+            } else {
+                WriteRendererMaterialGraphDebugLog(
+                    "runtime",
+                    "resolve-graph-binding-error asset=" + std::to_string(materialMetadata.id.value) +
+                        " diagnostics=" + std::to_string(bindingResult.diagnostics.size()));
             }
+        } else {
+            WriteRendererMaterialGraphDebugLog(
+                "runtime",
+                "resolve-graph-compile-failed asset=" + std::to_string(materialMetadata.id.value) +
+                    " diagnostics=" + std::to_string(graphCompile.diagnostics.size()));
         }
     }
     return resolved;

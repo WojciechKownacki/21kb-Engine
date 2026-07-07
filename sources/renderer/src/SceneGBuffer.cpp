@@ -109,6 +109,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " valid=" << (IsValid() ? "true" : "false")
                 << " renderer=" << static_cast<int>(bgfx::getRendererType());
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
 
     width = std::max(1U, width);
@@ -118,15 +119,18 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
         std::ostringstream message;
         message << "Ensure unsupported extent " << width << 'x' << height;
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
         return false;
     }
 
     if (IsValid() && width_ == width && height_ == height) {
         WriteRendererDebugLog("gbuffer", "Ensure reuse existing targets");
+        WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure reuse existing targets");
         return true;
     }
 
     WriteRendererDebugLog("gbuffer", "Ensure recreate targets begin");
+    WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure recreate targets begin");
     Shutdown();
 
     selection_ = SelectSceneGBufferFormats(kGBufferColorTextureFlags, kGBufferDepthTextureFlags);
@@ -139,9 +143,11 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " depth=" << TextureFormatName(selection_.depth.format)
                 << " depthStatus=" << static_cast<int>(selection_.depth.status);
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
     if (!selection_.IsSupported()) {
         WriteRendererDebugLog("gbuffer", "Ensure failed unsupported format selection");
+        WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure failed unsupported format selection");
         return false;
     }
 
@@ -202,6 +208,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " depthTex=" << HandleValue(depthTexture_)
                 << " extent=" << width_ << 'x' << height_;
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
     return true;
 }
