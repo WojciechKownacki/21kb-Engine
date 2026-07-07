@@ -331,6 +331,9 @@ public:
     [[nodiscard]] bool DragMaterialGraphNode(int x, int y);
     [[nodiscard]] bool EndMaterialGraphNodeDrag();
     [[nodiscard]] bool IsMaterialGraphNodeDragging() const noexcept;
+    [[nodiscard]] bool MoveMaterialGraphNodesTo(
+        kb::assets::AssetId assetId,
+        const std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>>& positions);
     [[nodiscard]] bool BeginMaterialGraphCommentDrag(kb::assets::AssetId assetId, std::uint32_t commentId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphComment(int x, int y);
     [[nodiscard]] bool EndMaterialGraphCommentDrag();

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <ranges>
 
 namespace kb::editor {
 namespace {
@@ -154,6 +156,20 @@ void SubmitLinks(const MaterialImguiNodeEditorModel& model) {
     return result;
 }
 
+[[nodiscard]] bool SamePosition(
+    const MaterialImguiNodeEditorMovedNode& position,
+    const MaterialImguiNode& node) noexcept {
+    return position.nodeId == node.nodeId && position.positionX == node.positionX && position.positionY == node.positionY;
+}
+
+[[nodiscard]] MaterialImguiNodeEditorMovedNode ModelPositionFor(const MaterialImguiNode& node) noexcept {
+    return MaterialImguiNodeEditorMovedNode{
+        .nodeId = node.nodeId,
+        .positionX = node.positionX,
+        .positionY = node.positionY,
+    };
+}
+
 } // namespace
 
 std::optional<MaterialImguiNodeEditorGraphLinkRequest> ResolveMaterialImguiNewLink(
@@ -220,11 +236,36 @@ MaterialImguiNodeEditorFrameResult MaterialImguiNodeEditorRenderer::Render(
     ed::Begin("MaterialGraphImguiNodeEditor", size);
 
     for (const MaterialImguiNode& node : model.nodes) {
-        ed::SetNodePosition(node.editorId, ImVec2(static_cast<float>(node.positionX), static_cast<float>(node.positionY)));
+        const auto applied = std::ranges::find_if(lastAppliedModelPositions_, [&node](const MaterialImguiNodeEditorMovedNode& position) {
+            return position.nodeId == node.nodeId;
+        });
+        const bool modelPositionChanged = applied == lastAppliedModelPositions_.end() || !SamePosition(*applied, node);
+        if (modelPositionChanged) {
+            ed::SetNodePosition(node.editorId, ImVec2(static_cast<float>(node.positionX), static_cast<float>(node.positionY)));
+            if (applied == lastAppliedModelPositions_.end()) {
+                lastAppliedModelPositions_.push_back(ModelPositionFor(node));
+            } else {
+                *applied = ModelPositionFor(node);
+            }
+        }
         DrawMaterialNode(node);
     }
     SubmitLinks(model);
     MaterialImguiNodeEditorFrameResult result = GatherInteractions();
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        for (const MaterialImguiNode& node : model.nodes) {
+            const ImVec2 position = ed::GetNodePosition(node.editorId);
+            const std::int32_t positionX = static_cast<std::int32_t>(std::lround(position.x));
+            const std::int32_t positionY = static_cast<std::int32_t>(std::lround(position.y));
+            if (positionX != node.positionX || positionY != node.positionY) {
+                result.movedNodes.push_back(MaterialImguiNodeEditorMovedNode{
+                    .nodeId = node.nodeId,
+                    .positionX = positionX,
+                    .positionY = positionY,
+                });
+            }
+        }
+    }
 
     ed::End();
     PopMaterialNodeEditorStyle();

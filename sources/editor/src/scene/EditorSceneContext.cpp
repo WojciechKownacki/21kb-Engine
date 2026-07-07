@@ -3454,6 +3454,28 @@ bool EditorSceneContext::IsMaterialGraphNodeDragging() const noexcept {
     return materialGraphNodeDragging_;
 }
 
+bool EditorSceneContext::MoveMaterialGraphNodesTo(
+    kb::assets::AssetId assetId,
+    const std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>>& positions) {
+    if (!assetId.IsValid() || positions.empty() || materialEditor_.OpenAssetId() != assetId || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+
+    std::optional<kb::render::RenderMaterialAssetData> before = materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    const std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    if (!materialEditor_.MoveGraphNodes(positions)) {
+        return false;
+    }
+    materialEditor_.ClearDiagnostics();
+    return RecordMaterialGraphWorkingCopyEdit(
+        assetId,
+        positions.size() == 1U ? "Move Material Graph Node" : "Move Material Graph Nodes",
+        std::move(*before),
+        beforeSelectedNodeId,
+        beforeSelectedNodeIds);
+}
+
 bool EditorSceneContext::BeginMaterialGraphCommentDrag(kb::assets::AssetId assetId, std::uint32_t commentId, int x, int y) {
     if (!assetId.IsValid() || commentId == 0U || materialEditor_.OpenAssetId() != assetId || !materialEditor_.WorkingCopy().has_value()) {
         return false;

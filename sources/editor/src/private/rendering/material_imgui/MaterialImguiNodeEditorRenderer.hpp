@@ -2,6 +2,7 @@
 
 #include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,6 +25,12 @@ struct MaterialImguiNodeEditorDeletedLink {
     ax::NodeEditor::PinId endPin{};
 };
 
+struct MaterialImguiNodeEditorMovedNode {
+    std::uint32_t nodeId = 0U;
+    std::int32_t positionX = 0;
+    std::int32_t positionY = 0;
+};
+
 struct MaterialImguiNodeEditorGraphLinkRequest {
     std::uint32_t fromNodeId = 0U;
     std::string fromPin;
@@ -34,6 +41,7 @@ struct MaterialImguiNodeEditorGraphLinkRequest {
 struct MaterialImguiNodeEditorFrameResult {
     std::optional<MaterialImguiNodeEditorNewLink> acceptedNewLink;
     std::vector<MaterialImguiNodeEditorDeletedLink> acceptedDeletedLinks;
+    std::vector<MaterialImguiNodeEditorMovedNode> movedNodes;
 };
 
 [[nodiscard]] std::optional<MaterialImguiNodeEditorGraphLinkRequest> ResolveMaterialImguiNewLink(
@@ -63,6 +71,7 @@ private:
         void operator()(ax::NodeEditor::EditorContext* context) const noexcept;
     };
 
+    std::vector<MaterialImguiNodeEditorMovedNode> lastAppliedModelPositions_;
     std::unique_ptr<ax::NodeEditor::EditorContext, EditorContextDeleter> context_;
 };
 

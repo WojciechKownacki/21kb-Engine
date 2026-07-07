@@ -193,6 +193,20 @@ namespace {
                         request->toPin));
                 }
             }
+            if (!result.movedNodes.empty()) {
+                std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>> positions;
+                positions.reserve(result.movedNodes.size());
+                for (const MaterialImguiNodeEditorMovedNode& movedNode : result.movedNodes) {
+                    positions.push_back({
+                        movedNode.nodeId,
+                        {
+                            movedNode.positionX,
+                            movedNode.positionY,
+                        },
+                    });
+                }
+                static_cast<void>(sceneContext.MoveMaterialGraphNodesTo(assetId, positions));
+            }
         });
     return true;
 }
