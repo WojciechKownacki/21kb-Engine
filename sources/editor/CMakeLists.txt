@@ -380,6 +380,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -576,6 +577,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorMaterialColorPickerDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp

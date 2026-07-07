@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -91,6 +92,24 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return metadata.physicalPath.string();
 }
 
+[[nodiscard]] std::string TextureFilterLabel(EditorTextureAssetPickerFilter filter) {
+    switch (filter) {
+    case EditorTextureAssetPickerFilter::TextureCube:
+        return "Texture Cube";
+    case EditorTextureAssetPickerFilter::TextureVolume:
+        return "Texture Volume";
+    case EditorTextureAssetPickerFilter::Texture2DArray:
+        return "Texture 2D Array";
+    case EditorTextureAssetPickerFilter::Texture2D:
+    default:
+        return "Texture 2D";
+    }
+}
+
+[[nodiscard]] std::string TextureFilterDescription(EditorTextureAssetPickerFilter filter) {
+    return "Choose a " + TextureFilterLabel(filter) + " asset for this material graph node.";
+}
+
 [[nodiscard]] std::vector<AssetPickerRow> BuildMeshRows(const EditorSceneContext& sceneContext) {
     std::vector<AssetPickerRow> rows;
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
@@ -127,11 +146,11 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return rows;
 }
 
-[[nodiscard]] std::vector<AssetPickerRow> BuildTextureRows(const EditorSceneContext& sceneContext) {
+[[nodiscard]] std::vector<AssetPickerRow> BuildTextureRows(const EditorSceneContext& sceneContext, EditorTextureAssetPickerFilter filter) {
     std::vector<AssetPickerRow> rows;
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (metadata.type != "RenderTexture" && metadata.type != "Texture" && metadata.importCategory != "Texture") {
+        if (!EditorTextureAssetMatchesFilter(metadata, filter)) {
             continue;
         }
         rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Texture"), .path = DisplayPath(metadata) });
@@ -166,14 +185,18 @@ public:
         std::string title,
         std::string description,
         std::string clearDescription,
-        HeroIconKind icon)
+        HeroIconKind icon,
+        const kb::assets::AssetManager* assetManager = nullptr,
+        bool textureThumbnails = false)
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
         , title_(std::move(title))
         , description_(std::move(description))
         , clearDescription_(std::move(clearDescription))
-        , icon_(icon) {}
+        , icon_(icon)
+        , assetManager_(assetManager)
+        , textureThumbnails_(textureThumbnails) {}
 
     [[nodiscard]] AssetPickerResult Show(HWND owner) {
         owner_ = owner;
@@ -295,16 +318,29 @@ private:
             const bool hovered = hoveredRow_ == row;
             GdiDrawing::FillRectColor(dc, rect, selected ? Rgb(35, 62, 78) : hovered ? Rgb(32, 37, 44) : (row % 2 == 0 ? Rgb(22, 25, 30) : Rgb(19, 22, 26)));
 
-            RECT icon = Rect(rect.left + 12, rect.top + 10, rect.left + 38, rect.top + 36);
-            HeroIconPainter::Draw(dc, icon, icon_, selected ? Color(theme_.accent) : Rgb(143, 158, 178), 2);
+            RECT icon = Rect(rect.left + 10, rect.top + 7, rect.left + 44, rect.top + 41);
+            bool drewTexturePreview = false;
+            if (textureThumbnails_ && row > 0 && assetManager_ != nullptr) {
+                const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(rows_[static_cast<std::size_t>(row - 1)].assetId);
+                if (metadata != nullptr) {
+                    GdiDrawing::DrawSharpFrame(dc, icon, Rgb(12, 14, 17), selected ? Color(theme_.accent) : Rgb(68, 78, 94));
+                    if (const EditorTexturePreviewImage* preview = EditorTexturePreviewService::PreviewFor(*metadata); preview != nullptr) {
+                        EditorTexturePreviewService::DrawContain(dc, Rect(icon.left + 1, icon.top + 1, icon.right - 1, icon.bottom - 1), *preview, false);
+                        drewTexturePreview = true;
+                    }
+                }
+            }
+            if (!drewTexturePreview) {
+                HeroIconPainter::Draw(dc, icon, icon_, selected ? Color(theme_.accent) : Rgb(143, 158, 178), 2);
+            }
             const std::string name = row == 0 ? std::string{ "None" } : rows_[static_cast<std::size_t>(row - 1)].name;
             const std::string path = row == 0 ? clearDescription_ : rows_[static_cast<std::size_t>(row - 1)].path;
             {
                 ScopedFont nameFont(12, FW_SEMIBOLD);
                 const ScopedGdiObject selectedFont(dc, nameFont.handle);
-                Text(dc, Rect(rect.left + 50, rect.top + 7, rect.right - 10, rect.top + 26), name, Color(theme_.textPrimary));
+                Text(dc, Rect(rect.left + 56, rect.top + 7, rect.right - 10, rect.top + 26), name, Color(theme_.textPrimary));
             }
-            Text(dc, Rect(rect.left + 50, rect.top + 26, rect.right - 10, rect.bottom - 5), path, selected ? Rgb(170, 221, 238) : Color(theme_.textSecondary));
+            Text(dc, Rect(rect.left + 56, rect.top + 26, rect.right - 10, rect.bottom - 5), path, selected ? Rgb(170, 221, 238) : Color(theme_.textSecondary));
         }
         RestoreDC(dc, saved);
         PaintScrollbar(dc, list);
@@ -418,6 +454,8 @@ private:
     std::string description_;
     std::string clearDescription_;
     HeroIconKind icon_ = HeroIconKind::Cube;
+    const kb::assets::AssetManager* assetManager_ = nullptr;
+    bool textureThumbnails_ = false;
     AssetPickerResult result_{};
     bool running_ = true;
     int hoveredRow_ = -1;
@@ -466,15 +504,19 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
     HWND owner,
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
-    kb::assets::AssetId currentTexture) {
+    kb::assets::AssetId currentTexture,
+    EditorTextureAssetPickerFilter filter) {
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
-        BuildTextureRows(sceneContext),
+        BuildTextureRows(sceneContext, filter),
         currentTexture,
-        "Select Texture",
-        "Choose a texture asset for the Texture Sample node.",
-        "Clear Texture Sample texture",
+        "Select " + TextureFilterLabel(filter),
+        TextureFilterDescription(filter),
+        "Clear material graph texture",
         HeroIconKind::RectangleGroup,
+        &manager,
+        true,
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorTextureAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };

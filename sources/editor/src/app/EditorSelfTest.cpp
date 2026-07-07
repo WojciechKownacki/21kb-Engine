@@ -7,6 +7,7 @@
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
@@ -29,15 +30,26 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cwchar>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -445,20 +457,14 @@ void RunSelectionTransformSuite(Report& report) {
 
 void RunInspectorMaterialDropTargetSuite(Report& report) {
     EditorSceneContext context;
-    const kb::scene::SceneEntity mesh = context.CreateHierarchyObject();
+    kb::scene::SceneEntity mesh = context.CreateHierarchyObject();
     report.Check(mesh.IsValid(), "Create mesh entity for inspector material drop target");
     kb::scene::MeshRendererComponent renderer{ .meshAssetId = 909U };
     renderer.materialSlotOverrideCount = 2U;
     context.Scene().Components().MeshRenderers().Set(mesh, renderer);
     context.SelectEntity(mesh);
 
-    const InspectorPanelRenderer::Hit materialHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 240);
-    report.Check(
-        materialHit.kind == InspectorHitKind::TextField &&
-            materialHit.section == InspectorSectionId::MeshRenderer &&
-            materialHit.property == InspectorPropertyId::MeshRendererMaterial,
-        "Inspector Mesh Renderer Material row hit-tests as the main material assignment target");
-
+    InspectorPanelRenderer::Hit materialHit{};
     InspectorPanelRenderer::Hit materialPickerHit{};
     InspectorPanelRenderer::Hit overridePickerHit{};
     InspectorPanelRenderer::Hit slotHit{};
@@ -467,6 +473,9 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
             if (hit.section != InspectorSectionId::MeshRenderer) {
                 continue;
+            }
+            if (materialHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterial) {
+                materialHit = hit;
             }
             if (materialPickerHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialPicker) {
                 materialPickerHit = hit;
@@ -481,9 +490,17 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             }
         }
     }
+    report.Check(materialHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material row hit-tests as the main material assignment target");
     report.Check(materialPickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material row exposes a material picker button");
     report.Check(slotHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer material override row hit-tests as a concrete material slot target");
     report.Check(overridePickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material Override row exposes a material picker button");
+
+    auto refreshMeshEntityFromSelection = [&]() {
+        const kb::scene::SceneEntity selected = context.SelectedEntity();
+        if (selected.IsValid() && context.Scene().Components().MeshRenderers().Has(selected)) {
+            mesh = selected;
+        }
+    };
 
     const kb::assets::AssetId materialId{ 31337U };
     report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -510,11 +527,13 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     report.Check(mainAssigned != nullptr && mainAssigned->materialAssetId == materialId.value, "Mesh Renderer main material assignment stores the material asset id");
     context.AcknowledgeSceneRenderSubmitted();
     report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer main material assignment");
+    refreshMeshEntityFromSelection();
     report.Check(context.SceneRenderFullDirty(), "Undoing Mesh Renderer main material assignment marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* mainUndone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(mainUndone != nullptr && mainUndone->materialAssetId == 0U, "Undo restores the previous Mesh Renderer main material");
     context.AcknowledgeSceneRenderSubmitted();
     report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer main material assignment");
+    refreshMeshEntityFromSelection();
     report.Check(context.SceneRenderFullDirty(), "Redoing Mesh Renderer main material assignment marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* mainRedone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(mainRedone != nullptr && mainRedone->materialAssetId == materialId.value, "Redo reapplies the Mesh Renderer main material");
@@ -529,13 +548,15 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             assigned->materialSlotAssetIds[1] == materialId.value,
         "Mesh Renderer material slot assignment stores the dropped material asset id");
     report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer material slot assignment");
+    refreshMeshEntityFromSelection();
     const kb::scene::MeshRendererComponent* slotUndone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(
         slotUndone != nullptr &&
-            slotUndone->materialSlotOverrideCount == 2U &&
+            slotUndone->materialSlotOverrideCount == 0U &&
             slotUndone->materialSlotAssetIds[1] == 0U,
-        "Undo restores the previous Mesh Renderer material slot override");
+        "Undo restores the cleared Mesh Renderer material slot state");
     report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer material slot assignment");
+    refreshMeshEntityFromSelection();
     const kb::scene::MeshRendererComponent* slotRedone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(
         slotRedone != nullptr &&
@@ -543,11 +564,19 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             slotRedone->materialSlotAssetIds[1] == materialId.value,
         "Redo reapplies the Mesh Renderer material slot override");
     report.Check(InspectorPanelInteraction::HandlePointerDown(context, slotHit, 360, 240), "Clicking an assigned Mesh Renderer material override is handled");
-    const kb::scene::MeshRendererComponent* slotClearedByClick = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    const kb::scene::MeshRendererComponent* slotInspectedByClick = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(
-        slotClearedByClick != nullptr &&
-            slotClearedByClick->materialSlotAssetIds[1] == 0U,
-        "Clicking an assigned Mesh Renderer material override clears it to None");
+        slotInspectedByClick != nullptr &&
+            slotInspectedByClick->materialSlotOverrideCount == 2U &&
+            slotInspectedByClick->materialSlotAssetIds[1] == materialId.value,
+        "Clicking an assigned Mesh Renderer material override keeps the assignment for inspection");
+    report.Check(context.SetMeshRendererMaterialSlotAsset(mesh, 1U, {}), "Clear Mesh Renderer material slot through command path");
+    const kb::scene::MeshRendererComponent* slotClearedByCommand = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        slotClearedByCommand != nullptr &&
+            slotClearedByCommand->materialSlotOverrideCount == 0U &&
+            slotClearedByCommand->materialSlotAssetIds[1] == 0U,
+        "Clear Mesh Renderer material slot removes the override");
     report.Check(context.SetMeshRendererMaterialSlotAsset(mesh, 1U, materialId), "Reassign Mesh Renderer material slot before rejection test");
 
     const kb::assets::AssetId wrongTypeId{ 31338U };
@@ -848,12 +877,12 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     report.Check(
         picker.left == preview.left &&
             picker.right == preview.right &&
-            picker.top >= preview.bottom &&
-            picker.bottom <= textureRect->bottom,
-        "TextureSample picker footer is a separate in-node row below the preview");
-    const std::optional<std::uint32_t> footerHit =
-        MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, picker.left + 2, picker.top + 2);
-    report.Check(footerHit.has_value() && *footerHit == 50U, "TextureSample picker footer opens the texture asset picker");
+            picker.top == preview.top &&
+            picker.bottom == preview.bottom,
+        "TextureSample image slot is the picker hit target");
+    const std::optional<std::uint32_t> slotHit =
+        MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, (picker.left + picker.right) / 2, (picker.top + picker.bottom) / 2);
+    report.Check(slotHit.has_value() && *slotHit == 50U, "TextureSample image slot opens the texture asset picker");
 
     const RECT parameterValue = MaterialEditorPanelTextureParameterRect(*parameterRect);
     report.Check(
@@ -879,11 +908,12 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
                 familyPreview.bottom < rect->bottom &&
                 familyPicker.left == familyPreview.left &&
                 familyPicker.right == familyPreview.right &&
-                familyPicker.bottom <= rect->bottom,
-            "Texture sample family keeps preview and picker inside the node");
+                familyPicker.top == familyPreview.top &&
+                familyPicker.bottom == familyPreview.bottom,
+            "Texture sample family keeps a single image picker slot inside the node");
         const std::optional<std::uint32_t> hit =
-            MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, familyPicker.left + 2, familyPicker.top + 2);
-        report.Check(hit.has_value() && *hit == nodeCase.id, "Texture sample family footer hit-tests to the editable texture node");
+            MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, (familyPicker.left + familyPicker.right) / 2, (familyPicker.top + familyPicker.bottom) / 2);
+        report.Check(hit.has_value() && *hit == nodeCase.id, "Texture sample family image slot hit-tests to the editable texture node");
         report.Check(
             context.SetMaterialGraphTextureSampleAsset(materialId, nodeCase.id, kb::assets::AssetId{}),
             "Texture sample family accepts texture asset edits");
@@ -1052,6 +1082,280 @@ void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
         previousFunctionOutputY = pin.y;
     }
     report.Check(denseFunctionOutputsSpaced, "MaterialFunctionCall dynamic output pins resize the node before they overlap");
+}
+
+[[nodiscard]] std::optional<CLSID> GdiplusEncoderClsid(const wchar_t* mimeType) {
+    UINT count = 0;
+    UINT bytes = 0;
+    Gdiplus::GetImageEncodersSize(&count, &bytes);
+    if (count == 0 || bytes == 0) {
+        return std::nullopt;
+    }
+    std::vector<std::byte> buffer(bytes);
+    auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if (Gdiplus::GetImageEncoders(count, bytes, encoders) != Gdiplus::Ok) {
+        return std::nullopt;
+    }
+    for (UINT index = 0; index < count; ++index) {
+        if (std::wcscmp(encoders[index].MimeType, mimeType) == 0) {
+            return encoders[index].Clsid;
+        }
+    }
+    return std::nullopt;
+}
+
+void RunMaterialGraphVisualRedesignSuite(Report& report) {
+    std::error_code error;
+
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Register material loader for node visual redesign capture");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "NodeRedesignAudit.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+
+    kb::render::RenderMaterialAssetData material{};
+    material.materialType = kb::render::kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.hasExplicitMaterialType = true;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    for (kb::render::RenderMaterialGraphNode& node : material.graph.nodes) {
+        if (node.id == 1U) {
+            node.positionX = 1180;
+            node.positionY = 180;
+        }
+    }
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 20U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 190,
+        .positionY = 90,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "auditImageTexture",
+            .displayName = "Image Texture",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+        },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 21U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureObjectCube,
+        .positionX = 680,
+        .positionY = 80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "auditCubeObject",
+            .displayName = "Cube Texture Object",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+        },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 22U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = 720,
+        .positionY = 300,
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 30U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 190,
+        .positionY = 430,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.95 0.72 0.18 1" },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 31U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ColorRamp,
+        .positionX = 500,
+        .positionY = 440,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0.1 0.2 0.9;1 1 0.75 0.18" },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 40U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::Multiply,
+        .positionX = 840,
+        .positionY = 450,
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 50U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch,
+        .positionX = 1030,
+        .positionY = 520,
+    });
+    kb::render::RenderMaterialGraphCustomCode customCode{};
+    customCode.body = "return float4(A.rgb * B.rgb, 1.0);";
+    customCode.inputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "A", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "B", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Mask", .type = kb::render::RenderMaterialGraphPinType::Float },
+    };
+    customCode.outputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Color", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Alpha", .type = kb::render::RenderMaterialGraphPinType::Float },
+    };
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 60U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CustomCode,
+        .positionX = 840,
+        .positionY = 700,
+        .customCode = std::move(customCode),
+    });
+
+    {
+        std::ofstream output{ materialPath, std::ios::binary | std::ios::trunc };
+        kb::render::RenderMaterialAssetWriter::Write(output, material);
+    }
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Discover material node visual redesign audit asset");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/NodeRedesignAudit.kbmat");
+    report.Check(metadata != nullptr, "Resolve material node visual redesign audit asset metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(metadata->id), "Open material node visual redesign audit asset");
+
+    constexpr int width = 1480;
+    constexpr int height = 900;
+    HDC screenDc = GetDC(nullptr);
+    report.Check(screenDc != nullptr, "Create screen DC for material node visual redesign capture");
+    if (screenDc == nullptr) {
+        return;
+    }
+    HDC memoryDc = CreateCompatibleDC(screenDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(screenDc, width, height);
+    HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+
+    HeroIconGdiplusRuntime::EnsureStarted();
+    MaterialEditorPanelRenderer renderer;
+    renderer.Paint(memoryDc, RECT{ 0, 0, width, height }, EditorTheme{}, context);
+
+    const std::filesystem::path outputPath =
+        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorNodeRedesignCurrent.bmp";
+    std::filesystem::create_directories(outputPath.parent_path(), error);
+    const std::optional<CLSID> bmpEncoder = GdiplusEncoderClsid(L"image/bmp");
+    report.Check(bmpEncoder.has_value(), "Resolve BMP encoder for material node visual redesign capture");
+    if (bmpEncoder.has_value()) {
+        Gdiplus::Bitmap image(bitmap, nullptr);
+        report.Check(image.Save(outputPath.wstring().c_str(), &*bmpEncoder, nullptr) == Gdiplus::Ok,
+            "Save material node visual redesign screenshot artifact");
+        report.Note("Material node visual redesign screenshot: " + outputPath.string());
+    }
+
+    SelectObject(memoryDc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(nullptr, screenDc);
+}
+
+void RunMaterialEditorGlobalSaveSuite(Report& report) {
+    std::error_code error;
+
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Register material loader for global Save fixture");
+    const kb::assets::AssetId normalTextureId{ 424242U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = normalTextureId,
+                     .type = "RenderTexture",
+                     .name = "GlobalSaveNormalTexture",
+                     .virtualPath = "/Game/Textures/GlobalSaveNormalTexture.ktx",
+                     .runtimeLoadable = true,
+                 }),
+        "Register normal texture asset for global Save fixture");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "GlobalSaveNormal.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, material), "Create material fixture for global Save");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Discover global Save material fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/GlobalSaveNormal.kbmat");
+    report.Check(metadata != nullptr, "Resolve global Save material metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(metadata->id), "Open global Save material in Material Editor");
+    if (!context.MaterialEditor().WorkingCopy().has_value()) {
+        report.Check(false, "Global Save material working copy exists");
+        return;
+    }
+
+    kb::render::RenderMaterialAssetData working = *context.MaterialEditor().WorkingCopy();
+    working.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    working.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 80,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "normalTex",
+            .displayName = "Normal Texture",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+        },
+    });
+    working.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = 320,
+        .positionY = 120,
+    });
+    working.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .id = 1U,
+        .fromNodeId = 2U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::TextureSample, "color", true),
+        .fromPin = "color",
+        .toNodeId = 3U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::NormalUnpack, "color", false),
+        .toPin = "color",
+    });
+    working.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .id = 2U,
+        .fromNodeId = 3U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::NormalUnpack, "normal", true),
+        .fromPin = "normal",
+        .toNodeId = 1U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "normal", false),
+        .toPin = "normal",
+    });
+    working.graphParameterValues = {
+        kb::render::RenderMaterialGraphParameterValue{
+            .stableId = "normalTex",
+            .type = kb::render::RenderMaterialParameterType::Texture,
+            .assetId = normalTextureId.value,
+        },
+        kb::render::RenderMaterialGraphParameterValue{
+            .stableId = "textureSample99",
+            .type = kb::render::RenderMaterialParameterType::Texture,
+            .assetId = 987654321ULL,
+        },
+    };
+    context.MaterialEditor().SetWorkingCopy(std::move(working));
+    report.Check(context.HasDirtyMaterialAssetEdit(), "Global Save fixture material is dirty after graph edit");
+    const bool globalSaveSucceeded = context.SaveOpenDocuments();
+    report.Check(globalSaveSucceeded, "Global Save persists the dirty Material Editor working copy");
+    if (!globalSaveSucceeded) {
+        for (const std::string& diagnostic : context.MaterialEditor().Diagnostics()) {
+            report.Note("Global Save diagnostic: " + diagnostic);
+        }
+    }
+    report.Check(!context.HasDirtyMaterialAssetEdit(), "Global Save clears dirty Material Editor state");
+
+    const std::optional<kb::render::RenderMaterialAssetData> reloaded = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(reloaded.has_value(), "Reload global Save material from disk");
+    if (!reloaded.has_value()) {
+        return;
+    }
+    const kb::render::RenderMaterialGraphNode* savedSample = kb::render::FindRenderMaterialGraphNode(reloaded->graph, 2U);
+    report.Check(savedSample != nullptr, "Saved graph keeps TextureSample node");
+    report.Check(savedSample != nullptr && savedSample->parameter.textureRole == "normal", "Saved normal-map TextureSample role is normalized to normal");
+    report.Check(savedSample != nullptr && savedSample->parameter.expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Linear,
+        "Saved normal-map TextureSample color space is Linear");
+    report.Check(std::ranges::any_of(reloaded->graph.links, [](const kb::render::RenderMaterialGraphLink& link) {
+        return link.fromNodeId == 3U && link.fromPin == "normal" && link.toNodeId == 1U && link.toPin == "normal";
+    }), "Saved graph keeps NormalUnpack -> MaterialOutput.normal link");
+    report.Check(std::ranges::none_of(reloaded->graphParameterValues, [](const kb::render::RenderMaterialGraphParameterValue& value) {
+        return value.stableId == "textureSample99";
+    }), "Saved graph prunes orphan generated texture parameter values");
 }
 
 void RunInspectorLightComponentSuite(Report& report) {
@@ -1388,7 +1692,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -1411,6 +1715,8 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);
     RunSuiteInScratch(report, "material_graph_texture_nodes", &RunMaterialGraphTextureNodeSuite);
     RunSuiteInScratch(report, "material_graph_dense_node_layout", &RunMaterialGraphDenseNodeLayoutSuite);
+    RunSuiteInScratch(report, "material_graph_visual_redesign", &RunMaterialGraphVisualRedesignSuite);
+    RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);

@@ -24,6 +24,7 @@ struct EditorMaterialPreviewSceneSettings {
     float environmentSpecularIntensity = 0.18F;
     float exposureStops = 0.0F;
     bool postProcessEnabled = true;
+    bool normalDebugView = false;
 
     [[nodiscard]] static EditorMaterialPreviewSceneSettings Defaults() noexcept {
         return EditorMaterialPreviewSceneSettings{};
