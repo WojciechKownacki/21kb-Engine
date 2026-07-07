@@ -3436,7 +3436,40 @@ std::optional<MaterialImguiNodeEditorModel> MaterialEditorPanelRenderer::BuildIm
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    return BuildMaterialImguiNodeEditorModel(graphView);
+    MaterialImguiNodeEditorModel model = BuildMaterialImguiNodeEditorModel(graphView);
+    for (MaterialImguiNode& node : model.nodes) {
+        if (!MaterialEditorPanelIsTexturePreviewNode(node.kind)) {
+            continue;
+        }
+
+        const kb::render::RenderMaterialGraphNode* graphNode = kb::render::FindRenderMaterialGraphNode(graphView, node.nodeId);
+        if (graphNode == nullptr) {
+            continue;
+        }
+
+        const kb::assets::AssetId textureAssetId = TextureNodeAssetId(&*document->material, *graphNode);
+        if (!textureAssetId.IsValid()) {
+            continue;
+        }
+
+        const kb::assets::AssetMetadata* textureMetadata = sceneContext.Scene().Assets().Manager().Registry().Find(textureAssetId);
+        if (textureMetadata == nullptr) {
+            continue;
+        }
+
+        const EditorTexturePreviewImage* preview = EditorTexturePreviewService::PreviewFor(*textureMetadata);
+        if (preview == nullptr || preview->width <= 0 || preview->height <= 0 || preview->bgra.empty()) {
+            continue;
+        }
+
+        node.texturePreview = MaterialImguiTexturePreview{
+            .cacheKey = textureAssetId.value,
+            .width = preview->width,
+            .height = preview->height,
+            .bgra = preview->bgra,
+        };
+    }
+    return model;
 }
 
 } // namespace kb::editor

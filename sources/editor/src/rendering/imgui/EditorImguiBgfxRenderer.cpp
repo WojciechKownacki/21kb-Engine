@@ -8,6 +8,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "../../../../../third_party/bgfx/examples/common/imgui/vs_ocornut_imgui.bin.h"
 #include "../../../../../third_party/bgfx/examples/common/imgui/fs_ocornut_imgui.bin.h"
@@ -24,20 +25,59 @@ const bgfx::EmbeddedShader kEmbeddedShaders[] = {
 };
 
 [[nodiscard]] ImTextureID TextureIdFromHandle(bgfx::TextureHandle handle) noexcept {
-    return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(handle.idx));
+    if (!bgfx::isValid(handle)) {
+        return nullptr;
+    }
+    return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(handle.idx) + 1);
 }
 
 [[nodiscard]] bgfx::TextureHandle TextureHandleFromId(ImTextureID textureId) noexcept {
     const intptr_t raw = reinterpret_cast<intptr_t>(textureId);
-    if (raw < 0 || raw > 0xFFFF) {
+    if (raw <= 0 || raw > 0x10000) {
         return BGFX_INVALID_HANDLE;
     }
-    return bgfx::TextureHandle{ static_cast<std::uint16_t>(raw) };
+    return bgfx::TextureHandle{ static_cast<std::uint16_t>(raw - 1) };
 }
 
 [[nodiscard]] bool EnsureTransientBuffers(std::uint32_t vertexCount, const bgfx::VertexLayout& layout, std::uint32_t indexCount) noexcept {
     return vertexCount == bgfx::getAvailTransientVertexBuffer(vertexCount, layout) &&
            indexCount == bgfx::getAvailTransientIndexBuffer(indexCount, sizeof(ImDrawIdx) == 4);
+}
+
+[[nodiscard]] std::uint64_t HashTexturePixels(int width, int height, std::span<const std::uint32_t> bgraPixels) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](std::uint64_t value) noexcept {
+        for (int shift = 0; shift < 64; shift += 8) {
+            hash ^= (value >> shift) & 0xFFU;
+            hash *= 1099511628211ULL;
+        }
+    };
+    mix(static_cast<std::uint64_t>(width));
+    mix(static_cast<std::uint64_t>(height));
+    for (const std::uint32_t pixel : bgraPixels) {
+        hash ^= static_cast<std::uint64_t>(pixel & 0xFFU);
+        hash *= 1099511628211ULL;
+        hash ^= static_cast<std::uint64_t>((pixel >> 8U) & 0xFFU);
+        hash *= 1099511628211ULL;
+        hash ^= static_cast<std::uint64_t>((pixel >> 16U) & 0xFFU);
+        hash *= 1099511628211ULL;
+        hash ^= static_cast<std::uint64_t>((pixel >> 24U) & 0xFFU);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+[[nodiscard]] std::vector<std::uint32_t> ConvertBgraToRgba(std::span<const std::uint32_t> bgraPixels) {
+    std::vector<std::uint32_t> rgba;
+    rgba.reserve(bgraPixels.size());
+    for (const std::uint32_t bgra : bgraPixels) {
+        const std::uint32_t b = bgra & 0xFFU;
+        const std::uint32_t g = (bgra >> 8U) & 0xFFU;
+        const std::uint32_t r = (bgra >> 16U) & 0xFFU;
+        const std::uint32_t a = (bgra >> 24U) & 0xFFU;
+        rgba.push_back(r | (g << 8U) | (b << 16U) | (a << 24U));
+    }
+    return rgba;
 }
 
 } // namespace
@@ -129,6 +169,70 @@ void EditorImguiBgfxRenderer::ClearCurrentContext() noexcept {
     }
 }
 
+ImTextureID EditorImguiBgfxRenderer::EnsureTexture(
+    std::uint64_t cacheKey,
+    int width,
+    int height,
+    std::span<const std::uint32_t> bgraPixels) {
+    if (!IsInitialized() ||
+        cacheKey == 0U ||
+        width <= 0 ||
+        height <= 0 ||
+        width > 65535 ||
+        height > 65535 ||
+        bgraPixels.size() != static_cast<std::size_t>(width * height)) {
+        return nullptr;
+    }
+
+    const std::uint64_t contentHash = HashTexturePixels(width, height, bgraPixels);
+    auto entry = std::ranges::find_if(textureCache_, [cacheKey](const TextureCacheEntry& candidate) {
+        return candidate.cacheKey == cacheKey;
+    });
+    if (entry != textureCache_.end() &&
+        entry->width == width &&
+        entry->height == height &&
+        entry->contentHash == contentHash &&
+        bgfx::isValid(entry->texture)) {
+        return TextureIdFromHandle(entry->texture);
+    }
+
+    std::vector<std::uint32_t> rgbaPixels = ConvertBgraToRgba(bgraPixels);
+    const bgfx::Memory* memory = bgfx::copy(rgbaPixels.data(), static_cast<std::uint32_t>(rgbaPixels.size() * sizeof(std::uint32_t)));
+    bgfx::TextureHandle texture = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(width),
+        static_cast<std::uint16_t>(height),
+        false,
+        1,
+        bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        memory);
+    if (!bgfx::isValid(texture)) {
+        return nullptr;
+    }
+
+    if (entry == textureCache_.end()) {
+        textureCache_.push_back(TextureCacheEntry{
+            .cacheKey = cacheKey,
+            .contentHash = contentHash,
+            .width = width,
+            .height = height,
+            .texture = texture,
+        });
+    } else {
+        if (bgfx::isValid(entry->texture)) {
+            bgfx::destroy(entry->texture);
+        }
+        *entry = TextureCacheEntry{
+            .cacheKey = cacheKey,
+            .contentHash = contentHash,
+            .width = width,
+            .height = height,
+            .texture = texture,
+        };
+    }
+    return TextureIdFromHandle(texture);
+}
+
 bool EditorImguiBgfxRenderer::IsInitialized() const noexcept {
     return context_ != nullptr && bgfx::isValid(textureUniform_) && bgfx::isValid(program_) && bgfx::isValid(fontTexture_);
 }
@@ -197,6 +301,13 @@ bool EditorImguiBgfxRenderer::CreateFontTexture() {
 }
 
 void EditorImguiBgfxRenderer::DestroyDeviceObjects() noexcept {
+    for (TextureCacheEntry& entry : textureCache_) {
+        if (bgfx::isValid(entry.texture)) {
+            bgfx::destroy(entry.texture);
+            entry.texture = BGFX_INVALID_HANDLE;
+        }
+    }
+    textureCache_.clear();
     if (bgfx::isValid(fontTexture_)) {
         bgfx::destroy(fontTexture_);
         fontTexture_ = BGFX_INVALID_HANDLE;

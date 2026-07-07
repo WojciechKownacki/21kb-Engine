@@ -110,8 +110,7 @@ void DrawCheckerboard(ImDrawList& drawList, const ImVec2& min, const ImVec2& max
     }
 }
 
-void DrawTexturePreviewSlot(const MaterialImguiNode& node) {
-    static_cast<void>(node);
+void DrawTexturePreviewSlot(const MaterialImguiNode& node, const MaterialImguiTextureResolver& textureResolver) {
     constexpr ImVec2 previewSize{ 194.0F, 118.0F };
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max{ min.x + previewSize.x, min.y + previewSize.y };
@@ -120,18 +119,35 @@ void DrawTexturePreviewSlot(const MaterialImguiNode& node) {
     const ImVec2 imageMin{ min.x + 1.0F, min.y + 1.0F };
     const ImVec2 imageMax{ max.x - 1.0F, max.y - 1.0F };
     DrawCheckerboard(*drawList, imageMin, imageMax, 12.0F);
-    drawList->AddRectFilledMultiColor(
-        imageMin,
-        imageMax,
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.12F, 0.19F, 0.24F, 0.28F)),
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.07F, 0.09F, 0.20F)),
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.02F, 0.03F, 0.04F, 0.32F)),
-        ImGui::ColorConvertFloat4ToU32(ImVec4(0.06F, 0.10F, 0.12F, 0.28F)));
+    ImTextureID textureId = nullptr;
+    if (node.texturePreview.has_value() && node.texturePreview->IsValid() && textureResolver) {
+        textureId = textureResolver(*node.texturePreview);
+    }
+    if (textureId != nullptr && node.texturePreview.has_value()) {
+        const float sourceWidth = static_cast<float>(node.texturePreview->width);
+        const float sourceHeight = static_cast<float>(node.texturePreview->height);
+        const float scale = std::min((imageMax.x - imageMin.x) / sourceWidth, (imageMax.y - imageMin.y) / sourceHeight);
+        const ImVec2 imageSize{ std::max(1.0F, std::floor(sourceWidth * scale)), std::max(1.0F, std::floor(sourceHeight * scale)) };
+        const ImVec2 drawMin{
+            imageMin.x + std::floor(((imageMax.x - imageMin.x) - imageSize.x) * 0.5F),
+            imageMin.y + std::floor(((imageMax.y - imageMin.y) - imageSize.y) * 0.5F),
+        };
+        const ImVec2 drawMax{ drawMin.x + imageSize.x, drawMin.y + imageSize.y };
+        drawList->AddImage(textureId, drawMin, drawMax);
+    } else {
+        drawList->AddRectFilledMultiColor(
+            imageMin,
+            imageMax,
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.12F, 0.19F, 0.24F, 0.28F)),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.07F, 0.09F, 0.20F)),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.02F, 0.03F, 0.04F, 0.32F)),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.06F, 0.10F, 0.12F, 0.28F)));
+    }
     drawList->AddRect(min, max, ImGui::ColorConvertFloat4ToU32(ImVec4(0.26F, 0.45F, 0.49F, 0.90F)), 4.0F, 0, 1.0F);
     ImGui::Dummy(previewSize);
 }
 
-void DrawMaterialNode(const MaterialImguiNode& node) {
+void DrawMaterialNode(const MaterialImguiNode& node, const MaterialImguiTextureResolver& textureResolver) {
     ed::BeginNode(node.editorId);
     ImGui::PushID(static_cast<int>(node.nodeId));
     DrawNodeHeader(node);
@@ -142,7 +158,7 @@ void DrawMaterialNode(const MaterialImguiNode& node) {
         ImGui::BeginGroup();
         ImGui::Dummy(ImVec2(24.0F, 1.0F));
         ImGui::SameLine(0.0F, 0.0F);
-        DrawTexturePreviewSlot(node);
+        DrawTexturePreviewSlot(node, textureResolver);
         ImGui::EndGroup();
         ImGui::Spacing();
     }
@@ -281,7 +297,8 @@ MaterialImguiNodeEditorRenderer& MaterialImguiNodeEditorRenderer::operator=(Mate
 
 MaterialImguiNodeEditorFrameResult MaterialImguiNodeEditorRenderer::Render(
     const MaterialImguiNodeEditorModel& model,
-    const ImVec2& size) {
+    const ImVec2& size,
+    const MaterialImguiTextureResolver& textureResolver) {
     ed::SetCurrentEditor(context_.get());
     PushMaterialNodeEditorStyle();
     ed::Begin("MaterialGraphImguiNodeEditor", size);
@@ -299,7 +316,7 @@ MaterialImguiNodeEditorFrameResult MaterialImguiNodeEditorRenderer::Render(
                 *applied = ModelPositionFor(node);
             }
         }
-        DrawMaterialNode(node);
+        DrawMaterialNode(node, textureResolver);
     }
     SubmitLinks(model);
     MaterialImguiNodeEditorFrameResult result = GatherInteractions();

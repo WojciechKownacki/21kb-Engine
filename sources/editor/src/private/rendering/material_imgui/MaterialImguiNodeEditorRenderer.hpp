@@ -3,6 +3,7 @@
 #include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,6 +45,8 @@ struct MaterialImguiNodeEditorFrameResult {
     std::vector<MaterialImguiNodeEditorMovedNode> movedNodes;
 };
 
+using MaterialImguiTextureResolver = std::function<ImTextureID(const MaterialImguiTexturePreview&)>;
+
 [[nodiscard]] std::optional<MaterialImguiNodeEditorGraphLinkRequest> ResolveMaterialImguiNewLink(
     const MaterialImguiNodeEditorModel& model,
     const MaterialImguiNodeEditorNewLink& link) noexcept;
@@ -64,7 +67,8 @@ public:
 
     [[nodiscard]] MaterialImguiNodeEditorFrameResult Render(
         const MaterialImguiNodeEditorModel& model,
-        const ImVec2& size = ImVec2(0.0F, 0.0F));
+        const ImVec2& size = ImVec2(0.0F, 0.0F),
+        const MaterialImguiTextureResolver& textureResolver = {});
 
 private:
     struct EditorContextDeleter {

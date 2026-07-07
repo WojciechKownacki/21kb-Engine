@@ -202,7 +202,10 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
         if (open) {
             frameResult = viewport_.materialGraphImguiRenderer_.Render(
                 present.model,
-                ImVec2(static_cast<float>(width), static_cast<float>(height)));
+                ImVec2(static_cast<float>(width), static_cast<float>(height)),
+                [this](const MaterialImguiTexturePreview& preview) {
+                    return viewport_.imguiRenderer_.EnsureTexture(preview.cacheKey, preview.width, preview.height, preview.bgra);
+                });
         }
         ImGui::End();
         ImGui::PopStyleVar(2);

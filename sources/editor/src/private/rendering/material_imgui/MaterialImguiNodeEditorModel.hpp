@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <imgui_node_editor.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -35,6 +36,17 @@ struct MaterialImguiPin {
     ImVec4 color{ 0.69F, 0.69F, 0.69F, 1.0F };
 };
 
+struct MaterialImguiTexturePreview {
+    std::uint64_t cacheKey = 0U;
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint32_t> bgra;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return cacheKey != 0U && width > 0 && height > 0 && bgra.size() == static_cast<std::size_t>(width * height);
+    }
+};
+
 struct MaterialImguiNode {
     ax::NodeEditor::NodeId editorId{};
     std::uint32_t nodeId = 0U;
@@ -43,6 +55,7 @@ struct MaterialImguiNode {
     int positionX = 0;
     int positionY = 0;
     MaterialImguiNodeBodyKind bodyKind = MaterialImguiNodeBodyKind::Pins;
+    std::optional<MaterialImguiTexturePreview> texturePreview;
     ImVec4 headerColor{ 0.12F, 0.15F, 0.19F, 1.0F };
     std::vector<MaterialImguiPin> inputs;
     std::vector<MaterialImguiPin> outputs;
