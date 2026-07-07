@@ -39,6 +39,7 @@
 #include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/material_imgui/MaterialImguiNodeEditorModel.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #if defined(_WIN32)
@@ -6463,6 +6464,63 @@ void RunMaterialEditorGraphRuntimeStateTest() {
         "KBMAT-MAT14: Fixing a broken graph must hot-reload back to the GPU graph state");
 }
 
+void RunMaterialImguiNodeEditorModelMappingTest() {
+    kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -360,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "normalSample",
+            .displayName = "Normal Sample",
+        },
+    });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = -80,
+        .positionY = 138,
+    });
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        2U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        3U,
+        "color"));
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        3U,
+        "normal",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "normal"));
+
+    const kb::editor::MaterialImguiNodeEditorModel model =
+        kb::editor::BuildMaterialImguiNodeEditorModel(graph);
+    kb::editor::tests::Require(model.nodes.size() == 3U, "KBMAT-IMGUI-0001: ImGui material editor model should include every graph node");
+    kb::editor::tests::Require(model.links.size() == 2U, "KBMAT-IMGUI-0001: ImGui material editor model should include every valid graph link");
+
+    const kb::editor::MaterialImguiNode* sample = model.FindNode(2U);
+    const kb::editor::MaterialImguiNode* unpack = model.FindNode(3U);
+    kb::editor::tests::Require(sample != nullptr && unpack != nullptr, "KBMAT-IMGUI-0001: ImGui node model must be searchable by graph node id");
+    kb::editor::tests::Require(sample->title == "Normal Sample", "KBMAT-IMGUI-0001: ImGui node title should use authored display name");
+    kb::editor::tests::Require(!sample->outputs.empty() && sample->outputs.front().type == kb::render::RenderMaterialGraphPinType::Color,
+        "KBMAT-IMGUI-0001: Texture sample color pin should map to a typed ImGui output pin");
+    kb::editor::tests::Require(!unpack->outputs.empty() && unpack->outputs.front().type == kb::render::RenderMaterialGraphPinType::Normal,
+        "KBMAT-IMGUI-0001: Normal unpack output should map to a Normal typed ImGui pin");
+
+    const kb::editor::MaterialImguiLink& firstLink = model.links.front();
+    kb::editor::tests::Require(model.FindPin(firstLink.startPin) != nullptr && model.FindPin(firstLink.endPin) != nullptr,
+        "KBMAT-IMGUI-0001: ImGui link endpoints must resolve back to exported pins");
+    kb::editor::tests::Require(model.FindLink(firstLink.editorId) == &firstLink,
+        "KBMAT-IMGUI-0001: ImGui links must be searchable by editor link id");
+    kb::editor::tests::Require(
+        kb::editor::MaterialImguiPinId(2U, kb::render::RenderMaterialGraphNodeKind::TextureSample, "color", kb::editor::MaterialImguiPinDirection::Output) == firstLink.startPin,
+        "KBMAT-IMGUI-0001: Stable graph pin ids must produce deterministic ImGui pin ids");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -6483,6 +6541,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
     RunMaterialEditorVariantSwitchAuthoringTest();
     RunMaterialEditorGraphRuntimeStateTest();
+    RunMaterialImguiNodeEditorModelMappingTest();
     RunMaterialEditorGraphWorkingCopyCommandUndoRedoTest();
     RunMaterialEditorGraphMultiSelectCopyPasteDuplicateTest();
     RunMaterialEditorGraphSelectionLayoutCommandsTest();

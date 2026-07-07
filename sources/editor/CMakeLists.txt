@@ -1,3 +1,26 @@
+add_library(kb_imgui_node_editor STATIC
+    ../../third_party/imgui/imgui.cpp
+    ../../third_party/imgui/imgui_draw.cpp
+    ../../third_party/imgui/imgui_tables.cpp
+    ../../third_party/imgui/imgui_widgets.cpp
+    ../../third_party/imgui-node-editor/crude_json.cpp
+    ../../third_party/imgui-node-editor/imgui_canvas.cpp
+    ../../third_party/imgui-node-editor/imgui_node_editor.cpp
+    ../../third_party/imgui-node-editor/imgui_node_editor_api.cpp
+)
+
+target_include_directories(kb_imgui_node_editor
+    PUBLIC
+        ../../third_party/imgui
+        ../../third_party/imgui-node-editor
+)
+
+if(MSVC)
+    target_compile_options(kb_imgui_node_editor PRIVATE /W0 /EHsc /FS)
+else()
+    target_compile_options(kb_imgui_node_editor PRIVATE -w)
+endif()
+
 add_executable(kb_editor WIN32
     include/kb/editor/EditorApplication.hpp
     include/kb/editor/assets/EditorAssetBrowserTypes.hpp
@@ -455,6 +478,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
+    src/private/rendering/material_imgui/MaterialImguiNodeEditorModel.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
@@ -644,6 +668,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/material_imgui/MaterialImguiNodeEditorModel.cpp
     src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
@@ -842,6 +867,7 @@ target_link_libraries(kb_editor
     PRIVATE
         kb_engine
         kb_renderer
+        kb_imgui_node_editor
 )
 
 if(TARGET kb_physics_jolt_plugin)
@@ -1042,6 +1068,7 @@ if(BUILD_TESTING)
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
+        src/rendering/material_imgui/MaterialImguiNodeEditorModel.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
@@ -1063,6 +1090,7 @@ if(BUILD_TESTING)
         PRIVATE
             kb_engine
             kb_renderer
+            kb_imgui_node_editor
     )
 
     kb_apply_editor_graph_cook_defs(kb_editor_tests)

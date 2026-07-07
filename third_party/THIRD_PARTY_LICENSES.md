@@ -93,6 +93,26 @@ substantial portions of the software.
 
 Lucide copyright and permission notices must be included in all copies.
 
+## imgui-node-editor
+
+- Repository: https://github.com/thedmd/imgui-node-editor
+- Local path: `third_party/imgui-node-editor`
+- License: MIT
+- License file: `third_party/imgui-node-editor/LICENSE`
+
+imgui-node-editor copyright and permission notices must be included in all
+copies or substantial portions of the software.
+
+## Dear ImGui
+
+- Repository: https://github.com/ocornut/imgui
+- Local path: `third_party/imgui`
+- License: MIT
+- License file: `third_party/imgui/LICENSE.txt`
+
+Dear ImGui copyright and permission notices must be included in all copies or
+substantial portions of the software.
+
 ## DejaVu Fonts
 
 - Repository: https://github.com/dejavu-fonts/dejavu-fonts

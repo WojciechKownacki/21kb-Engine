@@ -1,0 +1,6 @@
+[submodule "third_party/imgui-node-editor"]
+	path = third_party/imgui-node-editor
+	url = https://github.com/thedmd/imgui-node-editor.git
+[submodule "third_party/imgui"]
+	path = third_party/imgui
+	url = https://github.com/ocornut/imgui.git
