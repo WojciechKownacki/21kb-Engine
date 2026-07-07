@@ -268,6 +268,10 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     if (RectWidth(layout.graphCanvas) == 0U || RectHeight(layout.graphCanvas) == 0U) {
         return false;
     }
+    if (!state.sceneViewport.PresentRequested() &&
+        state.sceneViewport.IsHostSurfaceVisible(host, kMaterialEditorGraphImguiViewportKey)) {
+        return false;
+    }
 
     const std::optional<MaterialImguiNodeEditorModel> model =
         MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(*materialEditorContent, state.sceneContext);

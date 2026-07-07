@@ -19,10 +19,10 @@ namespace ed = ax::NodeEditor;
 }
 
 void PushMaterialNodeEditorStyle() {
-    ed::PushStyleColor(ed::StyleColor_Bg, ImVec4(0.025F, 0.032F, 0.044F, 1.0F));
-    ed::PushStyleColor(ed::StyleColor_Grid, ImVec4(0.17F, 0.22F, 0.29F, 0.32F));
-    ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.045F, 0.058F, 0.076F, 0.98F));
-    ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.20F, 0.25F, 0.31F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_Bg, ImVec4(0.018F, 0.022F, 0.030F, 1.0F));
+    ed::PushStyleColor(ed::StyleColor_Grid, ImVec4(0.19F, 0.25F, 0.32F, 0.28F));
+    ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.040F, 0.050F, 0.064F, 0.99F));
+    ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.18F, 0.24F, 0.31F, 1.0F));
     ed::PushStyleColor(ed::StyleColor_HovNodeBorder, ImVec4(0.30F, 0.87F, 0.82F, 1.0F));
     ed::PushStyleColor(ed::StyleColor_SelNodeBorder, ImVec4(0.20F, 0.95F, 0.88F, 1.0F));
     ed::PushStyleColor(ed::StyleColor_HovLinkBorder, ImVec4(0.95F, 0.75F, 0.25F, 1.0F));
@@ -30,7 +30,7 @@ void PushMaterialNodeEditorStyle() {
     ed::PushStyleColor(ed::StyleColor_PinRect, ImVec4(0.95F, 0.95F, 0.95F, 1.0F));
     ed::PushStyleColor(ed::StyleColor_PinRectBorder, ImVec4(0.02F, 0.025F, 0.03F, 1.0F));
 
-    ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(10.0F, 8.0F, 10.0F, 10.0F));
+    ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0.0F, 0.0F, 0.0F, 10.0F));
     ed::PushStyleVar(ed::StyleVar_NodeRounding, 5.0F);
     ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 1.25F);
     ed::PushStyleVar(ed::StyleVar_SelectedNodeBorderWidth, 2.0F);
@@ -79,14 +79,28 @@ void DrawOutputPin(const MaterialImguiPin& pin, float rowWidth) {
     ed::EndPin();
 }
 
-void DrawNodeHeader(const MaterialImguiNode& node) {
-    const ImVec4 header = node.headerColor;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95F, 0.98F, 1.0F, 1.0F));
-    ImGui::PushStyleColor(ImGuiCol_Header, WithAlpha(header, 0.95F));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, WithAlpha(header, 1.0F));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, WithAlpha(header, 1.0F));
-    ImGui::Selectable(node.title.c_str(), false, ImGuiSelectableFlags_Disabled, ImVec2(188.0F, 24.0F));
-    ImGui::PopStyleColor(4);
+void DrawNodeHeader(const MaterialImguiNode& node, float width) {
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max{ min.x + width, min.y + 28.0F };
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilledMultiColor(
+        min,
+        max,
+        ImGui::ColorConvertFloat4ToU32(WithAlpha(node.headerColor, 0.98F)),
+        ImGui::ColorConvertFloat4ToU32(WithAlpha(node.headerColor, 0.90F)),
+        ImGui::ColorConvertFloat4ToU32(WithAlpha(ImVec4(node.headerColor.x * 0.50F, node.headerColor.y * 0.50F, node.headerColor.z * 0.55F, 1.0F), 0.96F)),
+        ImGui::ColorConvertFloat4ToU32(WithAlpha(ImVec4(node.headerColor.x * 0.56F, node.headerColor.y * 0.56F, node.headerColor.z * 0.60F, 1.0F), 0.96F)));
+    drawList->AddLine(
+        ImVec2(min.x, max.y - 1.0F),
+        ImVec2(max.x, max.y - 1.0F),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.05F, 0.065F, 0.90F)),
+        1.0F);
+    const ImVec2 textSize = ImGui::CalcTextSize(node.title.c_str());
+    drawList->AddText(
+        ImVec2(min.x + std::floor((width - textSize.x) * 0.5F), min.y + std::floor((28.0F - textSize.y) * 0.5F)),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.94F, 0.98F, 1.0F, 1.0F)),
+        node.title.c_str());
+    ImGui::Dummy(ImVec2(width, 28.0F));
 }
 
 [[nodiscard]] bool HasTexturePreviewBody(const MaterialImguiNode& node) noexcept {
@@ -111,7 +125,7 @@ void DrawCheckerboard(ImDrawList& drawList, const ImVec2& min, const ImVec2& max
 }
 
 void DrawTexturePreviewSlot(const MaterialImguiNode& node, const MaterialImguiTextureResolver& textureResolver) {
-    constexpr ImVec2 previewSize{ 194.0F, 118.0F };
+    constexpr ImVec2 previewSize{ 220.0F, 128.0F };
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max{ min.x + previewSize.x, min.y + previewSize.y };
     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -150,10 +164,11 @@ void DrawTexturePreviewSlot(const MaterialImguiNode& node, const MaterialImguiTe
 void DrawMaterialNode(const MaterialImguiNode& node, const MaterialImguiTextureResolver& textureResolver) {
     ed::BeginNode(node.editorId);
     ImGui::PushID(static_cast<int>(node.nodeId));
-    DrawNodeHeader(node);
-    ImGui::Spacing();
+    constexpr float rowWidth = 250.0F;
+    DrawNodeHeader(node, rowWidth + 22.0F);
+    ImGui::Dummy(ImVec2(1.0F, 8.0F));
+    ImGui::Indent(10.0F);
 
-    constexpr float rowWidth = 210.0F;
     if (HasTexturePreviewBody(node)) {
         ImGui::BeginGroup();
         ImGui::Dummy(ImVec2(24.0F, 1.0F));
@@ -182,6 +197,7 @@ void DrawMaterialNode(const MaterialImguiNode& node, const MaterialImguiTextureR
         ImGui::EndGroup();
     }
 
+    ImGui::Unindent(10.0F);
     ImGui::PopID();
     ed::EndNode();
 }

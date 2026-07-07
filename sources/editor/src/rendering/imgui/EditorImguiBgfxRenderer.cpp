@@ -279,6 +279,17 @@ bool EditorImguiBgfxRenderer::CreateFontTexture() {
     }
 
     ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    ImFontConfig fontConfig{};
+    fontConfig.OversampleH = 2;
+    fontConfig.OversampleV = 2;
+    fontConfig.PixelSnapH = false;
+    ImFont* uiFont = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 15.0F, &fontConfig);
+    if (uiFont == nullptr) {
+        uiFont = io.Fonts->AddFontDefault();
+    }
+    io.FontDefault = uiFont;
+
     unsigned char* pixels = nullptr;
     int width = 0;
     int height = 0;

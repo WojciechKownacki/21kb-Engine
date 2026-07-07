@@ -3332,7 +3332,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         return;
     }
 
-    const bool useImguiGraph = MaterialEditorPanelRenderer::BuildImguiNodeEditorModel(content, sceneContext).has_value();
+    const bool useImguiGraph = document->material.has_value();
     if (document->material.has_value() && !useImguiGraph) {
         DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else if (document->material.has_value()) {

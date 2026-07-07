@@ -941,8 +941,9 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
         if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
             surface->imguiMouseWheel += static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / static_cast<float>(WHEEL_DELTA);
+            viewport->RequestPresent();
             if (surface->host != nullptr) {
-                InvalidateRect(surface->host, nullptr, FALSE);
+                InvalidateRect(surface->host, &surface->rect, FALSE);
             }
             return 0;
         }
@@ -954,8 +955,9 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
         if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
             SetCapture(window);
+            viewport->RequestPresent();
             if (surface->host != nullptr) {
-                InvalidateRect(surface->host, nullptr, FALSE);
+                InvalidateRect(surface->host, &surface->rect, FALSE);
             }
             return 0;
         }
@@ -969,8 +971,9 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
             if (GetCapture() == window) {
                 ReleaseCapture();
             }
+            viewport->RequestPresent();
             if (surface->host != nullptr) {
-                InvalidateRect(surface->host, nullptr, FALSE);
+                InvalidateRect(surface->host, &surface->rect, FALSE);
             }
             return 0;
         }
@@ -979,8 +982,9 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
     case WM_MOUSEMOVE: {
         const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
         if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
+            viewport->RequestPresent();
             if (surface->host != nullptr) {
-                InvalidateRect(surface->host, nullptr, FALSE);
+                InvalidateRect(surface->host, &surface->rect, FALSE);
             }
             return 0;
         }
