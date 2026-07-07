@@ -89,6 +89,48 @@ void DrawNodeHeader(const MaterialImguiNode& node) {
     ImGui::PopStyleColor(4);
 }
 
+[[nodiscard]] bool HasTexturePreviewBody(const MaterialImguiNode& node) noexcept {
+    return node.bodyKind == MaterialImguiNodeBodyKind::TextureSamplePreview ||
+        node.bodyKind == MaterialImguiNodeBodyKind::TextureObjectPreview;
+}
+
+void DrawCheckerboard(ImDrawList& drawList, const ImVec2& min, const ImVec2& max, float cellSize) {
+    const ImU32 dark = ImGui::ColorConvertFloat4ToU32(ImVec4(0.055F, 0.067F, 0.083F, 1.0F));
+    const ImU32 light = ImGui::ColorConvertFloat4ToU32(ImVec4(0.088F, 0.105F, 0.128F, 1.0F));
+    for (float y = min.y; y < max.y; y += cellSize) {
+        for (float x = min.x; x < max.x; x += cellSize) {
+            const int xi = static_cast<int>((x - min.x) / cellSize);
+            const int yi = static_cast<int>((y - min.y) / cellSize);
+            const ImU32 color = ((xi + yi) % 2) == 0 ? dark : light;
+            drawList.AddRectFilled(
+                ImVec2(x, y),
+                ImVec2(std::min(x + cellSize, max.x), std::min(y + cellSize, max.y)),
+                color);
+        }
+    }
+}
+
+void DrawTexturePreviewSlot(const MaterialImguiNode& node) {
+    static_cast<void>(node);
+    constexpr ImVec2 previewSize{ 194.0F, 118.0F };
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImVec2 max{ min.x + previewSize.x, min.y + previewSize.y };
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(min, max, ImGui::ColorConvertFloat4ToU32(ImVec4(0.025F, 0.031F, 0.040F, 1.0F)), 4.0F);
+    const ImVec2 imageMin{ min.x + 1.0F, min.y + 1.0F };
+    const ImVec2 imageMax{ max.x - 1.0F, max.y - 1.0F };
+    DrawCheckerboard(*drawList, imageMin, imageMax, 12.0F);
+    drawList->AddRectFilledMultiColor(
+        imageMin,
+        imageMax,
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.12F, 0.19F, 0.24F, 0.28F)),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.04F, 0.07F, 0.09F, 0.20F)),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.02F, 0.03F, 0.04F, 0.32F)),
+        ImGui::ColorConvertFloat4ToU32(ImVec4(0.06F, 0.10F, 0.12F, 0.28F)));
+    drawList->AddRect(min, max, ImGui::ColorConvertFloat4ToU32(ImVec4(0.26F, 0.45F, 0.49F, 0.90F)), 4.0F, 0, 1.0F);
+    ImGui::Dummy(previewSize);
+}
+
 void DrawMaterialNode(const MaterialImguiNode& node) {
     ed::BeginNode(node.editorId);
     ImGui::PushID(static_cast<int>(node.nodeId));
@@ -96,6 +138,15 @@ void DrawMaterialNode(const MaterialImguiNode& node) {
     ImGui::Spacing();
 
     constexpr float rowWidth = 210.0F;
+    if (HasTexturePreviewBody(node)) {
+        ImGui::BeginGroup();
+        ImGui::Dummy(ImVec2(24.0F, 1.0F));
+        ImGui::SameLine(0.0F, 0.0F);
+        DrawTexturePreviewSlot(node);
+        ImGui::EndGroup();
+        ImGui::Spacing();
+    }
+
     const std::size_t rows = std::max(node.inputs.size(), node.outputs.size());
     for (std::size_t row = 0U; row < rows; ++row) {
         ImGui::BeginGroup();

@@ -187,6 +187,41 @@ ImVec4 MaterialImguiNodeHeaderColor(render::RenderMaterialGraphNodeKind kind) no
     }
 }
 
+[[nodiscard]] bool IsTextureSamplePreviewNode(render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case render::RenderMaterialGraphNodeKind::TextureSample:
+    case render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool IsTextureObjectPreviewNode(render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case render::RenderMaterialGraphNodeKind::ParameterTexture:
+    case render::RenderMaterialGraphNodeKind::TextureObject:
+    case render::RenderMaterialGraphNodeKind::TextureObjectCube:
+    case render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] MaterialImguiNodeBodyKind NodeBodyKind(render::RenderMaterialGraphNodeKind kind) noexcept {
+    if (IsTextureSamplePreviewNode(kind)) {
+        return MaterialImguiNodeBodyKind::TextureSamplePreview;
+    }
+    if (IsTextureObjectPreviewNode(kind)) {
+        return MaterialImguiNodeBodyKind::TextureObjectPreview;
+    }
+    return MaterialImguiNodeBodyKind::Pins;
+}
+
 [[nodiscard]] std::string MaterialImguiNodeKindTitle(render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case render::RenderMaterialGraphNodeKind::TextureSample: return "Image Texture";
@@ -223,6 +258,7 @@ MaterialImguiNodeEditorModel BuildMaterialImguiNodeEditorModel(const render::Ren
             .title = MaterialImguiNodeTitle(graphNode),
             .positionX = graphNode.positionX,
             .positionY = graphNode.positionY,
+            .bodyKind = NodeBodyKind(graphNode.kind),
             .headerColor = MaterialImguiNodeHeaderColor(graphNode.kind),
         };
         for (const std::string& input : render::RenderMaterialGraphNodeInputPinNames(graphNode)) {

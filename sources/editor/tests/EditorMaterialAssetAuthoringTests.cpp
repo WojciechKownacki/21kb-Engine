@@ -6507,6 +6507,10 @@ void RunMaterialImguiNodeEditorModelMappingTest() {
     const kb::editor::MaterialImguiNode* unpack = model.FindNode(3U);
     kb::editor::tests::Require(sample != nullptr && unpack != nullptr, "KBMAT-IMGUI-0001: ImGui node model must be searchable by graph node id");
     kb::editor::tests::Require(sample->title == "Image Texture", "KBMAT-IMGUI-0001: Texture ImGui node title should use the node type, not the authored texture name");
+    kb::editor::tests::Require(sample->bodyKind == kb::editor::MaterialImguiNodeBodyKind::TextureSamplePreview,
+        "KBMAT-IMGUI-0001: Texture sample ImGui nodes should expose a texture preview body, not only pin rows");
+    kb::editor::tests::Require(unpack->bodyKind == kb::editor::MaterialImguiNodeBodyKind::Pins,
+        "KBMAT-IMGUI-0001: Non-texture ImGui nodes should keep the compact pin-only body");
     kb::editor::tests::Require(!sample->outputs.empty() && sample->outputs.front().type == kb::render::RenderMaterialGraphPinType::Color,
         "KBMAT-IMGUI-0001: Texture sample color pin should map to a typed ImGui output pin");
     kb::editor::tests::Require(!unpack->outputs.empty() && unpack->outputs.front().type == kb::render::RenderMaterialGraphPinType::Normal,

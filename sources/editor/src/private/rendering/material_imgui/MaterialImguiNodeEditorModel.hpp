@@ -18,6 +18,12 @@ enum class MaterialImguiPinDirection : std::uint8_t {
     Output,
 };
 
+enum class MaterialImguiNodeBodyKind : std::uint8_t {
+    Pins,
+    TextureSamplePreview,
+    TextureObjectPreview,
+};
+
 struct MaterialImguiPin {
     ax::NodeEditor::PinId editorId{};
     std::uint32_t nodeId = 0U;
@@ -36,6 +42,7 @@ struct MaterialImguiNode {
     std::string title;
     int positionX = 0;
     int positionY = 0;
+    MaterialImguiNodeBodyKind bodyKind = MaterialImguiNodeBodyKind::Pins;
     ImVec4 headerColor{ 0.12F, 0.15F, 0.19F, 1.0F };
     std::vector<MaterialImguiPin> inputs;
     std::vector<MaterialImguiPin> outputs;
