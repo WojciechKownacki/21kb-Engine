@@ -4803,6 +4803,89 @@ void RunMaterialGraphReflectionUniformAndTextureCountTest() {
         "KBMAT-MAT02: Reflection must list uv0 as required varying when TextureSample is present");
 }
 
+void RunMaterialGraphNormalMapTextureRoleInferenceTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "normalTex",
+            .displayName = "Normal Texture",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+        },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::NormalUnpack,
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::NormalUnpack, 4U, "color"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::NormalUnpack, 4U, "normal", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+
+    const std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(graph);
+    Require(!HasGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::InvalidColorSpaceRole),
+        "KBMAT-MAT02: TextureSample feeding Normal Map must not be rejected for its editor default baseColor/sRGB metadata");
+
+    const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0211U, .sourcePath = "/Game/Materials/NormalInference.kbmat" });
+    Require(result.Succeeded(), "KBMAT-MAT02: TextureSample -> Normal Map -> Output Normal graph must compile");
+    Require(result.shader.reflection.textures.size() == 1U &&
+            result.shader.reflection.textures[0].stableId == "normalTex" &&
+            result.shader.reflection.textures[0].colorSpace == RenderMaterialTextureColorSpace::Linear,
+        "KBMAT-MAT02: TextureSample feeding Normal Map must be reflected as linear normal data");
+
+    const RenderMaterialTypeSchema schema = BuildRenderMaterialGraphParameterSchema(graph, "normal.inference", 1U);
+    Require(schema.textureSlots.size() == 1U &&
+            schema.textureSlots[0].role == "normal" &&
+            schema.textureSlots[0].expectedColorSpace == RenderMaterialTextureColorSpace::Linear,
+        "KBMAT-MAT02: TextureSample feeding Output Normal must expose a normal/linear texture slot");
+
+    const RenderMaterialGraphProgramBindingResult binding = BuildRenderMaterialGraphProgramBinding(
+        0x0211U,
+        1U,
+        result.shader,
+        std::span<const RenderMaterialGraphParameterValue>{});
+    Require(binding.binding.textures.size() == 1U &&
+            binding.binding.textures[0].colorSpace == RenderTextureColorSpace::Linear,
+        "KBMAT-MAT02: Runtime graph binding must request the linear texture resource for normal maps");
+
+    RenderMaterialGraphDocument objectGraph = MakeDefaultRenderMaterialGraphDocument();
+    objectGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" },
+    });
+    objectGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::TextureObject,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "normalObject",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+        },
+    });
+    objectGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::TextureSample });
+    objectGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::NormalUnpack });
+    objectGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    objectGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureObject, 3U, "texture", RenderMaterialGraphNodeKind::TextureSample, 4U, "texture"));
+    objectGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 4U, "color", RenderMaterialGraphNodeKind::NormalUnpack, 5U, "color"));
+    objectGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::NormalUnpack, 5U, "normal", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+
+    const RenderMaterialGraphCompileResult objectResult = CompileRenderMaterialGraphToShaderSource(
+        objectGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0212U, .sourcePath = "/Game/Materials/NormalObjectInference.kbmat" });
+    Require(objectResult.Succeeded() &&
+            objectResult.shader.reflection.textures.size() == 1U &&
+            objectResult.shader.reflection.textures[0].stableId == "normalObject" &&
+            objectResult.shader.reflection.textures[0].colorSpace == RenderMaterialTextureColorSpace::Linear,
+        "KBMAT-MAT02: TextureObject feeding a Normal Map sample must also infer linear normal data");
+}
+
 void RunMaterialParameterCollectionAssetRoundTripTest() {
     RenderMaterialParameterCollectionData collection{};
     collection.displayName = "Global Material Controls";
@@ -5929,6 +6012,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialGraphAlphaClipThresholdPinTest();
     RunMaterialGraphOutputPinTypeMismatchDiagnosticTest();
     RunMaterialGraphReflectionUniformAndTextureCountTest();
+    RunMaterialGraphNormalMapTextureRoleInferenceTest();
     RunMaterialParameterCollectionAssetRoundTripTest();
     RunMaterialGraphCollectionParameterBindingTest();
     RunMaterialGraphTextureExpansionSchemaTest();

@@ -6,9 +6,52 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 namespace kb::render {
 namespace {
+
+struct Vec3 {
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+};
+
+struct TangentAccum {
+    Vec3 tangent{};
+    Vec3 bitangent{};
+};
+
+[[nodiscard]] Vec3 Add(Vec3 lhs, Vec3 rhs) noexcept {
+    return Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
+}
+
+[[nodiscard]] Vec3 Subtract(Vec3 lhs, Vec3 rhs) noexcept {
+    return Vec3{ lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z };
+}
+
+[[nodiscard]] Vec3 Scale(Vec3 value, float scalar) noexcept {
+    return Vec3{ value.x * scalar, value.y * scalar, value.z * scalar };
+}
+
+[[nodiscard]] float Dot(Vec3 lhs, Vec3 rhs) noexcept {
+    return (lhs.x * rhs.x) + (lhs.y * rhs.y) + (lhs.z * rhs.z);
+}
+
+[[nodiscard]] Vec3 Cross(Vec3 lhs, Vec3 rhs) noexcept {
+    return Vec3{
+        (lhs.y * rhs.z) - (lhs.z * rhs.y),
+        (lhs.z * rhs.x) - (lhs.x * rhs.z),
+        (lhs.x * rhs.y) - (lhs.y * rhs.x),
+    };
+}
+
+[[nodiscard]] Vec3 Normalize(Vec3 value) noexcept {
+    const float length = std::sqrt(Dot(value, value));
+    return length > 0.0001F
+        ? Vec3{ value.x / length, value.y / length, value.z / length }
+        : Vec3{};
+}
 
 void CompactIndices(RenderMeshAssetData& asset) {
     for (const std::uint32_t index : asset.indices32) {
@@ -228,14 +271,76 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
     return { tangent[0], tangent[1], tangent[2], 1.0F };
 }
 
+[[nodiscard]] std::vector<TangentAccum> BuildTangentsFromUv(const RenderMeshAssetData& asset) {
+    std::vector<TangentAccum> accum(asset.vertices.size());
+    const std::uint32_t totalIndexCount = static_cast<std::uint32_t>(asset.indices16.empty() ? asset.indices32.size() : asset.indices16.size());
+    if (asset.vertices.empty() || totalIndexCount < 3U) {
+        return accum;
+    }
+
+    for (std::uint32_t index = 0U; index + 2U < totalIndexCount; index += 3U) {
+        const std::uint32_t ia = IndexAt(asset, index);
+        const std::uint32_t ib = IndexAt(asset, index + 1U);
+        const std::uint32_t ic = IndexAt(asset, index + 2U);
+        if (ia >= asset.vertices.size() || ib >= asset.vertices.size() || ic >= asset.vertices.size()) {
+            continue;
+        }
+
+        const RenderStaticMeshVertexP3N3UV2& a = asset.vertices[ia];
+        const RenderStaticMeshVertexP3N3UV2& b = asset.vertices[ib];
+        const RenderStaticMeshVertexP3N3UV2& c = asset.vertices[ic];
+        const Vec3 p0{ a.x, a.y, a.z };
+        const Vec3 p1{ b.x, b.y, b.z };
+        const Vec3 p2{ c.x, c.y, c.z };
+        const Vec3 edge1 = Subtract(p1, p0);
+        const Vec3 edge2 = Subtract(p2, p0);
+        const float du1 = b.u - a.u;
+        const float dv1 = b.v - a.v;
+        const float du2 = c.u - a.u;
+        const float dv2 = c.v - a.v;
+        const float denominator = (du1 * dv2) - (du2 * dv1);
+        if (std::abs(denominator) <= 0.000001F) {
+            continue;
+        }
+
+        const float scale = 1.0F / denominator;
+        const Vec3 tangent = Scale(Subtract(Scale(edge1, dv2), Scale(edge2, dv1)), scale);
+        const Vec3 bitangent = Scale(Subtract(Scale(edge2, du1), Scale(edge1, du2)), scale);
+        accum[ia].tangent = Add(accum[ia].tangent, tangent);
+        accum[ib].tangent = Add(accum[ib].tangent, tangent);
+        accum[ic].tangent = Add(accum[ic].tangent, tangent);
+        accum[ia].bitangent = Add(accum[ia].bitangent, bitangent);
+        accum[ib].bitangent = Add(accum[ib].bitangent, bitangent);
+        accum[ic].bitangent = Add(accum[ic].bitangent, bitangent);
+    }
+    return accum;
+}
+
+[[nodiscard]] std::array<float, 4> ResolveTangentForVertex(
+    const RenderStaticMeshVertexP3N3UV2& vertex,
+    const TangentAccum& accum) noexcept {
+    const Vec3 normal = Normalize(Vec3{ vertex.nx, vertex.ny, vertex.nz });
+    Vec3 tangent = Subtract(accum.tangent, Scale(normal, Dot(normal, accum.tangent)));
+    tangent = Normalize(tangent);
+    if (Dot(tangent, tangent) <= 0.0001F) {
+        return FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
+    }
+    const float handedness = Dot(Cross(normal, tangent), accum.bitangent) < 0.0F ? -1.0F : 1.0F;
+    return { tangent.x, tangent.y, tangent.z, handedness };
+}
+
 void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& asset) {
     if (!asset.tangentVertices.empty()) {
         return;
     }
 
+    const std::vector<TangentAccum> tangents = BuildTangentsFromUv(asset);
     asset.tangentVertices.reserve(asset.vertices.size());
-    for (const RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
-        const std::array<float, 4> tangent = FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
+    for (std::size_t index = 0U; index < asset.vertices.size(); ++index) {
+        const RenderStaticMeshVertexP3N3UV2& vertex = asset.vertices[index];
+        const std::array<float, 4> tangent = index < tangents.size()
+            ? ResolveTangentForVertex(vertex, tangents[index])
+            : FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
         asset.tangentVertices.push_back(RenderStaticMeshVertexP3N3T4UV2{
             .x = vertex.x,
             .y = vertex.y,

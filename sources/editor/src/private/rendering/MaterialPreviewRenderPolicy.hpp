@@ -44,6 +44,9 @@ public:
         lighting.editorPreviewKeyLightColor = { 1.0F, 0.98F, 0.94F };
         lighting.editorPreviewKeyLightIntensity = settings.keyLightIntensity;
         lighting.shadowsEnabled = false;
+        lighting.debugView = settings.normalDebugView
+            ? kb::render::SceneRenderDebugView::GBufferNormal
+            : kb::render::SceneRenderDebugView::None;
         return lighting;
     }
 

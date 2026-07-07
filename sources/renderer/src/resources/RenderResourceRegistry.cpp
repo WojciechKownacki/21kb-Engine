@@ -4,13 +4,38 @@
 #include "resources/RenderMeshResourceBuilder.hpp"
 #include "resources/RenderResourceReleaser.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
+#include <sstream>
 #include <utility>
 
 namespace kb::render {
 namespace {
 
 constexpr std::uint64_t kDeferredDestroyFrameDelay = 3U;
+
+[[nodiscard]] std::string_view VertexFormatName(RenderVertexFormat format) noexcept {
+    switch (format) {
+    case RenderVertexFormat::P3C3: return "P3C3";
+    case RenderVertexFormat::P3N3UV2: return "P3N3UV2";
+    case RenderVertexFormat::P3N3T4UV2: return "P3N3T4UV2";
+    case RenderVertexFormat::SkinnedP3N3T4UV2J4W4: return "SkinnedP3N3T4UV2J4W4";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] bool VertexFormatHasTangent(RenderVertexFormat format) noexcept {
+    return format == RenderVertexFormat::P3N3T4UV2 ||
+        format == RenderVertexFormat::SkinnedP3N3T4UV2J4W4;
+}
+
+[[nodiscard]] std::string_view ResourceColorSpaceName(RenderTextureColorSpace colorSpace) noexcept {
+    switch (colorSpace) {
+    case RenderTextureColorSpace::Srgb: return "Srgb";
+    case RenderTextureColorSpace::Linear: return "Linear";
+    }
+    return "Linear";
+}
 
 } // namespace
 
@@ -22,14 +47,28 @@ RenderResourceRegistry::~RenderResourceRegistry() {
 
 RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc) {
     if (!RenderMeshResourceBuilder::IsValidDesc(desc)) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-mesh-rejected invalid desc");
         return {};
     }
 
     const bgfx::VertexLayout layout = RenderStaticMeshVertexLayout(desc.vertexFormat);
     const void* vertexData = RenderMeshResourceBuilder::VertexData(desc);
+    {
+        std::ostringstream row;
+        row << "register-mesh-begin vertices=" << desc.vertexCount
+            << " indices=" << desc.indexCount
+            << " vertexFormat=" << VertexFormatName(desc.vertexFormat)
+            << " hasTangent=" << (VertexFormatHasTangent(desc.vertexFormat) ? "true" : "false")
+            << " stride=" << RenderStaticMeshVertexStride(desc.vertexFormat)
+            << " sections=" << desc.sectionCount
+            << " materialSlots=" << desc.materialSlotCount
+            << " doubleSided=" << (desc.doubleSided ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("resource", row.str());
+    }
     const bgfx::Memory* vertexMemory = bgfx::copy(vertexData, static_cast<std::uint32_t>(RenderStaticMeshVertexStride(desc.vertexFormat) * desc.vertexCount));
     bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(vertexMemory, layout);
     if (!bgfx::isValid(vertexBuffer)) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed vertex buffer invalid");
         return {};
     }
 
@@ -40,6 +79,7 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     bgfx::IndexBufferHandle indexBuffer = bgfx::createIndexBuffer(indexMemory, indexFlags);
     if (!bgfx::isValid(indexBuffer)) {
         bgfx::destroy(vertexBuffer);
+        WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed index buffer invalid");
         return {};
     }
 
@@ -47,7 +87,17 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, indexBuffer);
     resource.version = AllocateResourceVersion();
     meshes_.Activate(slotIndex, std::move(resource));
-    return RenderMeshHandle{ detail::MakeRenderHandleValue(slotIndex, meshes_.Generation(slotIndex)) };
+    {
+        const RenderMeshHandle handle{ detail::MakeRenderHandleValue(slotIndex, meshes_.Generation(slotIndex)) };
+        std::ostringstream row;
+        row << "register-mesh-ok handle=" << handle.value
+            << " vb=" << vertexBuffer.idx
+            << " ib=" << indexBuffer.idx
+            << " vertexFormat=" << VertexFormatName(desc.vertexFormat)
+            << " hasTangent=" << (VertexFormatHasTangent(desc.vertexFormat) ? "true" : "false");
+        WriteRendererMaterialGraphDebugLog("resource", row.str());
+        return handle;
+    }
 }
 
 const RenderMeshResource* RenderResourceRegistry::FindMesh(RenderMeshHandle handle) const noexcept {
@@ -82,7 +132,19 @@ RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMateri
     }
     resource.version = AllocateResourceVersion();
     materials_.Activate(slotIndex, std::move(resource));
-    return RenderMaterialHandle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };
+    const RenderMaterialHandle handle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };
+    if (const RenderMaterialResource* material = materials_.Find(handle); material != nullptr && material->graphProgram.active) {
+        std::ostringstream row;
+        row << "register-material-graph handle=" << handle.value
+            << " graphHash=" << material->graphProgram.graphSourceHash
+            << " textures=" << material->graphProgram.textures.size()
+            << " uniforms=" << material->graphProgram.uniforms.size()
+            << " normalTextureAssetId=" << material->normalTextureAssetId
+            << " normalScale=" << material->normalScale
+            << " alphaMode=" << static_cast<int>(material->alphaMode);
+        WriteRendererMaterialGraphDebugLog("resource", row.str());
+    }
+    return handle;
 }
 
 const RenderMaterialResource* RenderResourceRegistry::FindMaterial(RenderMaterialHandle handle) const noexcept {
@@ -102,11 +164,13 @@ void RenderResourceRegistry::DestroyMaterial(RenderMaterialHandle handle) noexce
 
 RenderTextureHandle RenderResourceRegistry::RegisterTexture2D(const RenderTextureDesc& desc) {
     if (!RenderTextureResourceBuilder::IsValidDesc(desc)) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-texture-rejected invalid desc");
         return {};
     }
 
     bgfx::TextureHandle texture = bgfx::createTexture2D(desc.width, desc.height, false, 1, desc.format, desc.flags, desc.memory);
     if (!bgfx::isValid(texture)) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-texture-failed bgfx invalid");
         return {};
     }
 
@@ -114,7 +178,18 @@ RenderTextureHandle RenderResourceRegistry::RegisterTexture2D(const RenderTextur
     RenderTextureResource resource = RenderTextureResourceBuilder::Build(desc, texture);
     resource.version = AllocateResourceVersion();
     textures_.Activate(slotIndex, std::move(resource));
-    return RenderTextureHandle{ detail::MakeRenderHandleValue(slotIndex, textures_.Generation(slotIndex)) };
+    const RenderTextureHandle handle{ detail::MakeRenderHandleValue(slotIndex, textures_.Generation(slotIndex)) };
+    {
+        std::ostringstream row;
+        row << "register-texture-ok handle=" << handle.value
+            << " bgfxHandle=" << texture.idx
+            << " size=" << desc.width << "x" << desc.height
+            << " format=" << static_cast<int>(desc.format)
+            << " colorSpace=" << ResourceColorSpaceName(desc.colorSpace)
+            << " flags=0x" << std::hex << desc.flags << std::dec;
+        WriteRendererMaterialGraphDebugLog("resource", row.str());
+    }
+    return handle;
 }
 
 const RenderTextureResource* RenderResourceRegistry::FindTexture(RenderTextureHandle handle) const noexcept {

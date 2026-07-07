@@ -163,6 +163,11 @@ struct SceneRenderDrawBudget {
     std::uint32_t maxDroppedInstances = 0;
 };
 
+enum class SceneRenderDebugView : std::uint8_t {
+    None,
+    GBufferNormal,
+};
+
 struct SceneRenderLightingConfig {
     std::uint32_t maxForwardLights = kMaxSceneForwardLights;
     SceneRenderLightingPath lightingPath = SceneRenderLightingPath::Forward;
@@ -192,6 +197,7 @@ struct SceneRenderLightingConfig {
     bool perLightShadowCaching = true;
     bool contactShadowsEnabled = false;
     bool volumetricLightingEnabled = false;
+    SceneRenderDebugView debugView = SceneRenderDebugView::None;
 };
 
 struct SceneRenderShadowMapBinding {

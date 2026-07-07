@@ -85,7 +85,7 @@ void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UI
 }
 
 [[nodiscard]] std::string ScenePersistenceStatus(const EditorSceneContext& sceneContext) {
-    return sceneContext.SceneDocumentDirty() ? "Unsaved" : "Saved";
+    return sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit() ? "Unsaved" : "Saved";
 }
 
 [[nodiscard]] std::string PlayModeStatus(const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode) {
@@ -243,7 +243,8 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     const bool stopHovered = transportActive && hovered == EditorTransportCommand::Stop;
     const bool stopPressed = transportActive && pressed == EditorTransportCommand::Stop;
 
-    PaintTextButton(dc, toolbar.saveButton, theme, "Save", true, sceneContext.SceneDocumentDirty(), interaction.HoveredSave(), interaction.PressedSave(), warning);
+    const bool hasUnsavedOpenDocument = sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit();
+    PaintTextButton(dc, toolbar.saveButton, theme, "Save", true, hasUnsavedOpenDocument, interaction.HoveredSave(), interaction.PressedSave(), warning);
     PaintButton(dc, toolbar.playButton, theme, isStopped, false, playHovered, playPressed, noGlow);
     PaintButton(dc, toolbar.pauseButton, theme, transportActive, isPaused, pauseHovered, pausePressed, isPaused ? success : noGlow);
     PaintButton(dc, toolbar.stopButton, theme, transportActive, false, stopHovered, stopPressed, noGlow);

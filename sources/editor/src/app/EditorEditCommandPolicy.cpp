@@ -30,7 +30,7 @@ bool EditorEditCommandPolicy::Execute(EditorSceneContext& sceneContext, EditorEd
     case EditorEditCommand::Duplicate:
         return sceneContext.DuplicateSelectedHierarchyEntities();
     case EditorEditCommand::Save:
-        return sceneContext.SaveCurrentScene();
+        return sceneContext.SaveOpenDocuments();
     }
 
     return false;

@@ -24,6 +24,17 @@ void HashCombine(std::uint64_t& seed, std::uint64_t value) noexcept {
         : resourceMap->ResolveTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
 }
 
+[[nodiscard]] RenderTextureHandle ResolveGraphTextureHandle(
+    const RenderMaterialGraphTextureBinding& texture,
+    const SceneRenderResourceMap* resourceMap) noexcept {
+    if (texture.texture.IsValid()) {
+        return texture.texture;
+    }
+    return resourceMap == nullptr || texture.textureAssetId == 0U
+        ? RenderTextureHandle{}
+        : resourceMap->ResolveTexture(texture.textureAssetId, texture.colorSpace);
+}
+
 [[nodiscard]] const RenderTextureResource* ResolveTextureResource(
     RenderTextureHandle handle,
     const RenderResourceRegistry* resources) noexcept {
@@ -48,6 +59,20 @@ std::uint64_t SceneMaterialTextureDependencySignature::Build(const SceneMaterial
         HashCombine(signature, slot.assetId);
         HashCombine(signature, static_cast<std::uint64_t>(slot.policy.expectedColorSpace));
         HashCombine(signature, slot.directHandle.value);
+        HashCombine(signature, resolvedHandle.value);
+        HashCombine(signature, texture == nullptr ? 0U : texture->version);
+    }
+    for (std::size_t textureIndex = 0U; textureIndex < desc.material->graphProgram.textures.size(); ++textureIndex) {
+        const RenderMaterialGraphTextureBinding& graphTexture = desc.material->graphProgram.textures[textureIndex];
+        const RenderTextureHandle resolvedHandle = ResolveGraphTextureHandle(graphTexture, desc.resourceMap);
+        const RenderTextureResource* texture = ResolveTextureResource(resolvedHandle, desc.resources);
+
+        HashCombine(signature, 0x6772617068546578ULL);
+        HashCombine(signature, static_cast<std::uint64_t>(textureIndex + 1U));
+        HashCombine(signature, graphTexture.slot);
+        HashCombine(signature, graphTexture.textureAssetId);
+        HashCombine(signature, static_cast<std::uint64_t>(graphTexture.colorSpace));
+        HashCombine(signature, graphTexture.texture.value);
         HashCombine(signature, resolvedHandle.value);
         HashCombine(signature, texture == nullptr ? 0U : texture->version);
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/SceneGBuffer.hpp"
+#include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -40,6 +41,7 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    FullscreenTexturePass debugNormalPresentPass_{};
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSampler_ = BGFX_INVALID_HANDLE;

@@ -1,6 +1,8 @@
 #include "kb/render/MaterialProgramRegistry.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -32,6 +34,21 @@ void HashString(std::uint64_t& hash, std::string_view value) noexcept {
     for (const char ch : value) {
         HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(ch)));
     }
+}
+
+[[nodiscard]] std::string MaterialProgramKeyDebugString(const MaterialProgramKey& key) {
+    std::ostringstream row;
+    row << "graphProgram=" << (key.graphProgram ? "true" : "false")
+        << " pass=" << key.pass
+        << " materialTypeId=" << key.materialTypeId
+        << " version=" << key.materialTypeVersion
+        << " graphHash=" << key.graphSourceHash
+        << " variant=" << key.variantKey
+        << " pipeline=" << key.pipelineStateKey
+        << " backend=" << key.backend
+        << " generatedVS=" << (key.requiresGeneratedVertexShader ? "true" : "false")
+        << " identity=" << MaterialProgramKeyIdentityHash(key);
+    return row.str();
 }
 
 } // namespace
@@ -108,12 +125,18 @@ void MaterialProgramRegistry::OrphanHandle(bgfx::ProgramHandle handle) {
 }
 
 bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& key) {
+    if (key.graphProgram) {
+        WriteRendererMaterialGraphDebugLog("program", "acquire-begin " + MaterialProgramKeyDebugString(key));
+    }
     Entry* entry = FindEntry(key);
     if (entry != nullptr) {
         entry->pendingDestroy = false;
         if (bgfx::isValid(entry->handle)) {
             ++entry->refCount;
             ++stats_.hits;
+            if (key.graphProgram) {
+                WriteRendererMaterialGraphDebugLog("program", "acquire-hit handle=" + std::to_string(entry->handle.idx) + " " + MaterialProgramKeyDebugString(key));
+            }
             return entry->handle;
         }
         const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
@@ -122,9 +145,15 @@ bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& k
             entry->lastGood = handle;
             ++entry->refCount;
             ++stats_.loads;
+            if (key.graphProgram) {
+                WriteRendererMaterialGraphDebugLog("program", "acquire-reload-ok handle=" + std::to_string(handle.idx) + " " + MaterialProgramKeyDebugString(key));
+            }
             return handle;
         }
         ++stats_.failures;
+        if (key.graphProgram) {
+            WriteRendererMaterialGraphDebugLog("program", "acquire-reload-failed " + MaterialProgramKeyDebugString(key));
+        }
         return BGFX_INVALID_HANDLE;
     }
 
@@ -132,6 +161,9 @@ bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& k
     const bgfx::ProgramHandle handle = loader_ ? loader_(key) : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
     if (!bgfx::isValid(handle)) {
         ++stats_.failures;
+        if (key.graphProgram) {
+            WriteRendererMaterialGraphDebugLog("program", "acquire-miss-load-failed " + MaterialProgramKeyDebugString(key));
+        }
         return BGFX_INVALID_HANDLE;
     }
     entries_.push_back(Entry{
@@ -141,6 +173,9 @@ bgfx::ProgramHandle MaterialProgramRegistry::Acquire(const MaterialProgramKey& k
         .refCount = 1U,
     });
     ++stats_.loads;
+    if (key.graphProgram) {
+        WriteRendererMaterialGraphDebugLog("program", "acquire-miss-load-ok handle=" + std::to_string(handle.idx) + " " + MaterialProgramKeyDebugString(key));
+    }
     return handle;
 }
 
@@ -159,6 +194,9 @@ void MaterialProgramRegistry::Release(const MaterialProgramKey& key) {
 }
 
 bgfx::ProgramHandle MaterialProgramRegistry::Reload(const MaterialProgramKey& key) {
+    if (key.graphProgram) {
+        WriteRendererMaterialGraphDebugLog("program", "reload-begin " + MaterialProgramKeyDebugString(key));
+    }
     Entry* entry = FindEntry(key);
     if (entry == nullptr) {
         return Acquire(key);
@@ -173,6 +211,9 @@ bgfx::ProgramHandle MaterialProgramRegistry::Reload(const MaterialProgramKey& ke
         entry->lastGood = handle;
         entry->pendingDestroy = false;
         ++stats_.reloads;
+        if (key.graphProgram) {
+            WriteRendererMaterialGraphDebugLog("program", "reload-ok handle=" + std::to_string(handle.idx) + " " + MaterialProgramKeyDebugString(key));
+        }
         return handle;
     }
 
@@ -180,13 +221,26 @@ bgfx::ProgramHandle MaterialProgramRegistry::Reload(const MaterialProgramKey& ke
     if (bgfx::isValid(entry->lastGood)) {
         entry->handle = entry->lastGood;
         ++stats_.lastGoodUses;
+        if (key.graphProgram) {
+            WriteRendererMaterialGraphDebugLog("program", "reload-failed-last-good handle=" + std::to_string(entry->lastGood.idx) + " " + MaterialProgramKeyDebugString(key));
+        }
         return entry->lastGood;
+    }
+    if (key.graphProgram) {
+        WriteRendererMaterialGraphDebugLog("program", "reload-failed-no-last-good " + MaterialProgramKeyDebugString(key));
     }
     return BGFX_INVALID_HANDLE;
 }
 
 bgfx::ProgramHandle MaterialProgramRegistry::Find(const MaterialProgramKey& key) const noexcept {
     const Entry* entry = FindEntry(key);
+    if (key.graphProgram) {
+        WriteRendererMaterialGraphDebugLog(
+            "program",
+            std::string{ "find " } +
+                (entry != nullptr && bgfx::isValid(entry->handle) ? "hit handle=" + std::to_string(entry->handle.idx) + " " : "miss ") +
+                MaterialProgramKeyDebugString(key));
+    }
     return entry != nullptr ? entry->handle : bgfx::ProgramHandle{ BGFX_INVALID_HANDLE };
 }
 

@@ -1,11 +1,50 @@
 #include "project/EditorProjectPaths.hpp"
 
 #include <cctype>
+#include <system_error>
 
 namespace kb::editor {
 namespace {
 
 std::filesystem::path g_projectFile;
+
+[[nodiscard]] bool Exists(const std::filesystem::path& path) noexcept {
+    std::error_code error;
+    return std::filesystem::exists(path, error) && !error;
+}
+
+[[nodiscard]] bool IsDevRepositoryRoot(const std::filesystem::path& root) noexcept {
+    return Exists(root / "sources" / "editor" / "src" / "project" / "EditorProjectPaths.cpp") &&
+        Exists(root / "Project" / "Project.21kbproject");
+}
+
+[[nodiscard]] std::filesystem::path ParentPath(std::filesystem::path path) {
+    const std::filesystem::path parent = path.parent_path();
+    return parent == path ? std::filesystem::path{} : parent;
+}
+
+[[nodiscard]] std::filesystem::path ResolveDefaultProjectRoot() {
+    std::error_code error;
+    std::filesystem::path current = std::filesystem::absolute(std::filesystem::current_path(error), error);
+    if (error || current.empty()) {
+        current = std::filesystem::current_path();
+    }
+
+    for (std::filesystem::path probe = current; !probe.empty(); probe = ParentPath(probe)) {
+        if (IsDevRepositoryRoot(probe)) {
+            return probe / "Project";
+        }
+    }
+
+    for (std::filesystem::path probe = current; !probe.empty(); probe = ParentPath(probe)) {
+        const std::filesystem::path candidate = probe / "Project";
+        if (Exists(candidate / "Project.21kbproject")) {
+            return candidate;
+        }
+    }
+
+    return current / "Project";
+}
 
 [[nodiscard]] std::string Sanitize(std::string name) {
     for (char& character : name) {
@@ -47,7 +86,7 @@ std::filesystem::path EditorProjectPaths::ProjectRoot() {
     if (!g_projectFile.empty()) {
         return g_projectFile.parent_path();
     }
-    return std::filesystem::current_path() / "Project";
+    return ResolveDefaultProjectRoot();
 }
 
 std::filesystem::path EditorProjectPaths::ScenesRoot() {

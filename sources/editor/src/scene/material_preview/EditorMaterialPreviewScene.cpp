@@ -271,7 +271,8 @@ bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSett
             sceneSettings_.environmentDiffuseIntensity,
             sceneSettings_.environmentSpecularIntensity,
             sceneSettings_.exposureStops,
-            sceneSettings_.postProcessEnabled)
+            sceneSettings_.postProcessEnabled,
+            sceneSettings_.normalDebugView)
         == std::tie(settings.lightingPreset,
             settings.qualityLevel,
             settings.cameraDistance,
@@ -281,7 +282,8 @@ bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSett
             settings.environmentDiffuseIntensity,
             settings.environmentSpecularIntensity,
             settings.exposureStops,
-            settings.postProcessEnabled)) {
+            settings.postProcessEnabled,
+            settings.normalDebugView)) {
         return false;
     }
     sceneSettings_ = settings;

@@ -65,6 +65,16 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     return "Unknown";
 }
 
+[[nodiscard]] const char* DebugViewName(SceneRenderDebugView view) noexcept {
+    switch (view) {
+    case SceneRenderDebugView::None:
+        return "None";
+    case SceneRenderDebugView::GBufferNormal:
+        return "GBufferNormal";
+    }
+    return "Unknown";
+}
+
 [[nodiscard]] const char* MeshPassModeName(SceneRenderMeshPassMode mode) noexcept {
     switch (mode) {
     case SceneRenderMeshPassMode::OpaqueOnly:
@@ -246,6 +256,7 @@ void Renderer::Shutdown() {
     frameReferences_.Clear();
     runtimeAssetDiscovery_.Clear();
     lastRuntimeMaterialLightingPath_.reset();
+    lastRuntimeMaterialDebugView_.reset();
     sceneExposureMeter_.ShutdownGpuResources();
     editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
@@ -597,7 +608,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
-    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
+    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal;
     RenderMaterialGraphBuildContext runtimeGraphContext{};
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -605,10 +617,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             ? RenderMaterialGraphShadingPath::ForwardPlus
             : RenderMaterialGraphShadingPath::Forward;
     runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
-    if (!lastRuntimeMaterialLightingPath_.has_value() || *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath) {
+    if (!lastRuntimeMaterialLightingPath_.has_value() ||
+        *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
+        !lastRuntimeMaterialDebugView_.has_value() ||
+        *lastRuntimeMaterialDebugView_ != effectiveLightingConfig.debugView) {
         runtimeResourceCache_.InvalidateMaterials(sceneRenderer_.get());
         lastRuntimeMaterialLightingPath_ = effectiveLightingConfig.lightingPath;
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path change");
+        lastRuntimeMaterialDebugView_ = effectiveLightingConfig.debugView;
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path/debug view change");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
@@ -644,7 +660,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         std::ostringstream message;
         message << "SubmitSceneToViewport lighting resolved path=" << LightingPathName(effectiveLightingConfig.lightingPath)
                 << " deferred=" << BoolText(deferredLighting)
-                << " shadows=" << BoolText(effectiveLightingConfig.shadowsEnabled);
+                << " shadows=" << BoolText(effectiveLightingConfig.shadowsEnabled)
+                << " debugView=" << DebugViewName(effectiveLightingConfig.debugView);
         WriteRendererBreadcrumb("renderer", message.str());
     }
     if (deferredLighting && !defaultSceneGBuffer_.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
