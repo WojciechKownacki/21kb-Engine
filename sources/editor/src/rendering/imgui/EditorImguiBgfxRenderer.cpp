@@ -44,29 +44,6 @@ const bgfx::EmbeddedShader kEmbeddedShaders[] = {
            indexCount == bgfx::getAvailTransientIndexBuffer(indexCount, sizeof(ImDrawIdx) == 4);
 }
 
-[[nodiscard]] std::uint64_t HashTexturePixels(int width, int height, std::span<const std::uint32_t> bgraPixels) noexcept {
-    std::uint64_t hash = 1469598103934665603ULL;
-    const auto mix = [&hash](std::uint64_t value) noexcept {
-        for (int shift = 0; shift < 64; shift += 8) {
-            hash ^= (value >> shift) & 0xFFU;
-            hash *= 1099511628211ULL;
-        }
-    };
-    mix(static_cast<std::uint64_t>(width));
-    mix(static_cast<std::uint64_t>(height));
-    for (const std::uint32_t pixel : bgraPixels) {
-        hash ^= static_cast<std::uint64_t>(pixel & 0xFFU);
-        hash *= 1099511628211ULL;
-        hash ^= static_cast<std::uint64_t>((pixel >> 8U) & 0xFFU);
-        hash *= 1099511628211ULL;
-        hash ^= static_cast<std::uint64_t>((pixel >> 16U) & 0xFFU);
-        hash *= 1099511628211ULL;
-        hash ^= static_cast<std::uint64_t>((pixel >> 24U) & 0xFFU);
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
 [[nodiscard]] std::vector<std::uint32_t> ConvertBgraToRgba(std::span<const std::uint32_t> bgraPixels) {
     std::vector<std::uint32_t> rgba;
     rgba.reserve(bgraPixels.size());
@@ -174,6 +151,7 @@ void EditorImguiBgfxRenderer::ClearCurrentContext() noexcept {
 
 ImTextureID EditorImguiBgfxRenderer::EnsureTexture(
     std::uint64_t cacheKey,
+    std::uint64_t contentHash,
     int width,
     int height,
     std::span<const std::uint32_t> bgraPixels) {
@@ -187,7 +165,9 @@ ImTextureID EditorImguiBgfxRenderer::EnsureTexture(
         return nullptr;
     }
 
-    const std::uint64_t contentHash = HashTexturePixels(width, height, bgraPixels);
+    if (contentHash == 0U) {
+        contentHash = cacheKey;
+    }
     auto entry = std::ranges::find_if(textureCache_, [cacheKey](const TextureCacheEntry& candidate) {
         return candidate.cacheKey == cacheKey;
     });

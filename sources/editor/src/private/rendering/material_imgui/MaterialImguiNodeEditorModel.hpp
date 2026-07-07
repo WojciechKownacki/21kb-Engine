@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,12 +39,13 @@ struct MaterialImguiPin {
 
 struct MaterialImguiTexturePreview {
     std::uint64_t cacheKey = 0U;
+    std::uint64_t contentHash = 0U;
     int width = 0;
     int height = 0;
-    std::vector<std::uint32_t> bgra;
+    std::span<const std::uint32_t> bgra;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return cacheKey != 0U && width > 0 && height > 0 && bgra.size() == static_cast<std::size_t>(width * height);
+        return cacheKey != 0U && width > 0 && height > 0 && !bgra.empty() && bgra.size() == static_cast<std::size_t>(width * height);
     }
 };
 

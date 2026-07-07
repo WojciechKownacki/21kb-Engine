@@ -233,7 +233,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
                 present.model,
                 ImVec2(static_cast<float>(width), static_cast<float>(height)),
                 [this](const MaterialImguiTexturePreview& preview) {
-                    return viewport_.imguiRenderer_.EnsureTexture(preview.cacheKey, preview.width, preview.height, preview.bgra);
+                    return viewport_.imguiRenderer_.EnsureTexture(preview.cacheKey, preview.contentHash, preview.width, preview.height, preview.bgra);
                 });
         }
         ImGui::End();

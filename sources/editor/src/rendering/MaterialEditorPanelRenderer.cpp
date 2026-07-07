@@ -3467,9 +3467,10 @@ std::optional<MaterialImguiNodeEditorModel> MaterialEditorPanelRenderer::BuildIm
 
         node.texturePreview = MaterialImguiTexturePreview{
             .cacheKey = textureAssetId.value,
+            .contentHash = textureMetadata->contentHash,
             .width = preview->width,
             .height = preview->height,
-            .bgra = preview->bgra,
+            .bgra = std::span<const std::uint32_t>{ preview->bgra.data(), preview->bgra.size() },
         };
     }
     return model;

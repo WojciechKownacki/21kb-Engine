@@ -43,6 +43,7 @@ public:
 
     [[nodiscard]] ImTextureID EnsureTexture(
         std::uint64_t cacheKey,
+        std::uint64_t contentHash,
         int width,
         int height,
         std::span<const std::uint32_t> bgraPixels);
