@@ -45,38 +45,50 @@ void PopMaterialNodeEditorStyle() {
     ed::PopStyleColor(10);
 }
 
-void DrawSocket(const MaterialImguiPin& pin) {
-    const ImVec2 cursor = ImGui::GetCursorScreenPos();
-    const float radius = 4.5F;
+void DrawSocketCircle(const MaterialImguiPin& pin, const ImVec2& center) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->AddCircleFilled(ImVec2(cursor.x + radius, cursor.y + ImGui::GetTextLineHeight() * 0.5F), radius, ImGui::ColorConvertFloat4ToU32(pin.color), 16);
-    drawList->AddCircle(ImVec2(cursor.x + radius, cursor.y + ImGui::GetTextLineHeight() * 0.5F), radius + 1.0F, ImGui::ColorConvertFloat4ToU32(ImVec4(0.02F, 0.025F, 0.03F, 1.0F)), 16, 1.0F);
-    ImGui::Dummy(ImVec2(radius * 2.0F + 4.0F, ImGui::GetTextLineHeight()));
+    drawList->AddCircleFilled(center, 4.6F, ImGui::ColorConvertFloat4ToU32(pin.color), 18);
+    drawList->AddCircle(center, 5.7F, ImGui::ColorConvertFloat4ToU32(ImVec4(0.015F, 0.018F, 0.024F, 1.0F)), 18, 1.0F);
 }
 
-void DrawInputPin(const MaterialImguiPin& pin) {
-    ed::BeginPin(pin.editorId, ed::PinKind::Input);
-    ImGui::BeginGroup();
-    DrawSocket(pin);
-    ImGui::SameLine(0.0F, 4.0F);
-    ImGui::TextUnformatted(pin.label.c_str());
-    ImGui::EndGroup();
+void DrawSocketPinItem(const MaterialImguiPin& pin, ed::PinKind kind, const ImVec2& center) {
+    constexpr float hitSize = 16.0F;
+    ImGui::PushID(static_cast<int>(pin.stablePinId));
+    ImGui::SetCursorScreenPos(ImVec2(center.x - hitSize * 0.5F, center.y - hitSize * 0.5F));
+    ed::BeginPin(pin.editorId, kind);
+    ImGui::InvisibleButton("##socket", ImVec2(hitSize, hitSize));
     ed::EndPin();
+    ImGui::PopID();
+    DrawSocketCircle(pin, center);
 }
 
-void DrawOutputPin(const MaterialImguiPin& pin, float rowWidth) {
-    ed::BeginPin(pin.editorId, ed::PinKind::Output);
-    ImGui::BeginGroup();
-    const ImVec2 textSize = ImGui::CalcTextSize(pin.label.c_str());
-    const float socketWidth = 14.0F;
-    const float available = std::max(32.0F, rowWidth - textSize.x - socketWidth);
-    ImGui::Dummy(ImVec2(available, 1.0F));
-    ImGui::SameLine(0.0F, 0.0F);
-    ImGui::TextUnformatted(pin.label.c_str());
-    ImGui::SameLine(0.0F, 4.0F);
-    DrawSocket(pin);
-    ImGui::EndGroup();
-    ed::EndPin();
+void DrawPinRow(const MaterialImguiPin* input, const MaterialImguiPin* output, float rowWidth) {
+    constexpr float rowHeight = 20.0F;
+    constexpr float socketInset = 6.0F;
+    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+    const ImVec2 inputCenter{ rowMin.x + socketInset, rowMin.y + rowHeight * 0.5F };
+    const ImVec2 outputCenter{ rowMin.x + rowWidth - socketInset, rowMin.y + rowHeight * 0.5F };
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    if (input != nullptr) {
+        DrawSocketPinItem(*input, ed::PinKind::Input, inputCenter);
+        drawList->AddText(
+            ImVec2(rowMin.x + 18.0F, rowMin.y + 2.0F),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.86F, 0.91F, 0.97F, 1.0F)),
+            input->label.c_str());
+    }
+
+    if (output != nullptr) {
+        const ImVec2 textSize = ImGui::CalcTextSize(output->label.c_str());
+        drawList->AddText(
+            ImVec2(std::max(rowMin.x + 64.0F, outputCenter.x - 12.0F - textSize.x), rowMin.y + 2.0F),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(0.86F, 0.91F, 0.97F, 1.0F)),
+            output->label.c_str());
+        DrawSocketPinItem(*output, ed::PinKind::Output, outputCenter);
+    }
+
+    ImGui::SetCursorScreenPos(rowMin);
+    ImGui::Dummy(ImVec2(rowWidth, rowHeight));
 }
 
 void DrawNodeHeader(const MaterialImguiNode& node, float width) {
@@ -164,40 +176,26 @@ void DrawTexturePreviewSlot(const MaterialImguiNode& node, const MaterialImguiTe
 void DrawMaterialNode(const MaterialImguiNode& node, const MaterialImguiTextureResolver& textureResolver) {
     ed::BeginNode(node.editorId);
     ImGui::PushID(static_cast<int>(node.nodeId));
-    constexpr float rowWidth = 250.0F;
-    DrawNodeHeader(node, rowWidth + 22.0F);
+    constexpr float nodeWidth = 300.0F;
+    constexpr float bodyWidth = nodeWidth - 24.0F;
+    DrawNodeHeader(node, nodeWidth);
     ImGui::Dummy(ImVec2(1.0F, 8.0F));
-    ImGui::Indent(10.0F);
+    ImGui::Indent(12.0F);
 
     if (HasTexturePreviewBody(node)) {
-        ImGui::BeginGroup();
-        ImGui::Dummy(ImVec2(24.0F, 1.0F));
-        ImGui::SameLine(0.0F, 0.0F);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::floor((bodyWidth - 220.0F) * 0.5F));
         DrawTexturePreviewSlot(node, textureResolver);
-        ImGui::EndGroup();
-        ImGui::Spacing();
+        ImGui::Dummy(ImVec2(1.0F, 7.0F));
     }
 
     const std::size_t rows = std::max(node.inputs.size(), node.outputs.size());
     for (std::size_t row = 0U; row < rows; ++row) {
-        ImGui::BeginGroup();
-        if (row < node.inputs.size()) {
-            DrawInputPin(node.inputs[row]);
-        } else {
-            ImGui::Dummy(ImVec2(76.0F, ImGui::GetTextLineHeight()));
-        }
-        ImGui::EndGroup();
-        ImGui::SameLine(0.0F, 10.0F);
-        ImGui::BeginGroup();
-        if (row < node.outputs.size()) {
-            DrawOutputPin(node.outputs[row], rowWidth);
-        } else {
-            ImGui::Dummy(ImVec2(118.0F, ImGui::GetTextLineHeight()));
-        }
-        ImGui::EndGroup();
+        const MaterialImguiPin* input = row < node.inputs.size() ? &node.inputs[row] : nullptr;
+        const MaterialImguiPin* output = row < node.outputs.size() ? &node.outputs[row] : nullptr;
+        DrawPinRow(input, output, bodyWidth);
     }
 
-    ImGui::Unindent(10.0F);
+    ImGui::Unindent(12.0F);
     ImGui::PopID();
     ed::EndNode();
 }

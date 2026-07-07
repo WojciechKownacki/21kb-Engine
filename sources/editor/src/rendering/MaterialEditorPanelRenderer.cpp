@@ -3336,7 +3336,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     if (document->material.has_value() && !useImguiGraph) {
         DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else if (document->material.has_value()) {
-        DrawGraphGrid(dc, layout.graphCanvas);
+        FillRect(dc, &layout.graphCanvas, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
     } else {
         DrawGraphGrid(dc, layout.graphCanvas);
         DrawText(dc, layout.graphCanvas, "Material document could not be parsed.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);

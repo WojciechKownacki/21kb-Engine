@@ -982,8 +982,14 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
     case WM_MOUSEMOVE: {
         const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
         if (surface != nullptr && surface->key == kMaterialEditorGraphImguiViewportKey) {
-            viewport->RequestPresent();
-            if (surface->host != nullptr) {
+            const bool dragging = GetCapture() == window ||
+                (GetKeyState(VK_LBUTTON) & 0x8000) != 0 ||
+                (GetKeyState(VK_RBUTTON) & 0x8000) != 0 ||
+                (GetKeyState(VK_MBUTTON) & 0x8000) != 0;
+            if (dragging) {
+                viewport->RequestPresent();
+            }
+            if (dragging && surface->host != nullptr) {
                 InvalidateRect(surface->host, &surface->rect, FALSE);
             }
             return 0;

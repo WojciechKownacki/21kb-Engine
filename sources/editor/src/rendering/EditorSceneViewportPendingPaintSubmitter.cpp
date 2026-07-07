@@ -29,6 +29,31 @@ constexpr bgfx::ViewId kMaterialGraphImguiViewId = render::ViewId::Max - 1U;
     return value ? "1" : "0";
 }
 
+void TraceMaterialGraphImguiPresent(
+    const MaterialImguiNodeEditorModel& model,
+    std::uint32_t width,
+    std::uint32_t height,
+    float mouseWheel) {
+    static DWORD lastTraceMs = 0U;
+    static std::uint64_t presentCount = 0U;
+    ++presentCount;
+
+    const DWORD now = GetTickCount();
+    if (now - lastTraceMs < 1000U) {
+        return;
+    }
+    lastTraceMs = now;
+
+    std::ostringstream stream;
+    stream << "[MaterialGraphImgui] present count=" << presentCount
+           << " size=" << width << "x" << height
+           << " nodes=" << model.nodes.size()
+           << " links=" << model.links.size()
+           << " wheel=" << mouseWheel
+           << "\n";
+    OutputDebugStringA(stream.str().c_str());
+}
+
 [[nodiscard]] EditorImguiInputState ImguiInputForSurface(HWND host, const RECT& surfaceRect, float mouseWheel) noexcept {
     EditorImguiInputState input{};
     POINT cursor{};
@@ -182,6 +207,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitImguiGraphPresents() 
         const std::uint32_t height = RectHeight(surface->rect);
         const float mouseWheel = surface->imguiMouseWheel;
         surface->imguiMouseWheel = 0.0F;
+        TraceMaterialGraphImguiPresent(present.model, width, height, mouseWheel);
         if (!viewport_.imguiRenderer_.BeginFrame(width, height, 1.0F / 60.0F, ImguiInputForSurface(present.host, surface->rect, mouseWheel))) {
             viewport_.SetFailureDetail("Material graph ImGui frame setup failed.");
             viewport_.imguiRenderer_.ClearCurrentContext();
