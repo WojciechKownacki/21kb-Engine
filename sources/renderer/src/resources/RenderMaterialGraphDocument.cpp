@@ -745,6 +745,11 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "xy", true);
         break;
     case RenderMaterialGraphNodeKind::ConstantVector:
+        AppendIrPin(irNode, irNode.kind, "xyz", true);
+        AppendIrPin(irNode, irNode.kind, "r", true);
+        AppendIrPin(irNode, irNode.kind, "g", true);
+        AppendIrPin(irNode, irNode.kind, "b", true);
+        break;
     case RenderMaterialGraphNodeKind::ParameterVector:
         AppendIrPin(irNode, irNode.kind, "xyz", true);
         break;
@@ -2521,6 +2526,17 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         }
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "BreakVector output pin is not supported.");
         return "0.0";
+    case RenderMaterialGraphNodeKind::ConstantVector:
+        if (outputPin == "r") {
+            return "(" + baseRef + ").x";
+        }
+        if (outputPin == "g") {
+            return "(" + baseRef + ").y";
+        }
+        if (outputPin == "b") {
+            return "(" + baseRef + ").z";
+        }
+        return baseRef;
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
     case RenderMaterialGraphNodeKind::TextureSampleVolume:
@@ -7426,6 +7442,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ConstantVector2:
         return pin == "xy";
     case RenderMaterialGraphNodeKind::ConstantVector:
+        return pin == "xyz" || pin == "r" || pin == "g" || pin == "b";
     case RenderMaterialGraphNodeKind::ParameterVector:
         return pin == "xyz";
     case RenderMaterialGraphNodeKind::ConstantColor:
@@ -7843,6 +7860,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ConstantVector2:
         return outputPin && pin == "xy" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantVector:
+        if (!outputPin) return RenderMaterialGraphPinType::Unknown;
+        if (pin == "xyz") return RenderMaterialGraphPinType::Float3;
+        if (pin == "r" || pin == "g" || pin == "b") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ParameterVector:
         return outputPin && pin == "xyz" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantColor:
@@ -8376,6 +8397,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "xy") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::ConstantVector:
+        if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        return 0U;
     case RenderMaterialGraphNodeKind::ParameterVector:
         if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
         return 0U;
