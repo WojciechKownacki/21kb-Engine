@@ -119,8 +119,8 @@ bool FullscreenTexturePass::Initialize() {
     }
 
     program_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_present_tex.sc");
-    colorSampler_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
-    colorGradeSampler_ = bgfx::createUniform("s_colorGradeLut", bgfx::UniformType::Sampler);
+    colorSampler_ = bgfx::createUniform("s_kbFullscreenColor", bgfx::UniformType::Sampler);
+    colorGradeSampler_ = bgfx::createUniform("s_kbFullscreenColorGradeLut", bgfx::UniformType::Sampler);
     tonemapParams_ = bgfx::createUniform("u_tonemapParams", bgfx::UniformType::Vec4);
     colorGradeParams_ = bgfx::createUniform("u_colorGradeParams", bgfx::UniformType::Vec4);
     neutralColorGradeLut_ = CreateNeutralColorGradeLut();

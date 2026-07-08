@@ -65,10 +65,19 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT08: Forward wrapper must reuse the shared PBR lighting library");
     Require(opaque.find("KbEvaluateForwardLighting(") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must run PBR lighting over the evaluated surface");
+    Require(opaque.find("uniform vec4 u_materialParams;") != std::string::npos &&
+            opaque.find("graphNormal.xy * u_materialParams.z") != std::string::npos &&
+            opaque.find("basisTangent * graphNormal.x") != std::string::npos,
+        "KBMAT-MAT87: Forward graph normal mapping must honor material normalScale before TBN lighting");
     Require(opaque.find("ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;") != std::string::npos,
         "KBMAT-MAT46: Forward wrapper must expose a real front/back-face sign to graph nodes");
     Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must combine lit color, emissive and surface alpha");
+    Require(opaque.find("basisTangent = vertexTangent;") != std::string::npos &&
+            opaque.find("basisBitangent = vertexBitangent;") != std::string::npos &&
+            opaque.find("basisTangent = derivativeTangent") == std::string::npos &&
+            opaque.find("dFdx(v_texcoord0)") == std::string::npos,
+        "KBMAT-MAT87: Forward graph normal mapping must use the mesh vertex TBN, not a screen-derivative UV basis");
 
     const std::string shadow = BuildGraphFragmentWrapperSource(shader, "ShadowDepth");
     Require(shadow.find("gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);") != std::string::npos,
@@ -82,8 +91,16 @@ void RunGraphShaderWrapperSourceTest() {
             gbuffer.find("gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);") != std::string::npos &&
             gbuffer.find("gl_FragData[2] = vec4(clamp(surface.metallic") != std::string::npos,
         "Deferred graph wrapper must write albedo, normal and material MRT outputs");
+    Require(gbuffer.find("graphNormal.xy * u_materialParams.z") != std::string::npos &&
+            gbuffer.find("basisTangent * graphNormal.x") != std::string::npos,
+        "KBMAT-MAT87: GBuffer graph normal mapping must honor material normalScale before writing the normal MRT");
     Require(gbuffer.find("KbEvaluateForwardLighting(") == std::string::npos,
         "Deferred graph GBuffer wrapper must not light through the forward shader");
+    Require(gbuffer.find("basisTangent = vertexTangent;") != std::string::npos &&
+            gbuffer.find("basisBitangent = vertexBitangent;") != std::string::npos &&
+            gbuffer.find("basisTangent = derivativeTangent") == std::string::npos &&
+            gbuffer.find("dFdx(v_texcoord0)") == std::string::npos,
+        "KBMAT-MAT87: GBuffer graph normal mapping must use the mesh vertex TBN, not a screen-derivative UV basis");
     Require(opaque != shadow && opaque != gbuffer && shadow != gbuffer, "KBMAT-MAT04: Different passes must produce different wrapper sources");
 }
 
