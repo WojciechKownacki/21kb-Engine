@@ -6134,6 +6134,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     struct ReflectionTextureEntry {
         std::string samplerName;
         std::string stableId;
+        std::string role;
         RenderMaterialTextureColorSpace colorSpace;
         RenderMaterialGraphSamplerState samplerState;
         RenderMaterialGraphTextureDimension dimension;
@@ -6231,6 +6232,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
                 textureEntries.push_back({
                     ParameterUniformName(node, "_texture"),
                     StableParameterId(node),
+                    textureRole,
                     EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                     node.parameter.samplerState,
                     TextureDimensionForNode(node.kind),
@@ -6244,6 +6246,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
                 textureEntries.push_back({
                     ParameterUniformName(node, "_texture"),
                     StableParameterId(node),
+                    textureRole,
                     EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                     node.parameter.samplerState,
                     TextureDimensionForNode(node.kind),
@@ -6259,6 +6262,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             textureEntries.push_back({
                 ParameterUniformName(node, "_texture"),
                 StableParameterId(node),
+                textureRole,
                 EffectiveTextureColorSpaceForNode(graph, node, textureRole),
                 node.parameter.samplerState,
                 TextureDimensionForNode(node.kind),
@@ -6667,6 +6671,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             .samplerName = textureEntries[index].samplerName,
             .stableId = textureEntries[index].stableId,
             .slot = kRenderMaterialGraphTextureBaseSlot + index,
+            .role = textureEntries[index].role,
             .colorSpace = textureEntries[index].colorSpace,
             .samplerState = textureEntries[index].samplerState,
             .dimension = textureEntries[index].dimension,

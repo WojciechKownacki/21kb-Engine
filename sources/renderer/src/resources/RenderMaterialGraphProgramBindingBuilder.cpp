@@ -297,6 +297,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
             .samplerName = texture.samplerName,
             .stableId = texture.stableId,
             .slot = texture.slot,
+            .role = texture.role,
             .colorSpace = TextureBindingColorSpace(texture.colorSpace),
             .samplerFlags = RenderMaterialGraphSamplerBgfxFlags(texture.samplerState),
             .dimension = texture.dimension,
@@ -318,6 +319,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
             row << "texture sampler=" << textureBinding.samplerName
                 << " stableId=" << textureBinding.stableId
                 << " slot=" << textureBinding.slot
+                << " role=" << (textureBinding.role.empty() ? "<empty>" : textureBinding.role)
                 << " reflectedColorSpace=" << MaterialGraphDebugColorSpaceName(texture.colorSpace)
                 << " runtimeColorSpace=" << MaterialGraphDebugRuntimeColorSpaceName(textureBinding.colorSpace)
                 << " dimension=" << MaterialGraphDebugTextureDimensionName(textureBinding.dimension)

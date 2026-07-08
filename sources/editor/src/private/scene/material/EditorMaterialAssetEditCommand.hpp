@@ -141,6 +141,10 @@ private:
     kb::assets::AssetId textureId_{};
 };
 
+[[nodiscard]] bool ApplyEditorMaterialOutputNormalTextureGraph(
+    kb::render::RenderMaterialAssetData& material,
+    kb::assets::AssetId textureId);
+
 class EditorMaterialAssetEditCommand final : public IEditorCommand {
 public:
     [[nodiscard]] static std::unique_ptr<EditorMaterialAssetEditCommand> Create(

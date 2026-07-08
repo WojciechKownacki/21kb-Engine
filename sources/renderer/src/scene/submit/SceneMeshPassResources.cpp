@@ -5,12 +5,15 @@
 #include "renderer/RendererDebugLog.hpp"
 #include "scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::render {
@@ -111,6 +114,10 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
     case RenderTextureColorSpace::Linear: return "Linear";
     }
     return "Linear";
+}
+
+[[nodiscard]] bool IsNormalGraphTextureRole(std::string_view role) noexcept {
+    return role == "normal" || role == "normalMap";
 }
 
 [[nodiscard]] bool IsGraphCapablePass(MeshPassType pass) noexcept {
@@ -494,7 +501,15 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         WriteRendererMaterialGraphDebugLog(
             "gpu",
             "bind-graph-pass pass=" + GraphMeshPassName(desc.pass) +
-                " graphSourceHash=" + std::to_string(material->graphProgram.graphSourceHash));
+                " graphSourceHash=" + std::to_string(material->graphProgram.graphSourceHash) +
+                " normalScale=" + std::to_string(material->normalScale));
+        const std::array<float, 4U> graphMaterialParams{
+            std::clamp(material->metallicFactor, 0.0F, 1.0F),
+            std::clamp(material->roughnessFactor, 0.04F, 1.0F),
+            std::clamp(material->normalScale, 0.0F, 8.0F),
+            material->alphaCutoff,
+        };
+        bgfx::setUniform(materialParamsUniform_, graphMaterialParams.data());
         bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
         bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
@@ -532,20 +547,22 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
             const RenderTextureHandle resolved = desc.resourceMap.ResolveTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
             const RenderTextureResource* textureResource = desc.resources.FindTexture(resolved);
-            const bgfx::TextureHandle handle = (textureResource != nullptr && bgfx::isValid(textureResource->texture))
-                ? textureResource->texture
-                : fallbackWhiteTexture_;
+            const bool textureValid = textureResource != nullptr && bgfx::isValid(textureResource->texture);
+            const bool normalFallback = IsNormalGraphTextureRole(graphTexture.role);
+            const bgfx::TextureHandle fallbackTexture = normalFallback ? fallbackNormalTexture_ : fallbackWhiteTexture_;
+            const bgfx::TextureHandle handle = textureValid ? textureResource->texture : fallbackTexture;
             {
                 std::ostringstream row;
                 row << "setTexture sampler=" << graphTexture.samplerName
                     << " stableId=" << graphTexture.stableId
                     << " slot=" << graphTexture.slot
+                    << " role=" << (graphTexture.role.empty() ? "<empty>" : graphTexture.role)
                     << " assetId=" << graphTexture.textureAssetId
                     << " colorSpace=" << GraphRuntimeColorSpaceName(graphTexture.colorSpace)
                     << " resolvedHandle=" << resolved.value
                     << " textureResource=" << (textureResource != nullptr ? "true" : "false")
                     << " bgfxHandle=" << (bgfx::isValid(handle) ? std::to_string(handle.idx) : std::string{ "invalid" })
-                    << " fallbackWhite=" << ((textureResource == nullptr || !bgfx::isValid(textureResource->texture)) ? "true" : "false");
+                    << " fallback=" << (!textureValid ? (normalFallback ? "normal" : "white") : "none");
                 if (textureResource != nullptr) {
                     row << " resourceSize=" << textureResource->width << 'x' << textureResource->height
                         << " resourceFormat=" << static_cast<int>(textureResource->format)
