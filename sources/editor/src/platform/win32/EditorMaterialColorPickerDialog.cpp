@@ -12,22 +12,32 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <initializer_list>
+#include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 #include <windowsx.h>
 
 namespace kb::editor {
 namespace {
 
 constexpr wchar_t kColorPickerClassName[] = L"KBEditorMaterialColorPickerDialog";
-constexpr int kDialogWidth = 568;
-constexpr int kDialogHeight = 438;
-constexpr int kPad = 18;
-constexpr int kTitleHeight = 52;
-constexpr int kButtonWidth = 86;
-constexpr int kButtonHeight = 28;
+constexpr int kDialogWidth = 324;
+constexpr int kDialogHeight = 420;
+constexpr int kPad = 22;
+constexpr int kTitleHeight = 18;
+constexpr int kSquare = 216;
+constexpr int kHueWidth = 22;
+constexpr int kGap = 10;
+constexpr int kFieldHeight = 22;
+constexpr int kButtonWidth = 64;
+constexpr int kButtonHeight = 26;
+constexpr int kPreviewWidth = 44;
 
 enum class PickerField : std::uint8_t {
     None,
@@ -157,11 +167,10 @@ struct HsvColor {
     std::snprintf(
         buffer,
         sizeof(buffer),
-        "#%02X%02X%02X%02X",
+        "%02X%02X%02X",
         ColorByte(rgba[0]),
         ColorByte(rgba[1]),
-        ColorByte(rgba[2]),
-        ColorByte(rgba[3]));
+        ColorByte(rgba[2]));
     return std::string{ buffer };
 }
 
@@ -241,6 +250,164 @@ void DrawCheckerboard(HDC dc, RECT rect, int cell) {
     }
 }
 
+void DrawBorderOnly(HDC dc, const RECT& rect, COLORREF border) {
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    if (pen == nullptr) {
+        return;
+    }
+    {
+        const ScopedGdiObject selectedPen(dc, pen);
+        const ScopedGdiObject selectedBrush(dc, GetStockObject(NULL_BRUSH));
+        Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+    }
+    DeleteObject(pen);
+}
+
+[[nodiscard]] std::string ColorPickerLogPath() {
+    std::array<char, MAX_PATH> buffer{};
+    const DWORD length = GetTempPathA(static_cast<DWORD>(buffer.size()), buffer.data());
+    std::string path = (length > 0U && length < buffer.size()) ? std::string(buffer.data(), length) : std::string(".\\");
+    if (!path.empty() && path.back() != '\\' && path.back() != '/') {
+        path.push_back('\\');
+    }
+    path += "kb_material_color_picker.log";
+    return path;
+}
+
+void ColorPickerLogRaw(std::string_view message, std::ios_base::openmode mode = std::ios::app) {
+    static const std::string path = ColorPickerLogPath();
+    {
+        std::ofstream log(path, mode);
+        if (log.is_open()) {
+            log << message << '\n';
+        }
+    }
+    const std::string debug = "[MaterialColorPicker] " + std::string(message) + "\n";
+    OutputDebugStringA(debug.c_str());
+}
+
+void ColorPickerLog(std::string_view message) {
+    ColorPickerLogRaw(message);
+}
+
+void ColorPickerLogReset() {
+    ColorPickerLogRaw("=== Material color picker log begin ===", std::ios::trunc);
+    ColorPickerLog("path=" + ColorPickerLogPath());
+}
+
+[[nodiscard]] bool ShouldLog(int& counter, int first, int every) noexcept {
+    ++counter;
+    return counter <= first || (every > 0 && (counter % every) == 0);
+}
+
+[[nodiscard]] std::string RectText(const RECT& rect) {
+    std::ostringstream stream;
+    stream << "[" << rect.left << "," << rect.top << " - " << rect.right << "," << rect.bottom
+           << " size=" << RectWidth(rect) << "x" << RectHeight(rect) << "]";
+    return stream.str();
+}
+
+[[nodiscard]] std::string PixelText(std::uint32_t pixel) {
+    const int a = static_cast<int>((pixel >> 24U) & 0xFFU);
+    const int r = static_cast<int>((pixel >> 16U) & 0xFFU);
+    const int g = static_cast<int>((pixel >> 8U) & 0xFFU);
+    const int b = static_cast<int>(pixel & 0xFFU);
+    std::ostringstream stream;
+    stream << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << pixel
+           << std::dec << " rgba=(" << r << "," << g << "," << b << "," << a << ")";
+    return stream.str();
+}
+
+[[nodiscard]] std::string ColorRefText(COLORREF color) {
+    std::ostringstream stream;
+    stream << "rgb=(" << static_cast<int>(GetRValue(color)) << "," << static_cast<int>(GetGValue(color)) << ","
+           << static_cast<int>(GetBValue(color)) << ")";
+    return stream.str();
+}
+
+[[nodiscard]] std::string RgbaText(const std::array<float, 4U>& rgba) {
+    std::ostringstream stream;
+    stream << "rgba=(" << ColorByte(rgba[0]) << "," << ColorByte(rgba[1]) << "," << ColorByte(rgba[2]) << ","
+           << ColorByte(rgba[3]) << ") floats=(" << rgba[0] << "," << rgba[1] << "," << rgba[2] << "," << rgba[3]
+           << ")";
+    return stream.str();
+}
+
+[[nodiscard]] std::string HsvText(HsvColor hsv) {
+    std::ostringstream stream;
+    stream << "hsv=(" << hsv.h << "," << hsv.s << "," << hsv.v << ")";
+    return stream.str();
+}
+
+[[nodiscard]] std::uint32_t BgraPixel(int r, int g, int b) noexcept {
+    return 0xFF000000U | (static_cast<std::uint32_t>(std::clamp(r, 0, 255)) << 16U) |
+        (static_cast<std::uint32_t>(std::clamp(g, 0, 255)) << 8U) |
+        static_cast<std::uint32_t>(std::clamp(b, 0, 255));
+}
+
+[[nodiscard]] std::uint32_t BlendBgra(COLORREF foreground, BYTE alpha, COLORREF background) noexcept {
+    const int invAlpha = 255 - static_cast<int>(alpha);
+    const int r = ((static_cast<int>(GetRValue(foreground)) * static_cast<int>(alpha)) +
+                      (static_cast<int>(GetRValue(background)) * invAlpha) + 127) /
+        255;
+    const int g = ((static_cast<int>(GetGValue(foreground)) * static_cast<int>(alpha)) +
+                      (static_cast<int>(GetGValue(background)) * invAlpha) + 127) /
+        255;
+    const int b = ((static_cast<int>(GetBValue(foreground)) * static_cast<int>(alpha)) +
+                      (static_cast<int>(GetBValue(background)) * invAlpha) + 127) /
+        255;
+    return BgraPixel(r, g, b);
+}
+
+void DrawBgraPixels(HDC dc, const RECT& rect, const std::vector<std::uint32_t>& pixels) {
+    const int width = RectWidth(rect);
+    const int height = RectHeight(rect);
+    if (width <= 0 || height <= 0 || pixels.size() < static_cast<std::size_t>(width * height)) {
+        ColorPickerLog("DrawBgraPixels skip rect=" + RectText(rect) + " pixels=" + IntText(static_cast<int>(pixels.size())));
+        return;
+    }
+    static int drawCounter = 0;
+    const bool logDraw = ShouldLog(drawCounter, 18, 120);
+    if (logDraw) {
+        const std::size_t center = static_cast<std::size_t>((height / 2) * width + (width / 2));
+        ColorPickerLog(
+            "DrawBgraPixels #" + IntText(drawCounter) + " rect=" + RectText(rect) +
+            " first=" + PixelText(pixels.front()) + " center=" + PixelText(pixels[center]) +
+            " last=" + PixelText(pixels[static_cast<std::size_t>(width * height - 1)]));
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    SetLastError(0U);
+    const int oldMode = SetStretchBltMode(dc, COLORONCOLOR);
+    const int lines = StretchDIBits(
+        dc,
+        rect.left,
+        rect.top,
+        width,
+        height,
+        0,
+        0,
+        width,
+        height,
+        pixels.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY);
+    SetStretchBltMode(dc, oldMode);
+    if (logDraw) {
+        ColorPickerLog(
+            "DrawBgraPixels StretchDIBits lines=" + IntText(lines) +
+            " error=" + IntText(static_cast<int>(GetLastError())));
+    }
+}
+
 class ColorPickerWindow {
 public:
     ColorPickerWindow(std::string title, const std::array<float, 4U>& color)
@@ -249,6 +416,8 @@ public:
         , hsv_(RgbToHsv(color)) {
         ClampColor();
         RefreshFields();
+        ColorPickerLogReset();
+        ColorPickerLog("ctor " + RgbaText(rgba_) + " " + HsvText(hsv_));
     }
 
     [[nodiscard]] std::optional<std::array<float, 4U>> Show(HWND owner) {
@@ -257,9 +426,12 @@ public:
             return std::nullopt;
         }
         const RECT bounds = CenteredWindowRect(owner);
+        ColorPickerLog("show owner=" + IntText(owner_ != nullptr ? 1 : 0) + " bounds=" + RectText(bounds));
         EnableOwner(false);
         SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
         SetForegroundWindow(window_);
+        InvalidateRect(window_, nullptr, FALSE);
+        UpdateWindow(window_);
 
         MSG message{};
         while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -286,8 +458,10 @@ private:
         windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
         windowClass.lpszClassName = kColorPickerClassName;
         if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            ColorPickerLog("EnsureWindow RegisterClassEx failed error=" + IntText(static_cast<int>(GetLastError())));
             return false;
         }
+        SetLastError(0U);
         window_ = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             kColorPickerClassName,
@@ -301,6 +475,9 @@ private:
             nullptr,
             windowClass.hInstance,
             this);
+        ColorPickerLog(
+            "EnsureWindow CreateWindowEx window=" + IntText(window_ != nullptr ? 1 : 0) +
+            " error=" + IntText(static_cast<int>(GetLastError())));
         return window_ != nullptr;
     }
 
@@ -329,58 +506,87 @@ private:
     }
 
     [[nodiscard]] RECT SaturationValueRect() const noexcept {
-        return Rect(kPad, kTitleHeight + 18, kPad + 242, kTitleHeight + 198);
+        const int top = kPad + kTitleHeight + kGap;
+        return Rect(kPad, top, kPad + kSquare, top + kSquare);
     }
 
     [[nodiscard]] RECT HueRect() const noexcept {
         const RECT sv = SaturationValueRect();
-        return Rect(sv.right + 12, sv.top, sv.right + 34, sv.bottom);
+        return Rect(sv.right + kGap, sv.top, sv.right + kGap + kHueWidth, sv.bottom);
     }
 
     [[nodiscard]] RECT AlphaRect() const noexcept {
+        const RECT hue = HueRect();
+        return Rect(hue.right + kGap, hue.top, hue.right + kGap + kHueWidth, hue.bottom);
+    }
+
+    [[nodiscard]] RECT TitleRect() const noexcept {
+        return Rect(kPad, kPad, kDialogWidth - kPad, kPad + kTitleHeight);
+    }
+
+    [[nodiscard]] RECT FieldsBounds() const noexcept {
         const RECT sv = SaturationValueRect();
-        return Rect(sv.left, sv.bottom + 22, sv.right, sv.bottom + 42);
+        return Rect(kPad, sv.bottom + kGap, kDialogWidth - kPad, sv.bottom + kGap + (3 * kFieldHeight) + (2 * kGap));
+    }
+
+    [[nodiscard]] RECT HexLabelRect() const noexcept {
+        const RECT fields = FieldsBounds();
+        return Rect(fields.left, fields.top, fields.left + 30, fields.top + kFieldHeight);
+    }
+
+    [[nodiscard]] RECT HexFieldRect() const noexcept {
+        const RECT fields = FieldsBounds();
+        return Rect(fields.left + 38, fields.top, fields.right, fields.top + kFieldHeight);
+    }
+
+    [[nodiscard]] RECT RgbFieldRect(std::size_t channel) const noexcept {
+        const RECT fields = FieldsBounds();
+        const int top = fields.top + kFieldHeight + kGap;
+        const int gap = 6;
+        const int width = (RectWidth(fields) - (2 * gap)) / 3;
+        const int left = fields.left + static_cast<int>(channel) * (width + gap);
+        const int right = channel == 2U ? fields.right : left + width;
+        return Rect(left, top, right, top + kFieldHeight);
+    }
+
+    [[nodiscard]] RECT AlphaFieldRect() const noexcept {
+        const RECT fields = FieldsBounds();
+        const int top = fields.top + (2 * (kFieldHeight + kGap));
+        return Rect(fields.left, top, fields.right, top + kFieldHeight);
     }
 
     [[nodiscard]] RECT PreviewRect() const noexcept {
-        return Rect(326, kTitleHeight + 18, 526, kTitleHeight + 78);
-    }
-
-    [[nodiscard]] RECT SwatchRect(std::size_t index) const noexcept {
-        constexpr int chip = 22;
-        constexpr int gap = 8;
-        const int left = 326 + static_cast<int>(index % 7U) * (chip + gap);
-        const int top = kTitleHeight + 96 + static_cast<int>(index / 7U) * (chip + gap);
-        return Rect(left, top, left + chip, top + chip);
+        const RECT alpha = AlphaFieldRect();
+        const int top = alpha.bottom + kGap;
+        return Rect(kPad, top, kPad + kPreviewWidth, top + kButtonHeight);
     }
 
     [[nodiscard]] RECT FieldRect(PickerField field) const noexcept {
-        const int index = FieldIndex(field);
-        if (index < 0) {
-            return {};
+        switch (field) {
+        case PickerField::Hex: return HexFieldRect();
+        case PickerField::Red: return RgbFieldRect(0U);
+        case PickerField::Green: return RgbFieldRect(1U);
+        case PickerField::Blue: return RgbFieldRect(2U);
+        case PickerField::Alpha: return AlphaFieldRect();
+        default: return {};
         }
-        const int top = kTitleHeight + 138 + index * 24;
-        return Rect(372, top, 526, top + 20);
     }
 
     [[nodiscard]] RECT FieldLabelRect(PickerField field) const noexcept {
-        const RECT fieldRect = FieldRect(field);
-        return Rect(326, fieldRect.top, 366, fieldRect.bottom);
+        if (field == PickerField::Hex) {
+            return HexLabelRect();
+        }
+        return {};
     }
 
     [[nodiscard]] RECT OkButtonRect() const noexcept {
-        const RECT client = Client();
-        return Rect(client.right - kPad - kButtonWidth, client.bottom - kPad - kButtonHeight, client.right - kPad, client.bottom - kPad);
+        const RECT preview = PreviewRect();
+        return Rect(kDialogWidth - kPad - kButtonWidth, preview.top, kDialogWidth - kPad, preview.bottom);
     }
 
     [[nodiscard]] RECT CancelButtonRect() const noexcept {
         const RECT ok = OkButtonRect();
         return Rect(ok.left - 10 - kButtonWidth, ok.top, ok.left - 10, ok.bottom);
-    }
-
-    [[nodiscard]] RECT EyedropperButtonRect() const noexcept {
-        const RECT cancel = CancelButtonRect();
-        return Rect(kPad, cancel.top, kPad + 132, cancel.bottom);
     }
 
     [[nodiscard]] static int FieldIndex(PickerField field) noexcept {
@@ -423,7 +629,7 @@ private:
         fieldTexts_[4] = IntText(static_cast<int>(std::round(hsv_.h)));
         fieldTexts_[5] = IntText(static_cast<int>(std::round(hsv_.s * 100.0F)));
         fieldTexts_[6] = IntText(static_cast<int>(std::round(hsv_.v * 100.0F)));
-        fieldTexts_[7] = IntText(static_cast<int>(std::round(rgba_[3] * 100.0F)));
+        fieldTexts_[7] = IntText(ColorByte(rgba_[3]));
     }
 
     void SetRgba(std::array<float, 4U> color) {
@@ -431,6 +637,9 @@ private:
         ClampColor();
         hsv_ = RgbToHsv(rgba_);
         RefreshFields();
+        if (ShouldLog(colorChangeLogCount_, 16, 60)) {
+            ColorPickerLog("SetRgba #" + IntText(colorChangeLogCount_) + " " + RgbaText(rgba_) + " " + HsvText(hsv_));
+        }
         Invalidate();
     }
 
@@ -442,6 +651,9 @@ private:
         rgba_[1] = rgb[1];
         rgba_[2] = rgb[2];
         RefreshFields();
+        if (ShouldLog(colorChangeLogCount_, 16, 60)) {
+            ColorPickerLog("SetHsv #" + IntText(colorChangeLogCount_) + " " + RgbaText(rgba_) + " " + HsvText(hsv_));
+        }
         Invalidate();
     }
 
@@ -453,23 +665,72 @@ private:
 
     void Paint(HDC dc) const {
         const RECT client = Client();
-        GdiDrawing::FillRectColor(dc, client, Rgb(15, 17, 22));
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(15, 17, 22), Rgb(77, 89, 106));
-        GdiDrawing::FillRectColor(dc, Rect(1, 1, client.right - 1, kTitleHeight), Rgb(22, 27, 35));
-        {
-            ScopedFont titleFont(15, FW_SEMIBOLD);
-            const ScopedGdiObject selectedFont(dc, titleFont.handle);
-            Text(dc, Rect(kPad, 8, client.right - kPad, 30), title_.empty() ? std::string_view{ "Material Color" } : std::string_view{ title_ }, Rgb(235, 241, 249));
+        const int width = RectWidth(client);
+        const int height = RectHeight(client);
+        const bool logPaint = ShouldLog(paintLogCount_, 12, 120);
+        if (logPaint) {
+            ColorPickerLog("Paint #" + IntText(paintLogCount_) + " client=" + RectText(client) + " " + RgbaText(rgba_) + " " + HsvText(hsv_));
         }
-        Text(dc, Rect(kPad, 30, client.right - kPad, 50), "HSV, alpha, HEX, RGB and presets", Rgb(153, 168, 190));
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        SetLastError(0U);
+        HDC memoryDc = CreateCompatibleDC(dc);
+        if (memoryDc == nullptr) {
+            if (logPaint) {
+                ColorPickerLog("Paint CreateCompatibleDC failed error=" + IntText(static_cast<int>(GetLastError())));
+            }
+            PaintContent(dc);
+            return;
+        }
+
+        SetLastError(0U);
+        HBITMAP memoryBitmap = CreateCompatibleBitmap(dc, width, height);
+        if (memoryBitmap == nullptr) {
+            if (logPaint) {
+                ColorPickerLog("Paint CreateCompatibleBitmap failed error=" + IntText(static_cast<int>(GetLastError())));
+            }
+            DeleteDC(memoryDc);
+            PaintContent(dc);
+            return;
+        }
+
+        HGDIOBJ oldBitmap = SelectObject(memoryDc, memoryBitmap);
+        if (logPaint) {
+            ColorPickerLog(
+                "Paint double-buffer memoryDc=" + IntText(memoryDc != nullptr ? 1 : 0) +
+                " bitmap=" + IntText(memoryBitmap != nullptr ? 1 : 0) +
+                " oldBitmap=" + IntText(oldBitmap != nullptr ? 1 : 0));
+        }
+        PaintContent(memoryDc);
+        SetLastError(0U);
+        const BOOL blitOk = BitBlt(dc, 0, 0, width, height, memoryDc, 0, 0, SRCCOPY);
+        if (logPaint) {
+            ColorPickerLog(
+                "Paint final BitBlt ok=" + IntText(blitOk != FALSE ? 1 : 0) +
+                " error=" + IntText(static_cast<int>(GetLastError())));
+        }
+        SelectObject(memoryDc, oldBitmap);
+        DeleteObject(memoryBitmap);
+        DeleteDC(memoryDc);
+    }
+
+    void PaintContent(HDC dc) const {
+        const RECT client = Client();
+        GdiDrawing::FillRectColor(dc, client, Rgb(20, 23, 29));
+        GdiDrawing::DrawSharpFrame(dc, client, Rgb(20, 23, 29), Rgb(50, 58, 70));
+        {
+            ScopedFont titleFont(12, FW_SEMIBOLD);
+            const ScopedGdiObject selectedFont(dc, titleFont.handle);
+            Text(dc, TitleRect(), "Color", Rgb(245, 248, 252));
+        }
 
         DrawSaturationValue(dc);
         DrawHue(dc);
         DrawAlpha(dc);
-        DrawPreview(dc);
-        DrawSwatches(dc);
         DrawFields(dc);
-        DrawButton(dc, EyedropperButtonRect(), eyedropperArmed_ ? "Click screen" : "Pick screen", eyedropperArmed_);
+        DrawPreview(dc);
         DrawButton(dc, CancelButtonRect(), "Cancel", false);
         DrawButton(dc, OkButtonRect(), "Apply", true);
     }
@@ -478,15 +739,25 @@ private:
         const RECT rect = SaturationValueRect();
         const int width = std::max(1, RectWidth(rect));
         const int height = std::max(1, RectHeight(rect));
+        std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width * height));
         for (int y = 0; y < height; ++y) {
             const float value = 1.0F - (static_cast<float>(y) / static_cast<float>(std::max(1, height - 1)));
             for (int x = 0; x < width; ++x) {
                 const float saturation = static_cast<float>(x) / static_cast<float>(std::max(1, width - 1));
                 const std::array<float, 3U> rgb = HsvToRgb(HsvColor{ .h = hsv_.h, .s = saturation, .v = value });
-                SetPixelV(dc, rect.left + x, rect.top + y, Rgb(ColorByte(rgb[0]), ColorByte(rgb[1]), ColorByte(rgb[2])));
+                pixels[static_cast<std::size_t>(y * width + x)] = BgraPixel(ColorByte(rgb[0]), ColorByte(rgb[1]), ColorByte(rgb[2]));
             }
         }
-        GdiDrawing::DrawSharpFrame(dc, rect, Rgb(0, 0, 0), Rgb(83, 96, 116));
+        if (ShouldLog(saturationValueLogCount_, 10, 120)) {
+            const std::size_t center = static_cast<std::size_t>((height / 2) * width + (width / 2));
+            ColorPickerLog(
+                "DrawSaturationValue #" + IntText(saturationValueLogCount_) + " rect=" + RectText(rect) + " " + HsvText(hsv_) +
+                " tl=" + PixelText(pixels.front()) + " center=" + PixelText(pixels[center]) +
+                " tr=" + PixelText(pixels[static_cast<std::size_t>(width - 1)]) +
+                " bl=" + PixelText(pixels[static_cast<std::size_t>((height - 1) * width)]));
+        }
+        DrawBgraPixels(dc, rect, pixels);
+        DrawBorderOnly(dc, rect, Rgb(83, 96, 116));
         const int markerX = rect.left + static_cast<int>(std::round(hsv_.s * static_cast<float>(width - 1)));
         const int markerY = rect.top + static_cast<int>(std::round((1.0F - hsv_.v) * static_cast<float>(height - 1)));
         DrawMarker(dc, markerX, markerY);
@@ -494,76 +765,94 @@ private:
 
     void DrawHue(HDC dc) const {
         const RECT rect = HueRect();
+        const int width = std::max(1, RectWidth(rect));
         const int height = std::max(1, RectHeight(rect));
+        std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width * height));
         for (int y = 0; y < height; ++y) {
             const float hue = (static_cast<float>(y) / static_cast<float>(std::max(1, height - 1))) * 360.0F;
             const std::array<float, 3U> rgb = HsvToRgb(HsvColor{ .h = hue, .s = 1.0F, .v = 1.0F });
-            GdiDrawing::FillRectColor(dc, Rect(rect.left, rect.top + y, rect.right, rect.top + y + 1), Rgb(ColorByte(rgb[0]), ColorByte(rgb[1]), ColorByte(rgb[2])));
+            const std::uint32_t pixel = BgraPixel(ColorByte(rgb[0]), ColorByte(rgb[1]), ColorByte(rgb[2]));
+            for (int x = 0; x < width; ++x) {
+                pixels[static_cast<std::size_t>(y * width + x)] = pixel;
+            }
         }
-        GdiDrawing::DrawSharpFrame(dc, rect, Rgb(0, 0, 0), Rgb(83, 96, 116));
+        if (ShouldLog(hueLogCount_, 10, 120)) {
+            const std::size_t center = static_cast<std::size_t>((height / 2) * width + (width / 2));
+            ColorPickerLog(
+                "DrawHue #" + IntText(hueLogCount_) + " rect=" + RectText(rect) + " " + HsvText(hsv_) +
+                " top=" + PixelText(pixels.front()) + " center=" + PixelText(pixels[center]) +
+                " bottom=" + PixelText(pixels[static_cast<std::size_t>((height - 1) * width)]));
+        }
+        DrawBgraPixels(dc, rect, pixels);
+        DrawBorderOnly(dc, rect, Rgb(83, 96, 116));
         const int markerY = rect.top + static_cast<int>(std::round((hsv_.h / 360.0F) * static_cast<float>(height - 1)));
         GdiDrawing::FillRectColor(dc, Rect(rect.left - 3, markerY - 2, rect.right + 3, markerY + 3), Rgb(245, 248, 252));
     }
 
     void DrawAlpha(HDC dc) const {
         const RECT rect = AlphaRect();
-        DrawCheckerboard(dc, rect, 7);
         const int width = std::max(1, RectWidth(rect));
-        for (int x = 0; x < width; ++x) {
-            const BYTE alpha = static_cast<BYTE>(std::clamp((x * 255) / std::max(1, width - 1), 0, 255));
-            GdiDrawing::FillRectAlpha(dc, Rect(rect.left + x, rect.top, rect.left + x + 1, rect.bottom), RgbaColor(rgba_), alpha);
+        const int height = std::max(1, RectHeight(rect));
+        std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width * height));
+        const COLORREF color = RgbaColor(rgba_);
+        constexpr int kAlphaCheckerCell = 7;
+        for (int y = 0; y < height; ++y) {
+            const BYTE alpha = static_cast<BYTE>(std::clamp((y * 255) / std::max(1, height - 1), 0, 255));
+            for (int x = 0; x < width; ++x) {
+                const bool light = ((x / kAlphaCheckerCell) + (y / kAlphaCheckerCell)) % 2 == 0;
+                const COLORREF background = light ? Rgb(78, 83, 90) : Rgb(42, 46, 52);
+                pixels[static_cast<std::size_t>(y * width + x)] = BlendBgra(color, alpha, background);
+            }
         }
-        GdiDrawing::DrawSharpFrame(dc, rect, Rgb(0, 0, 0), Rgb(83, 96, 116));
-        const int markerX = rect.left + static_cast<int>(std::round(rgba_[3] * static_cast<float>(width - 1)));
-        GdiDrawing::FillRectColor(dc, Rect(markerX - 2, rect.top - 3, markerX + 3, rect.bottom + 3), Rgb(245, 248, 252));
+        if (ShouldLog(alphaLogCount_, 10, 120)) {
+            const std::size_t center = static_cast<std::size_t>((height / 2) * width + (width / 2));
+            ColorPickerLog(
+                "DrawAlpha #" + IntText(alphaLogCount_) + " rect=" + RectText(rect) + " color=" + ColorRefText(color) +
+                " alphaByte=" + IntText(ColorByte(rgba_[3])) + " top=" + PixelText(pixels.front()) +
+                " center=" + PixelText(pixels[center]) +
+                " bottom=" + PixelText(pixels[static_cast<std::size_t>((height - 1) * width)]));
+        }
+        DrawBgraPixels(dc, rect, pixels);
+        DrawBorderOnly(dc, rect, Rgb(83, 96, 116));
+        const int markerY = rect.top + static_cast<int>(std::round(rgba_[3] * static_cast<float>(height - 1)));
+        GdiDrawing::FillRectColor(dc, Rect(rect.left - 3, markerY - 2, rect.right + 3, markerY + 3), Rgb(245, 248, 252));
     }
 
     void DrawPreview(HDC dc) const {
         const RECT rect = PreviewRect();
-        DrawCheckerboard(dc, rect, 9);
-        GdiDrawing::FillRectAlpha(dc, rect, RgbaColor(rgba_), static_cast<BYTE>(ColorByte(rgba_[3])));
-        GdiDrawing::DrawSharpFrame(dc, rect, Rgb(0, 0, 0), Rgb(83, 96, 116));
-        Text(dc, Rect(rect.left + 10, rect.top, rect.right - 10, rect.bottom), HexText(rgba_), Rgb(245, 248, 252), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-
-    void DrawSwatches(HDC dc) const {
-        for (std::size_t index = 0U; index < kPresetColors.size(); ++index) {
-            const RECT chip = SwatchRect(index);
-            DrawCheckerboard(dc, chip, 5);
-            GdiDrawing::FillRectAlpha(dc, chip, RgbaColor(kPresetColors[index]), static_cast<BYTE>(ColorByte(kPresetColors[index][3])));
-            GdiDrawing::DrawSharpFrame(dc, chip, Rgb(0, 0, 0), Rgb(83, 96, 116));
+        const COLORREF color = RgbaColor(rgba_);
+        if (ShouldLog(previewLogCount_, 10, 120)) {
+            ColorPickerLog("DrawPreview #" + IntText(previewLogCount_) + " rect=" + RectText(rect) + " " + RgbaText(rgba_) + " color=" + ColorRefText(color));
         }
+        std::vector<std::uint32_t> pixels(
+            static_cast<std::size_t>(std::max(1, RectWidth(rect)) * std::max(1, RectHeight(rect))),
+            BgraPixel(GetRValue(color), GetGValue(color), GetBValue(color)));
+        DrawBgraPixels(dc, rect, pixels);
+        DrawBorderOnly(dc, rect, Rgb(83, 96, 116));
     }
 
     void DrawFields(HDC dc) const {
-        static constexpr std::array<PickerField, 8U> fields{
-            PickerField::Hex,
-            PickerField::Red,
-            PickerField::Green,
-            PickerField::Blue,
-            PickerField::Hue,
-            PickerField::Saturation,
-            PickerField::Value,
-            PickerField::Alpha,
-        };
-        static constexpr std::array<std::string_view, 8U> labels{ "HEX", "R", "G", "B", "H", "S", "V", "A" };
-        for (std::size_t index = 0U; index < fields.size(); ++index) {
-            const RECT label = FieldLabelRect(fields[index]);
-            const RECT field = FieldRect(fields[index]);
-            Text(dc, label, labels[index], Rgb(153, 168, 190), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            const bool focused = focusedField_ == fields[index];
-            GdiDrawing::DrawSharpFrame(dc, field, focused ? Rgb(31, 45, 62) : Rgb(22, 26, 33), focused ? Rgb(111, 171, 235) : Rgb(66, 76, 91));
-            std::string text = FieldText(fields[index]);
-            if (focused) {
-                text += "|";
-            }
-            Text(dc, Rect(field.left + 7, field.top, field.right - 7, field.bottom), text, Rgb(231, 238, 247));
-        }
+        Text(dc, HexLabelRect(), "Hex", Rgb(190, 205, 224), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawField(dc, PickerField::Hex, FieldText(PickerField::Hex));
+        DrawField(dc, PickerField::Red, "R " + FieldText(PickerField::Red));
+        DrawField(dc, PickerField::Green, "G " + FieldText(PickerField::Green));
+        DrawField(dc, PickerField::Blue, "B " + FieldText(PickerField::Blue));
+        DrawField(dc, PickerField::Alpha, "A " + FieldText(PickerField::Alpha));
     }
 
     void DrawButton(HDC dc, RECT rect, std::string_view label, bool emphasized) const {
-        GdiDrawing::DrawSharpFrame(dc, rect, emphasized ? Rgb(39, 68, 72) : Rgb(25, 29, 36), emphasized ? Rgb(96, 178, 184) : Rgb(72, 84, 102));
-        Text(dc, rect, label, emphasized ? Rgb(237, 255, 255) : Rgb(218, 228, 240), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        GdiDrawing::DrawSharpFrame(dc, rect, emphasized ? Rgb(245, 194, 50) : Rgb(17, 20, 27), emphasized ? Rgb(248, 211, 81) : Rgb(55, 65, 82));
+        Text(dc, rect, label, emphasized ? Rgb(22, 23, 26) : Rgb(235, 241, 249), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    void DrawField(HDC dc, PickerField field, std::string text) const {
+        const RECT rect = FieldRect(field);
+        const bool focused = focusedField_ == field;
+        GdiDrawing::DrawSharpFrame(dc, rect, focused ? Rgb(25, 34, 48) : Rgb(17, 20, 27), focused ? Rgb(111, 171, 235) : Rgb(55, 65, 82));
+        if (focused) {
+            text = FieldText(field) + "|";
+        }
+        Text(dc, Rect(rect.left + 7, rect.top, rect.right - 7, rect.bottom), text, Rgb(236, 242, 250));
     }
 
     static void DrawMarker(HDC dc, int x, int y) {
@@ -589,11 +878,14 @@ private:
         SetHsv(HsvColor{ .h = hue, .s = hsv_.s, .v = hsv_.v });
     }
 
-    void UpdateFromAlpha(int x) {
+    void UpdateFromAlpha(int y) {
         const RECT rect = AlphaRect();
-        const int clampedX = std::clamp<int>(x, static_cast<int>(rect.left), static_cast<int>(rect.right - 1));
-        rgba_[3] = static_cast<float>(clampedX - rect.left) / static_cast<float>(std::max(1, RectWidth(rect) - 1));
+        const int clampedY = std::clamp<int>(y, static_cast<int>(rect.top), static_cast<int>(rect.bottom - 1));
+        rgba_[3] = static_cast<float>(clampedY - rect.top) / static_cast<float>(std::max(1, RectHeight(rect) - 1));
         RefreshFields();
+        if (ShouldLog(colorChangeLogCount_, 16, 60)) {
+            ColorPickerLog("UpdateFromAlpha #" + IntText(colorChangeLogCount_) + " y=" + IntText(y) + " " + RgbaText(rgba_));
+        }
         Invalidate();
     }
 
@@ -632,7 +924,7 @@ private:
             break;
         case PickerField::Alpha:
             if (const std::optional<float> parsed = ParseFloat(FieldText(PickerField::Alpha))) {
-                rgba_[3] = std::clamp(*parsed, 0.0F, 100.0F) / 100.0F;
+                rgba_[3] = std::clamp(*parsed, 0.0F, 255.0F) / 255.0F;
                 RefreshFields();
                 Invalidate();
             }
@@ -643,14 +935,11 @@ private:
     }
 
     [[nodiscard]] PickerField FieldAt(int x, int y) const noexcept {
-        static constexpr std::array<PickerField, 8U> fields{
+        static constexpr std::array<PickerField, 5U> fields{
             PickerField::Hex,
             PickerField::Red,
             PickerField::Green,
             PickerField::Blue,
-            PickerField::Hue,
-            PickerField::Saturation,
-            PickerField::Value,
             PickerField::Alpha,
         };
         for (const PickerField field : fields) {
@@ -674,39 +963,7 @@ private:
         DestroyWindow(window_);
     }
 
-    void ArmEyedropper() {
-        eyedropperArmed_ = true;
-        SetCapture(window_);
-        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32515)));
-        Invalidate();
-    }
-
-    void SampleScreenAtClientPoint(int x, int y) {
-        POINT screen{ x, y };
-        ClientToScreen(window_, &screen);
-        HDC screenDc = GetDC(nullptr);
-        if (screenDc != nullptr) {
-            const COLORREF sampled = GetPixel(screenDc, screen.x, screen.y);
-            ReleaseDC(nullptr, screenDc);
-            if (sampled != CLR_INVALID) {
-                SetRgba(std::array<float, 4U>{
-                    static_cast<float>(GetRValue(sampled)) / 255.0F,
-                    static_cast<float>(GetGValue(sampled)) / 255.0F,
-                    static_cast<float>(GetBValue(sampled)) / 255.0F,
-                    rgba_[3],
-                });
-            }
-        }
-        eyedropperArmed_ = false;
-        ReleaseCapture();
-        Invalidate();
-    }
-
     void OnMouseDown(int x, int y) {
-        if (eyedropperArmed_) {
-            SampleScreenAtClientPoint(x, y);
-            return;
-        }
         ApplyFocusedField();
         if (Contains(OkButtonRect(), x, y)) {
             Accept();
@@ -715,16 +972,6 @@ private:
         if (Contains(CancelButtonRect(), x, y)) {
             Cancel();
             return;
-        }
-        if (Contains(EyedropperButtonRect(), x, y)) {
-            ArmEyedropper();
-            return;
-        }
-        for (std::size_t index = 0U; index < kPresetColors.size(); ++index) {
-            if (Contains(SwatchRect(index), x, y)) {
-                SetRgba(kPresetColors[index]);
-                return;
-            }
         }
         if (const PickerField field = FieldAt(x, y); field != PickerField::None) {
             focusedField_ = field;
@@ -747,18 +994,30 @@ private:
         if (Contains(AlphaRect(), x, y)) {
             dragKind_ = DragKind::Alpha;
             SetCapture(window_);
-            UpdateFromAlpha(x);
+            UpdateFromAlpha(y);
         }
     }
 
     void OnMouseMove(int x, int y) {
+        if (ShouldLog(mouseMoveLogCount_, 16, 120)) {
+            ColorPickerLog(
+                "WM_MOUSEMOVE #" + IntText(mouseMoveLogCount_) + " x=" + IntText(x) + " y=" + IntText(y) +
+                " dragging=" + IntText(dragKind_ != DragKind::None ? 1 : 0) +
+                " inSV=" + IntText(Contains(SaturationValueRect(), x, y) ? 1 : 0) +
+                " inHue=" + IntText(Contains(HueRect(), x, y) ? 1 : 0) +
+                " inAlpha=" + IntText(Contains(AlphaRect(), x, y) ? 1 : 0));
+        }
         if (dragKind_ == DragKind::SaturationValue) {
             UpdateFromSaturationValue(x, y);
         } else if (dragKind_ == DragKind::Hue) {
             UpdateFromHue(y);
         } else if (dragKind_ == DragKind::Alpha) {
-            UpdateFromAlpha(x);
+            UpdateFromAlpha(y);
         }
+    }
+
+    [[nodiscard]] bool IsDragging() const noexcept {
+        return dragKind_ != DragKind::None;
     }
 
     void OnMouseUp() {
@@ -781,13 +1040,7 @@ private:
 
     void OnKeyDown(WPARAM wparam) {
         if (wparam == VK_ESCAPE) {
-            if (eyedropperArmed_) {
-                eyedropperArmed_ = false;
-                ReleaseCapture();
-                Invalidate();
-            } else {
-                Cancel();
-            }
+            Cancel();
             return;
         }
         if (wparam == VK_RETURN) {
@@ -803,8 +1056,18 @@ private:
             return;
         }
         if (wparam == VK_TAB) {
-            const int index = FieldIndex(focusedField_);
-            focusedField_ = static_cast<PickerField>((std::max(0, index) + 1) % 8 + 1);
+            static constexpr std::array<PickerField, 5U> fields{
+                PickerField::Hex,
+                PickerField::Red,
+                PickerField::Green,
+                PickerField::Blue,
+                PickerField::Alpha,
+            };
+            const auto current = std::find(fields.begin(), fields.end(), focusedField_);
+            const std::size_t index = current == fields.end()
+                ? 0U
+                : (static_cast<std::size_t>(std::distance(fields.begin(), current)) + 1U) % fields.size();
+            focusedField_ = fields[index];
             Invalidate();
         }
     }
@@ -837,7 +1100,9 @@ private:
         case WM_MOUSEMOVE:
             if (picker != nullptr) {
                 picker->OnMouseMove(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-                return 0;
+                if (picker->IsDragging()) {
+                    return 0;
+                }
             }
             break;
         case WM_LBUTTONUP:
@@ -883,26 +1148,15 @@ private:
     std::array<std::string, 8U> fieldTexts_{};
     PickerField focusedField_ = PickerField::Hex;
     DragKind dragKind_ = DragKind::None;
+    mutable int paintLogCount_ = 0;
+    mutable int saturationValueLogCount_ = 0;
+    mutable int hueLogCount_ = 0;
+    mutable int alphaLogCount_ = 0;
+    mutable int previewLogCount_ = 0;
+    int colorChangeLogCount_ = 0;
+    int mouseMoveLogCount_ = 0;
     bool running_ = true;
     bool accepted_ = false;
-    bool eyedropperArmed_ = false;
-
-    static constexpr std::array<std::array<float, 4U>, 14U> kPresetColors{ {
-        { 1.0F, 1.0F, 1.0F, 1.0F },
-        { 0.0F, 0.0F, 0.0F, 1.0F },
-        { 0.93F, 0.18F, 0.24F, 1.0F },
-        { 1.0F, 0.55F, 0.18F, 1.0F },
-        { 1.0F, 0.82F, 0.24F, 1.0F },
-        { 0.22F, 0.74F, 0.42F, 1.0F },
-        { 0.24F, 0.62F, 1.0F, 1.0F },
-        { 0.62F, 0.36F, 0.95F, 1.0F },
-        { 0.0F, 0.0F, 0.0F, 0.0F },
-        { 0.15F, 0.18F, 0.22F, 1.0F },
-        { 0.54F, 0.67F, 0.82F, 1.0F },
-        { 0.90F, 0.77F, 0.55F, 1.0F },
-        { 0.32F, 0.88F, 0.78F, 1.0F },
-        { 1.0F, 0.32F, 0.60F, 1.0F },
-    } };
 };
 
 } // namespace

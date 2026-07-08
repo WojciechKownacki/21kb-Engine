@@ -3169,9 +3169,9 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return "XY";
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-            return "RGB";
+            return "RGB Node";
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-            return "RGBA";
+            return "RGBA Node";
         default:
             return "Constant";
         }
@@ -4756,13 +4756,13 @@ private:
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "RGB",
+                .displayName = "RGB Node",
                 .defaultValueHint = "0 0 0",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "RGBA",
+                .displayName = "RGBA Node",
                 .defaultValueHint = "1 1 1 1",
                 .hasRange = true,
                 .rangeMin = 0.0F,
