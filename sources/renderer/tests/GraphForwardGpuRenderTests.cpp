@@ -366,6 +366,7 @@ public:
         uEnvParams_ = bgfx::createUniform("u_environmentParams", bgfx::UniformType::Vec4);
         uTime_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
         uDynamicParameter_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
+        uMaterialParams_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
         uSceneColor_ = bgfx::createUniform("s_kbSceneColor", bgfx::UniformType::Sampler);
         uSceneDepth_ = bgfx::createUniform("s_kbSceneDepth", bgfx::UniformType::Sampler);
         bgfx::frame();
@@ -373,7 +374,7 @@ public:
         return bgfx::isValid(vbh_) && bgfx::isValid(fb_);
     }
 
-    [[nodiscard]] std::vector<std::uint8_t> RenderPixels(bgfx::ProgramHandle program, bgfx::UniformHandle sampler, bgfx::TextureHandle texture, float time = 0.0F, float instanceRandom = 0.0F, float objectRadius = 0.0F, std::uint32_t samplerFlags = UINT32_MAX, std::uint32_t clearColor = 0x000000ffU, std::uint64_t extraState = 0U, bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE, float dynamicR = 0.0F, float dynamicG = 0.0F, float dynamicB = 0.0F, float dynamicA = 0.0F, bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE, bgfx::UniformHandle graphUniform = BGFX_INVALID_HANDLE, const std::array<float, 4U>* graphUniformValue = nullptr, bool directionalLightFromPositiveX = false) {
+    [[nodiscard]] std::vector<std::uint8_t> RenderPixels(bgfx::ProgramHandle program, bgfx::UniformHandle sampler, bgfx::TextureHandle texture, float time = 0.0F, float instanceRandom = 0.0F, float objectRadius = 0.0F, std::uint32_t samplerFlags = UINT32_MAX, std::uint32_t clearColor = 0x000000ffU, std::uint64_t extraState = 0U, bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE, float dynamicR = 0.0F, float dynamicG = 0.0F, float dynamicB = 0.0F, float dynamicA = 0.0F, bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE, bgfx::UniformHandle graphUniform = BGFX_INVALID_HANDLE, const std::array<float, 4U>* graphUniformValue = nullptr, bool directionalLightFromPositiveX = false, float normalScale = 1.0F) {
         std::array<float, 128U> lightDirKind{};
         std::array<float, 128U> lightPositionRange{};
         std::array<float, 128U> lightColorIntensity{};
@@ -402,6 +403,7 @@ public:
         // u_time.x = time (MAT-72); .y = per-instance random, .z = object radius (MAT-77 proof lanes).
         const std::array<float, 4U> timeConstants{ time, instanceRandom, objectRadius, 0.0F };
         const std::array<float, 4U> dynamicParameter{ dynamicR, dynamicG, dynamicB, dynamicA };
+        const std::array<float, 4U> materialParams{ 0.0F, 1.0F, normalScale, 0.5F };
         bgfx::setViewFrameBuffer(0, fb_);
         bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
         bgfx::setViewClear(0, BGFX_CLEAR_COLOR, clearColor, 1.0F, 0);
@@ -417,6 +419,7 @@ public:
         bgfx::setUniform(uEnvParams_, envParams.data());
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
+        bgfx::setUniform(uMaterialParams_, materialParams.data());
         if (bgfx::isValid(graphUniform) && graphUniformValue != nullptr) {
             bgfx::setUniform(graphUniform, graphUniformValue->data());
         }
@@ -455,6 +458,7 @@ public:
         const std::array<float, 4U> envParams{ 1.0F, 1.0F, 0.0F, 0.0F };
         const std::array<float, 4U> timeConstants{ 0.0F, 0.0F, 0.0F, 0.0F };
         const std::array<float, 4U> dynamicParameter{ 0.0F, 0.0F, 0.0F, 0.0F };
+        const std::array<float, 4U> materialParams{ 0.0F, 1.0F, 1.0F, 0.5F };
 
         bgfx::setViewFrameBuffer(0, fb_);
         bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
@@ -471,6 +475,7 @@ public:
         bgfx::setUniform(uEnvParams_, envParams.data());
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
+        bgfx::setUniform(uMaterialParams_, materialParams.data());
 
         struct SplitVertex {
             float x;
@@ -524,6 +529,7 @@ public:
     void Shutdown() {
         bgfx::destroy(uSceneDepth_);
         bgfx::destroy(uSceneColor_);
+        bgfx::destroy(uMaterialParams_);
         bgfx::destroy(uDynamicParameter_);
         bgfx::destroy(uTime_);
         bgfx::destroy(uEnvParams_);
@@ -567,6 +573,7 @@ private:
     bgfx::UniformHandle uEnvParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uTime_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uDynamicParameter_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uMaterialParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneDepth_ = BGFX_INVALID_HANDLE;
 };
@@ -616,6 +623,7 @@ public:
         uLightParams_ = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
         uTime_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
         uDynamicParameter_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
+        uMaterialParams_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
         bgfx::frame();
         bgfx::frame();
         return bgfx::isValid(vbh_) && bgfx::isValid(fb_) &&
@@ -626,12 +634,14 @@ public:
     [[nodiscard]] std::array<std::vector<std::uint8_t>, 3U> Render(
         bgfx::ProgramHandle program,
         bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
-        bgfx::TextureHandle texture = BGFX_INVALID_HANDLE) {
+        bgfx::TextureHandle texture = BGFX_INVALID_HANDLE,
+        float normalScale = 1.0F) {
         const std::array<float, 4U> camera{ 0.0F, 0.0F, 1.0F, 0.0F };
         const std::array<float, 16U> lightDirKind{};
         const std::array<float, 4U> lightParams{};
         const std::array<float, 4U> timeConstants{};
         const std::array<float, 4U> dynamicParameter{};
+        const std::array<float, 4U> materialParams{ 0.0F, 1.0F, normalScale, 0.5F };
         bgfx::setViewFrameBuffer(0, fb_);
         bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
         bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x000000ffU, 1.0F, 0);
@@ -640,6 +650,7 @@ public:
         bgfx::setUniform(uLightParams_, lightParams.data());
         bgfx::setUniform(uTime_, timeConstants.data());
         bgfx::setUniform(uDynamicParameter_, dynamicParameter.data());
+        bgfx::setUniform(uMaterialParams_, materialParams.data());
         if (bgfx::isValid(sampler) && bgfx::isValid(texture)) {
             bgfx::setTexture(6U, sampler, texture);
         }
@@ -670,6 +681,7 @@ public:
 
     void Shutdown() {
         bgfx::destroy(uDynamicParameter_);
+        bgfx::destroy(uMaterialParams_);
         bgfx::destroy(uTime_);
         bgfx::destroy(uLightParams_);
         bgfx::destroy(uLightDirKind_);
@@ -710,6 +722,7 @@ private:
     bgfx::UniformHandle uLightParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uTime_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uDynamicParameter_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle uMaterialParams_ = BGFX_INVALID_HANDLE;
 };
 
 [[nodiscard]] bgfx::ProgramHandle BuildGraphProgram(const std::vector<std::uint8_t>& vsBytes, const RenderMaterialGraphShaderArtifact& artifact) {
@@ -974,10 +987,13 @@ void RunDeferredGBufferTextureNormalMapReadbackProofTest() {
 
     const ForwardRenderProbe flatNormal = ForwardRenderHarness::ProbeAt(harness.Render(program, sampler, flatTexture)[1], 32U, 32U);
     const ForwardRenderProbe positiveXNormal = ForwardRenderHarness::ProbeAt(harness.Render(program, sampler, positiveXTexture)[1], 32U, 32U);
+    const ForwardRenderProbe positiveXNormalScaleZero = ForwardRenderHarness::ProbeAt(harness.Render(program, sampler, positiveXTexture, 0.0F)[1], 32U, 32U);
     Require(flatNormal.b > 220U && flatNormal.r > 100U && flatNormal.r < 155U && flatNormal.g > 100U && flatNormal.g < 155U,
         "KBMAT-MAT87-GBuffer: flat tangent-space normal must be written as world +Z in the GBuffer normal attachment");
     Require(positiveXNormal.r > 220U && positiveXNormal.g > 100U && positiveXNormal.g < 155U && positiveXNormal.b > 100U && positiveXNormal.b < 155U,
         "KBMAT-MAT87-GBuffer: +X tangent-space normal texture must rotate through TBN into world +X in the GBuffer normal attachment");
+    Require(SimilarProbe(flatNormal, positiveXNormalScaleZero, 3U),
+        "KBMAT-MAT87-GBuffer: graph material normalScale=0 must flatten a normal map before writing the normal MRT");
 
     bgfx::destroy(positiveXTexture);
     bgfx::destroy(flatTexture);
@@ -1228,10 +1244,16 @@ void RunForwardGraphNormalMapLightingTest() {
         harness.RenderPixels(program, sampler, positiveXTexture, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU, 0U, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, true),
         32U,
         32U);
+    const ForwardRenderProbe positiveXScaleZero = ForwardRenderHarness::ProbeAt(
+        harness.RenderPixels(program, sampler, positiveXTexture, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU, 0U, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, true, 0.0F),
+        32U,
+        32U);
     const std::uint32_t flatLuma = static_cast<std::uint32_t>(flat.r) + flat.g + flat.b;
     const std::uint32_t positiveXLuma = static_cast<std::uint32_t>(positiveX.r) + positiveX.g + positiveX.b;
     Require(positiveXLuma > flatLuma + 80U && positiveX.r > flat.r + 20U,
         "KBMAT-MAT87: normal texture must change PBR lighting; +X normal must be brighter under +X directional light than a flat +Z normal");
+    Require(SimilarProbe(flat, positiveXScaleZero, 6U),
+        "KBMAT-MAT87: graph material normalScale=0 must flatten the normal map before Forward lighting");
 
     bgfx::destroy(positiveXTexture);
     bgfx::destroy(flatTexture);

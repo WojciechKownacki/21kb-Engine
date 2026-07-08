@@ -2,8 +2,8 @@ $input v_texcoord0
 
 #include <bgfx_shader.sh>
 
-SAMPLER2D(s_texColor, 0);
-SAMPLER3D(s_colorGradeLut, 1);
+SAMPLER2D(s_kbFullscreenColor, 0);
+SAMPLER3D(s_kbFullscreenColorGradeLut, 1);
 uniform vec4 u_tonemapParams;
 uniform vec4 u_colorGradeParams;
 
@@ -33,13 +33,13 @@ vec3 apply_color_grade_lut(vec3 displayLinear)
 {
     float lutSize = max(u_colorGradeParams.x, 2.0);
     vec3 uvw = saturate(displayLinear) * ((lutSize - 1.0) / lutSize) + vec3_splat(0.5 / lutSize);
-    vec3 graded = texture3D(s_colorGradeLut, uvw).rgb;
+    vec3 graded = texture3D(s_kbFullscreenColorGradeLut, uvw).rgb;
     return mix(displayLinear, graded, saturate(u_colorGradeParams.y));
 }
 
 void main()
 {
-    vec4 scene = texture2D(s_texColor, v_texcoord0);
+    vec4 scene = texture2D(s_kbFullscreenColor, v_texcoord0);
     vec3 hdr = scene.rgb * exp2(u_tonemapParams.x);
     vec3 display = tonemap_display(hdr);
     display = apply_color_grade_lut(display);
