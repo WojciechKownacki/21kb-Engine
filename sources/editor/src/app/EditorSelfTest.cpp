@@ -753,9 +753,18 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
     const SIZE rgbSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantVector);
     const SIZE rgbaSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantColor);
     const SIZE parameterSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ParameterColor);
-    report.Check(rgbSize.cx >= 220 && rgbSize.cy >= 110, "RGB node reserves production space for a color watcher");
-    report.Check(rgbaSize.cx >= 230 && rgbaSize.cy >= 138, "RGBA node reserves production space for a four-channel color watcher");
+    report.Check(rgbSize.cx == 204 && rgbSize.cy == 196, "RGB node uses the Verth watcher footprint");
+    report.Check(rgbaSize.cx == 204 && rgbaSize.cy == 196, "RGBA node uses the Verth watcher footprint");
     report.Check(parameterSize.cx == rgbaSize.cx && parameterSize.cy == rgbaSize.cy, "Color parameter node shares the RGBA watcher layout");
+    const std::vector<std::string> rgbOutputPins =
+        MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind::ConstantVector);
+    report.Check(
+        rgbOutputPins.size() == 4U &&
+            rgbOutputPins[0] == "xyz" &&
+            rgbOutputPins[1] == "r" &&
+            rgbOutputPins[2] == "g" &&
+            rgbOutputPins[3] == "b",
+        "RGB node exposes Verth-style RGB/R/G/B output pins");
 
     const RECT rgbSwatch = MaterialEditorPanelColorWatcherSwatchRect(*rgbRect, kb::render::RenderMaterialGraphNodeKind::ConstantVector);
     const std::optional<MaterialEditorGraphColorWatcherHit> rgbHit =
@@ -766,15 +775,15 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
             !rgbHit->applyImmediately,
         "RGB node swatch hit-test opens the color watcher picker with parsed RGB values");
 
-    const RECT rgbaChip = MaterialEditorPanelColorWatcherPaletteChipRect(*rgbaRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 3U);
-    const std::optional<MaterialEditorGraphColorWatcherHit> rgbaPaletteHit =
-        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbaChip.left + 2, rgbaChip.top + 2);
-    report.Check(rgbaPaletteHit.has_value() &&
-            rgbaPaletteHit->target == MaterialEditorGraphColorWatcherTarget::ConstantColor &&
-            rgbaPaletteHit->applyImmediately &&
-            rgbaPaletteHit->value.numbers[0] == 1.0F &&
-            rgbaPaletteHit->value.numbers[1] == 0.0F,
-        "RGBA node palette chip hit-test applies a reusable color swatch immediately");
+    const RECT rgbaSwatch = MaterialEditorPanelColorWatcherSwatchRect(*rgbaRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor);
+    const std::optional<MaterialEditorGraphColorWatcherHit> rgbaHit =
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbaSwatch.left + 2, rgbaSwatch.top + 2);
+    report.Check(rgbaHit.has_value() &&
+            rgbaHit->target == MaterialEditorGraphColorWatcherTarget::ConstantColor &&
+            !rgbaHit->applyImmediately &&
+            rgbaHit->value.numbers[0] > 0.89F &&
+            rgbaHit->value.numbers[3] > 0.59F,
+        "RGBA node swatch opens the color picker without hidden palette hit zones");
 
     const RECT parameterSwatch = MaterialEditorPanelColorWatcherSwatchRect(*parameterRect, kb::render::RenderMaterialGraphNodeKind::ParameterColor);
     const std::optional<MaterialEditorGraphColorWatcherHit> parameterHit =
