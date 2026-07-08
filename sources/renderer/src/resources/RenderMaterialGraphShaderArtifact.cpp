@@ -11,7 +11,7 @@
 namespace kb::render {
 namespace {
 
-constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 4ULL;
+constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 5ULL;
 
 void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     for (const char ch : value) {
@@ -129,22 +129,8 @@ void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialG
     wrapper += "    vertexTangent = dot(vertexTangent, vertexTangent) > 0.0001 ? vertexTangent : fallbackTangent;\n";
     wrapper += "    float vertexHandedness = dot(cross(basisNormal, vertexTangent), v_bitangent) < 0.0 ? -1.0 : 1.0;\n";
     wrapper += "    vec3 vertexBitangent = normalize(cross(basisNormal, vertexTangent) * vertexHandedness);\n";
-    wrapper += "    vec3 dp1 = dFdx(v_worldPos);\n";
-    wrapper += "    vec3 dp2 = dFdy(v_worldPos);\n";
-    wrapper += "    vec2 duv1 = dFdx(v_texcoord0);\n";
-    wrapper += "    vec2 duv2 = dFdy(v_texcoord0);\n";
-    wrapper += "    vec3 dp2perp = cross(dp2, basisNormal);\n";
-    wrapper += "    vec3 dp1perp = cross(basisNormal, dp1);\n";
-    wrapper += "    vec3 derivativeTangent = dp2perp * duv1.x + dp1perp * duv2.x;\n";
-    wrapper += "    vec3 derivativeBitangent = dp2perp * duv1.y + dp1perp * duv2.y;\n";
-    wrapper += "    float derivativeBasisLength = max(dot(derivativeTangent, derivativeTangent), dot(derivativeBitangent, derivativeBitangent));\n";
     wrapper += "    vec3 basisTangent = vertexTangent;\n";
     wrapper += "    vec3 basisBitangent = vertexBitangent;\n";
-    wrapper += "    if (derivativeBasisLength > 0.000001)\n    {\n";
-    wrapper += "        float derivativeInvLength = inversesqrt(derivativeBasisLength);\n";
-    wrapper += "        basisTangent = derivativeTangent * derivativeInvLength;\n";
-    wrapper += "        basisBitangent = derivativeBitangent * derivativeInvLength;\n";
-    wrapper += "    }\n";
 }
 
 } // namespace
@@ -258,6 +244,7 @@ std::string BuildGraphFragmentWrapperSource(
     // SceneMeshPassResources so graph Time/animation nodes read real engine time.
     wrapper += "uniform vec4 u_time;\n";
     wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
@@ -321,9 +308,11 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
                 wrapper += "    basisTangent = normalize(materialTangent - basisNormal * dot(basisNormal, materialTangent));\n";
                 wrapper += "    basisTangent = dot(basisTangent, basisTangent) > 0.0001 ? basisTangent : normalize(v_tangent);\n";
-                wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent));\n";
+                wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent) * vertexHandedness);\n";
             }
-            wrapper += "    vec3 worldNormal = normalize(basisTangent * surface.normal.x + basisBitangent * surface.normal.y + basisNormal * surface.normal.z);\n";
+            wrapper += "    vec3 graphNormal = surface.normal;\n";
+            wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
+            wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
             wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);\n";
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), 1.0);\n";
@@ -338,9 +327,11 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
                 wrapper += "    basisTangent = normalize(materialTangent - basisNormal * dot(basisNormal, materialTangent));\n";
                 wrapper += "    basisTangent = dot(basisTangent, basisTangent) > 0.0001 ? basisTangent : normalize(v_tangent);\n";
-                wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent));\n";
+                wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent) * vertexHandedness);\n";
             }
-            wrapper += "    vec3 worldNormal = normalize(basisTangent * surface.normal.x + basisBitangent * surface.normal.y + basisNormal * surface.normal.z);\n";
+            wrapper += "    vec3 graphNormal = surface.normal;\n";
+            wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
+            wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
             wrapper += "    float metallic = clamp(surface.metallic, 0.0, 1.0);\n";
             wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
@@ -451,6 +442,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     for (const RenderMaterialGraphReflectionTexture& texture : reflection.textures) {
         HashString64(hash, texture.samplerName);
         HashString64(hash, texture.stableId);
+        HashString64(hash, texture.role);
         HashU64(hash, texture.slot);
         HashU64(hash, static_cast<std::uint64_t>(texture.colorSpace));
         HashU64(hash, static_cast<std::uint64_t>(texture.dimension));
