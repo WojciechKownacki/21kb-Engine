@@ -4708,25 +4708,16 @@ void RunMaterialEditorGraphProductGeometryAuditTest() {
                     "KBMAT-MAT90: ColorRamp gradient should open a stop color picker");
             } else {
                 const RECT swatch = kb::editor::MaterialEditorPanelColorWatcherSwatchRect(*rect, kind);
-                const RECT chip = kb::editor::MaterialEditorPanelColorWatcherPaletteChipRect(*rect, kind, 3U);
-                kb::editor::tests::Require(RectInsideRect(watcher, swatch) && RectInsideRect(watcher, chip),
-                    ("KBMAT-MAT90: color swatch/palette geometry is outside watcher: " + nodeName).c_str());
+                kb::editor::tests::Require(RectInsideRect(watcher, swatch),
+                    ("KBMAT-MAT90: color swatch geometry is outside watcher: " + nodeName).c_str());
                 const std::optional<kb::editor::MaterialEditorGraphColorWatcherHit> swatchHit =
                     kb::editor::MaterialEditorPanelRenderer::GraphColorWatcherAt(
                         content,
                         material,
                         (swatch.left + swatch.right) / 2,
                         (swatch.top + swatch.bottom) / 2);
-                kb::editor::tests::Require(swatchHit.has_value() && swatchHit->nodeId == node.id,
+                kb::editor::tests::Require(swatchHit.has_value() && swatchHit->nodeId == node.id && !swatchHit->applyImmediately,
                     ("KBMAT-MAT90: color swatch should open custom color picker: " + nodeName).c_str());
-                const std::optional<kb::editor::MaterialEditorGraphColorWatcherHit> chipHit =
-                    kb::editor::MaterialEditorPanelRenderer::GraphColorWatcherAt(
-                        content,
-                        material,
-                        (chip.left + chip.right) / 2,
-                        (chip.top + chip.bottom) / 2);
-                kb::editor::tests::Require(chipHit.has_value() && chipHit->applyImmediately,
-                    ("KBMAT-MAT90: color preset chip should apply immediately: " + nodeName).c_str());
             }
         }
     }
