@@ -71,13 +71,9 @@ constexpr COLORREF SliderFill = RGB(79, 115, 134);
 constexpr COLORREF SliderFillFocus = RGB(66, 178, 168);
 constexpr COLORREF LinkShadow = RGB(0, 0, 0);
 constexpr COLORREF LinkFallback = RGB(164, 176, 190);
-constexpr COLORREF Canvas = RGB(7, 9, 12);
-constexpr COLORREF GridDot = RGB(39, 47, 57);
-constexpr COLORREF GridDotMajor = RGB(61, 72, 87);
-// GridDot alpha-blended over Canvas at 60/255, precomputed: SetPixelV is a single cheap GDI call,
-// while GdiDrawing::FillRectAlpha allocates a whole compatible DC + bitmap per call -- ruinous for
-// the thousands of minor-grid dots drawn per repaint (measured ~35ms/frame from this alone).
-constexpr COLORREF GridDotBlended = RGB(15, 18, 22);
+constexpr COLORREF Canvas = RGB(17, 18, 22);
+constexpr COLORREF GridLineMinor = RGB(25, 26, 30);
+constexpr COLORREF GridLineMajor = RGB(35, 36, 40);
 } // namespace MaterialGraphTheme
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
@@ -1140,89 +1136,45 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 [[nodiscard]] COLORREF GraphOutputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept;
 
 // ---------------------------------------------------------------------------------------------
-// Plain 2D grid backdrop: a solid canvas fill plus a minor/major dot grid that pans and scales
-// with the view.
-//
-// The minor dots (the bulk of the pattern -- e.g. ~2800 of them for a full graph canvas at a
-// typical zoom) are baked into a small tiled pattern-brush bitmap once per minorSpacing value
-// (i.e. once per zoom level, not once per frame) and stamped with a single FillRect: GDI tiles
-// and positions the brush natively, so this replaces thousands of per-pixel GDI calls with one.
-// Panning just moves the brush origin -- no rebuild. The sparser major dots (1/16th as many)
-// stay a plain per-dot loop; that was never the bottleneck.
-struct GraphGridPatternCache {
-    HBITMAP tileBitmap = nullptr;
-    HBRUSH brush = nullptr;
-    int minorSpacing = 0;
-    std::uint64_t hitCount = 0U;
-    std::uint64_t rebuildCount = 0U;
-};
-
-[[nodiscard]] GraphGridPatternCache& GraphGridPattern() {
-    static GraphGridPatternCache cache;
-    return cache;
-}
-
-void EnsureGraphGridPattern(GraphGridPatternCache& cache, int minorSpacing) {
-    if (cache.brush != nullptr && cache.minorSpacing == minorSpacing) {
-        ++cache.hitCount;
-        return;
-    }
-    ++cache.rebuildCount;
-    if (cache.brush != nullptr) {
-        DeleteObject(cache.brush);
-        cache.brush = nullptr;
-    }
-    if (cache.tileBitmap != nullptr) {
-        DeleteObject(cache.tileBitmap);
-        cache.tileBitmap = nullptr;
-    }
-    HDC screenDc = GetDC(nullptr);
-    HDC tileDc = CreateCompatibleDC(screenDc);
-    cache.tileBitmap = CreateCompatibleBitmap(screenDc, minorSpacing, minorSpacing);
-    ReleaseDC(nullptr, screenDc);
-    if (tileDc == nullptr || cache.tileBitmap == nullptr) {
-        if (tileDc != nullptr) {
-            DeleteDC(tileDc);
-        }
-        return;
-    }
-    HGDIOBJ previousBitmap = SelectObject(tileDc, cache.tileBitmap);
-    const RECT tileRect{ 0, 0, minorSpacing, minorSpacing };
-    GdiDrawing::FillRectColor(tileDc, tileRect, MaterialGraphTheme::Canvas);
-    SetPixelV(tileDc, 0, 0, MaterialGraphTheme::GridDotBlended);
-    SelectObject(tileDc, previousBitmap);
-    DeleteDC(tileDc);
-    cache.brush = CreatePatternBrush(cache.tileBitmap);
-    cache.minorSpacing = minorSpacing;
-}
-
+// Verth-style graph-paper backdrop: a solid canvas fill plus subtle minor/major
+// lines that pan and scale with graph world coordinates.
 void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, canvas.left, canvas.top, canvas.right, canvas.bottom);
 
-    const int minorSpacing = std::clamp(ScaleMetric(20, zoom), 8, 80);
-    const int majorSpacing = minorSpacing * 4;
-    const int minorStartX = canvas.left + ((panX % minorSpacing) + minorSpacing) % minorSpacing;
-    const int minorStartY = canvas.top + ((panY % minorSpacing) + minorSpacing) % minorSpacing;
-    const int majorStartX = canvas.left + ((panX % majorSpacing) + majorSpacing) % majorSpacing;
-    const int majorStartY = canvas.top + ((panY % majorSpacing) + majorSpacing) % majorSpacing;
+    GdiDrawing::FillRectColor(dc, canvas, MaterialGraphTheme::Canvas);
 
-    GraphGridPatternCache& patternCache = GraphGridPattern();
-    EnsureGraphGridPattern(patternCache, minorSpacing);
-    if (patternCache.brush != nullptr) {
-        POINT previousOrigin{};
-        SetBrushOrgEx(dc, minorStartX, minorStartY, &previousOrigin);
-        RECT canvasRect = canvas;
-        FillRect(dc, &canvasRect, patternCache.brush);
-        SetBrushOrgEx(dc, previousOrigin.x, previousOrigin.y, nullptr);
-    } else {
-        GdiDrawing::FillRectColor(dc, canvas, MaterialGraphTheme::Canvas);
+    constexpr int kWorldSpacing = 32;
+    const int spacing = ScaleMetric(kWorldSpacing, zoom);
+    if (spacing < 7) {
+        RestoreDC(dc, savedDc);
+        return;
     }
 
-    for (int x = majorStartX; x < canvas.right; x += majorSpacing) {
-        for (int y = majorStartY; y < canvas.bottom; y += majorSpacing) {
-            GdiDrawing::FillRectColor(dc, RECT{ x - 1, y - 1, x + 2, y + 2 }, MaterialGraphTheme::GridDotMajor);
-        }
+    const int startX = canvas.left + ((panX % spacing) + spacing) % spacing;
+    const int startY = canvas.top + ((panY % spacing) + spacing) % spacing;
+    const int majorWidth = std::max(1, static_cast<int>(std::round(1.4F * std::clamp(zoom, 0.75F, 1.5F))));
+
+    int verticalCount = 0;
+    for (int x = startX; x < canvas.right && verticalCount < 600; x += spacing, ++verticalCount) {
+        const int worldIndex = (x - canvas.left - panX) / std::max(1, spacing);
+        const bool major = worldIndex % 4 == 0;
+        const int width = major ? majorWidth : 1;
+        GdiDrawing::FillRectColor(
+            dc,
+            RECT{ x, canvas.top, std::min<LONG>(canvas.right, x + width), canvas.bottom },
+            major ? MaterialGraphTheme::GridLineMajor : MaterialGraphTheme::GridLineMinor);
+    }
+
+    int horizontalCount = 0;
+    for (int y = startY; y < canvas.bottom && horizontalCount < 600; y += spacing, ++horizontalCount) {
+        const int worldIndex = (y - canvas.top - panY) / std::max(1, spacing);
+        const bool major = worldIndex % 4 == 0;
+        const int height = major ? majorWidth : 1;
+        GdiDrawing::FillRectColor(
+            dc,
+            RECT{ canvas.left, y, canvas.right, std::min<LONG>(canvas.bottom, y + height) },
+            major ? MaterialGraphTheme::GridLineMajor : MaterialGraphTheme::GridLineMinor);
     }
 
     RestoreDC(dc, savedDc);
