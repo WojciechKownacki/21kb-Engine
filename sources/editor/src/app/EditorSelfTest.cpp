@@ -1245,6 +1245,89 @@ void RunMaterialGraphVisualRedesignSuite(Report& report) {
     ReleaseDC(nullptr, screenDc);
 }
 
+void RunMaterialGraphCanvasClipSuite(Report& report) {
+    std::error_code error;
+
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Register material loader for graph canvas clipping fixture");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "ClipProbe.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -160,
+        .positionY = 70,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "clipProbeTexture",
+            .displayName = "Clip Probe",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, material), "Create graph canvas clipping material fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Discover graph canvas clipping material fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/ClipProbe.kbmat");
+    report.Check(metadata != nullptr, "Resolve graph canvas clipping material metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(metadata->id), "Open graph canvas clipping material in Material Editor");
+
+    constexpr int width = 820;
+    constexpr int height = 460;
+    constexpr COLORREF sentinel = RGB(247, 13, 193);
+    HDC screenDc = GetDC(nullptr);
+    report.Check(screenDc != nullptr, "Create screen DC for graph canvas clipping capture");
+    if (screenDc == nullptr) {
+        return;
+    }
+    HDC memoryDc = CreateCompatibleDC(screenDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(screenDc, width, height);
+    HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+    const RECT full{ 0, 0, width, height };
+    HBRUSH sentinelBrush = CreateSolidBrush(sentinel);
+    FillRect(memoryDc, &full, sentinelBrush);
+    DeleteObject(sentinelBrush);
+
+    MaterialEditorPanelRenderer{}.Paint(memoryDc, RECT{ 180, 0, 780, 440 }, EditorTheme{}, context);
+    bool outsideCanvasClean = true;
+    int firstLeakX = -1;
+    int firstLeakY = -1;
+    COLORREF firstLeakColor = CLR_INVALID;
+    for (int y = 60; y < 360 && outsideCanvasClean; ++y) {
+        for (int x = 0; x < 180; ++x) {
+            const COLORREF pixel = GetPixel(memoryDc, x, y);
+            if (pixel != sentinel) {
+                outsideCanvasClean = false;
+                firstLeakX = x;
+                firstLeakY = y;
+                firstLeakColor = pixel;
+                break;
+            }
+        }
+    }
+    if (!outsideCanvasClean) {
+        report.Note(
+            "First graph canvas clip leak at (" + std::to_string(firstLeakX) + ", " + std::to_string(firstLeakY) +
+            ") color=" + std::to_string(static_cast<std::uint32_t>(firstLeakColor)));
+    }
+    report.Check(outsideCanvasClean,
+        "Material graph node paint is clipped before the Material Editor canvas");
+    report.Check(GetPixel(memoryDc, 220, 180) != sentinel,
+        "Material graph clipping fixture drew the node inside the Material Editor canvas");
+
+    SelectObject(memoryDc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(nullptr, screenDc);
+}
+
 void RunMaterialEditorGlobalSaveSuite(Report& report) {
     std::error_code error;
 
@@ -1692,7 +1775,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -1716,6 +1799,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_texture_nodes", &RunMaterialGraphTextureNodeSuite);
     RunSuiteInScratch(report, "material_graph_dense_node_layout", &RunMaterialGraphDenseNodeLayoutSuite);
     RunSuiteInScratch(report, "material_graph_visual_redesign", &RunMaterialGraphVisualRedesignSuite);
+    RunSuiteInScratch(report, "material_graph_canvas_clip", &RunMaterialGraphCanvasClipSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);

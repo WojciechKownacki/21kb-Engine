@@ -4837,8 +4837,9 @@ void RunMaterialGraphNormalMapTextureRoleInferenceTest() {
     Require(result.Succeeded(), "KBMAT-MAT02: TextureSample -> Normal Map -> Output Normal graph must compile");
     Require(result.shader.reflection.textures.size() == 1U &&
             result.shader.reflection.textures[0].stableId == "normalTex" &&
+            result.shader.reflection.textures[0].role == "normal" &&
             result.shader.reflection.textures[0].colorSpace == RenderMaterialTextureColorSpace::Linear,
-        "KBMAT-MAT02: TextureSample feeding Normal Map must be reflected as linear normal data");
+        "KBMAT-MAT02: TextureSample feeding Normal Map must be reflected as role=normal linear data");
 
     const RenderMaterialTypeSchema schema = BuildRenderMaterialGraphParameterSchema(graph, "normal.inference", 1U);
     Require(schema.textureSlots.size() == 1U &&
@@ -4852,8 +4853,9 @@ void RunMaterialGraphNormalMapTextureRoleInferenceTest() {
         result.shader,
         std::span<const RenderMaterialGraphParameterValue>{});
     Require(binding.binding.textures.size() == 1U &&
+            binding.binding.textures[0].role == "normal" &&
             binding.binding.textures[0].colorSpace == RenderTextureColorSpace::Linear,
-        "KBMAT-MAT02: Runtime graph binding must request the linear texture resource for normal maps");
+        "KBMAT-MAT02: Runtime graph binding must preserve role=normal and request the linear texture resource for normal maps");
 
     RenderMaterialGraphDocument objectGraph = MakeDefaultRenderMaterialGraphDocument();
     objectGraph.nodes.push_back(RenderMaterialGraphNode{

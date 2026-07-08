@@ -326,6 +326,7 @@ struct RenderMaterialGraphTextureBinding {
     std::uint32_t slot = 0U;
     std::uint64_t textureAssetId = 0U;
     RenderTextureHandle texture{};
+    std::string role;
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
     // Resolved bgfx sampler flags (filter/wrap) from the graph sampler state; UINT32_MAX = texture default.
     std::uint32_t samplerFlags = UINT32_MAX;

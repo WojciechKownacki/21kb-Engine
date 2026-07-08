@@ -593,6 +593,7 @@ struct RenderMaterialGraphReflectionTexture {
     std::string samplerName;
     std::string stableId;
     std::uint32_t slot = 0U;
+    std::string role;
     RenderMaterialTextureColorSpace colorSpace = RenderMaterialTextureColorSpace::Unknown;
     RenderMaterialGraphSamplerState samplerState{};
     RenderMaterialGraphTextureDimension dimension = RenderMaterialGraphTextureDimension::Texture2D;

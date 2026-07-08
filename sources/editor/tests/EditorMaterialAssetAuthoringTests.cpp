@@ -930,6 +930,139 @@ void RunMaterialTextureSlotValidationTest() {
     kb::editor::tests::Require(acceptedUnknown.inferredSemantic == kb::editor::EditorMaterialTextureSemantic::Unknown, "Ambiguous texture names should remain unclassified");
 }
 
+void RunMaterialEditorNormalSlotBuildsGraphNormalMapTest() {
+    kb::render::RenderMaterialAssetData clearOnly{};
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(clearOnly, {}),
+        "KBMAT-GRAPH-0102: Normal slot clear should succeed on a material without normal graph authoring");
+    kb::editor::tests::Require(clearOnly.graph.nodes.empty() && clearOnly.desc.normalTextureAssetId == 0U,
+        "KBMAT-GRAPH-0102: Normal slot clear should not create an empty normal graph");
+
+    kb::render::RenderMaterialAssetData working{};
+    working.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    const kb::assets::AssetId materialId{ 0x0102U };
+    const kb::assets::AssetId normalTextureId{ 0xBACE02U };
+
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(working, normalTextureId),
+        "KBMAT-GRAPH-0102: Normal slot graph authoring could not assign normal texture");
+    const kb::render::RenderMaterialGraphNode* outputNode = nullptr;
+    const kb::render::RenderMaterialGraphNode* normalUnpackNode = nullptr;
+    const kb::render::RenderMaterialGraphNode* textureSampleNode = nullptr;
+    for (const kb::render::RenderMaterialGraphNode& node : working.graph.nodes) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            outputNode = &node;
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::NormalUnpack) {
+            normalUnpackNode = &node;
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && node.parameter.textureRole == "normal") {
+            textureSampleNode = &node;
+        }
+    }
+    kb::editor::tests::Require(outputNode != nullptr && normalUnpackNode != nullptr && textureSampleNode != nullptr,
+        "KBMAT-GRAPH-0102: Normal slot assignment should create TextureSample -> NormalUnpack -> MaterialOutput.normal");
+
+    const auto hasLink = [&working](std::uint32_t fromNode, std::string_view fromPin, std::uint32_t toNode, std::string_view toPin) {
+        return std::ranges::any_of(working.graph.links, [fromNode, fromPin, toNode, toPin](const kb::render::RenderMaterialGraphLink& link) {
+            return link.fromNodeId == fromNode && link.fromPin == fromPin && link.toNodeId == toNode && link.toPin == toPin;
+        });
+    };
+    kb::editor::tests::Require(
+        hasLink(textureSampleNode->id, "color", normalUnpackNode->id, "color") &&
+            hasLink(normalUnpackNode->id, "normal", outputNode->id, "normal"),
+        "KBMAT-GRAPH-0102: Normal slot graph should wire the normal sample through NormalUnpack");
+
+    const kb::render::RenderMaterialGraphParameterValue* value = FindGraphParameterValue(working, textureSampleNode->parameter.stableId);
+    kb::editor::tests::Require(value != nullptr && value->type == kb::render::RenderMaterialParameterType::Texture && value->assetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Normal slot graph should store the assigned normal texture as a graph parameter value");
+
+    kb::assets::AssetManager manager;
+    kb::assets::AssetMetadata runtimeMetadata = Metadata("GraphNormalSlot", "RenderMaterial", "/Game/Materials/GraphNormalSlot.kbmat");
+    runtimeMetadata.id = materialId;
+    const kb::render::ResolvedRuntimeMaterialDesc resolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, runtimeMetadata, working);
+    const auto normalBinding = std::ranges::find_if(
+        resolved.graphProgram.textures,
+        [stableId = textureSampleNode->parameter.stableId](const kb::render::RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == stableId;
+        });
+    kb::editor::tests::Require(resolved.desc.normalTextureAssetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Normal slot graph should drive the runtime PBR normal texture fallback");
+    kb::editor::tests::Require(resolved.graphProgram.active &&
+            normalBinding != resolved.graphProgram.textures.end() &&
+            normalBinding->textureAssetId == normalTextureId.value &&
+            normalBinding->role == "normal" &&
+            normalBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
+        "KBMAT-GRAPH-0102: Normal slot graph should bind the normal sampler as role=normal linear");
+
+    kb::render::RenderMaterialAssetData objectBacked{};
+    objectBacked.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterTexture,
+        .positionX = -560,
+        .positionY = 96,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "normalObject",
+            .displayName = "Normal Object",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -320,
+        .positionY = 96,
+    });
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = -96,
+        .positionY = 96,
+    });
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ParameterTexture,
+        2U,
+        "texture",
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        3U,
+        "texture"));
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        3U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "color"));
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "normal",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "normal"));
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(objectBacked, normalTextureId),
+        "KBMAT-GRAPH-0102: Normal slot graph authoring should update an object-backed normal sample");
+    const kb::render::RenderMaterialGraphParameterValue* objectValue = FindGraphParameterValue(objectBacked, "normalObject");
+    kb::editor::tests::Require(objectValue != nullptr && objectValue->assetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Object-backed normal sample should update the upstream texture parameter");
+    const kb::render::ResolvedRuntimeMaterialDesc objectResolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, runtimeMetadata, objectBacked);
+    const auto objectNormalBinding = std::ranges::find_if(
+        objectResolved.graphProgram.textures,
+        [](const kb::render::RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == "normalObject";
+        });
+    kb::editor::tests::Require(objectResolved.desc.normalTextureAssetId == normalTextureId.value &&
+            objectNormalBinding != objectResolved.graphProgram.textures.end() &&
+            objectNormalBinding->textureAssetId == normalTextureId.value &&
+            objectNormalBinding->role == "normal" &&
+            objectNormalBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
+        "KBMAT-GRAPH-0102: Object-backed normal sample should bind the upstream texture as role=normal linear");
+}
+
 void RunMaterialAssetEditCommandUndoRedoTest() {
     CleanTempRoot();
 
@@ -1234,8 +1367,9 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     kb::editor::tests::Require(resolvedNormalGraph.graphProgram.active &&
             normalTextureBinding != resolvedNormalGraph.graphProgram.textures.end() &&
             normalTextureBinding->textureAssetId == 0xBACE02U &&
+            normalTextureBinding->role == "normal" &&
             normalTextureBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
-        "KBMAT-GRAPH-0101: Reloaded normal texture graph should bind the normal sample as a linear graph texture");
+        "KBMAT-GRAPH-0101: Reloaded normal texture graph should bind the normal sample as role=normal linear graph texture");
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -6478,6 +6612,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunDuplicateMaterialAssetPreservesParametersTest();
     RunMaterialTextureSlotAuthoringTest();
     RunMaterialTextureSlotValidationTest();
+    RunMaterialEditorNormalSlotBuildsGraphNormalMapTest();
     RunMaterialAssetEditCommandUndoRedoTest();
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();

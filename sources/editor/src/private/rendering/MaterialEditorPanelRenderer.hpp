@@ -286,19 +286,21 @@ inline constexpr int TextureSlotRowCount = 5;
 inline constexpr int DetailsNodePropertyRowHeight = 22;
 inline constexpr int DetailsNodePropertyOptionHeight = 20;
 } // namespace MaterialEditorPanelMetrics
+
+inline constexpr std::size_t kMaterialEditorPanelColorWatcherPaletteChipCount = 8U;
 #endif
 
 #if defined(_WIN32)
 inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return SIZE{ 150, 54 };
+        return SIZE{ 204, 76 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return SIZE{ 172, 72 };
+        return SIZE{ 230, 100 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return SIZE{ 300, 138 };
+        return SIZE{ 408, 188 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return SIZE{ 300, 166 };
+        return SIZE{ 408, 212 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
     case kb::render::RenderMaterialGraphNodeKind::TextureObject:
     case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
@@ -1591,34 +1593,36 @@ inline MaterialEditorParameterValue MaterialEditorPanelConstantParameterValue(
 }
 
 inline RECT MaterialEditorPanelConstantValueRect(const RECT& node) noexcept {
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) /
+        static_cast<float>(std::max<LONG>(1, MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantScalar).cx));
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
-    const int padding = std::max(3, MaterialEditorPanelScaled(6, scale));
-    const int fieldHeight = std::max(10, std::min(MaterialEditorPanelScaled(20, scale), bodyHeight - (padding * 2)));
+    const int padding = std::max(4, MaterialEditorPanelScaled(10, scale));
+    const int fieldHeight = std::max(14, std::min(MaterialEditorPanelScaled(22, scale), bodyHeight - (padding * 2)));
     const int top = bodyTop + ((bodyHeight - fieldHeight) / 2);
-    const int left = node.left + MaterialEditorPanelScaled(18, scale);
-    const int right = node.right - MaterialEditorPanelScaled(48, scale);
+    const int left = node.left + MaterialEditorPanelScaled(16, scale);
+    const int right = node.right - MaterialEditorPanelScaled(40, scale);
     const int bottom = top + fieldHeight;
     return RECT{ left, top, right, bottom };
 }
 
 inline RECT MaterialEditorPanelConstantVectorFieldRect(const RECT& node, std::size_t componentIndex, std::size_t componentCount = 2U) noexcept {
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+    const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantVector2);
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, nodeSize.cx));
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
     const int count = static_cast<int>(std::max<std::size_t>(1U, componentCount));
-    const int padding = std::max(3, MaterialEditorPanelScaled(5, scale));
-    const int gap = std::max(2, MaterialEditorPanelScaled(4, scale));
-    const int maxFieldHeight = std::max(10, (bodyHeight - (padding * 2) - ((count - 1) * gap)) / count);
-    const int fieldHeight = std::max(10, std::min(MaterialEditorPanelScaled(19, scale), maxFieldHeight));
+    const int padding = std::max(4, MaterialEditorPanelScaled(9, scale));
+    const int gap = std::max(3, MaterialEditorPanelScaled(4, scale));
+    const int maxFieldHeight = std::max(14, (bodyHeight - (padding * 2) - ((count - 1) * gap)) / count);
+    const int fieldHeight = std::max(14, std::min(MaterialEditorPanelScaled(22, scale), maxFieldHeight));
     const int fieldsHeight = (count * fieldHeight) + ((count - 1) * gap);
     const int top = bodyTop + std::max(0, (bodyHeight - fieldsHeight) / 2)
         + static_cast<int>(componentIndex) * (fieldHeight + gap);
-    const int left = node.left + MaterialEditorPanelScaled(56, scale);
-    const int right = node.right - MaterialEditorPanelScaled(64, scale);
+    const int left = node.left + MaterialEditorPanelScaled(54, scale);
+    const int right = node.right - MaterialEditorPanelScaled(62, scale);
     const int bottom = top + fieldHeight;
     return RECT{ left, top, right, bottom };
 }
@@ -1656,18 +1660,18 @@ inline RECT MaterialEditorPanelColorWatcherRect(const RECT& node, kb::render::Re
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    const int left = node.left + MaterialEditorPanelScaled(14, scale);
-    const int top = node.top + headerHeight + MaterialEditorPanelScaled(8, scale);
-    const int right = node.right - MaterialEditorPanelScaled(78, scale);
-    const int bottom = node.bottom - MaterialEditorPanelScaled(8, scale);
-    return RECT{ left, top, right, std::max(top + MaterialEditorPanelScaled(34, scale), bottom) };
+    const int left = node.left + MaterialEditorPanelScaled(18, scale);
+    const int top = node.top + headerHeight + MaterialEditorPanelScaled(10, scale);
+    const int right = node.right - MaterialEditorPanelScaled(104, scale);
+    const int bottom = node.bottom - MaterialEditorPanelScaled(12, scale);
+    return RECT{ left, top, right, std::max(top + MaterialEditorPanelScaled(72, scale), bottom) };
 }
 
 inline RECT MaterialEditorPanelColorWatcherSwatchRect(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind) noexcept {
     const RECT watcher = MaterialEditorPanelColorWatcherRect(node, kind);
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int size = std::max(26, MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 24 : 34, scale));
+    const int size = std::max(36, MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 28 : 48, scale));
     return RECT{
         watcher.left,
         watcher.top,
@@ -1683,21 +1687,22 @@ inline RECT MaterialEditorPanelColorWatcherTextRect(const RECT& node, kb::render
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
     return RECT{
         swatch.right + MaterialEditorPanelScaled(8, scale),
-        watcher.top,
+        watcher.top + MaterialEditorPanelScaled(1, scale),
         watcher.right,
-        std::min(watcher.bottom, watcher.top + MaterialEditorPanelScaled(18, scale)),
+        std::min(watcher.bottom, watcher.top + MaterialEditorPanelScaled(38, scale)),
     };
 }
 
 inline RECT MaterialEditorPanelColorWatcherPaletteRect(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind) noexcept {
     const RECT watcher = MaterialEditorPanelColorWatcherRect(node, kind);
+    const RECT swatch = MaterialEditorPanelColorWatcherSwatchRect(node, kind);
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int top = watcher.top + MaterialEditorPanelScaled(42, scale);
+    const int top = swatch.bottom + MaterialEditorPanelScaled(10, scale);
     return RECT{
         watcher.left,
         top,
-        watcher.right,
+        std::min<LONG>(watcher.right, watcher.left + MaterialEditorPanelScaled(188, scale)),
         std::min<LONG>(watcher.bottom, top + MaterialEditorPanelScaled(16, scale)),
     };
 }
@@ -1709,8 +1714,8 @@ inline RECT MaterialEditorPanelColorWatcherPaletteChipRect(
     const RECT palette = MaterialEditorPanelColorWatcherPaletteRect(node, kind);
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int chipSize = std::max(10, MaterialEditorPanelScaled(13, scale));
-    const int gap = std::max(3, MaterialEditorPanelScaled(4, scale));
+    const int chipSize = std::max(14, MaterialEditorPanelScaled(18, scale));
+    const int gap = std::max(3, MaterialEditorPanelScaled(5, scale));
     const int left = palette.left + static_cast<int>(chipIndex) * (chipSize + gap);
     return RECT{
         left,
@@ -1729,10 +1734,10 @@ inline RECT MaterialEditorPanelColorWatcherChannelRect(
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
     const int count = static_cast<int>(std::max<std::size_t>(1U, componentCount));
-    const int gap = std::max(2, MaterialEditorPanelScaled(4, scale));
+    const int gap = std::max(3, MaterialEditorPanelScaled(6, scale));
     const int availableWidth = static_cast<int>(std::max<LONG>(1L, watcher.right - watcher.left));
-    const int fieldWidth = std::max(32, (availableWidth - ((count - 1) * gap)) / count);
-    const int fieldHeight = std::max(14, MaterialEditorPanelScaled(18, scale));
+    const int fieldWidth = std::max(42, (availableWidth - ((count - 1) * gap)) / count);
+    const int fieldHeight = std::max(18, MaterialEditorPanelScaled(22, scale));
     const int top = watcher.bottom - fieldHeight;
     const int left = watcher.left + static_cast<int>(componentIndex) * (fieldWidth + gap);
     return RECT{ left, top, std::min<LONG>(watcher.right, left + fieldWidth), watcher.bottom };
@@ -1747,7 +1752,7 @@ inline RECT MaterialEditorPanelColorWatcherChannelLabelRect(
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
     field.bottom = field.top;
-    field.top -= MaterialEditorPanelScaled(12, scale);
+    field.top -= MaterialEditorPanelScaled(16, scale);
     return field;
 }
 
@@ -1904,8 +1909,10 @@ inline MaterialEditorParameterValue MaterialEditorPanelColorWatcherPaletteValue(
         return MaterialEditorPanelColorValue(0.0F, 1.0F, 0.0F, current.numbers[3]);
     case 5U:
         return MaterialEditorPanelColorValue(0.0F, 0.35F, 1.0F, current.numbers[3]);
-    default:
+    case 6U:
         return MaterialEditorPanelColorValue(1.0F, 0.82F, 0.28F, current.numbers[3]);
+    default:
+        return MaterialEditorPanelColorValue(0.24F, 0.88F, 0.78F, current.numbers[3]);
     }
 }
 
@@ -1998,7 +2005,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .value = value,
             };
         }
-        for (std::size_t chipIndex = 0U; chipIndex < 7U; ++chipIndex) {
+        for (std::size_t chipIndex = 0U; chipIndex < kMaterialEditorPanelColorWatcherPaletteChipCount; ++chipIndex) {
             const RECT chip = MaterialEditorPanelColorWatcherPaletteChipRect(*rect, node.kind, chipIndex);
             if (chip.right > chip.left && MaterialEditorPanelPointInRect(chip, x, y)) {
                 return MaterialEditorGraphColorWatcherHit{
@@ -2100,7 +2107,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .value = value,
             };
         }
-        for (std::size_t chipIndex = 0U; chipIndex < 7U; ++chipIndex) {
+        for (std::size_t chipIndex = 0U; chipIndex < kMaterialEditorPanelColorWatcherPaletteChipCount; ++chipIndex) {
             const RECT chip = MaterialEditorPanelColorWatcherPaletteChipRect(*rect, node.kind, chipIndex);
             if (chip.right > chip.left && MaterialEditorPanelPointInRect(chip, x, y)) {
                 return MaterialEditorGraphColorWatcherHit{

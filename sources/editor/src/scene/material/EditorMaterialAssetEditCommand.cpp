@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace kb::editor {
@@ -36,7 +37,277 @@ namespace {
     return asset.desc.albedoTextureAssetId;
 }
 
+[[nodiscard]] bool IsMaterialGraphTextureObjectNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
+}
+
+[[nodiscard]] bool IsMaterialGraphTextureValueNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+        IsMaterialGraphTextureObjectNode(kind);
+}
+
+[[nodiscard]] const char* MaterialGraphTextureStableIdPrefix(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    if (kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return "texture";
+    }
+    if (IsMaterialGraphTextureObjectNode(kind)) {
+        return "textureObject";
+    }
+    return "textureSample";
+}
+
+void ConfigureNormalTextureValueNode(kb::render::RenderMaterialGraphNode& node) {
+    if (node.parameter.stableId.empty()) {
+        node.parameter.stableId = std::string{ MaterialGraphTextureStableIdPrefix(node.kind) } + std::to_string(node.id);
+    }
+    if (node.parameter.displayName.empty() || node.parameter.displayName.starts_with("Texture Sample") || node.parameter.displayName.starts_with("Texture Object")) {
+        node.parameter.displayName = "Normal Texture";
+    }
+    node.parameter.textureRole = "normal";
+    node.parameter.expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Linear;
+    node.parameter.overrideSupported = true;
+}
+
+void UpsertGraphParameterValue(
+    kb::render::RenderMaterialAssetData& material,
+    kb::render::RenderMaterialGraphParameterValue value) {
+    for (kb::render::RenderMaterialGraphParameterValue& existing : material.graphParameterValues) {
+        if (existing.stableId == value.stableId) {
+            existing = std::move(value);
+            return;
+        }
+    }
+    material.graphParameterValues.push_back(std::move(value));
+}
+
+[[nodiscard]] std::uint32_t NextMaterialGraphNodeId(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
+    std::uint32_t nextId = 1U;
+    for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        nextId = std::max(nextId, node.id + 1U);
+    }
+    return nextId;
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphNode* FindMutableMaterialGraphNode(
+    kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId) noexcept {
+    for (kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.id == nodeId) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphNode* FindMutableMaterialOutputNode(
+    kb::render::RenderMaterialGraphDocument& graph) noexcept {
+    for (kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] const kb::render::RenderMaterialGraphLink* FindMaterialGraphInputLink(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId,
+    std::string_view pin) noexcept {
+    for (const kb::render::RenderMaterialGraphLink& link : graph.links) {
+        if (link.toNodeId == nodeId && link.toPin == pin) {
+            return &link;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] std::uint32_t TextureValueNodeIdForSample(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t textureSampleNodeId) noexcept {
+    if (const kb::render::RenderMaterialGraphLink* textureInput = FindMaterialGraphInputLink(graph, textureSampleNodeId, "texture");
+        textureInput != nullptr) {
+        const kb::render::RenderMaterialGraphNode* sourceNode = kb::render::FindRenderMaterialGraphNode(graph, textureInput->fromNodeId);
+        if (sourceNode != nullptr && IsMaterialGraphTextureObjectNode(sourceNode->kind)) {
+            return sourceNode->id;
+        }
+    }
+    return textureSampleNodeId;
+}
+
+void RemoveMaterialGraphInputLinks(
+    kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId,
+    std::string_view pin) {
+    const auto oldEnd = std::remove_if(graph.links.begin(), graph.links.end(), [nodeId, pin](const kb::render::RenderMaterialGraphLink& link) {
+        return link.toNodeId == nodeId && link.toPin == pin;
+    });
+    graph.links.erase(oldEnd, graph.links.end());
+}
+
+[[nodiscard]] bool AddMaterialGraphStableLink(
+    kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t fromNodeId,
+    std::string fromPin,
+    std::uint32_t toNodeId,
+    std::string toPin) {
+    const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(graph, fromNodeId);
+    const kb::render::RenderMaterialGraphNode* toNode = kb::render::FindRenderMaterialGraphNode(graph, toNodeId);
+    if (fromNode == nullptr || toNode == nullptr) {
+        return false;
+    }
+
+    kb::render::RenderMaterialGraphLink link{
+        .fromNodeId = fromNodeId,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(*fromNode, fromPin, true),
+        .fromPin = std::move(fromPin),
+        .toNodeId = toNodeId,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(*toNode, toPin, false),
+        .toPin = std::move(toPin),
+    };
+    if (link.fromPinId == 0U || link.toPinId == 0U) {
+        return false;
+    }
+    link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+    graph.links.push_back(std::move(link));
+    return true;
+}
+
 } // namespace
+
+bool ApplyEditorMaterialOutputNormalTextureGraph(
+    kb::render::RenderMaterialAssetData& material,
+    kb::assets::AssetId textureId) {
+    if (material.graph.nodes.empty()) {
+        if (!textureId.IsValid()) {
+            material.desc.normalTextureAssetId = 0U;
+            return true;
+        }
+        material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    }
+
+    kb::render::RenderMaterialGraphNode* outputNode = FindMutableMaterialOutputNode(material.graph);
+    if (outputNode == nullptr) {
+        if (!textureId.IsValid()) {
+            material.desc.normalTextureAssetId = 0U;
+            return true;
+        }
+        const std::uint32_t outputId = NextMaterialGraphNodeId(material.graph);
+        material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+            .id = outputId,
+            .kind = kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+            .positionX = 240,
+            .positionY = 64,
+        });
+        outputNode = &material.graph.nodes.back();
+    }
+
+    const std::uint32_t outputNodeId = outputNode->id;
+    const std::int32_t outputX = outputNode->positionX;
+    const std::int32_t outputY = outputNode->positionY;
+    std::uint32_t normalUnpackNodeId = 0U;
+    std::uint32_t textureSampleNodeId = 0U;
+
+    if (const kb::render::RenderMaterialGraphLink* normalInput = FindMaterialGraphInputLink(material.graph, outputNodeId, "normal");
+        normalInput != nullptr) {
+        const kb::render::RenderMaterialGraphNode* sourceNode = kb::render::FindRenderMaterialGraphNode(material.graph, normalInput->fromNodeId);
+        if (sourceNode != nullptr &&
+            sourceNode->kind == kb::render::RenderMaterialGraphNodeKind::NormalUnpack &&
+            normalInput->fromPin == "normal") {
+            normalUnpackNodeId = sourceNode->id;
+        } else if (sourceNode != nullptr &&
+            sourceNode->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample &&
+            normalInput->fromPin == "color") {
+            textureSampleNodeId = sourceNode->id;
+        }
+    }
+
+    if (normalUnpackNodeId != 0U) {
+        if (const kb::render::RenderMaterialGraphLink* colorInput = FindMaterialGraphInputLink(material.graph, normalUnpackNodeId, "color");
+            colorInput != nullptr) {
+            const kb::render::RenderMaterialGraphNode* sampleNode = kb::render::FindRenderMaterialGraphNode(material.graph, colorInput->fromNodeId);
+            if (sampleNode != nullptr &&
+                sampleNode->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample &&
+                colorInput->fromPin == "color") {
+                textureSampleNodeId = sampleNode->id;
+            }
+        }
+    }
+
+    if (!textureId.IsValid()) {
+        if (textureSampleNodeId != 0U) {
+            const std::uint32_t textureValueNodeId = TextureValueNodeIdForSample(material.graph, textureSampleNodeId);
+            kb::render::RenderMaterialGraphNode* textureValueNode = FindMutableMaterialGraphNode(material.graph, textureValueNodeId);
+            if (textureValueNode != nullptr && IsMaterialGraphTextureValueNode(textureValueNode->kind)) {
+                ConfigureNormalTextureValueNode(*textureValueNode);
+                UpsertGraphParameterValue(material, kb::render::RenderMaterialGraphParameterValue{
+                    .stableId = textureValueNode->parameter.stableId,
+                    .type = kb::render::RenderMaterialParameterType::Texture,
+                    .assetId = 0U,
+                });
+            }
+        }
+        RemoveMaterialGraphInputLinks(material.graph, outputNodeId, "normal");
+        material.desc.normalTextureAssetId = 0U;
+        return true;
+    }
+
+    if (normalUnpackNodeId == 0U) {
+        normalUnpackNodeId = NextMaterialGraphNodeId(material.graph);
+        material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+            .id = normalUnpackNodeId,
+            .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+            .positionX = outputX - 240,
+            .positionY = outputY + 96,
+        });
+    }
+
+    if (textureSampleNodeId == 0U) {
+        textureSampleNodeId = NextMaterialGraphNodeId(material.graph);
+        material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+            .id = textureSampleNodeId,
+            .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+            .positionX = outputX - 520,
+            .positionY = outputY + 88,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureSample" + std::to_string(textureSampleNodeId),
+                .displayName = "Normal Texture",
+                .textureRole = "normal",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Linear,
+                .overrideSupported = true,
+            },
+        });
+    }
+
+    kb::render::RenderMaterialGraphNode* textureSample = FindMutableMaterialGraphNode(material.graph, textureSampleNodeId);
+    if (textureSample == nullptr || textureSample->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return false;
+    }
+    const std::uint32_t textureValueNodeId = TextureValueNodeIdForSample(material.graph, textureSampleNodeId);
+    kb::render::RenderMaterialGraphNode* textureValueNode = FindMutableMaterialGraphNode(material.graph, textureValueNodeId);
+    if (textureValueNode == nullptr || !IsMaterialGraphTextureValueNode(textureValueNode->kind)) {
+        return false;
+    }
+    ConfigureNormalTextureValueNode(*textureValueNode);
+
+    RemoveMaterialGraphInputLinks(material.graph, normalUnpackNodeId, "color");
+    RemoveMaterialGraphInputLinks(material.graph, outputNodeId, "normal");
+    if (!AddMaterialGraphStableLink(material.graph, textureSampleNodeId, "color", normalUnpackNodeId, "color") ||
+        !AddMaterialGraphStableLink(material.graph, normalUnpackNodeId, "normal", outputNodeId, "normal")) {
+        return false;
+    }
+
+    material.desc.normalTextureAssetId = textureId.value;
+    UpsertGraphParameterValue(material, kb::render::RenderMaterialGraphParameterValue{
+        .stableId = textureValueNode->parameter.stableId,
+        .type = kb::render::RenderMaterialParameterType::Texture,
+        .assetId = textureId.value,
+    });
+    return true;
+}
 
 EditorMaterialBaseColorChannelEdit::EditorMaterialBaseColorChannelEdit(int channel, float value) noexcept
     : channel_(channel)

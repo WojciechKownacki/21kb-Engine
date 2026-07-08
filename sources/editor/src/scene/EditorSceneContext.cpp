@@ -1667,6 +1667,8 @@ bool EditorSceneContext::UndoSceneCommand() {
         RefreshOpenMaterialEditorFromSource();
     } else if (undone && materialEditor_.OpenAssetId().IsValid()) {
         SyncMaterialEditorWorkingCopyRuntimePreview();
+        sceneGraphCookPending_ = true;
+        RequestOpenMaterialSceneGraphCook();
         MarkSceneRenderDirty();
     }
     return undone;
@@ -1680,6 +1682,8 @@ bool EditorSceneContext::RedoSceneCommand() {
         RefreshOpenMaterialEditorFromSource();
     } else if (redone && materialEditor_.OpenAssetId().IsValid()) {
         SyncMaterialEditorWorkingCopyRuntimePreview();
+        sceneGraphCookPending_ = true;
+        RequestOpenMaterialSceneGraphCook();
         MarkSceneRenderDirty();
     }
     return redone;
@@ -3975,6 +3979,8 @@ void EditorSceneContext::CancelMaterialGraphWorkingCopyTransaction() {
         }
         materialEditor_.ClearDiagnostics();
         SyncMaterialEditorWorkingCopyRuntimePreview();
+        sceneGraphCookPending_ = true;
+        RequestOpenMaterialSceneGraphCook();
         MarkSceneRenderDirty();
     }
     ClearMaterialGraphWorkingCopyTransaction();
@@ -5620,6 +5626,38 @@ bool EditorSceneContext::SetMaterialTextureAsset(kb::assets::AssetId id, EditorM
             return false;
         }
     }
+
+    const kb::assets::AssetMetadata* materialMetadata = scene_->Assets().Manager().Registry().Find(id);
+    if (slot == EditorMaterialTextureSlot::Normal &&
+        materialEditor_.OpenAssetId() == id &&
+        materialEditor_.WorkingCopy().has_value() &&
+        materialMetadata != nullptr &&
+        materialMetadata->type == "RenderMaterial") {
+        kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+        kb::render::RenderMaterialAssetData working = before;
+        if (!ApplyEditorMaterialOutputNormalTextureGraph(working, textureId)) {
+            console_.Error("Materials", "Material graph normal map could not be connected.");
+            return false;
+        }
+
+        const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+        std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+        const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+        materialEditor_.SetWorkingCopy(std::move(working));
+        if (!RecordMaterialGraphWorkingCopyEdit(
+                id,
+                "Set Material Normal Map",
+                std::move(before),
+                beforeSelectedNodeId,
+                std::move(beforeSelectedNodeIds),
+                beforeSelectedCommentId)) {
+            console_.Warning("Materials", "Material graph normal map change could not be recorded.");
+            return false;
+        }
+        console_.Info("Materials", textureId.IsValid() ? "Normal map connected to the material graph." : "Normal map cleared from the material graph.");
+        return true;
+    }
+
     return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialTextureAssetEdit>(slot, textureId));
 }
 
@@ -6710,6 +6748,8 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
         materialEditor_.ClearDiagnostics();
         LogMaterialGraphDebugDocument(console_, "record-edit-transaction " + debugLabel, *materialEditor_.WorkingCopy());
         SyncMaterialEditorWorkingCopyRuntimePreview();
+        sceneGraphCookPending_ = true;
+        RequestOpenMaterialSceneGraphCook();
         MarkSceneRenderDirty();
         return true;
     }
@@ -6745,6 +6785,8 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
         LogMaterialGraphDebugDocument(console_, "record-edit-after " + debugLabel, *materialEditor_.WorkingCopy());
     }
     SyncMaterialEditorWorkingCopyRuntimePreview();
+    sceneGraphCookPending_ = true;
+    RequestOpenMaterialSceneGraphCook();
     MarkSceneRenderDirty();
     return true;
 }
@@ -6777,6 +6819,8 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
     materialEditor_.SetWorkingCopy(std::move(working));
     materialEditor_.ClearDiagnostics();
     SyncMaterialEditorWorkingCopyRuntimePreview();
+    sceneGraphCookPending_ = true;
+    RequestOpenMaterialSceneGraphCook();
     MarkSceneRenderDirty();
     return true;
 }
@@ -7031,6 +7075,7 @@ void EditorSceneContext::RefreshOpenMaterialEditorFromSource() {
         materialEditor_.SetInstanceWorkingCopy(std::move(*instance), effective);
         materialEditor_.MarkSaved();
         materialEditor_.ClearDiagnostics();
+        sceneGraphCookPending_ = true;
         MarkSceneRenderDirty();
         return;
     }
@@ -7042,6 +7087,8 @@ void EditorSceneContext::RefreshOpenMaterialEditorFromSource() {
     materialEditor_.SetWorkingCopy(std::move(*material));
     materialEditor_.MarkSaved();
     materialEditor_.ClearDiagnostics();
+    sceneGraphCookPending_ = true;
+    RequestOpenMaterialSceneGraphCook();
     MarkSceneRenderDirty();
 }
 
@@ -7082,13 +7129,24 @@ void EditorSceneContext::RequestOpenMaterialSceneGraphCook() {
     }
     const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
     if (!openAsset.IsValid() || !materialEditor_.WorkingCopy().has_value()) {
+        LogMaterialGraphDebug(console_, "scene-cook-open-skip reason=no-open-working-copy");
         return;
     }
     const kb::render::RenderMaterialAssetData& material = *materialEditor_.WorkingCopy();
     if (material.graph.links.empty() && material.graph.nodes.size() <= 1U) {
+        LogMaterialGraphDebug(console_, "scene-cook-open-skip reason=no-authored-graph asset=" + std::to_string(openAsset.value));
         return;
     }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(openAsset);
+    {
+        std::ostringstream row;
+        row << "scene-cook-open-request asset=" << openAsset.value
+            << " graphNodes=" << material.graph.nodes.size()
+            << " graphLinks=" << material.graph.links.size()
+            << " outputNormalLinked=" << (MaterialGraphDebugOutputHasLink(material.graph, "normal") ? "true" : "false")
+            << " sceneLightingPath=" << static_cast<int>(project_.sceneLightingPath);
+        LogMaterialGraphDebug(console_, row.str());
+    }
     static_cast<void>(materialGraphCookService_->RequestCook(
         openAsset,
         material,
