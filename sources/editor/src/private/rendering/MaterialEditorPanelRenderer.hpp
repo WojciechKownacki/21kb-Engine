@@ -287,7 +287,6 @@ inline constexpr int DetailsNodePropertyRowHeight = 22;
 inline constexpr int DetailsNodePropertyOptionHeight = 20;
 } // namespace MaterialEditorPanelMetrics
 
-inline constexpr std::size_t kMaterialEditorPanelColorWatcherPaletteChipCount = 8U;
 #endif
 
 #if defined(_WIN32)
@@ -296,11 +295,11 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
         return SIZE{ 204, 76 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return SIZE{ 230, 100 };
+        return SIZE{ 204, 100 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return SIZE{ 408, 188 };
+        return SIZE{ 204, 196 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return SIZE{ 408, 212 };
+        return SIZE{ 204, 196 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
     case kb::render::RenderMaterialGraphNodeKind::TextureObject:
     case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
@@ -312,7 +311,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return SIZE{ 176, 72 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return SIZE{ 300, 166 };
+        return SIZE{ 204, 196 };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return SIZE{ 218, 176 };
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
@@ -1320,6 +1319,7 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         return { "xy" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+        return { "xyz", "r", "g", "b" };
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return { "xyz" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
@@ -1435,6 +1435,17 @@ inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::Ren
         return POINT{ node.right - pinInset, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
     }
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
+    if (kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterColor) {
+        const int rowHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodePinRowHeight, scale);
+        const int y = node.top + headerHeight +
+            MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeBodyTopPadding, scale) +
+            (static_cast<int>(index) * rowHeight) +
+            (rowHeight / 2);
+        const int bottom = static_cast<int>(node.bottom);
+        return POINT{ node.right - pinInset, std::clamp<int>(y, static_cast<int>(node.top) + headerHeight + pinInset, bottom - pinInset) };
+    }
     if (!MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
         const int bodyTop = node.top + headerHeight;
         const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
@@ -1660,9 +1671,9 @@ inline RECT MaterialEditorPanelColorWatcherRect(const RECT& node, kb::render::Re
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    const int left = node.left + MaterialEditorPanelScaled(18, scale);
+    const int left = node.left + MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 18 : 8, scale);
     const int top = node.top + headerHeight + MaterialEditorPanelScaled(10, scale);
-    const int right = node.right - MaterialEditorPanelScaled(104, scale);
+    const int right = node.right - MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 104 : 38, scale);
     const int bottom = node.bottom - MaterialEditorPanelScaled(12, scale);
     return RECT{ left, top, right, std::max(top + MaterialEditorPanelScaled(72, scale), bottom) };
 }
@@ -1671,57 +1682,21 @@ inline RECT MaterialEditorPanelColorWatcherSwatchRect(const RECT& node, kb::rend
     const RECT watcher = MaterialEditorPanelColorWatcherRect(node, kind);
     const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int size = std::max(36, MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 28 : 48, scale));
+    if (kind != kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+        const int height = std::max(36, MaterialEditorPanelScaled(98, scale));
+        return RECT{
+            watcher.left,
+            watcher.top,
+            watcher.right,
+            std::min(watcher.bottom, watcher.top + height),
+        };
+    }
+    const int size = std::max(36, MaterialEditorPanelScaled(28, scale));
     return RECT{
         watcher.left,
         watcher.top,
         std::min(watcher.right, watcher.left + size),
         std::min(watcher.bottom, watcher.top + size),
-    };
-}
-
-inline RECT MaterialEditorPanelColorWatcherTextRect(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    const RECT watcher = MaterialEditorPanelColorWatcherRect(node, kind);
-    const RECT swatch = MaterialEditorPanelColorWatcherSwatchRect(node, kind);
-    const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    return RECT{
-        swatch.right + MaterialEditorPanelScaled(8, scale),
-        watcher.top + MaterialEditorPanelScaled(1, scale),
-        watcher.right,
-        std::min(watcher.bottom, watcher.top + MaterialEditorPanelScaled(38, scale)),
-    };
-}
-
-inline RECT MaterialEditorPanelColorWatcherPaletteRect(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    const RECT watcher = MaterialEditorPanelColorWatcherRect(node, kind);
-    const RECT swatch = MaterialEditorPanelColorWatcherSwatchRect(node, kind);
-    const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int top = swatch.bottom + MaterialEditorPanelScaled(10, scale);
-    return RECT{
-        watcher.left,
-        top,
-        std::min<LONG>(watcher.right, watcher.left + MaterialEditorPanelScaled(188, scale)),
-        std::min<LONG>(watcher.bottom, top + MaterialEditorPanelScaled(16, scale)),
-    };
-}
-
-inline RECT MaterialEditorPanelColorWatcherPaletteChipRect(
-    const RECT& node,
-    kb::render::RenderMaterialGraphNodeKind kind,
-    std::size_t chipIndex) noexcept {
-    const RECT palette = MaterialEditorPanelColorWatcherPaletteRect(node, kind);
-    const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(kind);
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1L, nodeSize.cx));
-    const int chipSize = std::max(14, MaterialEditorPanelScaled(18, scale));
-    const int gap = std::max(3, MaterialEditorPanelScaled(5, scale));
-    const int left = palette.left + static_cast<int>(chipIndex) * (chipSize + gap);
-    return RECT{
-        left,
-        palette.top,
-        std::min<LONG>(palette.right, left + chipSize),
-        std::min<LONG>(palette.bottom, palette.top + chipSize),
     };
 }
 
@@ -1895,27 +1870,6 @@ inline std::vector<MaterialEditorPanelColorRampStopModel> MaterialEditorPanelCol
     return stops;
 }
 
-inline MaterialEditorParameterValue MaterialEditorPanelColorWatcherPaletteValue(std::size_t chipIndex, const MaterialEditorParameterValue& current) noexcept {
-    switch (chipIndex) {
-    case 0U:
-        return current;
-    case 1U:
-        return MaterialEditorPanelColorValue(1.0F, 1.0F, 1.0F, current.numbers[3]);
-    case 2U:
-        return MaterialEditorPanelColorValue(0.0F, 0.0F, 0.0F, current.numbers[3]);
-    case 3U:
-        return MaterialEditorPanelColorValue(1.0F, 0.0F, 0.0F, current.numbers[3]);
-    case 4U:
-        return MaterialEditorPanelColorValue(0.0F, 1.0F, 0.0F, current.numbers[3]);
-    case 5U:
-        return MaterialEditorPanelColorValue(0.0F, 0.35F, 1.0F, current.numbers[3]);
-    case 6U:
-        return MaterialEditorPanelColorValue(1.0F, 0.82F, 0.28F, current.numbers[3]);
-    default:
-        return MaterialEditorPanelColorValue(0.24F, 0.88F, 0.78F, current.numbers[3]);
-    }
-}
-
 inline bool MaterialEditorPanelPointNear(POINT point, int x, int y, int radius) noexcept {
     const int dx = x - point.x;
     const int dy = y - point.y;
@@ -2005,19 +1959,6 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .value = value,
             };
         }
-        for (std::size_t chipIndex = 0U; chipIndex < kMaterialEditorPanelColorWatcherPaletteChipCount; ++chipIndex) {
-            const RECT chip = MaterialEditorPanelColorWatcherPaletteChipRect(*rect, node.kind, chipIndex);
-            if (chip.right > chip.left && MaterialEditorPanelPointInRect(chip, x, y)) {
-                return MaterialEditorGraphColorWatcherHit{
-                    .target = target,
-                    .nodeId = node.id,
-                    .stableId = stableId,
-                    .displayName = node.parameter.displayName.empty() ? std::string{ "Color" } : node.parameter.displayName,
-                    .value = MaterialEditorPanelColorWatcherPaletteValue(chipIndex, value),
-                    .applyImmediately = true,
-                };
-            }
-        }
     }
     return std::nullopt;
 }
@@ -2106,19 +2047,6 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .displayName = node.parameter.displayName.empty() ? std::string{ "Color" } : node.parameter.displayName,
                 .value = value,
             };
-        }
-        for (std::size_t chipIndex = 0U; chipIndex < kMaterialEditorPanelColorWatcherPaletteChipCount; ++chipIndex) {
-            const RECT chip = MaterialEditorPanelColorWatcherPaletteChipRect(*rect, node.kind, chipIndex);
-            if (chip.right > chip.left && MaterialEditorPanelPointInRect(chip, x, y)) {
-                return MaterialEditorGraphColorWatcherHit{
-                    .target = target,
-                    .nodeId = node.id,
-                    .stableId = stableId,
-                    .displayName = node.parameter.displayName.empty() ? std::string{ "Color" } : node.parameter.displayName,
-                    .value = MaterialEditorPanelColorWatcherPaletteValue(chipIndex, value),
-                    .applyImmediately = true,
-                };
-            }
         }
     }
     return std::nullopt;
