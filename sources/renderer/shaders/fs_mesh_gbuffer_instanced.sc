@@ -1,6 +1,7 @@
 $input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal
 
 #include <bgfx_shader.sh>
+#include "gbuffer_contract.sh"
 
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_normal, 1);
@@ -32,8 +33,10 @@ void main()
     float roughness = clamp(u_materialParams.y * metallicRoughness.g, 0.04, 1.0);
     float occlusionSample = texture2D(s_occlusion, materialUv).r;
     float occlusion = mix(1.0, occlusionSample, clamp(u_materialFlags.y, 0.0, 1.0));
+    vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
 
     gl_FragData[0] = vec4(albedo.rgb, albedo.a);
     gl_FragData[1] = vec4(normal * 0.5 + 0.5, 1.0);
-    gl_FragData[2] = vec4(metallic, roughness, occlusion, u_materialEmissive.a);
+    gl_FragData[2] = vec4(metallic, roughness, occlusion, KbEncodeGBufferShadingModel(KB_GBUFFER_SHADING_MODEL_DEFAULT_LIT));
+    gl_FragData[3] = vec4(emissive, 0.5);
 }

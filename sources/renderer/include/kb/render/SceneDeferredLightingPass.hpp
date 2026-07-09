@@ -45,6 +45,7 @@ private:
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle surfaceSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;

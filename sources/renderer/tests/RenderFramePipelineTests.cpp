@@ -36,11 +36,12 @@ void RenderPassGraphValidatesRequiredPasses() {
     RenderPassGraph graph = RenderFramePipeline{}.BuildViewportGraph(RenderViewportViewIdAllocator::ForViewportIndex(0U));
     const RenderPassGraphValidationResult result = graph.ValidateRequiredPasses();
     Require(result.Succeeded(), RenderPassGraphValidationStatusName(result.status));
-    Require(graph.Resources().size() == 16U, "RenderPassGraph did not declare the viewport graph resources");
+    Require(graph.Resources().size() == 17U, "RenderPassGraph did not declare the viewport graph resources");
     Require(graph.FindResource(RenderGraphResource::SceneColor) != nullptr, "RenderPassGraph did not declare SceneColor");
     Require(graph.FindResource(RenderGraphResource::GBufferAlbedo) != nullptr, "RenderPassGraph did not declare GBufferAlbedo");
     Require(graph.FindResource(RenderGraphResource::GBufferNormal) != nullptr, "RenderPassGraph did not declare GBufferNormal");
     Require(graph.FindResource(RenderGraphResource::GBufferMaterial) != nullptr, "RenderPassGraph did not declare GBufferMaterial");
+    Require(graph.FindResource(RenderGraphResource::GBufferSurface) != nullptr, "P0.6: RenderPassGraph did not declare GBufferSurface");
     Require(graph.FindResource(RenderGraphResource::GBufferDepth) != nullptr, "RenderPassGraph did not declare GBufferDepth");
     Require(graph.FindResource(RenderGraphResource::ShadowMap) != nullptr, "RenderPassGraph did not declare ShadowMap");
     Require(graph.FindResource(RenderGraphResource::FinalOutput) != nullptr, "RenderPassGraph did not declare FinalOutput");
@@ -53,7 +54,7 @@ void RenderPassGraphValidatesRequiredPasses() {
     Require(compile.Succeeded(), RenderPassGraphValidationStatusName(compile.validation.status));
     Require(compile.resourceUsages.size() == graph.Resources().size(), "RenderPassGraph compile did not emit usage for every resource");
     Require(compile.externalResourceCount == 4U, "RenderPassGraph compile reported wrong external resource count");
-    Require(compile.transientResourceCount == 12U, "RenderPassGraph compile reported wrong transient resource count");
+    Require(compile.transientResourceCount == 13U, "RenderPassGraph compile reported wrong transient resource count");
     Require(compile.estimatedTransientBytes > 0U, "RenderPassGraph compile did not estimate transient memory");
     Require(compile.estimatedAliasedTransientBytes > 0U, "RenderPassGraph compile did not estimate aliased transient memory");
     Require(compile.estimatedAliasedTransientBytes <= compile.estimatedTransientBytes, "RenderPassGraph aliased memory estimate exceeded unaliased estimate");

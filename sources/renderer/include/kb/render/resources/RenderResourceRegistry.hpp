@@ -51,6 +51,9 @@ public:
     [[nodiscard]] bool ContainsMaterial(RenderMaterialHandle handle) const noexcept;
     void DestroyMaterial(RenderMaterialHandle handle) noexcept;
 
+    [[nodiscard]] RenderTextureHandle RegisterTexture(const RenderTextureDesc& desc);
+    // Compatibility entry point for existing callers. Descriptors are still validated as true 2D
+    // resources; new asset/runtime code should use RegisterTexture so dimension dispatch stays central.
     [[nodiscard]] RenderTextureHandle RegisterTexture2D(const RenderTextureDesc& desc);
     [[nodiscard]] const RenderTextureResource* FindTexture(RenderTextureHandle handle) const noexcept;
     [[nodiscard]] bool ContainsTexture(RenderTextureHandle handle) const noexcept;
