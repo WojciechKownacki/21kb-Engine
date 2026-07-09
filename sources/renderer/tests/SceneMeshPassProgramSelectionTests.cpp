@@ -59,6 +59,12 @@ namespace {
     };
     constant.parameter.defaultValueHint = std::string{ colorHint };
     graph.nodes.push_back(constant);
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::DynamicParameter,
+        .positionX = 80,
+        .positionY = 220,
+    });
     RenderMaterialGraphLink link{
         .fromNodeId = 2U,
         .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
@@ -69,6 +75,16 @@ namespace {
     };
     link.id = MakeRenderMaterialGraphLinkId(link);
     graph.links.push_back(link);
+    RenderMaterialGraphLink alphaLink{
+        .fromNodeId = 3U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::DynamicParameter, "r", true),
+        .fromPin = "r",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "alpha", false),
+        .toPin = "alpha",
+    };
+    alphaLink.id = MakeRenderMaterialGraphLinkId(alphaLink);
+    graph.links.push_back(alphaLink);
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0700U });
     Require(compiled.Succeeded(), "KBMAT-MAT07: Selection graph must compile");
     return compiled.shader;
@@ -76,6 +92,7 @@ namespace {
 
 [[nodiscard]] RenderMaterialGraphShaderSource CompileWorldPositionOffsetGraphForSelection() {
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.blendMode = "masked";
     RenderMaterialGraphNode color{
         .id = 2U,
         .kind = RenderMaterialGraphNodeKind::ConstantColor,
@@ -90,8 +107,16 @@ namespace {
         .positionY = 220,
     };
     offset.parameter.defaultValueHint = "0.35 0 0";
+    RenderMaterialGraphNode alpha{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 80,
+        .positionY = 320,
+    };
+    alpha.parameter.defaultValueHint = "0.25";
     graph.nodes.push_back(color);
     graph.nodes.push_back(offset);
+    graph.nodes.push_back(alpha);
 
     RenderMaterialGraphLink colorLink{
         .fromNodeId = 2U,
@@ -115,9 +140,21 @@ namespace {
     offsetLink.id = MakeRenderMaterialGraphLinkId(offsetLink);
     graph.links.push_back(offsetLink);
 
+    RenderMaterialGraphLink alphaLink{
+        .fromNodeId = 4U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::ConstantScalar, "value", true),
+        .fromPin = "value",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "alpha", false),
+        .toPin = "alpha",
+    };
+    alphaLink.id = MakeRenderMaterialGraphLinkId(alphaLink);
+    graph.links.push_back(alphaLink);
+
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x1900U });
-    Require(compiled.Succeeded() && compiled.shader.reflection.hasWorldPositionOffset,
-        "KBMAT-MAT99-19: WPO graph must compile and flag the generated vertex shader requirement");
+    Require(compiled.Succeeded() && compiled.shader.reflection.hasWorldPositionOffset &&
+            compiled.shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked,
+        "P0.5: masked WPO graph must compile and flag both shadow shader requirements");
     return compiled.shader;
 }
 
@@ -183,6 +220,16 @@ void RunSceneMeshPassProgramSelectionTest() {
             "Deferred graph GBuffer pass must fall back to builtin GBuffer when the graph artifact is missing");
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 2U,
             "Deferred graph GBuffer miss must increment builtin fallback usage");
+        RenderMaterialResource maskedShadowRequired = graphFallback;
+        maskedShadowRequired.graphProgram.alphaMode = RenderMaterialAlphaMode::Mask;
+        const SceneMeshPassProgramResolution missingMaskedShadow =
+            passResources.ResolveMeshPassProgram(&maskedShadowRequired, MeshPassType::ShadowDepth);
+        Require(!bgfx::isValid(missingMaskedShadow.program) && !missingMaskedShadow.graphProgram &&
+                !missingMaskedShadow.fellBackToBuiltin &&
+                missingMaskedShadow.status == SceneRenderMaterialProgramStatus::GraphFallback,
+            "P0.5: missing masked graph ShadowDepth artifact must fail closed instead of casting an opaque builtin shadow");
+        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 2U,
+            "P0.5: forbidden masked shadow fallback must not be counted or submitted as builtin");
         Require(passResources.ProgramBindStats().programSwitchCount >= 2U,
             "KBMAT-MAT07: Program switch stats must count distinct bound programs");
 
@@ -267,13 +314,25 @@ void RunSceneMeshPassProgramSelectionTest() {
             "KBMAT-MAT07: Two materials sharing a graph program key must reuse the same program");
 
         MaterialProgramRegistryStats registryStatsBefore = passResources.ProgramRegistryStats();
-        const RenderMaterialResource graphMaterialVariant = MakeGraphMaterialResource(shaderA.sourceHash, variantA ^ 0x8000'0000'0000'0000ULL, pipelineA);
+        RenderMaterialGraphShaderSource maskedVariantShader = shaderA;
+        maskedVariantShader.reflection.blendMode = RenderMaterialGraphBlendMode::Masked;
+        Require(CookGraphForActiveBackend(maskedVariantShader, cacheRoot.generic_string()),
+            "P0.7: wrapper-changing masked variant must cook beside opaque for runtime loading");
+        const std::uint64_t maskedVariant = RenderMaterialGraphVariantKey(maskedVariantShader);
+        Require(maskedVariant != variantA,
+            "P0.7: masked and opaque wrappers with identical graph source must have distinct identities");
+        const RenderMaterialResource graphMaterialVariant = MakeGraphMaterialResource(
+            shaderA.sourceHash,
+            maskedVariant,
+            RenderMaterialGraphPipelineStateKey(maskedVariantShader));
         const SceneMeshPassProgramResolution graphVariant = passResources.ResolveMeshPassProgram(&graphMaterialVariant, MeshPassType::BaseOpaque);
-        Require(graphVariant.graphProgram &&
+        Require(graphVariant.graphProgram && bgfx::isValid(graphVariant.program) &&
                 graphVariant.key.variantKey != graphA.key.variantKey &&
                 graphVariant.materialProgramIdentity != graphA.materialProgramIdentity &&
                 passResources.ProgramRegistryStats().loads == registryStatsBefore.loads + 1U,
-            "KBMAT-MAT66: Hot-reloaded static variant with the same source binary path must not reuse the stale program binding");
+            "P0.7: runtime loader must load the canonical masked binary without reusing opaque");
+        Require(graphVariant.program.idx != graphA.program.idx,
+            "P0.7: opaque and masked binaries with dynamic alpha must coexist as distinct GPU programs");
 
         registryStatsBefore = passResources.ProgramRegistryStats();
         const RenderMaterialResource graphMaterialPipeline = MakeGraphMaterialResource(shaderA.sourceHash, variantA, pipelineA ^ 0x4000'0000'0000'0000ULL);
@@ -297,6 +356,8 @@ void RunSceneMeshPassProgramSelectionTest() {
         const RenderMaterialGraphShaderSource wpoShader = CompileWorldPositionOffsetGraphForSelection();
         Require(CookGraphForActiveBackend(wpoShader, cacheRoot.generic_string()),
             "KBMAT-MAT99-19: WPO graph must cook fragment and generated vertex binaries for scene selection");
+        Require(CookGraphForActiveBackend(wpoShader, cacheRoot.generic_string(), "ShadowDepth"),
+            "P0.5: masked WPO graph must cook generated vertex and alpha fragment binaries for ShadowDepth");
         const std::uint64_t wpoVariant = RenderMaterialGraphVariantKey(wpoShader);
         const std::uint64_t wpoPipeline = RenderMaterialGraphPipelineStateKey(wpoShader);
         const RenderMaterialResource wpoMaterial = MakeGraphMaterialResource(
@@ -310,9 +371,23 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(wpoReady.graphProgram && bgfx::isValid(wpoReady.program) && !wpoReady.fellBackToBuiltin &&
                 wpoReady.key.requiresGeneratedVertexShader,
             "KBMAT-MAT99-19: WPO graph material must bind the generated scene vertex program when vs.bin exists");
+        const SceneMeshPassProgramResolution shadowReady = passResources.ResolveMeshPassProgram(&wpoMaterial, MeshPassType::ShadowDepth);
+        Require(shadowReady.graphProgram && bgfx::isValid(shadowReady.program) && !shadowReady.fellBackToBuiltin &&
+                shadowReady.key.requiresGeneratedVertexShader,
+            "P0.5: ShadowDepth must load the generated WPO vertex shader and graph alpha fragment shader");
+        RenderMaterialResource missingRequiredShadow = wpoMaterial;
+        missingRequiredShadow.graphProgram.variantKey ^= 0x0200'0000'0000'0000ULL;
+        missingRequiredShadow.graphProgram.alphaMode = RenderMaterialAlphaMode::Mask;
+        const SceneMeshPassProgramResolution missingRequiredShadowResolution =
+            passResources.ResolveMeshPassProgram(&missingRequiredShadow, MeshPassType::ShadowDepth);
+        Require(!bgfx::isValid(missingRequiredShadowResolution.program) &&
+                !missingRequiredShadowResolution.graphProgram &&
+                !missingRequiredShadowResolution.fellBackToBuiltin,
+            "P0.5: missing WPO/masked ShadowDepth binary must fail closed instead of using position-only/opaque fallback");
 
         const std::filesystem::path wpoVertexPath = cacheRoot /
             ("graph_" + std::to_string(wpoShader.sourceHash)) /
+            ("variant_" + std::to_string(wpoVariant)) /
             "BaseOpaque" /
             "dxbc" /
             "vs.bin";
@@ -334,8 +409,8 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
             "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 8U,
-            "KBMAT-MAT07: Graph program binds must be counted in submit stats");
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 9U,
+            "KBMAT-MAT07/P0.5: Base, GBuffer, and generated ShadowDepth graph program binds must be counted in submit stats");
 #endif
 
         passResources.Shutdown();

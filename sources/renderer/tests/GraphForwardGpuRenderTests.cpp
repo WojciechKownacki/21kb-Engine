@@ -151,6 +151,26 @@ struct ForwardRenderProbe {
     return code == 0 && std::filesystem::exists(outBin, error) && std::filesystem::file_size(outBin, error) > 0U;
 }
 
+[[nodiscard]] bool CookHarnessRendererShader(
+    std::string_view shaderName,
+    std::string_view shaderType,
+    const std::filesystem::path& outBin) {
+    const std::filesystem::path source = std::filesystem::path{ KB_TEST_GRAPH_SHADER_INCLUDE_DIR } / shaderName;
+    std::ostringstream command;
+    command << '"' << '"' << KB_TEST_GRAPH_SHADERC_PATH << '"'
+        << " --type " << shaderType << " --platform windows --profile s_5_0"
+        << " -f \"" << source.generic_string() << '"'
+        << " -o \"" << outBin.generic_string() << '"'
+        << " --varyingdef \"" << KB_TEST_GRAPH_SHADER_VARYING_DEF << '"'
+        << " -i \"" << KB_TEST_GRAPH_SHADER_INCLUDE_DIR << '"'
+        << " -i \"" << KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR << '"'
+        << " -O 3" << '"';
+    std::error_code error;
+    std::filesystem::remove(outBin, error);
+    const int code = std::system(command.str().c_str());
+    return code == 0 && std::filesystem::exists(outBin, error) && std::filesystem::file_size(outBin, error) > 0U;
+}
+
 // MAT-81: a generated vertex shader that embeds the graph source, evaluates EvaluateWorldPositionOffset
 // with a vertex-populated context, and offsets the position before projection.
 [[nodiscard]] bool CookHarnessWorldPositionOffsetVertexShader(const std::filesystem::path& outBin, const std::string& graphSource) {
@@ -613,25 +633,53 @@ public:
         for (bgfx::TextureHandle& readback : readbacks_) {
             readback = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
         }
-        bgfx::Attachment attachments[3U]{};
-        for (std::uint32_t index = 0; index < 3U; ++index) {
+        depth_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT);
+        bgfx::Attachment attachments[5U]{};
+        for (std::uint32_t index = 0; index < 4U; ++index) {
             attachments[index].init(targets_[index]);
         }
-        fb_ = bgfx::createFrameBuffer(3U, attachments, false);
+        attachments[4].init(depth_);
+        fb_ = bgfx::createFrameBuffer(5U, attachments, false);
         uCamera_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
         uLightDirKind_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, 4U);
         uLightParams_ = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
         uTime_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
         uDynamicParameter_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
         uMaterialParams_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
+        resolveTarget_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        resolveReadback_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        resolveFrameBuffer_ = bgfx::createFrameBuffer(1U, &resolveTarget_, false);
+        deferredAlbedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
+        deferredNormalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
+        deferredMaterialSampler_ = bgfx::createUniform("s_gbufferMaterial", bgfx::UniformType::Sampler);
+        deferredSurfaceSampler_ = bgfx::createUniform("s_gbufferSurface", bgfx::UniformType::Sampler);
+        deferredDepthSampler_ = bgfx::createUniform("s_gbufferDepth", bgfx::UniformType::Sampler);
+        deferredShadowSampler_ = bgfx::createUniform("s_deferredShadowMap", bgfx::UniformType::Sampler);
+        deferredLightDirKind_ = bgfx::createUniform("u_deferredLightDirKind", bgfx::UniformType::Vec4, 32U);
+        deferredLightPositionRange_ = bgfx::createUniform("u_deferredLightPositionRange", bgfx::UniformType::Vec4, 32U);
+        deferredLightColorIntensity_ = bgfx::createUniform("u_deferredLightColorIntensity", bgfx::UniformType::Vec4, 32U);
+        deferredLightSpot_ = bgfx::createUniform("u_deferredLightSpot", bgfx::UniformType::Vec4, 32U);
+        deferredLightParams_ = bgfx::createUniform("u_deferredLightParams", bgfx::UniformType::Vec4);
+        deferredAmbient_ = bgfx::createUniform("u_deferredAmbientColor", bgfx::UniformType::Vec4);
+        deferredEnvironmentZenith_ = bgfx::createUniform("u_deferredEnvironmentZenith", bgfx::UniformType::Vec4);
+        deferredEnvironmentGround_ = bgfx::createUniform("u_deferredEnvironmentGround", bgfx::UniformType::Vec4);
+        deferredEnvironmentParams_ = bgfx::createUniform("u_deferredEnvironmentParams", bgfx::UniformType::Vec4);
+        deferredCamera_ = bgfx::createUniform("u_deferredCameraPosition", bgfx::UniformType::Vec4);
+        deferredInverseViewProjection_ = bgfx::createUniform("u_deferredInverseViewProjection", bgfx::UniformType::Mat4);
+        deferredDepthParams_ = bgfx::createUniform("u_deferredDepthParams", bgfx::UniformType::Vec4);
+        deferredShadowViewProjection_ = bgfx::createUniform("u_deferredShadowViewProj", bgfx::UniformType::Mat4);
+        deferredShadowParams_ = bgfx::createUniform("u_deferredShadowParams", bgfx::UniformType::Vec4);
+        const std::uint32_t white = 0xFFFF'FFFFU;
+        fallbackShadow_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, bgfx::copy(&white, sizeof(white)));
         bgfx::frame();
         bgfx::frame();
-        return bgfx::isValid(vbh_) && bgfx::isValid(fb_) &&
-            bgfx::isValid(targets_[0]) && bgfx::isValid(targets_[1]) && bgfx::isValid(targets_[2]) &&
-            bgfx::isValid(readbacks_[0]) && bgfx::isValid(readbacks_[1]) && bgfx::isValid(readbacks_[2]);
+        return bgfx::isValid(vbh_) && bgfx::isValid(fb_) && bgfx::isValid(depth_) &&
+            bgfx::isValid(resolveFrameBuffer_) && bgfx::isValid(resolveReadback_) && bgfx::isValid(fallbackShadow_) &&
+            bgfx::isValid(targets_[0]) && bgfx::isValid(targets_[1]) && bgfx::isValid(targets_[2]) && bgfx::isValid(targets_[3]) &&
+            bgfx::isValid(readbacks_[0]) && bgfx::isValid(readbacks_[1]) && bgfx::isValid(readbacks_[2]) && bgfx::isValid(readbacks_[3]);
     }
 
-    [[nodiscard]] std::array<std::vector<std::uint8_t>, 3U> Render(
+    [[nodiscard]] std::array<std::vector<std::uint8_t>, 4U> Render(
         bgfx::ProgramHandle program,
         bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle texture = BGFX_INVALID_HANDLE,
@@ -644,7 +692,7 @@ public:
         const std::array<float, 4U> materialParams{ 0.0F, 1.0F, normalScale, 0.5F };
         bgfx::setViewFrameBuffer(0, fb_);
         bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
-        bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x000000ffU, 1.0F, 0);
+        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ffU, 0.0F, 0);
         bgfx::setUniform(uCamera_, camera.data());
         bgfx::setUniform(uLightDirKind_, lightDirKind.data(), 4U);
         bgfx::setUniform(uLightParams_, lightParams.data());
@@ -655,22 +703,23 @@ public:
             bgfx::setTexture(6U, sampler, texture);
         }
         bgfx::setVertexBuffer(0, vbh_);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_GEQUAL);
         bgfx::submit(0, program);
         bgfx::frame();
 
-        std::array<std::vector<std::uint8_t>, 3U> pixels{
+        std::array<std::vector<std::uint8_t>, 4U> pixels{
+            std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
             std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
             std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
             std::vector<std::uint8_t>(64U * 64U * 4U, 0U),
         };
-        std::array<std::uint32_t, 3U> readyFrames{};
-        for (std::uint32_t index = 0; index < 3U; ++index) {
+        std::array<std::uint32_t, 4U> readyFrames{};
+        for (std::uint32_t index = 0; index < 4U; ++index) {
             bgfx::blit(static_cast<bgfx::ViewId>(1U + index), readbacks_[index], 0U, 0U, targets_[index], 0U, 0U, 64U, 64U);
             readyFrames[index] = bgfx::readTexture(readbacks_[index], pixels[index].data());
         }
         std::uint32_t frame = bgfx::frame();
-        const std::uint32_t readyFrame = (std::max)({ readyFrames[0], readyFrames[1], readyFrames[2] });
+        const std::uint32_t readyFrame = (std::max)({ readyFrames[0], readyFrames[1], readyFrames[2], readyFrames[3] });
         int guard = 0;
         while (frame < readyFrame && guard < 8) {
             frame = bgfx::frame();
@@ -679,7 +728,110 @@ public:
         return pixels;
     }
 
+    [[nodiscard]] ForwardRenderProbe Resolve(
+        bgfx::ProgramHandle program,
+        bool environmentEnabled,
+        bool directionalLightEnabled) {
+        std::array<float, 128U> lightDirKind{};
+        std::array<float, 128U> lightPositionRange{};
+        std::array<float, 128U> lightColorIntensity{};
+        std::array<float, 128U> lightSpot{};
+        std::array<float, 4U> lightParams{};
+        std::array<float, 4U> ambient{ 0.0F, 0.0F, 0.0F, 1.0F };
+        std::array<float, 4U> environmentZenith{ 0.0F, 0.0F, 0.0F, 1.0F };
+        std::array<float, 4U> environmentGround{ 0.0F, 0.0F, 0.0F, 1.0F };
+        std::array<float, 4U> environmentParams{};
+        if (environmentEnabled) {
+            ambient = { 1.0F, 1.0F, 1.0F, 1.0F };
+            environmentZenith = ambient;
+            environmentGround = ambient;
+            environmentParams = { 1.0F, 1.0F, 1.0F, 0.0F };
+        }
+        if (directionalLightEnabled) {
+            lightDirKind[2] = -1.0F;
+            lightColorIntensity[0] = 1.0F;
+            lightColorIntensity[1] = 1.0F;
+            lightColorIntensity[2] = 1.0F;
+            lightColorIntensity[3] = 4.0F;
+            lightParams[0] = 1.0F;
+        }
+
+        constexpr std::array<float, 16U> identity{
+            1.0F, 0.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F,
+            0.0F, 0.0F, 0.0F, 1.0F,
+        };
+        constexpr std::array<float, 16U> zeroMatrix{};
+        constexpr std::array<float, 4U> camera{ 0.0F, 0.0F, 2.0F, 0.0F };
+        constexpr std::array<float, 4U> zeroVector{};
+
+        bgfx::setViewFrameBuffer(0U, resolveFrameBuffer_);
+        bgfx::setViewRect(0U, 0U, 0U, 64U, 64U);
+        bgfx::setViewTransform(0U, identity.data(), identity.data());
+        bgfx::setViewClear(0U, BGFX_CLEAR_COLOR, 0x000000ffU);
+        bgfx::setUniform(deferredLightDirKind_, lightDirKind.data(), 32U);
+        bgfx::setUniform(deferredLightPositionRange_, lightPositionRange.data(), 32U);
+        bgfx::setUniform(deferredLightColorIntensity_, lightColorIntensity.data(), 32U);
+        bgfx::setUniform(deferredLightSpot_, lightSpot.data(), 32U);
+        bgfx::setUniform(deferredLightParams_, lightParams.data());
+        bgfx::setUniform(deferredAmbient_, ambient.data());
+        bgfx::setUniform(deferredEnvironmentZenith_, environmentZenith.data());
+        bgfx::setUniform(deferredEnvironmentGround_, environmentGround.data());
+        bgfx::setUniform(deferredEnvironmentParams_, environmentParams.data());
+        bgfx::setUniform(deferredCamera_, camera.data());
+        bgfx::setUniform(deferredInverseViewProjection_, identity.data());
+        bgfx::setUniform(deferredDepthParams_, zeroVector.data());
+        bgfx::setUniform(deferredShadowViewProjection_, zeroMatrix.data());
+        bgfx::setUniform(deferredShadowParams_, zeroVector.data());
+        bgfx::setTexture(0U, deferredAlbedoSampler_, targets_[0]);
+        bgfx::setTexture(1U, deferredNormalSampler_, targets_[1]);
+        bgfx::setTexture(2U, deferredMaterialSampler_, targets_[2]);
+        bgfx::setTexture(3U, deferredSurfaceSampler_, targets_[3]);
+        bgfx::setTexture(4U, deferredDepthSampler_, depth_);
+        bgfx::setTexture(5U, deferredShadowSampler_, fallbackShadow_);
+        bgfx::setVertexBuffer(0U, vbh_);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(0U, program);
+        bgfx::frame();
+
+        bgfx::blit(1U, resolveReadback_, 0U, 0U, resolveTarget_, 0U, 0U, 64U, 64U);
+        std::vector<std::uint8_t> pixels(64U * 64U * 4U, 0U);
+        const std::uint32_t readyFrame = bgfx::readTexture(resolveReadback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        int guard = 0;
+        while (frame < readyFrame && guard < 8) {
+            frame = bgfx::frame();
+            ++guard;
+        }
+        return ForwardRenderHarness::ProbeAt(pixels, 32U, 32U);
+    }
+
     void Shutdown() {
+        bgfx::destroy(fallbackShadow_);
+        bgfx::destroy(deferredShadowParams_);
+        bgfx::destroy(deferredShadowViewProjection_);
+        bgfx::destroy(deferredDepthParams_);
+        bgfx::destroy(deferredInverseViewProjection_);
+        bgfx::destroy(deferredCamera_);
+        bgfx::destroy(deferredEnvironmentParams_);
+        bgfx::destroy(deferredEnvironmentGround_);
+        bgfx::destroy(deferredEnvironmentZenith_);
+        bgfx::destroy(deferredAmbient_);
+        bgfx::destroy(deferredLightParams_);
+        bgfx::destroy(deferredLightSpot_);
+        bgfx::destroy(deferredLightColorIntensity_);
+        bgfx::destroy(deferredLightPositionRange_);
+        bgfx::destroy(deferredLightDirKind_);
+        bgfx::destroy(deferredShadowSampler_);
+        bgfx::destroy(deferredDepthSampler_);
+        bgfx::destroy(deferredSurfaceSampler_);
+        bgfx::destroy(deferredMaterialSampler_);
+        bgfx::destroy(deferredNormalSampler_);
+        bgfx::destroy(deferredAlbedoSampler_);
+        bgfx::destroy(resolveFrameBuffer_);
+        bgfx::destroy(resolveReadback_);
+        bgfx::destroy(resolveTarget_);
         bgfx::destroy(uDynamicParameter_);
         bgfx::destroy(uMaterialParams_);
         bgfx::destroy(uTime_);
@@ -687,6 +839,7 @@ public:
         bgfx::destroy(uLightDirKind_);
         bgfx::destroy(uCamera_);
         bgfx::destroy(fb_);
+        bgfx::destroy(depth_);
         for (bgfx::TextureHandle readback : readbacks_) {
             bgfx::destroy(readback);
         }
@@ -706,17 +859,44 @@ private:
 #endif
     bgfx::VertexLayout layout_{};
     bgfx::VertexBufferHandle vbh_ = BGFX_INVALID_HANDLE;
-    std::array<bgfx::TextureHandle, 3U> targets_{
+    std::array<bgfx::TextureHandle, 4U> targets_{
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
     };
-    std::array<bgfx::TextureHandle, 3U> readbacks_{
+    std::array<bgfx::TextureHandle, 4U> readbacks_{
+        bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
     };
     bgfx::FrameBufferHandle fb_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle resolveTarget_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle resolveReadback_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle resolveFrameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackShadow_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredAlbedoSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredNormalSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredMaterialSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredSurfaceSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredDepthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredShadowSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredLightDirKind_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredLightPositionRange_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredLightColorIntensity_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredLightSpot_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredLightParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredAmbient_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredEnvironmentZenith_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredEnvironmentGround_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredEnvironmentParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredCamera_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredInverseViewProjection_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredDepthParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredShadowViewProjection_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle deferredShadowParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uCamera_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uLightDirKind_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uLightParams_ = BGFX_INVALID_HANDLE;
@@ -737,6 +917,22 @@ private:
     const bgfx::ShaderHandle vsh = bgfx::createShader(bgfx::copy(vsBytes.data(), static_cast<std::uint32_t>(vsBytes.size())));
     const bgfx::ShaderHandle fsh = bgfx::createShader(bgfx::copy(fsBytes.data(), static_cast<std::uint32_t>(fsBytes.size())));
     if (!bgfx::isValid(vsh) || !bgfx::isValid(fsh)) {
+        return BGFX_INVALID_HANDLE;
+    }
+    return bgfx::createProgram(vsh, fsh, true);
+}
+
+[[nodiscard]] bgfx::ProgramHandle BuildProgram(
+    const std::vector<std::uint8_t>& vsBytes,
+    const std::vector<std::uint8_t>& fsBytes) {
+    if (vsBytes.empty() || fsBytes.empty()) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const bgfx::ShaderHandle vsh = bgfx::createShader(bgfx::copy(vsBytes.data(), static_cast<std::uint32_t>(vsBytes.size())));
+    const bgfx::ShaderHandle fsh = bgfx::createShader(bgfx::copy(fsBytes.data(), static_cast<std::uint32_t>(fsBytes.size())));
+    if (!bgfx::isValid(vsh) || !bgfx::isValid(fsh)) {
+        if (bgfx::isValid(vsh)) bgfx::destroy(vsh);
+        if (bgfx::isValid(fsh)) bgfx::destroy(fsh);
         return BGFX_INVALID_HANDLE;
     }
     return bgfx::createProgram(vsh, fsh, true);
@@ -856,16 +1052,28 @@ struct AcceptanceCookedMaterial {
         delta(lhs.a, rhs.a) <= tolerance;
 }
 
-[[nodiscard]] RenderMaterialGraphDocument MakeGBufferProofGraph(std::string_view colorHint) {
+[[nodiscard]] RenderMaterialGraphDocument MakeGBufferProofGraph(
+    std::string_view colorHint,
+    std::string_view shadingModel = "defaultLit",
+    std::string_view metallicHint = "0.75",
+    std::string_view roughnessHint = "0.25",
+    std::string_view emissiveHint = "0.80 0.10 0.05 1",
+    std::string_view specularHint = "0.65",
+    std::string_view normalHint = "0 1 0") {
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = std::string{ shadingModel };
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 80, .positionY = 80, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ colorHint } } });
-    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .positionX = 80, .positionY = 220, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" } });
-    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 340, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.75" } });
-    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 440, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .positionX = 80, .positionY = 220, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ normalHint } } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 340, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ metallicHint } } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 440, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ roughnessHint } } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 80, .positionY = 540, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ emissiveHint } } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 640, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ specularHint } } });
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 6U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "specular"));
     return graph;
 }
 
@@ -892,12 +1100,13 @@ void RunDeferredGBufferGraphGpuReadbackProofTest() {
     std::filesystem::create_directories(cacheDir, error);
 
     const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
-    Require(CookHarnessVertexShader(vsBin), "Deferred GBuffer graph proof vertex shader must cook");
+    Require(CookHarnessDepthVertexShader(vsBin, 0.5F), "Deferred GBuffer graph proof vertex shader must cook");
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     Require(!vsBytes.empty(), "Deferred GBuffer graph proof vertex shader bytes must be readable");
 
     RenderMaterialGraphShaderArtifact redArtifact = CookGBufferProofArtifact(MakeGBufferProofGraph("0.90 0.05 0.03 1"), 0xD620U, cacheDir / "red");
     RenderMaterialGraphShaderArtifact greenArtifact = CookGBufferProofArtifact(MakeGBufferProofGraph("0.04 0.85 0.08 1"), 0xD621U, cacheDir / "green");
+    RenderMaterialGraphShaderArtifact unlitArtifact = CookGBufferProofArtifact(MakeGBufferProofGraph("0.20 0.30 0.40 1", "unlit"), 0xD622U, cacheDir / "unlit");
 
     DeferredGBufferHarness harness;
     if (!harness.Initialize()) {
@@ -905,14 +1114,18 @@ void RunDeferredGBufferGraphGpuReadbackProofTest() {
     }
     const bgfx::ProgramHandle redProgram = BuildGraphProgram(vsBytes, redArtifact);
     const bgfx::ProgramHandle greenProgram = BuildGraphProgram(vsBytes, greenArtifact);
-    Require(bgfx::isValid(redProgram) && bgfx::isValid(greenProgram), "Deferred GBuffer graph proof programs must link");
+    const bgfx::ProgramHandle unlitProgram = BuildGraphProgram(vsBytes, unlitArtifact);
+    Require(bgfx::isValid(redProgram) && bgfx::isValid(greenProgram) && bgfx::isValid(unlitProgram), "Deferred GBuffer graph proof programs must link");
 
-    const std::array<std::vector<std::uint8_t>, 3U> redPixels = harness.Render(redProgram);
-    const std::array<std::vector<std::uint8_t>, 3U> greenPixels = harness.Render(greenProgram);
+    const std::array<std::vector<std::uint8_t>, 4U> redPixels = harness.Render(redProgram);
+    const std::array<std::vector<std::uint8_t>, 4U> greenPixels = harness.Render(greenProgram);
+    const std::array<std::vector<std::uint8_t>, 4U> unlitPixels = harness.Render(unlitProgram);
     const ForwardRenderProbe redAlbedo = ForwardRenderHarness::ProbeAt(redPixels[0], 32U, 32U);
     const ForwardRenderProbe greenAlbedo = ForwardRenderHarness::ProbeAt(greenPixels[0], 32U, 32U);
     const ForwardRenderProbe normal = ForwardRenderHarness::ProbeAt(redPixels[1], 32U, 32U);
     const ForwardRenderProbe material = ForwardRenderHarness::ProbeAt(redPixels[2], 32U, 32U);
+    const ForwardRenderProbe surface = ForwardRenderHarness::ProbeAt(redPixels[3], 32U, 32U);
+    const ForwardRenderProbe unlitMaterial = ForwardRenderHarness::ProbeAt(unlitPixels[2], 32U, 32U);
 
     Require(redAlbedo.r > redAlbedo.g + 100U && greenAlbedo.g > greenAlbedo.r + 100U,
         "Deferred GBuffer readback must show graph baseColor changing the albedo attachment");
@@ -920,9 +1133,106 @@ void RunDeferredGBufferGraphGpuReadbackProofTest() {
         "Deferred GBuffer readback must show graph normal output in the normal attachment");
     Require(material.r > 170U && material.r < 215U && material.g > 45U && material.g < 90U,
         "Deferred GBuffer readback must show graph metallic/roughness in the material attachment");
+    Require(material.a >= 1U && material.a <= 2U && unlitMaterial.a == 0U,
+        "P0.6: Deferred GBuffer readback must preserve stable DefaultLit and Unlit shading-model ids");
+    Require(surface.r > 180U && surface.g > 15U && surface.g < 40U && surface.b > 5U && surface.b < 25U &&
+            surface.a > 150U && surface.a < 180U,
+        "P0.6: Deferred GBuffer readback must preserve graph emissive RGB and explicit specular");
 
     bgfx::destroy(redProgram);
     bgfx::destroy(greenProgram);
+    bgfx::destroy(unlitProgram);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+void RunDeferredLightingSurfaceSemanticsGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_surface_semantics";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path geometryVsBin = cacheDir / "vs_graph_probe.bin";
+    const std::filesystem::path resolveVsBin = cacheDir / "vs_present.bin";
+    const std::filesystem::path resolveFsBin = cacheDir / "fs_deferred_lighting.bin";
+    Require(CookHarnessDepthVertexShader(geometryVsBin, 0.5F), "P0.6: deferred surface geometry vertex shader must cook");
+    Require(CookHarnessRendererShader("vs_present.sc", "vertex", resolveVsBin), "P0.6: deferred resolve vertex shader must cook");
+    Require(CookHarnessRendererShader("fs_deferred_lighting.sc", "fragment", resolveFsBin), "P0.6: production deferred lighting shader must cook");
+
+    const std::vector<std::uint8_t> geometryVsBytes = ReadAllBytes(geometryVsBin);
+    const std::vector<std::uint8_t> resolveVsBytes = ReadAllBytes(resolveVsBin);
+    const std::vector<std::uint8_t> resolveFsBytes = ReadAllBytes(resolveFsBin);
+    Require(!geometryVsBytes.empty() && !resolveVsBytes.empty() && !resolveFsBytes.empty(),
+        "P0.6: deferred surface GPU binaries must be readable");
+
+    const RenderMaterialGraphShaderArtifact defaultLitArtifact = CookGBufferProofArtifact(
+        MakeGBufferProofGraph("0.75 0.20 0.08 1", "defaultLit", "0", "0.8", "0 0 0 1", "0.5"),
+        0xD630U,
+        cacheDir / "default_lit");
+    const RenderMaterialGraphShaderArtifact unlitArtifact = CookGBufferProofArtifact(
+        MakeGBufferProofGraph("0.20 0.30 0.40 1", "unlit", "0", "0.8", "0.35 0.10 0.05 1", "0.5"),
+        0xD631U,
+        cacheDir / "unlit");
+    const RenderMaterialGraphShaderArtifact emissiveArtifact = CookGBufferProofArtifact(
+        MakeGBufferProofGraph("0 0 0 1", "defaultLit", "0", "0.8", "0.80 0.08 0.03 1", "0.5"),
+        0xD632U,
+        cacheDir / "emissive");
+    const RenderMaterialGraphShaderArtifact specularZeroArtifact = CookGBufferProofArtifact(
+        MakeGBufferProofGraph("0 0 0 1", "defaultLit", "0", "0.15", "0 0 0 1", "0", "0 0 1"),
+        0xD633U,
+        cacheDir / "specular_zero");
+    const RenderMaterialGraphShaderArtifact specularOneArtifact = CookGBufferProofArtifact(
+        MakeGBufferProofGraph("0 0 0 1", "defaultLit", "0", "0.15", "0 0 0 1", "1", "0 0 1"),
+        0xD634U,
+        cacheDir / "specular_one");
+
+    DeferredGBufferHarness harness;
+    if (!harness.Initialize()) {
+        Require(false, "P0.6: a real D3D11 device is required for deferred surface semantics proof");
+        return;
+    }
+
+    const bgfx::ProgramHandle resolveProgram = BuildProgram(resolveVsBytes, resolveFsBytes);
+    const bgfx::ProgramHandle defaultLitProgram = BuildGraphProgram(geometryVsBytes, defaultLitArtifact);
+    const bgfx::ProgramHandle unlitProgram = BuildGraphProgram(geometryVsBytes, unlitArtifact);
+    const bgfx::ProgramHandle emissiveProgram = BuildGraphProgram(geometryVsBytes, emissiveArtifact);
+    const bgfx::ProgramHandle specularZeroProgram = BuildGraphProgram(geometryVsBytes, specularZeroArtifact);
+    const bgfx::ProgramHandle specularOneProgram = BuildGraphProgram(geometryVsBytes, specularOneArtifact);
+    Require(bgfx::isValid(resolveProgram) && bgfx::isValid(defaultLitProgram) && bgfx::isValid(unlitProgram) &&
+            bgfx::isValid(emissiveProgram) && bgfx::isValid(specularZeroProgram) && bgfx::isValid(specularOneProgram),
+        "P0.6: GBuffer and production deferred resolve programs must link");
+
+    static_cast<void>(harness.Render(defaultLitProgram));
+    const ForwardRenderProbe defaultLit = harness.Resolve(resolveProgram, true, false);
+    Require(defaultLit.r > defaultLit.g + 30U && defaultLit.r > defaultLit.b + 30U && defaultLit.r > 35U,
+        "P0.6: DefaultLit deferred resolve must evaluate PBR base color");
+
+    static_cast<void>(harness.Render(unlitProgram));
+    const ForwardRenderProbe unlitWithoutLights = harness.Resolve(resolveProgram, false, false);
+    const ForwardRenderProbe unlitWithLights = harness.Resolve(resolveProgram, true, true);
+    Require(SimilarProbe(unlitWithoutLights, unlitWithLights, 3U),
+        "P0.6: Unlit deferred output must not change with PBR lights or environment");
+    Require(unlitWithoutLights.r > 120U && unlitWithoutLights.g > 80U && unlitWithoutLights.b > 80U,
+        "P0.6: Unlit deferred resolve must output base color plus emissive");
+
+    static_cast<void>(harness.Render(emissiveProgram));
+    const ForwardRenderProbe emissive = harness.Resolve(resolveProgram, false, false);
+    Require(emissive.r > emissive.g + 100U && emissive.r > emissive.b + 100U && emissive.r > 150U,
+        "P0.6: DefaultLit deferred resolve must add emissive after zero-light PBR");
+
+    static_cast<void>(harness.Render(specularZeroProgram));
+    const ForwardRenderProbe specularZero = harness.Resolve(resolveProgram, false, true);
+    static_cast<void>(harness.Render(specularOneProgram));
+    const ForwardRenderProbe specularOne = harness.Resolve(resolveProgram, false, true);
+    Require(specularOne.r > specularZero.r + 20U && specularOne.g > specularZero.g + 20U && specularOne.b > specularZero.b + 20U,
+        "P0.6: explicit graph specular must change the deferred BRDF instead of falling back to 0.5");
+
+    bgfx::destroy(specularOneProgram);
+    bgfx::destroy(specularZeroProgram);
+    bgfx::destroy(emissiveProgram);
+    bgfx::destroy(unlitProgram);
+    bgfx::destroy(defaultLitProgram);
+    bgfx::destroy(resolveProgram);
     harness.Shutdown();
     std::filesystem::remove_all(cacheDir, error);
 }
@@ -934,7 +1244,7 @@ void RunDeferredGBufferTextureNormalMapReadbackProofTest() {
     std::filesystem::create_directories(cacheDir, error);
 
     const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
-    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT87-GBuffer: Harness vertex shader must cook");
+    Require(CookHarnessDepthVertexShader(vsBin, 0.5F), "KBMAT-MAT87-GBuffer: Harness vertex shader must cook");
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     Require(!vsBytes.empty(), "KBMAT-MAT87-GBuffer: Harness vertex shader bytes must be readable");
 
@@ -4380,6 +4690,7 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
 void RunGraphForwardGpuRenderTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunDeferredGBufferGraphGpuReadbackProofTest();
+    RunDeferredLightingSurfaceSemanticsGpuTest();
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
     RunForwardGraphRenderTest();
     RunForwardGraphNormalMapLightingTest();

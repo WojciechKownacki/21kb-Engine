@@ -1,5 +1,6 @@
 #include "renderer/RendererViewConfigurator.hpp"
 
+#include "kb/render/SceneGBufferContract.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 
@@ -60,6 +61,38 @@ void RendererViewConfigurator::ConfigureFramebufferClear(
     bgfx::setViewFrameBuffer(viewId, frameBuffer);
     bgfx::setViewTransform(viewId, identity.data(), identity.data());
     bgfx::setViewClear(viewId, clearFlags, rgba, depth, stencil);
+    bgfx::setViewRect(viewId, 0, 0, width, height);
+    bgfx::touch(viewId);
+}
+
+void RendererViewConfigurator::ConfigureGBufferClear(
+    bgfx::ViewId viewId,
+    bgfx::FrameBufferHandle frameBuffer,
+    RenderExtent extent,
+    float depth,
+    std::uint8_t stencil) {
+    constexpr std::array<std::uint8_t, kSceneGBufferColorAttachmentCount> paletteIndices{ 12U, 13U, 14U, 15U };
+    const std::array<float, 16> identity = RendererMatrixMath::Identity();
+    const std::uint16_t width = ClampToViewExtent(extent.width);
+    const std::uint16_t height = ClampToViewExtent(extent.height);
+
+    for (std::size_t index = 0U; index < kSceneGBufferClearColors.size(); ++index) {
+        const std::array<float, 4U> clear = kSceneGBufferClearColors[index].ToArray();
+        bgfx::setPaletteColor(paletteIndices[index], clear.data());
+    }
+
+    bgfx::setViewName(viewId, "KB GBuffer Geometry");
+    bgfx::setViewFrameBuffer(viewId, frameBuffer);
+    bgfx::setViewTransform(viewId, identity.data(), identity.data());
+    bgfx::setViewClear(
+        viewId,
+        BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+        depth,
+        stencil,
+        paletteIndices[0],
+        paletteIndices[1],
+        paletteIndices[2],
+        paletteIndices[3]);
     bgfx::setViewRect(viewId, 0, 0, width, height);
     bgfx::touch(viewId);
 }

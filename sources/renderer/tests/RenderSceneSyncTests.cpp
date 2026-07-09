@@ -895,6 +895,7 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     first.missingMeshBindingCount = 1U;
     first.unsupportedMeshVertexFormatCount = 2U;
     first.missingTextureBindingCount = 1U;
+    first.textureDimensionMismatchCount = 1U;
 
     SceneRenderSubmitStats second{};
     second.visibleMeshCount = 3U;
@@ -948,6 +949,7 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     second.shadowMapAllocationBytes = 1024ULL * 1024ULL * 4ULL;
     second.missingMaterialResourceCount = 1U;
     second.missingTextureResourceCount = 2U;
+    second.textureDimensionMismatchCount = 2U;
 
     first += second;
     Require(first.visibleMeshCount == 5U, "SceneRenderSubmitStats did not aggregate visible meshes");
@@ -1004,7 +1006,14 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     Require(first.missingMaterialResourceCount == 1U, "SceneRenderSubmitStats lost missing material resources");
     Require(first.missingTextureBindingCount == 1U, "SceneRenderSubmitStats lost missing texture bindings");
     Require(first.missingTextureResourceCount == 2U, "SceneRenderSubmitStats lost missing texture resources");
+    Require(first.textureDimensionMismatchCount == 3U, "SceneRenderSubmitStats lost texture dimension mismatches");
     Require(first.HasMissingResources(), "SceneRenderSubmitStats aggregate did not preserve missing-resource status");
+
+    SceneRenderSubmitStats dimensionMismatchOnly{};
+    Require(!dimensionMismatchOnly.HasMissingResources(), "Empty SceneRenderSubmitStats reported missing resources");
+    dimensionMismatchOnly.textureDimensionMismatchCount = 1U;
+    Require(dimensionMismatchOnly.HasMissingResources(),
+        "Texture dimension mismatch must mark SceneRenderSubmitStats as having a missing-compatible resource");
 }
 
 void RunRendererRuntimeResourceStatsExposeCacheRetentionPolicyTest() {

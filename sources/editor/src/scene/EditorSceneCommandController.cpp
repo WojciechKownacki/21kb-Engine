@@ -52,7 +52,7 @@ EditorSceneCommandController::EditorSceneCommandController(
     , hierarchyRowsDirty_(hierarchyRowsDirty) {}
 
 bool EditorSceneCommandController::Undo() {
-    if (!commandStack_.Undo()) {
+    if (!commandStack_.Undo(EditorCommandHistoryKey::Scene())) {
         console_.Warning("Edit", "Undo ignored.");
         return false;
     }
@@ -66,7 +66,7 @@ bool EditorSceneCommandController::Undo() {
 }
 
 bool EditorSceneCommandController::Redo() {
-    if (!commandStack_.Redo()) {
+    if (!commandStack_.Redo(EditorCommandHistoryKey::Scene())) {
         console_.Warning("Edit", "Redo ignored.");
         return false;
     }

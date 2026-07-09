@@ -9,6 +9,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
@@ -68,8 +70,6 @@ constexpr COLORREF TextMuted = RGB(174, 181, 191);
 constexpr COLORREF Field = RGB(13, 15, 22);
 constexpr COLORREF FieldBorder = RGB(0, 0, 0);
 constexpr COLORREF FieldFocus = RGB(92, 158, 245);
-constexpr COLORREF SliderFill = RGB(56, 115, 217);
-constexpr COLORREF SliderFillFocus = RGB(56, 115, 217);
 constexpr COLORREF LinkShadow = RGB(0, 0, 0);
 constexpr COLORREF LinkFallback = RGB(164, 176, 190);
 constexpr COLORREF Canvas = RGB(17, 18, 22);
@@ -1444,8 +1444,7 @@ void DrawGraphPin(
     POINT point,
     COLORREF color,
     float scale,
-    bool tinted = false,
-    MaterialEditorGraphPinDragState dragState = MaterialEditorGraphPinDragState::None) {
+    bool tinted = false) {
     static_cast<void>(tinted);
     const int r = std::max(4, ScaleMetric(kGraphNodePinRadius, scale));
     const Gdiplus::RectF outerRect{
@@ -1458,41 +1457,6 @@ void DrawGraphPin(
     Gdiplus::Pen edgePen(ToGdiplusColor(RGB(0, 0, 0), 154U), std::max<Gdiplus::REAL>(1.0F, scale));
     graphics.FillEllipse(&faceBrush, outerRect);
     graphics.DrawEllipse(&edgePen, outerRect);
-    if (dragState != MaterialEditorGraphPinDragState::None) {
-        const COLORREF ringColor = dragState == MaterialEditorGraphPinDragState::Compatible
-            ? RGB(92, 210, 126)
-            : (dragState == MaterialEditorGraphPinDragState::Incompatible ? RGB(231, 88, 88) : RGB(118, 174, 255));
-        Gdiplus::Pen ringPen(ToGdiplusColor(ringColor, dragState == MaterialEditorGraphPinDragState::Source ? 190U : 220U), std::max<Gdiplus::REAL>(2.0F, scale * 2.0F));
-        const float ringInset = std::max(1.0F, scale * 1.2F);
-        Gdiplus::RectF ringRect{
-            outerRect.X - ringInset,
-            outerRect.Y - ringInset,
-            outerRect.Width + (ringInset * 2.0F),
-            outerRect.Height + (ringInset * 2.0F),
-        };
-        graphics.DrawEllipse(&ringPen, ringRect);
-    }
-}
-
-[[nodiscard]] MaterialEditorGraphPinDragState GraphPinDragStateForNode(
-    const kb::render::RenderMaterialGraphDocument& graph,
-    const EditorSceneContext& sceneContext,
-    kb::assets::AssetId assetId,
-    const kb::render::RenderMaterialGraphNode& node,
-    std::string_view pin,
-    bool outputPin) noexcept {
-    if (!sceneContext.HasMaterialGraphPinConnection() ||
-        sceneContext.MaterialGraphPinConnectionAssetId() != assetId) {
-        return MaterialEditorGraphPinDragState::None;
-    }
-    return MaterialEditorPanelRenderer::GraphPinDragState(
-        graph,
-        sceneContext.MaterialGraphPinConnectionNodeId(),
-        sceneContext.MaterialGraphPinConnectionPin(),
-        sceneContext.MaterialGraphPinConnectionIsOutput(),
-        node.id,
-        pin,
-        outputPin);
 }
 
 [[nodiscard]] COLORREF GraphPinTypeColor(kb::render::RenderMaterialGraphPinType type) noexcept {
@@ -1905,12 +1869,11 @@ std::array<std::string, 4U> ConstantComponentTexts(
     return texts;
 }
 
-void DrawGraphValueSliderField(
+void DrawGraphNumericValueField(
     HDC dc,
     const RECT& fieldRect,
     const RECT& textRect,
     const char* text,
-    float value,
     bool editing,
     float scale) {
     const int radius = std::max(4, ScaleMetric(6, scale));
@@ -1923,12 +1886,6 @@ void DrawGraphValueSliderField(
         fieldRect.right - 1,
         fieldRect.bottom - 1,
     };
-    const float normalized = std::clamp(value, 0.0F, 1.0F);
-    const int fillWidth = static_cast<int>(std::round(static_cast<float>(std::max(0, static_cast<int>(fillBounds.right - fillBounds.left))) * normalized));
-    if (fillWidth > 0) {
-        const RECT fillRect{ fillBounds.left, fillBounds.top, fillBounds.left + fillWidth, fillBounds.bottom };
-        FillRoundedRect(dc, fillRect, editing ? MaterialGraphTheme::SliderFillFocus : MaterialGraphTheme::SliderFill, radius);
-    }
     GdiDrawing::FillRectAlpha(dc, RECT{ fillBounds.left + 2, fillBounds.top + 1, fillBounds.right - 2, fillBounds.top + std::max(2, ScaleMetric(3, scale)) }, RGB(255, 255, 255), 20);
     DrawGraphText(
         dc,
@@ -2072,7 +2029,7 @@ void DrawConstantVectorFields(
             ScaleMetric(kGraphPinFontSize, scale),
             FW_NORMAL,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        DrawGraphValueSliderField(
+        DrawGraphNumericValueField(
             dc,
             fieldRect,
             RECT{
@@ -2082,7 +2039,6 @@ void DrawConstantVectorFields(
                 fieldRect.bottom,
             },
             texts[index].c_str(),
-            value.numbers[index],
             editing,
             scale);
     }
@@ -2102,12 +2058,11 @@ void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMat
         ? std::string{ sceneContext.MaterialEditor().GraphConstantInlineEditBuffer() } + "|"
         : MaterialEditorPanelParameterValueText(value);
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar) {
-        DrawGraphValueSliderField(
+        DrawGraphNumericValueField(
             dc,
             valueRect,
             RECT{ valueRect.left + ScaleMetric(13, scale), valueRect.top, valueRect.right - ScaleMetric(10, scale), valueRect.bottom },
             valueText.c_str(),
-            value.numbers[0],
             editing,
             scale);
         return;
@@ -2303,6 +2258,8 @@ void DrawGraphNodeDirect(
     bool selected,
     const kb::render::RenderMaterialAssetData* material,
     const EditorSceneContext& sceneContext) {
+    static_cast<void>(graph);
+    static_cast<void>(assetId);
     const float scale = NodeUiScale(rect, node.kind);
     const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
     const int cornerDiameter = ScaleMetric(kGraphNodeCornerDiameter, scale);
@@ -2336,7 +2293,6 @@ void DrawGraphNodeDirect(
             POINT point{};
             COLORREF color = RGB(255, 255, 255);
             bool tinted = false;
-            MaterialEditorGraphPinDragState dragState = MaterialEditorGraphPinDragState::None;
         };
         std::vector<PinDrawCommand> pinDrawCommands;
 
@@ -2386,7 +2342,6 @@ void DrawGraphNodeDirect(
                     .point = scaledPin,
                     .color = GraphInputPinColor(node, inputPins[index].first),
                     .tinted = false,
-                    .dragState = GraphPinDragStateForNode(graph, sceneContext, assetId, node, inputPins[index].first, false),
                 });
                 const bool textureSample = MaterialEditorPanelIsTextureSamplePreviewNode(node.kind);
                 const RECT texturePreview = textureSample ? MaterialEditorPanelTextureSamplePreviewRect(rect) : RECT{};
@@ -2417,7 +2372,6 @@ void DrawGraphNodeDirect(
                 .point = output,
                 .color = GraphOutputPinColor(node, outputPins[index].first),
                 .tinted = GraphOutputPinTinted(node.kind, outputPins[index].first),
-                .dragState = GraphPinDragStateForNode(graph, sceneContext, assetId, node, outputPins[index].first, true),
             });
             RECT outputLabelRect{
                 rect.left + ScaleMetric(6, scale),
@@ -2458,11 +2412,15 @@ void DrawGraphNodeDirect(
             if (splitPinLabelLanes) {
                 outputLabelRect.left = std::max<LONG>(outputLabelRect.left, splitOutputLeft);
             }
-            if (outputLabelRect.right > outputLabelRect.left + ScaleMetric(10, scale)) {
+            const std::string outputLabel = outputPins[index].second;
+            const int minOutputLabelWidth = ScaleMetric(
+                static_cast<int>(outputLabel.size() * 6U) + 8,
+                scale);
+            if (outputLabelRect.right > outputLabelRect.left + minOutputLabelWidth) {
                 DrawGraphText(
                     dc,
                     outputLabelRect,
-                    std::string{ outputPins[index].second }.c_str(),
+                    outputLabel.c_str(),
                     GraphOutputPinLabelColor(node.kind, outputPins[index].first),
                     ScaleMetric(kGraphPinFontSize, scale),
                     FW_NORMAL,
@@ -2481,7 +2439,7 @@ void DrawGraphNodeDirect(
                 std::max(0, static_cast<int>(clip.right - clip.left)),
                 std::max(0, static_cast<int>(clip.bottom - clip.top))));
             for (const PinDrawCommand& command : pinDrawCommands) {
-                DrawGraphPin(pinGraphics, command.point, command.color, scale, command.tinted, command.dragState);
+                DrawGraphPin(pinGraphics, command.point, command.color, scale, command.tinted);
             }
         }
     }
@@ -2568,25 +2526,9 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
 
     const POINT anchor = GraphCanvasPointToPoint(*anchorPoint);
     const POINT cursor{ sceneContext.MaterialGraphPinConnectionX(), sceneContext.MaterialGraphPinConnectionY() };
-    COLORREF pendingColor = sceneContext.MaterialGraphPinConnectionIsOutput()
+    const COLORREF pendingColor = sceneContext.MaterialGraphPinConnectionIsOutput()
         ? GraphOutputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin())
         : GraphInputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin());
-    if (const std::optional<MaterialEditorGraphPinHit> hoverPin =
-            MaterialEditorPanelRenderer::GraphPinAt(content, graph, sceneContext, assetId, cursor.x, cursor.y)) {
-        const MaterialEditorGraphPinDragState hoverState = MaterialEditorPanelRenderer::GraphPinDragState(
-            graph,
-            sceneContext.MaterialGraphPinConnectionNodeId(),
-            sceneContext.MaterialGraphPinConnectionPin(),
-            sceneContext.MaterialGraphPinConnectionIsOutput(),
-            hoverPin->nodeId,
-            hoverPin->pin,
-            hoverPin->direction == MaterialEditorGraphPinDirection::Output);
-        if (hoverState == MaterialEditorGraphPinDragState::Compatible) {
-            pendingColor = RGB(92, 210, 126);
-        } else if (hoverState == MaterialEditorGraphPinDragState::Incompatible) {
-            pendingColor = RGB(231, 88, 88);
-        }
-    }
     HeroIconGdiplusRuntime::EnsureStarted();
     Gdiplus::Graphics pendingLinkGraphics(dc);
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
@@ -2732,6 +2674,374 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         GdiDrawing::FillRectColor(dc, RECT{ trackLeft, viewport.top, trackLeft + 3, viewport.bottom }, RGB(36, 41, 49));
         const int viewportHeight = std::max(1L, viewport.bottom - viewport.top);
         const int contentHeight = std::max(1, MaterialEditorGraphContextMenuScrollableContentHeight(sceneContext));
+        const int thumbHeight = std::max(28, viewportHeight * viewportHeight / contentHeight);
+        const int thumbTop = viewport.top + (viewportHeight - thumbHeight) * scrollOffset / std::max(1, maxScroll);
+        GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
+    }
+}
+
+constexpr int kMaterialGraphTexturePickerWidth = 720;
+constexpr int kMaterialGraphTexturePickerHeight = 560;
+constexpr int kMaterialGraphTexturePickerHeaderHeight = 34;
+constexpr int kMaterialGraphTexturePickerTileWidth = 158;
+constexpr int kMaterialGraphTexturePickerTileHeight = 150;
+constexpr int kMaterialGraphTexturePickerTileGap = 10;
+constexpr int kMaterialGraphTexturePickerColumns = 4;
+
+struct MaterialGraphTexturePickerRow {
+    kb::assets::AssetId assetId{};
+    std::string name;
+    std::string path;
+};
+
+[[nodiscard]] std::string MaterialGraphTexturePickerDisplayName(const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.name.empty()) {
+        return metadata.name;
+    }
+    if (!metadata.virtualPath.empty()) {
+        return metadata.virtualPath.stem().string();
+    }
+    return "Texture";
+}
+
+[[nodiscard]] std::string MaterialGraphTexturePickerDisplayPath(const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.virtualPath.empty()) {
+        return kb::assets::NormalizeAssetPath(metadata.virtualPath);
+    }
+    return metadata.physicalPath.string();
+}
+
+[[nodiscard]] std::string MaterialGraphTexturePickerLower(std::string text) {
+    std::ranges::transform(text, text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text;
+}
+
+[[nodiscard]] bool MaterialGraphTexturePickerMatchesQuery(
+    const MaterialGraphTexturePickerRow& row,
+    std::string_view query) {
+    if (query.empty()) {
+        return true;
+    }
+    const std::string needle = MaterialGraphTexturePickerLower(std::string{ query });
+    const std::string haystack = MaterialGraphTexturePickerLower(row.name + " " + row.path);
+    return haystack.find(needle) != std::string::npos;
+}
+
+[[nodiscard]] EditorTextureAssetPickerFilter MaterialGraphTexturePickerFilterForNodeKind(
+    kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
+        return EditorTextureAssetPickerFilter::TextureCube;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return EditorTextureAssetPickerFilter::TextureVolume;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return EditorTextureAssetPickerFilter::Texture2DArray;
+    default:
+        return EditorTextureAssetPickerFilter::Texture2D;
+    }
+}
+
+[[nodiscard]] EditorTextureAssetPickerFilter MaterialGraphTexturePickerFilterForOpenNode(
+    const EditorSceneContext& sceneContext) {
+    const std::optional<kb::render::RenderMaterialAssetData>& working = sceneContext.MaterialEditor().WorkingCopy();
+    if (!working.has_value()) {
+        return EditorTextureAssetPickerFilter::Texture2D;
+    }
+    const kb::render::RenderMaterialGraphNode* node =
+        kb::render::FindRenderMaterialGraphNode(working->graph, sceneContext.MaterialGraphTexturePickerNodeId());
+    return node == nullptr
+        ? EditorTextureAssetPickerFilter::Texture2D
+        : MaterialGraphTexturePickerFilterForNodeKind(node->kind);
+}
+
+[[nodiscard]] std::vector<MaterialGraphTexturePickerRow> MaterialGraphTexturePickerRows(
+    const EditorSceneContext& sceneContext) {
+    const EditorTextureAssetPickerFilter filter = MaterialGraphTexturePickerFilterForOpenNode(sceneContext);
+    std::vector<MaterialGraphTexturePickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (!EditorTextureAssetMatchesFilter(metadata, filter)) {
+            continue;
+        }
+        MaterialGraphTexturePickerRow row{
+            .assetId = metadata.id,
+            .name = MaterialGraphTexturePickerDisplayName(metadata),
+            .path = MaterialGraphTexturePickerDisplayPath(metadata),
+        };
+        if (!MaterialGraphTexturePickerMatchesQuery(row, sceneContext.MaterialGraphTexturePickerSearchQuery())) {
+            continue;
+        }
+        rows.push_back(std::move(row));
+    }
+    std::ranges::sort(rows, [](const MaterialGraphTexturePickerRow& lhs, const MaterialGraphTexturePickerRow& rhs) {
+        if (lhs.name != rhs.name) {
+            return lhs.name < rhs.name;
+        }
+        return lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerRect(const RECT& content) noexcept {
+    const RECT host{
+        content.left + 12,
+        content.top + kHeaderHeight + 12,
+        content.right - 12,
+        content.bottom - 12,
+    };
+    const int hostWidth = std::max(0, RectWidth(host));
+    const int hostHeight = std::max(0, RectHeight(host));
+    const int width = std::min(kMaterialGraphTexturePickerWidth, std::max(240, hostWidth));
+    const int height = std::min(kMaterialGraphTexturePickerHeight, std::max(220, hostHeight));
+    const int left = std::clamp(
+        host.left + (hostWidth - width) / 2,
+        host.left,
+        std::max(host.left, host.right - width));
+    const int top = std::clamp(
+        host.top + (hostHeight - height) / 2,
+        host.top,
+        std::max(host.top, host.bottom - height));
+    return RECT{ left, top, left + width, top + height };
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerSearchRect(const RECT& picker) noexcept {
+    return RECT{
+        picker.left + 10,
+        picker.top + 6,
+        picker.right - 184,
+        picker.top + 34,
+    };
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerAcceptRect(const RECT& picker) noexcept {
+    return RECT{
+        picker.right - 174,
+        picker.top + 6,
+        picker.right - 92,
+        picker.top + 34,
+    };
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerCancelRect(const RECT& picker) noexcept {
+    return RECT{
+        picker.right - 82,
+        picker.top + 6,
+        picker.right - 10,
+        picker.top + 34,
+    };
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerViewportRect(const RECT& picker) noexcept {
+    return RECT{
+        picker.left + 10,
+        picker.top + kMaterialGraphTexturePickerHeaderHeight + 10,
+        picker.right - 10,
+        picker.bottom - 10,
+    };
+}
+
+[[nodiscard]] int MaterialGraphTexturePickerContentHeight(std::size_t rowCount) noexcept {
+    if (rowCount == 0U) {
+        return 0;
+    }
+    return static_cast<int>(rowCount) * kMaterialGraphTexturePickerTileHeight +
+        static_cast<int>(rowCount - 1U) * kMaterialGraphTexturePickerTileGap;
+}
+
+[[nodiscard]] int MaterialGraphTexturePickerMaxScrollImpl(
+    const RECT& content,
+    const EditorSceneContext& sceneContext) {
+    if (!sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        return 0;
+    }
+    const std::vector<MaterialGraphTexturePickerRow> rows = MaterialGraphTexturePickerRows(sceneContext);
+    const std::size_t rowCount =
+        rows.empty()
+            ? 0U
+            : ((rows.size() + static_cast<std::size_t>(kMaterialGraphTexturePickerColumns) - 1U) /
+                  static_cast<std::size_t>(kMaterialGraphTexturePickerColumns));
+    const RECT viewport = MaterialGraphTexturePickerViewportRect(MaterialGraphTexturePickerRect(content));
+    return std::max(0, MaterialGraphTexturePickerContentHeight(rowCount) - RectHeight(viewport));
+}
+
+[[nodiscard]] RECT MaterialGraphTexturePickerTileRect(
+    const RECT& viewport,
+    std::size_t index,
+    int scrollOffset) noexcept {
+    const int column = static_cast<int>(index % static_cast<std::size_t>(kMaterialGraphTexturePickerColumns));
+    const int row = static_cast<int>(index / static_cast<std::size_t>(kMaterialGraphTexturePickerColumns));
+    const int x = viewport.left + column * (kMaterialGraphTexturePickerTileWidth + kMaterialGraphTexturePickerTileGap);
+    const int y = viewport.top + row * (kMaterialGraphTexturePickerTileHeight + kMaterialGraphTexturePickerTileGap) - scrollOffset;
+    return RECT{ x, y, x + kMaterialGraphTexturePickerTileWidth, y + kMaterialGraphTexturePickerTileHeight };
+}
+
+[[nodiscard]] MaterialEditorGraphTexturePickerHit MaterialGraphTexturePickerHitImpl(
+    const RECT& content,
+    const EditorSceneContext& sceneContext,
+    int x,
+    int y) {
+    if (!sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        return {};
+    }
+    const RECT picker = MaterialGraphTexturePickerRect(content);
+    if (!MaterialEditorPanelPointInRect(picker, x, y)) {
+        return MaterialEditorGraphTexturePickerHit{ .kind = MaterialEditorGraphTexturePickerHitKind::Backdrop };
+    }
+    if (MaterialEditorPanelPointInRect(MaterialGraphTexturePickerSearchRect(picker), x, y)) {
+        return MaterialEditorGraphTexturePickerHit{ .kind = MaterialEditorGraphTexturePickerHitKind::Search };
+    }
+    if (MaterialEditorPanelPointInRect(MaterialGraphTexturePickerAcceptRect(picker), x, y)) {
+        return MaterialEditorGraphTexturePickerHit{ .kind = MaterialEditorGraphTexturePickerHitKind::Accept };
+    }
+    if (MaterialEditorPanelPointInRect(MaterialGraphTexturePickerCancelRect(picker), x, y)) {
+        return MaterialEditorGraphTexturePickerHit{ .kind = MaterialEditorGraphTexturePickerHitKind::Cancel };
+    }
+
+    const RECT viewport = MaterialGraphTexturePickerViewportRect(picker);
+    if (!MaterialEditorPanelPointInRect(viewport, x, y)) {
+        return {};
+    }
+    const std::vector<MaterialGraphTexturePickerRow> rows = MaterialGraphTexturePickerRows(sceneContext);
+    const int scrollOffset = std::clamp(
+        sceneContext.MaterialGraphTexturePickerScrollOffset(),
+        0,
+        MaterialGraphTexturePickerMaxScrollImpl(content, sceneContext));
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        const RECT tile = MaterialGraphTexturePickerTileRect(viewport, index, scrollOffset);
+        if (MaterialEditorPanelPointInRect(tile, x, y)) {
+            return MaterialEditorGraphTexturePickerHit{
+                .kind = MaterialEditorGraphTexturePickerHitKind::Texture,
+                .assetId = rows[index].assetId,
+            };
+        }
+    }
+    return {};
+}
+
+void DrawMaterialGraphTexturePickerButton(HDC dc, const RECT& rect, const char* label, bool enabled) {
+    const COLORREF fill = enabled ? RGB(38, 43, 51) : RGB(30, 33, 38);
+    const COLORREF border = enabled ? RGB(83, 128, 165) : RGB(59, 65, 75);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+    DrawText(
+        dc,
+        RECT{ rect.left + 6, rect.top, rect.right - 6, rect.bottom },
+        label,
+        enabled ? RGB(236, 242, 249) : RGB(126, 135, 149),
+        10,
+        FW_SEMIBOLD,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+void DrawMaterialGraphTexturePickerTile(
+    HDC dc,
+    const RECT& tile,
+    const MaterialGraphTexturePickerRow& row,
+    bool selected,
+    const EditorSceneContext& sceneContext) {
+    FillRoundedRect(dc, tile, selected ? RGB(38, 73, 88) : RGB(19, 20, 24), 4);
+    StrokeRoundedRect(dc, tile, selected ? RGB(92, 176, 207) : RGB(0, 0, 0), 4, selected ? 2 : 1);
+
+    const RECT image{
+        tile.left + 6,
+        tile.top + 6,
+        tile.right - 6,
+        tile.top + 110,
+    };
+    GdiDrawing::DrawSharpFrame(dc, image, RGB(0, 0, 0), RGB(7, 8, 10));
+    DrawColorCheckerboard(dc, RECT{ image.left + 1, image.top + 1, image.right - 1, image.bottom - 1 }, 10);
+    if (const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(row.assetId);
+        metadata != nullptr) {
+        if (const EditorTexturePreviewImage* preview = EditorTexturePreviewService::PreviewFor(*metadata); preview != nullptr) {
+            EditorTexturePreviewService::DrawContain(dc, RECT{ image.left + 1, image.top + 1, image.right - 1, image.bottom - 1 }, *preview, false);
+        }
+    }
+
+    DrawText(
+        dc,
+        RECT{ tile.left + 8, image.bottom + 8, tile.right - 8, tile.bottom - 6 },
+        row.name.c_str(),
+        RGB(232, 238, 246),
+        10,
+        FW_SEMIBOLD,
+        DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawMaterialGraphTexturePickerOverlay(
+    HDC dc,
+    const RECT& content,
+    const EditorSceneContext& sceneContext) {
+    if (!sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        return;
+    }
+
+    const RECT body{ content.left, content.top + kHeaderHeight, content.right, content.bottom };
+    GdiDrawing::FillRectAlpha(dc, body, RGB(0, 0, 0), 72);
+
+    const RECT picker = MaterialGraphTexturePickerRect(content);
+    GdiDrawing::DrawSharpFrame(dc, picker, RGB(28, 31, 36), RGB(47, 52, 61));
+
+    const RECT search = MaterialGraphTexturePickerSearchRect(picker);
+    FillRoundedRect(dc, search, RGB(17, 20, 26), 4);
+    StrokeRoundedRect(dc, search, RGB(83, 128, 165), 4, 1);
+    std::string searchText{ sceneContext.MaterialGraphTexturePickerSearchQuery() };
+    searchText += "|";
+    DrawText(
+        dc,
+        RECT{ search.left + 10, search.top, search.right - 10, search.bottom },
+        searchText.c_str(),
+        RGB(236, 242, 249),
+        10,
+        FW_NORMAL);
+
+    const bool canAccept = sceneContext.MaterialGraphTexturePickerSelectedAssetId().IsValid();
+    DrawMaterialGraphTexturePickerButton(dc, MaterialGraphTexturePickerAcceptRect(picker), "Accept", canAccept);
+    DrawMaterialGraphTexturePickerButton(dc, MaterialGraphTexturePickerCancelRect(picker), "Cancel", true);
+
+    const RECT viewport = MaterialGraphTexturePickerViewportRect(picker);
+    const std::vector<MaterialGraphTexturePickerRow> rows = MaterialGraphTexturePickerRows(sceneContext);
+    const int maxScroll = MaterialGraphTexturePickerMaxScrollImpl(content, sceneContext);
+    const int scrollOffset = std::clamp(sceneContext.MaterialGraphTexturePickerScrollOffset(), 0, maxScroll);
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        const RECT tile = MaterialGraphTexturePickerTileRect(viewport, index, scrollOffset);
+        if (tile.bottom < viewport.top || tile.top > viewport.bottom) {
+            continue;
+        }
+        DrawMaterialGraphTexturePickerTile(
+            dc,
+            tile,
+            rows[index],
+            rows[index].assetId == sceneContext.MaterialGraphTexturePickerSelectedAssetId(),
+            sceneContext);
+    }
+    if (rows.empty()) {
+        DrawText(
+            dc,
+            viewport,
+            "No textures",
+            RGB(126, 135, 149),
+            11,
+            FW_NORMAL,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    RestoreDC(dc, savedDc);
+
+    if (maxScroll > 0) {
+        const int trackLeft = picker.right - 7;
+        GdiDrawing::FillRectColor(dc, RECT{ trackLeft, viewport.top, trackLeft + 3, viewport.bottom }, RGB(36, 41, 49));
+        const int viewportHeight = std::max(1, RectHeight(viewport));
+        const std::size_t rowCount =
+            rows.empty()
+                ? 0U
+                : ((rows.size() + static_cast<std::size_t>(kMaterialGraphTexturePickerColumns) - 1U) /
+                      static_cast<std::size_t>(kMaterialGraphTexturePickerColumns));
+        const int contentHeight = std::max(1, MaterialGraphTexturePickerContentHeight(rowCount));
         const int thumbHeight = std::max(28, viewportHeight * viewportHeight / contentHeight);
         const int thumbTop = viewport.top + (viewportHeight - thumbHeight) * scrollOffset / std::max(1, maxScroll);
         GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
@@ -3039,353 +3349,148 @@ void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const
     }
 }
 
-void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const MaterialEditorPanelDetailsRows& rows) {
-    if (RectWidth(layout.detailsPanel) < 220 || RectHeight(layout.detailsPanel) < 140) {
+void DrawDetailsPanel(
+    HDC dc,
+    const MaterialEditorPanelLayout& layout,
+    const MaterialEditorPanelDetailsRows& rows,
+    const MaterialEditorDetailsLayout& detailsLayout) {
+    if (!detailsLayout.visible) {
         return;
     }
 
     DrawGraphOverlay(dc, layout.detailsPanel, RGB(22, 25, 29), RGB(54, 61, 71));
     DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 8, layout.detailsPanel.right - 10, layout.detailsPanel.top + 30 }, rows.title.c_str(), RGB(235, 238, 243), 12, FW_SEMIBOLD);
+    FillRoundedRect(dc, detailsLayout.searchRect, rows.findFocused ? RGB(34, 45, 55) : RGB(30, 34, 40), 4);
+    StrokeRoundedRect(dc, detailsLayout.searchRect, rows.findFocused ? RGB(83, 128, 165) : RGB(62, 70, 82), 4);
+    const std::string searchText = rows.findQuery.empty() ? "Find in material" : rows.findQuery;
+    DrawText(dc, RECT{ detailsLayout.searchRect.left + 8, detailsLayout.searchRect.top, detailsLayout.searchRect.right - 8, detailsLayout.searchRect.bottom }, searchText.c_str(), rows.findQuery.empty() ? RGB(151, 162, 176) : RGB(232, 237, 243), 9, rows.findFocused ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
-    int y = layout.detailsPanel.top + 34;
-    const int rowHeight = 18;
-    const int bottom = layout.detailsPanel.bottom - 10;
-    {
-        const RECT searchRect{
-            layout.detailsPanel.left + 10,
-            y,
-            layout.detailsPanel.right - 10,
-            y + 24,
-        };
-        FillRoundedRect(dc, searchRect, rows.findFocused ? RGB(34, 45, 55) : RGB(30, 34, 40), 4);
-        StrokeRoundedRect(dc, searchRect, rows.findFocused ? RGB(83, 128, 165) : RGB(62, 70, 82), 4);
-        const std::string searchText = rows.findQuery.empty() ? "Find in material" : rows.findQuery;
-        DrawText(
-            dc,
-            RECT{ searchRect.left + 8, searchRect.top, searchRect.right - 8, searchRect.bottom },
-            searchText.c_str(),
-            rows.findQuery.empty() ? RGB(151, 162, 176) : RGB(232, 237, 243),
-            9,
-            rows.findFocused ? FW_SEMIBOLD : FW_NORMAL,
-            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-        y += 32;
-    }
-
-    if (!rows.instanceParentRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parent Chain", RGB(190, 169, 239), 10, FW_SEMIBOLD);
-        y += 22;
-        for (const MaterialEditorInstanceParentChainRow& row : rows.instanceParentRows) {
-            if (y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text = (row.current ? "* " : "  ") + row.label;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.current ? RGB(234, 225, 255) : RGB(201, 193, 222), 9, row.current ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
+    const auto sectionLabel = [](MaterialEditorDetailsSection section) noexcept {
+        switch (section) {
+        case MaterialEditorDetailsSection::ParentChain: return "Parent Chain";
+        case MaterialEditorDetailsSection::InstanceOverrides: return "Instance Overrides";
+        case MaterialEditorDetailsSection::StaticSwitches: return "Static Switches";
+        case MaterialEditorDetailsSection::LayerStack: return "Layer Stack";
+        case MaterialEditorDetailsSection::FindResults: return "Find";
+        case MaterialEditorDetailsSection::NodeProperties: return "Node Properties";
+        case MaterialEditorDetailsSection::MaterialDiff: return "Material Diff";
+        case MaterialEditorDetailsSection::DebugChannels: return "Debug Channels";
+        case MaterialEditorDetailsSection::Parameters: return "Parameters";
+        case MaterialEditorDetailsSection::TextureSlots: return "Texture Slots";
+        case MaterialEditorDetailsSection::MaterialStats: return "Material Stats";
+        case MaterialEditorDetailsSection::ShaderViewer: return "Shader Viewer";
         }
-        y += 6;
-    }
+        return "Details";
+    };
 
-    if (!rows.instanceOverrideGroupRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Instance Overrides", RGB(126, 201, 143), 10, FW_SEMIBOLD);
-        y += 22;
-        for (const MaterialEditorInstanceOverrideGroupRow& group : rows.instanceOverrideGroupRows) {
-            if (y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text =
-                std::string{ group.expanded ? "v " : "> " } +
-                MaterialEditorPanelParameterGroupName(group.group) + "  " +
-                std::to_string(group.activeOverrideCount) + "/" + std::to_string(group.totalParameterCount) + " overrides";
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(198, 222, 205), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, detailsLayout.viewport.left, detailsLayout.viewport.top, detailsLayout.viewport.right, detailsLayout.viewport.bottom);
+    for (const MaterialEditorDetailsLayoutItem& item : detailsLayout.items) {
+        if (RectWidth(item.clippedRect) <= 0 || RectHeight(item.clippedRect) <= 0) {
+            continue;
         }
-        y += 6;
-    }
-
-    if (!rows.instanceStaticSwitchRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Static Switches", RGB(231, 183, 118), 10, FW_SEMIBOLD);
-        y += 22;
-        for (const MaterialEditorInstanceStaticSwitchRow& row : rows.instanceStaticSwitchRows) {
-            if (y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text = row.displayName + " = " + row.value + (row.overrideActive ? " override" : " parent");
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.overrideActive ? RGB(245, 215, 174) : RGB(205, 194, 181), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
+        if (item.kind == MaterialEditorDetailsItemKind::SectionHeader) {
+            DrawText(dc, item.rect, sectionLabel(item.section), RGB(157, 198, 241), 10, FW_SEMIBOLD);
+            continue;
         }
-        y += 6;
-    }
 
-    if (!rows.layerTreeRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Layer Stack", RGB(157, 198, 241), 10, FW_SEMIBOLD);
-        y += 22;
-        for (const MaterialEditorLayerTreeRow& row : rows.layerTreeRows) {
-            if (y + rowHeight > bottom) {
-                break;
-            }
-            const std::string name = row.layerName.empty() ? ("Layer " + std::to_string(row.index + 1U)) : row.layerName;
-            const std::string text =
-                std::string{ row.enabled ? "[on] " : "[off] " } + name +
-                " L:" + std::to_string(row.layerFunctionAssetId) +
-                (row.index > 0U ? (" B:" + std::to_string(row.blendFunctionAssetId)) : std::string{}) +
-                " params " + std::to_string(row.layerParameterCount + row.blendParameterCount);
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.enabled ? RGB(205, 219, 238) : RGB(141, 151, 164), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-        }
-        y += 6;
-    }
-
-    if (!rows.findResults.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Find", RGB(180, 213, 154), 10, FW_SEMIBOLD);
-        y += 22;
-        std::size_t resultCount = 0U;
-        for (const MaterialEditorFindResult& result : rows.findResults) {
-            if (y + rowHeight > bottom || resultCount >= 5U) {
-                break;
-            }
-            const std::string text = result.label + "  " + result.detail;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(205, 226, 194), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++resultCount;
-        }
-        y += 6;
-    }
-
-    if (!rows.nodePropertyRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Node Properties", RGB(157, 198, 241), 10, FW_SEMIBOLD);
-        y += 22;
-        for (const MaterialEditorGraphNodeProperty& property : rows.nodePropertyRows) {
-            if (y + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight > bottom) {
-                break;
-            }
-            const RECT row{
-                layout.detailsPanel.left + 12,
-                y,
-                layout.detailsPanel.right - 12,
-                y + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight,
-            };
-            const RECT label{
-                row.left,
-                row.top,
-                row.left + std::min(122, std::max(72, RectWidth(row) / 2)),
-                row.bottom,
-            };
-            const RECT field{
-                label.right + 8,
-                row.top + 2,
-                row.right,
-                row.bottom - 2,
-            };
-            DrawText(dc, label, property.displayName.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-            FillRoundedRect(dc, field, RGB(31, 35, 41), 4);
-            StrokeRoundedRect(dc, field, RGB(67, 76, 91), 4);
-
-            std::string valueText = MaterialEditorPanelParameterValueText(property.value);
-            if (property.kind == MaterialEditorGraphNodePropertyKind::Enum) {
-                const auto selected = std::ranges::find_if(property.options, [&property](const MaterialEditorGraphNodePropertyOption& option) {
-                    return option.value == property.value.text;
-                });
-                if (selected != property.options.end()) {
-                    valueText = selected->label;
-                }
-            }
-            if (property.kind == MaterialEditorGraphNodePropertyKind::TextureAsset) {
-                valueText += "  Pick";
-            }
-
-            if (property.kind == MaterialEditorGraphNodePropertyKind::Numeric) {
-                float normalized = property.value.numbers[0];
-                if (property.range.has_value()) {
-                    const float span = std::max(0.0001F, property.range->max - property.range->min);
-                    normalized = (property.value.numbers[0] - property.range->min) / span;
-                }
-                normalized = std::clamp(normalized, 0.0F, 1.0F);
-                const RECT fill{
-                    field.left + 1,
-                    field.top + 1,
-                    field.left + 1 + static_cast<int>(std::round(static_cast<float>(std::max(0, RectWidth(field) - 2)) * normalized)),
-                    field.bottom - 1,
-                };
-                if (fill.right > fill.left) {
-                    FillRoundedRect(dc, fill, RGB(55, 107, 142), 4);
-                }
-            } else if (property.kind == MaterialEditorGraphNodePropertyKind::Color) {
-                const RECT swatch{
-                    field.left + 5,
-                    field.top + 4,
-                    field.left + 25,
-                    field.bottom - 4,
-                };
-                const COLORREF color = RGB(
-                    std::clamp(static_cast<int>(property.value.numbers[0] * 255.0F), 0, 255),
-                    std::clamp(static_cast<int>(property.value.numbers[1] * 255.0F), 0, 255),
-                    std::clamp(static_cast<int>(property.value.numbers[2] * 255.0F), 0, 255));
-                FillRoundedRect(dc, swatch, color, 4);
-                StrokeRoundedRect(dc, swatch, RGB(18, 18, 18), 4);
-            } else if (property.kind == MaterialEditorGraphNodePropertyKind::Enum) {
-                DrawText(dc, RECT{ field.right - 22, field.top, field.right - 5, field.bottom }, "v", RGB(160, 176, 194), 9, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            }
-
-            const int textLeft = property.kind == MaterialEditorGraphNodePropertyKind::Color ? field.left + 32 : field.left + 8;
-            DrawText(dc, RECT{ textLeft, field.top, field.right - 22, field.bottom }, valueText.c_str(), RGB(229, 232, 238), 9, FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-            y += MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight;
-
-            if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
-                for (const MaterialEditorGraphNodePropertyOption& option : property.options) {
-                    if (y + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight > bottom) {
-                        break;
-                    }
-                    const bool active = option.value == property.value.text;
-                    const RECT optionRow{
-                        layout.detailsPanel.left + 28,
-                        y,
-                        layout.detailsPanel.right - 18,
-                        y + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight,
-                    };
-                    FillRoundedRect(dc, optionRow, active ? RGB(48, 83, 109) : RGB(27, 31, 37), 4);
-                    DrawText(dc, RECT{ optionRow.left + 8, optionRow.top, optionRow.right - 8, optionRow.bottom }, option.label.c_str(), active ? RGB(239, 246, 252) : RGB(202, 211, 222), 9, active ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
-                    y += MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight;
-                }
-            }
-        }
-        y += 6;
-    }
-
-    if (!rows.materialDiffRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Material Diff", RGB(241, 185, 126), 10, FW_SEMIBOLD);
-        y += 22;
-        std::size_t diffCount = 0U;
-        for (const std::string& row : rows.materialDiffRows) {
-            if (y + rowHeight > bottom || diffCount >= 8U) {
-                break;
-            }
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(235, 215, 190), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++diffCount;
-        }
-        if (diffCount < rows.materialDiffRows.size() && y + rowHeight <= bottom) {
-            const std::string more = "+" + std::to_string(rows.materialDiffRows.size() - diffCount) + " more material changes";
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, more.c_str(), RGB(201, 178, 150), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-        }
-        y += 6;
-    }
-
-    if (!rows.debugChannelRows.empty()) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Debug Channels", RGB(239, 203, 127), 10, FW_SEMIBOLD);
-        y += 22;
-        std::size_t debugCount = 0U;
-        for (const MaterialDebugChannelRow& row : rows.debugChannelRows) {
-            if (y + rowHeight > bottom || debugCount >= 6U) {
-                break;
-            }
-            const std::string text = row.label + "  " + row.value;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(224, 218, 203), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++debugCount;
-        }
-        y += 6;
-    }
-
-    if (y + 20 <= bottom) {
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parameters", RGB(126, 201, 143), 10, FW_SEMIBOLD);
-        y += 22;
-    }
-    std::size_t parameterCount = 0U;
-    for (const std::string& row : rows.parameterRows) {
-        if (y + rowHeight > bottom || parameterCount >= 7U) {
+        std::string text;
+        COLORREF color = RGB(198, 205, 218);
+        int weight = FW_NORMAL;
+        switch (item.kind) {
+        case MaterialEditorDetailsItemKind::ParentRow: {
+            const MaterialEditorInstanceParentChainRow& row = rows.instanceParentRows[item.index];
+            text = (row.current ? "* " : "  ") + row.label;
+            color = row.current ? RGB(234, 225, 255) : RGB(201, 193, 222);
+            weight = row.current ? FW_SEMIBOLD : FW_NORMAL;
             break;
         }
-        DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-        y += rowHeight;
-        ++parameterCount;
-    }
-
-    if (y + 28 <= bottom) {
-        y += 6;
-        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Texture Slots", RGB(126, 181, 223), 10, FW_SEMIBOLD);
-        y += 22;
-    }
-    std::size_t slotCount = 0U;
-    for (const std::string& row : rows.textureSlotRows) {
-        if (y + rowHeight > bottom || slotCount >= 6U) {
+        case MaterialEditorDetailsItemKind::InstanceOverrideGroupRow: {
+            const MaterialEditorInstanceOverrideGroupRow& row = rows.instanceOverrideGroupRows[item.index];
+            text = std::string{ row.expanded ? "v " : "> " } + MaterialEditorPanelParameterGroupName(row.group) + "  " + std::to_string(row.activeOverrideCount) + "/" + std::to_string(row.totalParameterCount) + " overrides";
             break;
         }
-        DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-        y += rowHeight;
-        ++slotCount;
+        case MaterialEditorDetailsItemKind::StaticSwitchRow: {
+            const MaterialEditorInstanceStaticSwitchRow& row = rows.instanceStaticSwitchRows[item.index];
+            text = row.displayName + " = " + row.value + (row.overrideActive ? " override" : " parent");
+            break;
+        }
+        case MaterialEditorDetailsItemKind::LayerRow: {
+            const MaterialEditorLayerTreeRow& row = rows.layerTreeRows[item.index];
+            text = std::string{ row.enabled ? "[on] " : "[off] " } + (row.layerName.empty() ? ("Layer " + std::to_string(row.index + 1U)) : row.layerName);
+            break;
+        }
+        case MaterialEditorDetailsItemKind::FindResultRow:
+            text = rows.findResults[item.index].label + "  " + rows.findResults[item.index].detail;
+            break;
+        case MaterialEditorDetailsItemKind::NodePropertyRow: {
+            const MaterialEditorGraphNodeProperty& row = rows.nodePropertyRows[item.index];
+            text = row.displayName + " = " + MaterialEditorPanelParameterValueText(row.value);
+            if (row.kind == MaterialEditorGraphNodePropertyKind::TextureAsset) {
+                text += "  Pick";
+            }
+            break;
+        }
+        case MaterialEditorDetailsItemKind::NodePropertyOptionRow: {
+            const MaterialEditorGraphNodeProperty& property = rows.nodePropertyRows[item.index];
+            const MaterialEditorGraphNodePropertyOption& option = property.options[item.optionIndex];
+            const bool active = option.value == property.value.text;
+            FillRoundedRect(dc, item.rect, active ? RGB(48, 83, 109) : RGB(27, 31, 37), 4);
+            text = option.label;
+            color = active ? RGB(239, 246, 252) : RGB(202, 211, 222);
+            weight = active ? FW_SEMIBOLD : FW_NORMAL;
+            break;
+        }
+        case MaterialEditorDetailsItemKind::MaterialDiffRow:
+            text = rows.materialDiffRows[item.index];
+            color = RGB(235, 215, 190);
+            break;
+        case MaterialEditorDetailsItemKind::DebugChannelRow:
+            text = rows.debugChannelRows[item.index].label + "  " + rows.debugChannelRows[item.index].value;
+            break;
+        case MaterialEditorDetailsItemKind::ParameterRow:
+            text = rows.parameterRows[item.index];
+            break;
+        case MaterialEditorDetailsItemKind::TextureParameterRow:
+            text = rows.textureSlotRows[item.index];
+            break;
+        case MaterialEditorDetailsItemKind::MaterialStatsPassRow: {
+            const MaterialEditorMaterialStatsPassRow& row = rows.materialStats.passRows[item.index];
+            text = row.passName + (row.graphProgram ? " graph" : " builtin") + " inst " + std::to_string(row.instructionEstimate) + " tex " + std::to_string(row.textureSampleCount) + "/" + std::to_string(row.samplerCount);
+            break;
+        }
+        case MaterialEditorDetailsItemKind::MaterialStatsWarningRow:
+            text = "! " + rows.materialStats.warnings[item.index];
+            color = RGB(244, 187, 121);
+            break;
+        case MaterialEditorDetailsItemKind::ShaderSourceRow: {
+            const MaterialEditorShaderSourceView& row = rows.shaderViewer.sources[item.index];
+            text = row.passName + " " + row.stageName + " " + row.backendName;
+            break;
+        }
+        case MaterialEditorDetailsItemKind::ShaderReflectionRow: {
+            const MaterialEditorShaderReflectionRow& row = rows.shaderViewer.reflectionRows[item.index];
+            text = row.category + " " + row.name + (row.stableId.empty() ? "" : (" [" + row.stableId + "]"));
+            break;
+        }
+        case MaterialEditorDetailsItemKind::ShaderWarningRow:
+            text = "! " + rows.shaderViewer.warnings[item.index];
+            color = RGB(244, 187, 121);
+            break;
+        case MaterialEditorDetailsItemKind::SectionHeader:
+            break;
+        }
+        DrawText(dc, item.rect, text.c_str(), color, 9, weight, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     }
+    RestoreDC(dc, savedDc);
 
-    if (rows.materialStats.available || !rows.materialStats.warnings.empty()) {
-        if (y + 28 <= bottom) {
-            y += 6;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Material Stats", RGB(241, 208, 130), 10, FW_SEMIBOLD);
-            y += 22;
-        }
-        for (const MaterialEditorMaterialStatsPassRow& row : rows.materialStats.passRows) {
-            if (y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text =
-                row.passName + (row.graphProgram ? " graph" : " builtin") +
-                " inst " + std::to_string(row.instructionEstimate) +
-                " tex " + std::to_string(row.textureSampleCount) + "/" + std::to_string(row.samplerCount) +
-                " uni " + std::to_string(row.uniformCount) +
-                " var " + std::to_string(row.varyingCount) +
-                " variants " + std::to_string(row.staticVariantCount);
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(228, 215, 184), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-        }
-        std::size_t warningCount = 0U;
-        for (const std::string& warning : rows.materialStats.warnings) {
-            if (warningCount >= 3U || y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text = "! " + warning;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(244, 187, 121), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++warningCount;
-        }
-    }
-
-    if (rows.shaderViewer.available || !rows.shaderViewer.warnings.empty()) {
-        if (y + 28 <= bottom) {
-            y += 6;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Shader Viewer", RGB(177, 205, 246), 10, FW_SEMIBOLD);
-            y += 22;
-        }
-        std::size_t sourceCount = 0U;
-        for (const MaterialEditorShaderSourceView& source : rows.shaderViewer.sources) {
-            if (y + rowHeight > bottom || sourceCount >= 3U) {
-                break;
-            }
-            const std::string text =
-                source.passName + " " + source.stageName + " " + source.backendName +
-                " lines " + std::to_string(std::count(source.source.begin(), source.source.end(), '\n') + 1U);
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(204, 219, 241), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++sourceCount;
-        }
-        std::size_t reflectionCount = 0U;
-        for (const MaterialEditorShaderReflectionRow& row : rows.shaderViewer.reflectionRows) {
-            if (y + rowHeight > bottom || reflectionCount >= 4U) {
-                break;
-            }
-            const std::string text = row.category + " " + row.name + (row.stableId.empty() ? "" : (" [" + row.stableId + "]"));
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(192, 205, 225), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++reflectionCount;
-        }
-        std::size_t warningCount = 0U;
-        for (const std::string& warning : rows.shaderViewer.warnings) {
-            if (warningCount >= 2U || y + rowHeight > bottom) {
-                break;
-            }
-            const std::string text = "! " + warning;
-            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(244, 187, 121), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
-            y += rowHeight;
-            ++warningCount;
-        }
+    if (detailsLayout.maxScroll > 0) {
+        const int trackLeft = layout.detailsPanel.right - 7;
+        const int viewportHeight = std::max(1, RectHeight(detailsLayout.viewport));
+        const int thumbHeight = std::max(24, viewportHeight * viewportHeight / std::max(1, detailsLayout.contentHeight));
+        const int thumbTop = detailsLayout.viewport.top + (viewportHeight - thumbHeight) * detailsLayout.scrollOffset / std::max(1, detailsLayout.maxScroll);
+        GdiDrawing::FillRectColor(dc, RECT{ trackLeft, detailsLayout.viewport.top, trackLeft + 3, detailsLayout.viewport.bottom }, RGB(36, 41, 49));
+        GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
     }
 }
 
@@ -3410,42 +3515,35 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
-    if (sceneContext.MaterialEditor().InfoPanelVisible()) {
-        const std::vector<MaterialEditorGraphNodeProperty> nodeProperties =
-            metadata.type == "RenderMaterialInstance"
-                ? std::vector<MaterialEditorGraphNodeProperty>{}
-                : sceneContext.MaterialEditor().GraphNodeProperties(sceneContext.MaterialEditor().SelectedNodeId());
-        MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRows(
-            sceneContext.MaterialEditor().Parameters(),
-            sceneContext.MaterialEditor().SelectedNodeId(),
-            nodeProperties);
-        if (sceneContext.MaterialEditor().SelectedNodeId() != 0U) {
-            details.title = sceneContext.MaterialEditor().GraphNodeDisplayName(sceneContext.MaterialEditor().SelectedNodeId());
-        }
-        details.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
-        details.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
-        details.instanceStaticSwitchRows = sceneContext.MaterialEditor().InstanceStaticSwitchRows();
-        details.layerTreeRows = sceneContext.MaterialEditor().LayerTreeRows();
-        details.materialStats = sceneContext.MaterialEditor().MaterialStats();
-        details.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
-        details.findQuery = std::string{ sceneContext.MaterialEditor().FindQuery() };
-        details.findFocused = sceneContext.MaterialEditor().IsFindFocused();
-        details.findResults = sceneContext.MaterialEditor().FindResults();
-        details.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
-        if (metadata.type == "RenderMaterialInstance") {
-            details.title = "Material Instance Overrides";
-        }
-        if (document->material.has_value()) {
-            details.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(document->material->desc, metadata.id.value);
-        }
-        DrawDetailsPanel(
-            dc,
-            layout,
-            details);
+    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->material.has_value()) {
+        const MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRowsForDocument(
+            sceneContext,
+            *document->material,
+            metadata.type == "RenderMaterialInstance");
+        const MaterialEditorDetailsLayout detailsLayout = MaterialEditorPanelRenderer::ResolveDetailsLayout(
+            content,
+            details,
+            sceneContext.MaterialEditorDetailsScrollOffset());
+        DrawDetailsPanel(dc, layout, details, detailsLayout);
     }
+    DrawMaterialGraphTexturePickerOverlay(dc, content, sceneContext);
 }
 
 } // namespace
+
+int MaterialEditorPanelRenderer::GraphTexturePickerMaxScroll(
+    const RECT& content,
+    const EditorSceneContext& sceneContext) {
+    return MaterialGraphTexturePickerMaxScrollImpl(content, sceneContext);
+}
+
+MaterialEditorGraphTexturePickerHit MaterialEditorPanelRenderer::GraphTexturePickerHit(
+    const RECT& content,
+    const EditorSceneContext& sceneContext,
+    int x,
+    int y) {
+    return MaterialGraphTexturePickerHitImpl(content, sceneContext, x, y);
+}
 
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);

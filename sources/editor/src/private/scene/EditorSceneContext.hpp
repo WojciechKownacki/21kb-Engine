@@ -320,6 +320,9 @@ public:
     void ClearMaterialEditorFind();
     [[nodiscard]] bool FocusFirstMaterialEditorFindResult();
     [[nodiscard]] bool FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight);
+    [[nodiscard]] int MaterialEditorDetailsScrollOffset() const noexcept;
+    [[nodiscard]] bool SetMaterialEditorDetailsScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] bool ScrollMaterialEditorDetails(int wheelDelta, int maxOffset) noexcept;
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
     [[nodiscard]] bool SelectMaterialGraphUpstream();
@@ -447,6 +450,24 @@ public:
     [[nodiscard]] bool ClearMaterialGraphContextMenuHover() noexcept;
     [[nodiscard]] bool ToggleMaterialGraphContextMenuCategory(std::size_t categoryIndex) noexcept;
     [[nodiscard]] bool ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand command);
+    [[nodiscard]] bool OpenMaterialGraphTexturePicker(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        kb::assets::AssetId currentTexture) noexcept;
+    [[nodiscard]] bool CloseMaterialGraphTexturePicker() noexcept;
+    [[nodiscard]] bool IsMaterialGraphTexturePickerOpen() const noexcept;
+    [[nodiscard]] kb::assets::AssetId MaterialGraphTexturePickerAssetId() const noexcept;
+    [[nodiscard]] std::uint32_t MaterialGraphTexturePickerNodeId() const noexcept;
+    [[nodiscard]] kb::assets::AssetId MaterialGraphTexturePickerSelectedAssetId() const noexcept;
+    [[nodiscard]] bool SetMaterialGraphTexturePickerSelected(kb::assets::AssetId textureId) noexcept;
+    [[nodiscard]] std::string_view MaterialGraphTexturePickerSearchQuery() const noexcept;
+    void SetMaterialGraphTexturePickerSearchQuery(std::string query);
+    void AppendMaterialGraphTexturePickerSearchText(wchar_t character);
+    void BackspaceMaterialGraphTexturePickerSearch();
+    void ClearMaterialGraphTexturePickerSearch() noexcept;
+    [[nodiscard]] int MaterialGraphTexturePickerScrollOffset() const noexcept;
+    [[nodiscard]] bool SetMaterialGraphTexturePickerScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] bool ScrollMaterialGraphTexturePicker(int wheelDelta, int maxOffset) noexcept;
     [[nodiscard]] bool SetMaterialEditorGraphParameterValue(
         kb::assets::AssetId id,
         std::string_view stableId,
@@ -592,6 +613,10 @@ private:
     [[nodiscard]] bool ApplyPatchToMaterialEditorWorkingCopy(kb::assets::AssetId id, IEditorMaterialAssetPropertyEdit& edit);
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
     [[nodiscard]] bool CopyWorkingMaterialInstanceToSource(kb::assets::AssetId id);
+    [[nodiscard]] bool ValidateMaterialEditorAssetCandidate(
+        kb::assets::AssetId id,
+        const kb::render::RenderMaterialAssetData* materialCandidate,
+        const kb::render::RenderMaterialInstanceAssetData* instanceCandidate);
     void SyncMaterialEditorWorkingCopyRuntimePreview();
     void ClearMaterialEditorWorkingCopyRuntimePreview();
     // MAT-84: cook every graph-backed material referenced by scene meshes (even unopened ones) so
@@ -702,17 +727,9 @@ private:
     int materialGraphBoxSelectionCurrentY_ = 0;
     bool materialGraphBoxSelectionAdditive_ = false;
     bool materialGraphBoxSelecting_ = false;
-    kb::assets::AssetId materialGraphConstantSliderAssetId_{};
-    std::uint32_t materialGraphConstantSliderNodeId_ = 0U;
-    std::size_t materialGraphConstantSliderComponentIndex_ = 0U;
-    int materialGraphConstantSliderStartX_ = 0;
-    float materialGraphConstantSliderStartValue_ = 0.0F;
-    float materialGraphConstantSliderLastValue_ = 0.0F;
-    std::optional<kb::render::RenderMaterialAssetData> materialGraphConstantSliderStartDocument_;
-    std::uint32_t materialGraphConstantSliderStartSelectedNodeId_ = 0U;
-    bool materialGraphConstantSliderChanged_ = false;
     bool materialGraphConstantSliderDragging_ = false;
     bool materialGraphFocused_ = false;
+    int materialEditorDetailsScrollOffset_ = 0;
     int materialGraphPanStartX_ = 0;
     int materialGraphPanStartY_ = 0;
     int materialGraphPanStartOffsetX_ = 0;
@@ -741,6 +758,11 @@ private:
     std::string materialGraphContextMenuPinFilterPin_;
     bool materialGraphContextMenuPinFilterOutput_ = true;
     bool materialGraphContextMenuPinFilterActive_ = false;
+    kb::assets::AssetId materialGraphTexturePickerAssetId_{};
+    std::uint32_t materialGraphTexturePickerNodeId_ = 0U;
+    kb::assets::AssetId materialGraphTexturePickerSelectedTextureId_{};
+    std::string materialGraphTexturePickerSearchQuery_;
+    int materialGraphTexturePickerScrollOffset_ = 0;
     kb::assets::AssetId materialGraphWorkingCopyTransactionAssetId_{};
     std::string materialGraphWorkingCopyTransactionLabel_;
     std::optional<kb::render::RenderMaterialAssetData> materialGraphWorkingCopyTransactionBefore_;

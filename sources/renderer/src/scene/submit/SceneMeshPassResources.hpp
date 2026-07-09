@@ -64,6 +64,9 @@ public:
 
 private:
     [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
+    [[nodiscard]] bgfx::TextureHandle GraphFallbackTexture(
+        RenderTextureDimension dimension,
+        bool normal) const noexcept;
 
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
@@ -106,6 +109,12 @@ private:
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhiteCubeTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormalCubeTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhite3DTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormal3DTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhite2DArrayTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormal2DArrayTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

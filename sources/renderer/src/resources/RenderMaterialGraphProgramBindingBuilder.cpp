@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
 #include <sstream>
@@ -34,7 +35,6 @@ namespace {
 
 constexpr std::uint64_t kGraphProgramFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kGraphProgramFnvPrime = 1099511628211ULL;
-constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 4ULL;
 
 void HashByte(std::uint64_t& hash, std::uint8_t value) noexcept {
     hash ^= value;
@@ -48,19 +48,6 @@ void HashBool(std::uint64_t& hash, bool value) noexcept {
 void HashU32(std::uint64_t& hash, std::uint32_t value) noexcept {
     for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
         HashByte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
-    }
-}
-
-void HashU64(std::uint64_t& hash, std::uint64_t value) noexcept {
-    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
-        HashByte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
-    }
-}
-
-void HashString(std::uint64_t& hash, const std::string& value) noexcept {
-    HashU64(hash, static_cast<std::uint64_t>(value.size()));
-    for (const char ch : value) {
-        HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(ch)));
     }
 }
 
@@ -168,22 +155,7 @@ void HashString(std::uint64_t& hash, const std::string& value) noexcept {
 } // namespace
 
 std::uint64_t RenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept {
-    std::uint64_t hash = kGraphProgramFnvOffset;
-    HashU64(hash, shader.sourceHash);
-    HashU64(hash, kMaterialGraphShaderWrapperVersion);
-    HashByte(hash, static_cast<std::uint8_t>(shader.reflection.shadingModel));
-    HashByte(hash, static_cast<std::uint8_t>(shader.reflection.blendMode));
-    HashBool(hash, shader.reflection.hasWorldPositionOffset);
-    HashBool(hash, shader.reflection.hasCustomizedUv0);
-    HashBool(hash, shader.reflection.hasDisplacement);
-    HashBool(hash, shader.reflection.hasTangentOutput);
-    HashBool(hash, shader.reflection.usesSceneDepth);
-    HashBool(hash, shader.reflection.usesSceneColor);
-    HashU64(hash, static_cast<std::uint64_t>(shader.reflection.requiredVaryings.size()));
-    for (const std::string& varying : shader.reflection.requiredVaryings) {
-        HashString(hash, varying);
-    }
-    return hash;
+    return ComputeRenderMaterialGraphVariantKey(shader);
 }
 
 std::uint64_t RenderMaterialGraphPipelineStateKey(const RenderMaterialGraphShaderSource& shader) noexcept {

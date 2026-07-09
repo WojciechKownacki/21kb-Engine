@@ -504,6 +504,10 @@ bool EditorMaterialAssetEditCommand::AffectsOpenMaterialSource() const noexcept 
     return true;
 }
 
+EditorCommandHistoryKey EditorMaterialAssetEditCommand::HistoryKey() const noexcept {
+    return EditorCommandHistoryKey::MaterialAsset(materialId_.value);
+}
+
 bool EditorMaterialAssetEditCommand::Execute() {
     return Write(after_);
 }
@@ -561,6 +565,10 @@ bool EditorMaterialInstanceEditCommand::AffectsHierarchySelection() const noexce
 
 bool EditorMaterialInstanceEditCommand::AffectsOpenMaterialSource() const noexcept {
     return true;
+}
+
+EditorCommandHistoryKey EditorMaterialInstanceEditCommand::HistoryKey() const noexcept {
+    return EditorCommandHistoryKey::MaterialAsset(materialInstanceId_.value);
 }
 
 bool EditorMaterialInstanceEditCommand::Execute() {
@@ -660,6 +668,10 @@ bool EditorMaterialWorkingCopyEditCommand::AffectsSceneDocument() const noexcept
 
 bool EditorMaterialWorkingCopyEditCommand::AffectsHierarchySelection() const noexcept {
     return false;
+}
+
+EditorCommandHistoryKey EditorMaterialWorkingCopyEditCommand::HistoryKey() const noexcept {
+    return EditorCommandHistoryKey::MaterialAsset(materialId_.value);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Execute() {

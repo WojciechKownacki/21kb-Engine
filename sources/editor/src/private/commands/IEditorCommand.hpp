@@ -1,8 +1,36 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 namespace kb::editor {
+
+enum class EditorCommandHistoryKind : std::uint8_t {
+    Scene,
+    MaterialAsset,
+};
+
+struct EditorCommandHistoryKey {
+    EditorCommandHistoryKind kind = EditorCommandHistoryKind::Scene;
+    std::uint64_t documentId = 0U;
+
+    [[nodiscard]] static constexpr EditorCommandHistoryKey Scene() noexcept {
+        return {};
+    }
+
+    [[nodiscard]] static constexpr EditorCommandHistoryKey MaterialAsset(std::uint64_t assetId) noexcept {
+        return EditorCommandHistoryKey{
+            .kind = EditorCommandHistoryKind::MaterialAsset,
+            .documentId = assetId,
+        };
+    }
+
+    [[nodiscard]] constexpr bool IsMaterialAsset() const noexcept {
+        return kind == EditorCommandHistoryKind::MaterialAsset && documentId != 0U;
+    }
+
+    [[nodiscard]] constexpr bool operator==(const EditorCommandHistoryKey&) const noexcept = default;
+};
 
 class IEditorCommand {
 public:
@@ -17,6 +45,9 @@ public:
     }
     [[nodiscard]] virtual bool AffectsOpenMaterialSource() const noexcept {
         return false;
+    }
+    [[nodiscard]] virtual EditorCommandHistoryKey HistoryKey() const noexcept {
+        return EditorCommandHistoryKey::Scene();
     }
     [[nodiscard]] virtual bool Execute() = 0;
     [[nodiscard]] virtual bool Undo() = 0;

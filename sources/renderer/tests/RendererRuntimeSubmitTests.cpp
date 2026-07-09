@@ -994,6 +994,51 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(fastTrigResolved.desc.baseColor[3], 0.785814F), "KBMAT-RUNTIME: ArcTangent2Fast graph did not evaluate into Alpha");
 }
 
+[[nodiscard]] RenderMaterialAssetData MakeDimensionGraphMaterial(
+    RenderMaterialGraphNodeKind sampleKind,
+    std::string stableId,
+    std::uint64_t textureAssetId) {
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    RenderMaterialGraphNode sample = MakeGraphNode(2U, sampleKind, stableId);
+    sample.parameter.textureRole = "occlusion";
+    sample.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Linear;
+    material.graph.nodes.push_back(std::move(sample));
+    material.graph.links.push_back(MakeGraphLink(
+        sampleKind,
+        2U,
+        "a",
+        RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "alpha"));
+    material.graphParameterValues.push_back(MakeTextureGraphValue(std::move(stableId), textureAssetId));
+    return material;
+}
+
+void WriteDimensionTexture(
+    const std::filesystem::path& path,
+    RenderTextureDimension dimension,
+    std::uint16_t depth = 1U,
+    std::uint16_t layers = 1U) {
+    std::ofstream output{ path, std::ios::trunc };
+    output << "dimension ";
+    switch (dimension) {
+    case RenderTextureDimension::Texture2D: output << "2d\n"; break;
+    case RenderTextureDimension::TextureCube: output << "cube\n"; break;
+    case RenderTextureDimension::Texture3D: output << "3d\n"; break;
+    case RenderTextureDimension::Texture2DArray: output << "2dArray\n"; break;
+    }
+    output << "size 2 2\n";
+    if (dimension == RenderTextureDimension::Texture3D) {
+        output << "depth " << depth << "\n";
+    }
+    if (dimension == RenderTextureDimension::Texture2DArray) {
+        output << "layers " << layers << "\n";
+    }
+    output << "rgba8 32 96 224 255\n";
+}
+
 void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_missing_material_fallback";
     std::error_code error;
@@ -2189,6 +2234,197 @@ void RunRendererEnsuresGraphProgramTextureResourcesTest() {
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
+
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+void RunRendererPreservesGraphTextureDimensionsThroughProductionPipelineTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_texture_dimensions";
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph texture dimension test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+    WriteDimensionTexture(root / "cube.kbtex", RenderTextureDimension::TextureCube);
+    WriteDimensionTexture(root / "volume.kbtex", RenderTextureDimension::Texture3D, 3U);
+    WriteDimensionTexture(root / "array.kbtex", RenderTextureDimension::Texture2DArray, 1U, 3U);
+    WriteDimensionTexture(root / "flat.kbtex", RenderTextureDimension::Texture2D);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph texture dimension test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph texture dimension test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Graph texture dimension test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph texture dimension test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 5U, "Graph texture dimension test did not discover mesh and texture assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* cubeMetadata = manager.Registry().FindByPath("/Game/cube.kbtex");
+    const kb::assets::AssetMetadata* volumeMetadata = manager.Registry().FindByPath("/Game/volume.kbtex");
+    const kb::assets::AssetMetadata* arrayMetadata = manager.Registry().FindByPath("/Game/array.kbtex");
+    const kb::assets::AssetMetadata* flatMetadata = manager.Registry().FindByPath("/Game/flat.kbtex");
+    Require(meshMetadata != nullptr && cubeMetadata != nullptr && volumeMetadata != nullptr &&
+            arrayMetadata != nullptr && flatMetadata != nullptr,
+        "Graph texture dimension test could not resolve discovered asset metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+    const std::uint64_t cubeAssetId = cubeMetadata->id.value;
+    const std::uint64_t volumeAssetId = volumeMetadata->id.value;
+    const std::uint64_t arrayAssetId = arrayMetadata->id.value;
+    const std::uint64_t flatAssetId = flatMetadata->id.value;
+
+    struct MaterialCase {
+        const char* filename;
+        const char* virtualPath;
+        RenderMaterialGraphNodeKind sampleKind;
+        const char* stableId;
+        std::uint64_t textureAssetId;
+        RenderTextureDimension expectedDimension;
+        bool expectMismatch;
+        std::uint64_t materialAssetId = 0U;
+    };
+    std::array materialCases{
+        // The first stable id intentionally aliases a legacy PBR field. A Cube graph parameter
+        // must still remain graph-only instead of being mirrored into the sampler2D slot.
+        MaterialCase{ "cube_material.kbmat", "/Game/cube_material.kbmat", RenderMaterialGraphNodeKind::TextureSampleCube, "occlusionTexture", cubeAssetId, RenderTextureDimension::TextureCube, false },
+        MaterialCase{ "volume_material.kbmat", "/Game/volume_material.kbmat", RenderMaterialGraphNodeKind::TextureSampleVolume, "volumeTex", volumeAssetId, RenderTextureDimension::Texture3D, false },
+        MaterialCase{ "array_material.kbmat", "/Game/array_material.kbmat", RenderMaterialGraphNodeKind::TextureSample2DArray, "arrayTex", arrayAssetId, RenderTextureDimension::Texture2DArray, false },
+        MaterialCase{ "mismatch_material.kbmat", "/Game/mismatch_material.kbmat", RenderMaterialGraphNodeKind::TextureSampleCube, "mismatchCubeTex", flatAssetId, RenderTextureDimension::TextureCube, true },
+    };
+
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    std::uint64_t compileAssetId = 0xD140U;
+    for (const MaterialCase& materialCase : materialCases) {
+        const RenderMaterialAssetData material = MakeDimensionGraphMaterial(
+            materialCase.sampleKind,
+            materialCase.stableId,
+            materialCase.textureAssetId);
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+            material.graph,
+            RenderMaterialGraphBuildContext{ .assetId = compileAssetId++ });
+        if (!compiled.Succeeded()) {
+            std::cerr << "Graph texture dimension compile failed for " << materialCase.stableId << ':\n';
+            for (const RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
+                std::cerr << "  " << diagnostic.message << '\n';
+            }
+        }
+        Require(compiled.Succeeded() && compiled.shader.reflection.textures.size() == 1U &&
+                compiled.shader.reflection.textures[0].dimension == materialCase.expectedDimension,
+            "Graph texture dimension test graph did not compile with the expected sampler dimension");
+        RenderMaterialGraphShaderArtifactRequest request{};
+        request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+        request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+        request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+        request.cacheRoot = cacheRoot.generic_string();
+        request.pass = "BaseOpaque";
+        Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+            "Graph texture dimension test could not cook the production graph program");
+        Require(RenderMaterialAssetWriter::Save(root / materialCase.filename, material),
+            "Graph texture dimension test could not save material asset");
+    }
+
+    Require(manager.DiscoverMountedAssets() >= 9U, "Graph texture dimension test did not discover material assets");
+    for (MaterialCase& materialCase : materialCases) {
+        const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath(materialCase.virtualPath);
+        Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
+            "Graph texture dimension test discovered wrong material metadata");
+        materialCase.materialAssetId = materialMetadata->id.value;
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = materialCase.stableId,
+            .transform = TransformAt(static_cast<float>(materialCase.materialAssetId & 3U) * 0.2F, 0.0F, 0.0F),
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = meshAssetId,
+            .materialAssetId = materialCase.materialAssetId,
+        });
+    }
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Graph texture dimension test renderer did not initialize");
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 8U,
+            .maxVisibleInstances = 8U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+    Require(renderer.BeginFrame(), "Graph texture dimension test did not begin frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph texture dimension test did not submit scene");
+
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Graph texture dimension test could not inspect production resources");
+    for (const MaterialCase& materialCase : materialCases) {
+        const RenderMaterialResource* material = resources->FindMaterial(resourceMap->ResolveMaterial(materialCase.materialAssetId));
+        Require(material != nullptr && material->graphProgram.textures.size() == 1U,
+            "Graph texture dimension test did not build the graph material binding");
+        Require(material->occlusionTextureAssetId == 0U,
+            "Non-2D graph texture was incorrectly mirrored into the legacy sampler2D PBR slot");
+        const RenderMaterialGraphTextureBinding& binding = material->graphProgram.textures[0];
+        Require(binding.dimension == materialCase.expectedDimension,
+            "Graph texture dimension was lost before runtime binding");
+        const RenderTextureResource* texture = resources->FindTexture(
+            resourceMap->ResolveTexture(materialCase.textureAssetId, binding.colorSpace));
+        const RenderTextureDimension expectedResourceDimension = materialCase.expectMismatch
+            ? RenderTextureDimension::Texture2D
+            : materialCase.expectedDimension;
+        Require(texture != nullptr && texture->dimension == expectedResourceDimension,
+            "Production graph texture resource did not preserve its asset dimension");
+    }
+
+    // Re-check resources with the authored asset dimension, including depth/layer metadata.
+    const RenderTextureResource* cubeResource = resources->FindTexture(resourceMap->ResolveTexture(cubeAssetId, RenderTextureColorSpace::Linear));
+    const RenderTextureResource* volumeResource = resources->FindTexture(resourceMap->ResolveTexture(volumeAssetId, RenderTextureColorSpace::Linear));
+    const RenderTextureResource* arrayResource = resources->FindTexture(resourceMap->ResolveTexture(arrayAssetId, RenderTextureColorSpace::Linear));
+    const RenderTextureResource* flatResource = resources->FindTexture(resourceMap->ResolveTexture(flatAssetId, RenderTextureColorSpace::Linear));
+    Require(cubeResource != nullptr && cubeResource->dimension == RenderTextureDimension::TextureCube && cubeResource->layers == 1U,
+        "Production resource pipeline did not create a cube texture resource");
+    Require(volumeResource != nullptr && volumeResource->dimension == RenderTextureDimension::Texture3D && volumeResource->depth == 3U,
+        "Production resource pipeline did not create a 3D texture resource");
+    Require(arrayResource != nullptr && arrayResource->dimension == RenderTextureDimension::Texture2DArray && arrayResource->layers == 3U,
+        "Production resource pipeline did not create a 2D array texture resource");
+    Require(flatResource != nullptr && flatResource->dimension == RenderTextureDimension::Texture2D,
+        "Production resource pipeline changed the legacy 2D texture dimension");
+
+    Require(renderer.LastSceneSubmitStats().textureDimensionMismatchCount == 1U,
+        "Production submit must count exactly the authored 2D-to-Cube mismatch");
+    std::uint32_t mismatchDiagnosticCount = 0U;
+    for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
+        if (event.kind != SceneRenderDiagnosticKind::TextureDimensionMismatch) {
+            continue;
+        }
+        ++mismatchDiagnosticCount;
+        Require(event.textureAssetId == flatAssetId &&
+                event.expectedTextureDimension == RenderTextureDimension::TextureCube &&
+                event.actualTextureDimension == RenderTextureDimension::Texture2D &&
+                event.fallbackTextureDimension == RenderTextureDimension::TextureCube,
+            "Texture dimension mismatch diagnostic did not identify the asset, actual sampler type and Cube fallback");
+    }
+    Require(mismatchDiagnosticCount == 1U,
+        "Production submit must emit one deterministic texture dimension mismatch diagnostic");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+#endif
 
 void RunRendererRoutesGraphBlendModeToTransparentPassTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_blend_pass";
@@ -3664,6 +3900,7 @@ void RunRendererRuntimeSubmitTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest();
     RunRendererSceneRendersMultipleCookedGraphMaterialsTest();
+    RunRendererPreservesGraphTextureDimensionsThroughProductionPipelineTest();
 #endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunRendererEnsuresGraphProgramTextureResourcesTest();

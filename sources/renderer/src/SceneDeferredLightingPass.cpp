@@ -92,6 +92,7 @@ bool SceneDeferredLightingPass::Initialize() {
     albedoSampler_ = bgfx::createUniform("s_gbufferAlbedo", bgfx::UniformType::Sampler);
     normalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
     materialSampler_ = bgfx::createUniform("s_gbufferMaterial", bgfx::UniformType::Sampler);
+    surfaceSampler_ = bgfx::createUniform("s_gbufferSurface", bgfx::UniformType::Sampler);
     depthSampler_ = bgfx::createUniform("s_gbufferDepth", bgfx::UniformType::Sampler);
     lightDirKindUniform_ = bgfx::createUniform("u_deferredLightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightPositionRangeUniform_ = bgfx::createUniform("u_deferredLightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
@@ -116,6 +117,7 @@ bool SceneDeferredLightingPass::Initialize() {
                 << " albedoSampler=" << HandleValue(albedoSampler_)
                 << " normalSampler=" << HandleValue(normalSampler_)
                 << " materialSampler=" << HandleValue(materialSampler_)
+                << " surfaceSampler=" << HandleValue(surfaceSampler_)
                 << " depthSampler=" << HandleValue(depthSampler_)
                 << " renderer=" << static_cast<int>(bgfx::getRendererType());
         WriteRendererDebugLog("deferred_lighting", message.str());
@@ -137,6 +139,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
                 << " albedoSampler=" << HandleValue(albedoSampler_)
                 << " normalSampler=" << HandleValue(normalSampler_)
                 << " materialSampler=" << HandleValue(materialSampler_)
+                << " surfaceSampler=" << HandleValue(surfaceSampler_)
                 << " depthSampler=" << HandleValue(depthSampler_);
         WriteRendererDebugLog("deferred_lighting", message.str());
     }
@@ -208,6 +211,10 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
         bgfx::destroy(materialSampler_);
         materialSampler_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(surfaceSampler_)) {
+        bgfx::destroy(surfaceSampler_);
+        surfaceSampler_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(depthSampler_)) {
         bgfx::destroy(depthSampler_);
         depthSampler_ = BGFX_INVALID_HANDLE;
@@ -264,6 +271,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " albedoTex=" << HandleValue(desc.gbuffer->AlbedoTexture())
                 << " normalTex=" << HandleValue(desc.gbuffer->NormalTexture())
                 << " materialTex=" << HandleValue(desc.gbuffer->MaterialTexture())
+                << " surfaceTex=" << HandleValue(desc.gbuffer->SurfaceTexture())
                 << " depthTex=" << HandleValue(desc.gbuffer->DepthTexture())
                 << " program=" << HandleValue(program_)
                 << " clear=0x" << std::hex << desc.clearRgba << std::dec
@@ -360,6 +368,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " albedoTex=" << HandleValue(desc.gbuffer->AlbedoTexture())
                 << " normalTex=" << HandleValue(desc.gbuffer->NormalTexture())
                 << " materialTex=" << HandleValue(desc.gbuffer->MaterialTexture())
+                << " surfaceTex=" << HandleValue(desc.gbuffer->SurfaceTexture())
                 << " depthTex=" << HandleValue(desc.gbuffer->DepthTexture())
                 << " shadowValid=" << (shadowValid ? "true" : "false")
                 << " shadowTex=" << HandleValue(shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_)
@@ -370,8 +379,9 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(0U, albedoSampler_, desc.gbuffer->AlbedoTexture());
     bgfx::setTexture(1U, normalSampler_, desc.gbuffer->NormalTexture());
     bgfx::setTexture(2U, materialSampler_, desc.gbuffer->MaterialTexture());
-    bgfx::setTexture(3U, depthSampler_, desc.gbuffer->DepthTexture());
-    bgfx::setTexture(4U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    bgfx::setTexture(3U, surfaceSampler_, desc.gbuffer->SurfaceTexture());
+    bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
+    bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
@@ -390,7 +400,8 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
 
 bool SceneDeferredLightingPass::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && debugNormalPresentPass_.IsInitialized() && bgfx::isValid(albedoSampler_) &&
-        bgfx::isValid(normalSampler_) && bgfx::isValid(materialSampler_) && bgfx::isValid(depthSampler_) &&
+        bgfx::isValid(normalSampler_) && bgfx::isValid(materialSampler_) && bgfx::isValid(surfaceSampler_) &&
+        bgfx::isValid(depthSampler_) &&
         bgfx::isValid(lightDirKindUniform_) && bgfx::isValid(lightPositionRangeUniform_) &&
         bgfx::isValid(lightColorIntensityUniform_) && bgfx::isValid(lightSpotUniform_) &&
         bgfx::isValid(lightParamsUniform_) && bgfx::isValid(ambientColorUniform_) &&

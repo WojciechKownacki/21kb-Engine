@@ -24,6 +24,7 @@ enum class RenderTargetRole : std::uint8_t {
     GBufferAlbedo,
     GBufferNormal,
     GBufferMaterial,
+    GBufferSurface,
     GBufferDepth,
     SelectionMask,
     PostProcessColor,

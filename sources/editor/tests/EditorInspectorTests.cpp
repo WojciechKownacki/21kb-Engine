@@ -1626,6 +1626,166 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Normal") != std::string::npos && row.find("Linear") != std::string::npos; }), "Material Editor details should expose metadata-driven texture color policy");
 }
 
+void RunMaterialEditorDetailsCanonicalLayoutTest() {
+    const RECT content{ 0, 0, 960, 720 };
+    std::vector<kb::editor::MaterialEditorParameter> parameters;
+    for (std::size_t index = 0U; index < 10U; ++index) {
+        parameters.push_back(kb::editor::MaterialEditorParameter{
+            .stableId = "scalar." + std::to_string(index),
+            .type = kb::render::RenderMaterialParameterType::Scalar,
+            .displayName = "Scalar " + std::to_string(index),
+            .value = kb::editor::MaterialEditorParameterValue{
+                .kind = kb::editor::MaterialEditorParameterValueKind::Scalar,
+                .numbers = { static_cast<float>(index), 0.0F, 0.0F, 0.0F },
+            },
+        });
+    }
+    for (std::size_t index = 0U; index < 2U; ++index) {
+        parameters.push_back(kb::editor::MaterialEditorParameter{
+            .stableId = "texture." + std::to_string(index),
+            .type = kb::render::RenderMaterialParameterType::Texture,
+            .displayName = "Texture " + std::to_string(index),
+            .value = kb::editor::MaterialEditorParameterValue{
+                .kind = kb::editor::MaterialEditorParameterValueKind::TextureAsset,
+                .assetId = 100U + index,
+            },
+        });
+    }
+
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> nodeProperties{
+        kb::editor::MaterialEditorGraphNodeProperty{
+            .nodeId = 42U,
+            .stableId = "node.name",
+            .displayName = "Name",
+            .kind = kb::editor::MaterialEditorGraphNodePropertyKind::Text,
+            .value = kb::editor::MaterialEditorParameterValue{
+                .kind = kb::editor::MaterialEditorParameterValueKind::Enum,
+                .text = "Canonical",
+            },
+        },
+        kb::editor::MaterialEditorGraphNodeProperty{
+            .nodeId = 42U,
+            .stableId = "uvSet",
+            .displayName = "UV Set",
+            .kind = kb::editor::MaterialEditorGraphNodePropertyKind::Enum,
+            .type = kb::render::RenderMaterialParameterType::Enum,
+            .value = kb::editor::MaterialEditorParameterValue{
+                .kind = kb::editor::MaterialEditorParameterValueKind::Enum,
+                .text = "1",
+            },
+            .options = {
+                kb::editor::MaterialEditorGraphNodePropertyOption{ .value = "0", .label = "UV0" },
+                kb::editor::MaterialEditorGraphNodePropertyOption{ .value = "1", .label = "UV1" },
+                kb::editor::MaterialEditorGraphNodePropertyOption{ .value = "2", .label = "UV2" },
+            },
+            .dropdownOpen = true,
+        },
+    };
+
+    kb::editor::MaterialEditorPanelDetailsRows materialRows =
+        kb::editor::MaterialEditorPanelRenderer::DetailsRows(parameters, 42U, nodeProperties);
+    materialRows.layerTreeRows = {
+        kb::editor::MaterialEditorLayerTreeRow{ .nodeId = 42U, .index = 0U, .layerName = "Base" },
+        kb::editor::MaterialEditorLayerTreeRow{ .nodeId = 42U, .index = 1U, .layerName = "Coat" },
+    };
+    materialRows.findResults = {
+        kb::editor::MaterialEditorFindResult{ .label = "Node 42", .detail = "Canonical" },
+        kb::editor::MaterialEditorFindResult{ .kind = kb::editor::MaterialEditorFindResultKind::Parameter, .label = "Scalar 0", .detail = "scalar.0" },
+    };
+    materialRows.materialDiffRows.assign(10U, "changed property");
+    materialRows.debugChannelRows.assign(5U, kb::editor::MaterialDebugChannelRow{ .label = "Debug", .value = "Value" });
+    materialRows.materialStats.available = true;
+    materialRows.materialStats.passRows.push_back(kb::editor::MaterialEditorMaterialStatsPassRow{ .passName = "GBuffer", .graphProgram = true });
+    materialRows.materialStats.warnings.push_back("stats warning");
+    materialRows.shaderViewer.available = true;
+    materialRows.shaderViewer.sources.push_back(kb::editor::MaterialEditorShaderSourceView{ .passName = "GBuffer", .backendName = "dx11", .stageName = "fragment" });
+    materialRows.shaderViewer.reflectionRows.push_back(kb::editor::MaterialEditorShaderReflectionRow{ .category = "uniform", .name = "Tint", .stableId = "scalar.0" });
+
+    kb::editor::MaterialEditorPanelDetailsRows instanceRows =
+        kb::editor::MaterialEditorPanelRenderer::DetailsRows(parameters, 0U, {});
+    instanceRows.title = "Material Instance Overrides";
+    instanceRows.instanceParentRows = {
+        kb::editor::MaterialEditorInstanceParentChainRow{ .assetId = kb::assets::AssetId{ 1U }, .label = "Instance", .current = true },
+        kb::editor::MaterialEditorInstanceParentChainRow{ .assetId = kb::assets::AssetId{ 2U }, .label = "Parent" },
+    };
+    instanceRows.instanceOverrideGroupRows = {
+        kb::editor::MaterialEditorInstanceOverrideGroupRow{ .group = kb::editor::MaterialEditorParameterGroup::Core, .activeOverrideCount = 2U, .totalParameterCount = 10U },
+    };
+    instanceRows.instanceStaticSwitchRows = {
+        kb::editor::MaterialEditorInstanceStaticSwitchRow{ .nodeId = 7U, .stableId = "useCoat", .displayName = "Use Coat", .parentValue = "false", .value = "true", .overrideActive = true },
+    };
+    instanceRows.materialDiffRows.assign(12U, "instance override changed");
+
+    const auto rectEqual = [](const RECT& lhs, const RECT& rhs) noexcept {
+        return lhs.left == rhs.left && lhs.top == rhs.top && lhs.right == rhs.right && lhs.bottom == rhs.bottom;
+    };
+    const auto verifyRows = [&](const kb::editor::MaterialEditorPanelDetailsRows& rows, const char* label) {
+        const auto require = [label](bool condition, std::string_view suffix) {
+            const std::string message = std::string{ label } + " " + std::string{ suffix };
+            kb::editor::tests::Require(condition, message.c_str());
+        };
+        const kb::editor::MaterialEditorDetailsLayout first =
+            kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, rows, 0);
+        require(first.visible && first.maxScroll > 0, "Details layout should be visible and scrollable");
+        const std::array<int, 3U> offsets{ 0, first.maxScroll / 2, first.maxScroll };
+        for (const int offset : offsets) {
+            const kb::editor::MaterialEditorDetailsLayout layout =
+                kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, rows, offset);
+            const kb::editor::MaterialEditorDetailsHit searchHit = kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+                layout,
+                rows,
+                (layout.searchRect.left + layout.searchRect.right) / 2,
+                (layout.searchRect.top + layout.searchRect.bottom) / 2);
+            require(searchHit.kind == kb::editor::MaterialEditorDetailsHitKind::Search && rectEqual(searchHit.rect, layout.searchRect),
+                "search render rect must equal hit rect");
+
+            for (const kb::editor::MaterialEditorDetailsLayoutItem& item : layout.items) {
+                if (item.clippedRect.right <= item.clippedRect.left || item.clippedRect.bottom <= item.clippedRect.top) {
+                    continue;
+                }
+                const bool interactive =
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::FindResultRow ||
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyRow ||
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyOptionRow ||
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::ParameterRow ||
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::TextureParameterRow;
+                if (!interactive) {
+                    continue;
+                }
+                const kb::editor::MaterialEditorDetailsHit hit = kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+                    layout,
+                    rows,
+                    (item.clippedRect.left + item.clippedRect.right) / 2,
+                    (item.clippedRect.top + item.clippedRect.bottom) / 2);
+                require(hit.kind != kb::editor::MaterialEditorDetailsHitKind::Backdrop && rectEqual(hit.rect, item.clippedRect),
+                    "visible row render rect must equal hit rect");
+                if (item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyRow ||
+                    item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyOptionRow) {
+                    require(hit.nodeProperty.stableId == rows.nodePropertyRows[item.index].stableId,
+                        "node property hit must preserve stableId");
+                } else if (item.kind == kb::editor::MaterialEditorDetailsItemKind::ParameterRow) {
+                    require(hit.parameter.stableId == rows.parameterModels[item.index].stableId,
+                        "parameter hit must preserve stableId");
+                } else if (item.kind == kb::editor::MaterialEditorDetailsItemKind::TextureParameterRow) {
+                    require(hit.parameter.stableId == rows.textureSlotModels[item.index].stableId,
+                        "texture hit must preserve stableId");
+                }
+            }
+
+            const kb::editor::MaterialEditorDetailsHit backdrop = kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+                layout,
+                rows,
+                layout.panel.left + 3,
+                layout.viewport.top + 3);
+            require(backdrop.kind == kb::editor::MaterialEditorDetailsHitKind::Backdrop,
+                "opaque Details background must capture input instead of leaking to canvas");
+        }
+    };
+
+    verifyRows(materialRows, "Material");
+    verifyRows(instanceRows, "Material Instance");
+}
+
 void RunMaterialEditorParserDiagnosticRowsTest() {
     std::istringstream input{
         "version 1\n"
@@ -1807,6 +1967,7 @@ void RunEditorInspectorTests() {
     RunMaterialValueFormatterTest();
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();
+    RunMaterialEditorDetailsCanonicalLayoutTest();
     RunMaterialEditorParserDiagnosticRowsTest();
     RunMaterialEditorGraphDiagnosticsRefreshTest();
     RunMaterialEditorGraphNodeRenameTest();

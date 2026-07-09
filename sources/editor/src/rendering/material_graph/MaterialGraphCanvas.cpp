@@ -303,10 +303,41 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             continue;
         }
 
-        const float laneMax = std::max(1.0F, screenWidth * 0.24F);
-        const float pinLaneWidth = std::min(
-            laneMax,
-            std::max(std::max(14.0F, radius + 8.0F), 32.0F * zoom_));
+        const float center = screenWidth * 0.5F;
+        const float texturePinLaneMax = screenWidth * 0.24F;
+        const float texturePinLaneMin = std::min(72.0F * zoom_, texturePinLaneMax);
+        const float texturePinLaneWidth = node.texturePreview.enabled
+            ? std::clamp(screenWidth * 0.14F, texturePinLaneMin, texturePinLaneMax)
+            : 0.0F;
+        const bool outputUsesValueRows = node.outputsPerField ||
+            (node.inputs.empty() && !node.valueFields.empty() && node.outputs.size() == 1U) ||
+            (!node.valueFields.empty() && node.outputs.size() > 1U);
+        const auto hasInputOnRow = [&](float cy) noexcept {
+            for (std::size_t otherPin = 0U; otherPin < node.inputs.size(); ++otherPin) {
+                const MaterialGraphCanvasPoint otherWorld = PinCenterWorld(
+                    node,
+                    static_cast<std::uint32_t>(otherPin),
+                    false);
+                const float otherCy = (otherWorld.y - node.y) * zoom_;
+                if (std::abs(otherCy - cy) <= rowHalf) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto hasOutputOnRow = [&](float cy) noexcept {
+            for (std::size_t otherPin = 0U; otherPin < node.outputs.size(); ++otherPin) {
+                const MaterialGraphCanvasPoint otherWorld = PinCenterWorld(
+                    node,
+                    static_cast<std::uint32_t>(otherPin),
+                    true);
+                const float otherCy = (otherWorld.y - node.y) * zoom_;
+                if (std::abs(otherCy - cy) <= rowHalf) {
+                    return true;
+                }
+            }
+            return false;
+        };
         for (std::size_t pin = 0U; pin < node.inputs.size(); ++pin) {
             const MaterialGraphCanvasPoint pinWorld = PinCenterWorld(
                 node,
@@ -316,7 +347,8 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             if (std::abs(by - cy) > rowHalf) {
                 continue;
             }
-            if (bx <= pinLaneWidth) {
+            const bool outputOnRow = hasOutputOnRow(cy);
+            if (node.texturePreview.enabled ? bx <= texturePinLaneWidth : (!outputOnRow || bx <= center)) {
                 return MaterialGraphCanvasPinHit{
                     static_cast<std::uint32_t>(nodeIndex),
                     static_cast<std::uint32_t>(pin),
@@ -337,7 +369,9 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             if (std::abs(by - cy) > outputRowHalf) {
                 continue;
             }
-            if (bx >= screenWidth - pinLaneWidth) {
+            const bool inputOnRow = hasInputOnRow(cy);
+            const bool outputOnlyOwnsFullRow = !inputOnRow && !outputUsesValueRows;
+            if (node.texturePreview.enabled ? bx >= screenWidth - texturePinLaneWidth : (outputOnlyOwnsFullRow || bx >= center)) {
                 return MaterialGraphCanvasPinHit{
                     static_cast<std::uint32_t>(nodeIndex),
                     static_cast<std::uint32_t>(pin),

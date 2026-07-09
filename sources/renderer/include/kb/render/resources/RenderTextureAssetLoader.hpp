@@ -15,6 +15,10 @@ namespace kb::render {
 struct RenderTextureAssetData {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
+    std::uint16_t depth = 1;
+    std::uint16_t layers = 1;
+    std::uint8_t mipCount = 1;
+    RenderTextureDimension dimension = RenderTextureDimension::Texture2D;
     std::vector<std::uint8_t> rgba8;
 
     [[nodiscard]] RenderTextureDesc MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear) const noexcept;

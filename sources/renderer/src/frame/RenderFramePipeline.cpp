@@ -49,6 +49,11 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         .lifetime = RenderGraphResourceLifetime::Transient,
     }));
     static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::GBufferSurface,
+        .target = Target(RenderTargetRole::GBufferSurface, RenderTargetFormat::Rgba16F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
         .id = RenderGraphResource::GBufferDepth,
         .target = Target(RenderTargetRole::GBufferDepth, RenderTargetFormat::D32F, extent, true, true),
         .lifetime = RenderGraphResourceLifetime::Transient,
@@ -118,6 +123,7 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         pass.Writes(RenderGraphResource::GBufferAlbedo)
             .Writes(RenderGraphResource::GBufferNormal)
             .Writes(RenderGraphResource::GBufferMaterial)
+            .Writes(RenderGraphResource::GBufferSurface)
             .Writes(RenderGraphResource::GBufferDepth)
             .Writes(RenderGraphResource::SceneDepth);
         break;
@@ -125,6 +131,7 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         pass.Reads(RenderGraphResource::GBufferAlbedo)
             .Reads(RenderGraphResource::GBufferNormal)
             .Reads(RenderGraphResource::GBufferMaterial)
+            .Reads(RenderGraphResource::GBufferSurface)
             .Reads(RenderGraphResource::GBufferDepth)
             .Reads(RenderGraphResource::ShadowMap)
             .Writes(RenderGraphResource::SceneColor);

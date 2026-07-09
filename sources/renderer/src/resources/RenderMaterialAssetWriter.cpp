@@ -1,8 +1,8 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "RenderMaterialAtomicFileWriter.hpp"
 
 #include <array>
 #include <cstdint>
-#include <fstream>
 #include <iomanip>
 #include <ostream>
 #include <string_view>
@@ -694,40 +694,9 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 55>& PropertyWriters
 } // namespace
 
 bool RenderMaterialAssetWriter::Save(const std::filesystem::path& path, const RenderMaterialAssetData& asset) {
-    std::error_code error;
-    const std::filesystem::path parent = path.parent_path();
-    if (!parent.empty()) {
-        std::filesystem::create_directories(parent, error);
-        if (error) {
-            return false;
-        }
-    }
-
-    // Atomic save: write to a temp file, flush, then rename.
-    const std::filesystem::path tmpPath = path.string() + ".tmp";
-    {
-        std::ofstream output{ tmpPath, std::ios::trunc | std::ios::binary };
-        if (!output) {
-            return false;
-        }
+    return detail::WriteMaterialFileAtomically(path, [&asset](std::ostream& output) {
         Write(output, asset);
-        output.flush();
-        if (!output) {
-            return false;
-        }
-    }
-
-    std::filesystem::rename(tmpPath, path, error);
-    if (error) {
-        // Fallback: copy then remove tmp on Windows rename-across-volumes issues
-        error.clear();
-        std::filesystem::copy_file(tmpPath, path, std::filesystem::copy_options::overwrite_existing, error);
-        if (error) {
-            return false;
-        }
-        std::filesystem::remove(tmpPath, error);
-    }
-    return !error;
+    });
 }
 
 void RenderMaterialAssetWriter::Write(std::ostream& output, const RenderMaterialAssetData& asset) {

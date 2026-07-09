@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/SceneGBuffer.hpp"
+#include "kb/render/SceneGBufferContract.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/SceneRenderTargetFormat.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
@@ -74,6 +75,7 @@ void SceneGBufferFormatSelectionRequiresEveryAttachment() {
         .albedoFormat = bgfx::TextureFormat::BGRA8,
         .normalFormat = bgfx::TextureFormat::RGBA16F,
         .materialFormat = bgfx::TextureFormat::RGBA8,
+        .surfaceFormat = bgfx::TextureFormat::RGBA16F,
         .depth = SceneDepthFormatSelection{
             .format = bgfx::TextureFormat::D32F,
             .status = SceneTargetFormatSelectionStatus::Selected,
@@ -83,6 +85,16 @@ void SceneGBufferFormatSelectionRequiresEveryAttachment() {
     Require(selection.IsSupported(), "Complete GBuffer format selection should be supported");
     selection.materialFormat = bgfx::TextureFormat::Count;
     Require(!selection.IsSupported(), "GBuffer format selection accepted a missing material attachment");
+    selection.materialFormat = bgfx::TextureFormat::RGBA8;
+    selection.surfaceFormat = bgfx::TextureFormat::Count;
+    Require(!selection.IsSupported(), "P0.6: GBuffer format selection accepted a missing HDR surface attachment");
+
+    Require(kSceneGBufferColorAttachmentCount == 4U,
+        "P0.6: GBuffer contract must expose four color attachments");
+    Require(EncodeSceneGBufferShadingModel(SceneGBufferShadingModelId::Unlit) == 0.0F &&
+            EncodeSceneGBufferShadingModel(SceneGBufferShadingModelId::DefaultLit) > 0.0F &&
+            kSceneGBufferClearColors[3].alpha == 0.5F,
+        "P0.6: stable shading-model ids and neutral surface clear do not match the deferred shader contract");
 }
 
 void RenderTargetDescSupportsSceneFallbackFormats() {
