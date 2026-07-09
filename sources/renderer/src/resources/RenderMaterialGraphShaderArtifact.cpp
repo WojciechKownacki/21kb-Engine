@@ -1,37 +1,240 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/SceneGBufferContract.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <system_error>
+#include <unordered_set>
 
 namespace kb::render {
 namespace {
 
-constexpr std::uint64_t kMaterialGraphShaderWrapperVersion = 5ULL;
-
-void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
-    for (const char ch : value) {
-        hash ^= static_cast<unsigned char>(ch);
-        hash *= 1099511628211ULL;
+[[nodiscard]] constexpr SceneGBufferShadingModelId GBufferShadingModelId(RenderMaterialShadingModel model) noexcept {
+    switch (model) {
+    case RenderMaterialShadingModel::Unlit: return SceneGBufferShadingModelId::Unlit;
+    case RenderMaterialShadingModel::DefaultLit: return SceneGBufferShadingModelId::DefaultLit;
+    case RenderMaterialShadingModel::Subsurface: return SceneGBufferShadingModelId::Subsurface;
+    case RenderMaterialShadingModel::ClearCoat: return SceneGBufferShadingModelId::ClearCoat;
+    case RenderMaterialShadingModel::Cloth: return SceneGBufferShadingModelId::Cloth;
+    case RenderMaterialShadingModel::Hair: return SceneGBufferShadingModelId::Hair;
+    case RenderMaterialShadingModel::Eye: return SceneGBufferShadingModelId::Eye;
+    case RenderMaterialShadingModel::SingleLayerWater: return SceneGBufferShadingModelId::SingleLayerWater;
+    case RenderMaterialShadingModel::ThinTranslucent: return SceneGBufferShadingModelId::ThinTranslucent;
     }
+    return SceneGBufferShadingModelId::DefaultLit;
+}
+
+constexpr std::uint64_t kArtifactHashPrime = 1099511628211ULL;
+
+void HashByte(std::uint64_t& hash, std::uint8_t value) noexcept {
+    hash ^= value;
+    hash *= kArtifactHashPrime;
 }
 
 void HashU64(std::uint64_t& hash, std::uint64_t value) noexcept {
-    HashString64(hash, std::to_string(value));
+    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
+        HashByte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
 }
 
-[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
+    HashU64(hash, static_cast<std::uint64_t>(value.size()));
+    for (const char ch : value) {
+        HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(ch)));
+    }
+}
+
+void AddArtifactDiagnostic(
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
+    RenderMaterialGraphDiagnosticSeverity severity,
+    std::string message,
+    std::string pass = {},
+    std::string backend = {});
+
+[[nodiscard]] bool ReadTextFileStrict(const std::filesystem::path& path, std::string& text) {
     std::ifstream input{ path, std::ios::binary };
     if (!input) {
-        return {};
+        return false;
     }
     std::ostringstream buffer;
     buffer << input.rdbuf();
-    return buffer.str();
+    if (input.bad()) {
+        return false;
+    }
+    text = buffer.str();
+    return true;
+}
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::string text;
+    static_cast<void>(ReadTextFileStrict(path, text));
+    return text;
+}
+
+[[nodiscard]] std::vector<std::string> ShaderIncludeNames(std::string_view source) {
+    std::vector<std::string> names;
+    std::size_t lineBegin = 0U;
+    while (lineBegin < source.size()) {
+        const std::size_t lineEnd = source.find('\n', lineBegin);
+        std::string_view line = source.substr(
+            lineBegin,
+            lineEnd == std::string_view::npos ? source.size() - lineBegin : lineEnd - lineBegin);
+        const std::size_t first = line.find_first_not_of(" \t\r");
+        if (first != std::string_view::npos) {
+            line.remove_prefix(first);
+            if (line.front() == '#') {
+                line.remove_prefix(1U);
+                const std::size_t directiveBegin = line.find_first_not_of(" \t");
+                if (directiveBegin != std::string_view::npos) {
+                    line.remove_prefix(directiveBegin);
+                }
+                constexpr std::string_view directive = "include";
+                if (line.starts_with(directive) &&
+                    (line.size() == directive.size() || line[directive.size()] == ' ' || line[directive.size()] == '\t' ||
+                     line[directive.size()] == '"' || line[directive.size()] == '<')) {
+                    line.remove_prefix(directive.size());
+                    const std::size_t delimiter = line.find_first_of("\"<");
+                    if (delimiter != std::string_view::npos) {
+                        const char close = line[delimiter] == '"' ? '"' : '>';
+                        const std::size_t closeAt = line.find(close, delimiter + 1U);
+                        if (closeAt != std::string_view::npos && closeAt > delimiter + 1U) {
+                            names.emplace_back(line.substr(delimiter + 1U, closeAt - delimiter - 1U));
+                        }
+                    }
+                }
+            }
+        }
+        if (lineEnd == std::string_view::npos) {
+            break;
+        }
+        lineBegin = lineEnd + 1U;
+    }
+    return names;
+}
+
+struct ResolvedShaderDependency {
+    std::filesystem::path path;
+    std::string name;
+    std::string content;
+};
+
+[[nodiscard]] std::optional<std::filesystem::path> ResolveShaderInclude(
+    std::string_view name,
+    const std::filesystem::path& includingDirectory,
+    std::span<const std::string> includeDirs) {
+    std::error_code error;
+    if (!includingDirectory.empty()) {
+        std::filesystem::path candidate = (includingDirectory / std::filesystem::path{ name }).lexically_normal();
+        if (std::filesystem::is_regular_file(candidate, error)) {
+            return candidate;
+        }
+        error.clear();
+    }
+    for (const std::string& includeDir : includeDirs) {
+        std::filesystem::path candidate = (std::filesystem::path{ includeDir } / std::filesystem::path{ name }).lexically_normal();
+        if (std::filesystem::is_regular_file(candidate, error)) {
+            return candidate;
+        }
+        error.clear();
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool CollectShaderDependencies(
+    std::string_view wrapperSource,
+    const RenderMaterialGraphShaderArtifactRequest& request,
+    std::vector<ResolvedShaderDependency>& dependencies,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    std::unordered_set<std::string> visitedPaths;
+    const auto addDependency = [&](const std::filesystem::path& inputPath,
+                                   std::string logicalName,
+                                   const auto& self) -> bool {
+        std::error_code canonicalError;
+        std::filesystem::path path = std::filesystem::weakly_canonical(inputPath, canonicalError);
+        if (canonicalError) {
+            path = inputPath.lexically_normal();
+        }
+        std::string pathKey = path.generic_string();
+#if defined(_WIN32)
+        std::ranges::transform(pathKey, pathKey.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+#endif
+        if (!visitedPaths.insert(pathKey).second) {
+            return true;
+        }
+
+        std::string content;
+        if (!ReadTextFileStrict(path, content)) {
+            AddArtifactDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader dependency could not be read: " + path.generic_string() + ".");
+            return false;
+        }
+
+        dependencies.push_back(ResolvedShaderDependency{
+            .path = path,
+            .name = std::move(logicalName),
+            .content = std::move(content),
+        });
+        const std::string& dependencySource = dependencies.back().content;
+        for (const std::string& includeName : ShaderIncludeNames(dependencySource)) {
+            const std::optional<std::filesystem::path> included = ResolveShaderInclude(includeName, path.parent_path(), request.includeDirs);
+            if (!included.has_value()) {
+                AddArtifactDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph shader include dependency '" + includeName + "' could not be resolved.");
+                return false;
+            }
+            if (!self(*included, includeName, self)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (const std::string& dependencyFile : request.dependencyFiles) {
+        const std::filesystem::path path{ dependencyFile };
+        if (!addDependency(path, path.filename().generic_string(), addDependency)) {
+            return false;
+        }
+    }
+    if (!request.varyingDefPath.empty()) {
+        const std::filesystem::path varyingPath{ request.varyingDefPath };
+        if (!addDependency(varyingPath, varyingPath.filename().generic_string(), addDependency)) {
+            return false;
+        }
+    }
+    for (const std::string& includeName : ShaderIncludeNames(wrapperSource)) {
+        const std::optional<std::filesystem::path> included = ResolveShaderInclude(includeName, {}, request.includeDirs);
+        if (!included.has_value()) {
+            AddArtifactDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader include dependency '" + includeName + "' could not be resolved.");
+            return false;
+        }
+        if (!addDependency(*included, includeName, addDependency)) {
+            return false;
+        }
+    }
+
+    std::ranges::sort(dependencies, [](const ResolvedShaderDependency& lhs, const ResolvedShaderDependency& rhs) {
+        if (lhs.name != rhs.name) {
+            return lhs.name < rhs.name;
+        }
+        return lhs.path.generic_string() < rhs.path.generic_string();
+    });
+    return true;
 }
 
 [[nodiscard]] std::string QuotePath(const std::string& value) {
@@ -56,8 +259,8 @@ void AddArtifactDiagnostic(
     std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
     RenderMaterialGraphDiagnosticSeverity severity,
     std::string message,
-    std::string pass = {},
-    std::string backend = {}) {
+    std::string pass,
+    std::string backend) {
     diagnostics.push_back(RenderMaterialGraphDiagnostic{
         .severity = severity,
         .kind = RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
@@ -218,14 +421,35 @@ bool RenderMaterialGraphShaderArtifactResult::Succeeded() const noexcept {
 
 const RenderMaterialGraphShaderManifestEntry* RenderMaterialGraphShaderManifest::Find(
     std::uint64_t graphSourceHash,
+    std::uint64_t variantKey,
     std::string_view pass,
     RenderMaterialGraphShaderBackend backend) const noexcept {
     for (const RenderMaterialGraphShaderManifestEntry& entry : entries) {
-        if (entry.graphSourceHash == graphSourceHash && entry.pass == pass && entry.backend == backend) {
+        if (entry.graphSourceHash == graphSourceHash &&
+            entry.variantKey == variantKey &&
+            entry.pass == pass &&
+            entry.backend == backend) {
             return &entry;
         }
     }
     return nullptr;
+}
+
+const RenderMaterialGraphShaderManifestEntry* RenderMaterialGraphShaderManifest::Find(
+    std::uint64_t graphSourceHash,
+    std::string_view pass,
+    RenderMaterialGraphShaderBackend backend) const noexcept {
+    const RenderMaterialGraphShaderManifestEntry* match = nullptr;
+    for (const RenderMaterialGraphShaderManifestEntry& entry : entries) {
+        if (entry.graphSourceHash != graphSourceHash || entry.pass != pass || entry.backend != backend) {
+            continue;
+        }
+        if (match != nullptr && match->variantKey != entry.variantKey) {
+            return nullptr;
+        }
+        match = &entry;
+    }
+    return match;
 }
 
 std::string BuildGraphFragmentWrapperSource(
@@ -239,6 +463,9 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "#include <bgfx_shader.sh>\n";
     if (!shadowPass) {
         wrapper += "#include \"pbr_graph_forward.sh\"\n";
+    }
+    if (gbufferPass) {
+        wrapper += "#include \"gbuffer_contract.sh\"\n";
     }
     // MAT-72 frame time constants (x=time seconds, y=deltaTime, z=frameIndex). Bound per frame by
     // SceneMeshPassResources so graph Time/animation nodes read real engine time.
@@ -302,6 +529,7 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         }
         if (gbufferPass) {
+            const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
             AppendMaterialGraphTangentBasis(wrapper, shader);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
@@ -315,7 +543,8 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
             wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);\n";
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
-            wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), 1.0);\n";
+            wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
+            wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
             // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
             wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
@@ -434,19 +663,33 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
 
 std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraphReflection& reflection) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
+    HashU64(hash, reflection.uniforms.size());
     for (const RenderMaterialGraphReflectionUniform& uniform : reflection.uniforms) {
         HashString64(hash, uniform.name);
         HashString64(hash, uniform.stableId);
         HashU64(hash, static_cast<std::uint64_t>(uniform.kind));
+        HashU64(hash, static_cast<std::uint64_t>(uniform.source));
+        HashU64(hash, uniform.collectionAssetId);
+        HashString64(hash, uniform.collectionParameterStableId);
+        for (const float value : uniform.defaultValue) {
+            HashU64(hash, std::bit_cast<std::uint32_t>(value));
+        }
     }
+    HashU64(hash, reflection.textures.size());
     for (const RenderMaterialGraphReflectionTexture& texture : reflection.textures) {
         HashString64(hash, texture.samplerName);
         HashString64(hash, texture.stableId);
         HashString64(hash, texture.role);
         HashU64(hash, texture.slot);
         HashU64(hash, static_cast<std::uint64_t>(texture.colorSpace));
+        HashU64(hash, static_cast<std::uint64_t>(texture.samplerState.minFilter));
+        HashU64(hash, static_cast<std::uint64_t>(texture.samplerState.magFilter));
+        HashU64(hash, static_cast<std::uint64_t>(texture.samplerState.mipFilter));
+        HashU64(hash, static_cast<std::uint64_t>(texture.samplerState.wrapU));
+        HashU64(hash, static_cast<std::uint64_t>(texture.samplerState.wrapV));
         HashU64(hash, static_cast<std::uint64_t>(texture.dimension));
     }
+    HashU64(hash, reflection.requiredVaryings.size());
     for (const std::string& varying : reflection.requiredVaryings) {
         HashString64(hash, varying);
     }
@@ -460,6 +703,15 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, static_cast<std::uint64_t>(reflection.blendMode));
     HashU64(hash, reflection.usesSceneDepth ? 1U : 0U);
     HashU64(hash, reflection.usesSceneColor ? 1U : 0U);
+    return hash;
+}
+
+std::uint64_t ComputeRenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    HashU64(hash, shader.sourceHash);
+    HashU64(hash, kRenderMaterialGraphShaderWrapperVersion);
+    HashU64(hash, ComputeRenderMaterialGraphReflectionHash(shader.reflection));
+    HashString64(hash, shader.entryPoint);
     return hash;
 }
 
@@ -477,6 +729,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
 
     RenderMaterialGraphShaderArtifact artifact{};
     artifact.graphSourceHash = shader.sourceHash;
+    artifact.variantKey = ComputeRenderMaterialGraphVariantKey(shader);
     artifact.pass = request.pass;
     artifact.entryPoint = shader.entryPoint;
     artifact.graphGenerated = true;
@@ -489,25 +742,28 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
 
     // Dependency graph: the wrapper includes (e.g. the shared PBR library, varying definitions)
     // contribute to the artifact identity so editing them invalidates cooked binaries.
-    std::uint64_t dependencyHash = 1469598103934665603ULL;
-    std::vector<std::string> dependencyFiles = request.dependencyFiles;
-    if (!request.varyingDefPath.empty()) {
-        dependencyFiles.push_back(request.varyingDefPath);
+    std::vector<ResolvedShaderDependency> dependencies;
+    if (!CollectShaderDependencies(artifact.wrapperSource, request, dependencies, result.diagnostics)) {
+        return result;
     }
-    std::sort(dependencyFiles.begin(), dependencyFiles.end());
-    for (const std::string& dependencyFile : dependencyFiles) {
+    std::uint64_t dependencyHash = 1469598103934665603ULL;
+    HashU64(dependencyHash, dependencies.size());
+    for (const ResolvedShaderDependency& dependency : dependencies) {
         std::uint64_t contentHash = 1469598103934665603ULL;
-        HashString64(contentHash, ReadTextFile(std::filesystem::path{ dependencyFile }));
-        const std::string name = std::filesystem::path{ dependencyFile }.filename().generic_string();
-        HashString64(dependencyHash, name);
+        HashString64(contentHash, dependency.content);
+        HashString64(dependencyHash, dependency.name);
         HashU64(dependencyHash, contentHash);
-        artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{ .name = name, .contentHash = contentHash });
+        artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
+            .name = dependency.name,
+            .contentHash = contentHash,
+        });
     }
     artifact.dependencyHash = dependencyHash;
 
     std::uint64_t artifactHash = 1469598103934665603ULL;
     HashU64(artifactHash, artifact.graphSourceHash);
-    HashU64(artifactHash, kMaterialGraphShaderWrapperVersion);
+    HashU64(artifactHash, kRenderMaterialGraphShaderWrapperVersion);
+    HashU64(artifactHash, artifact.variantKey);
     HashU64(artifactHash, artifact.wrapperHash);
     HashU64(artifactHash, artifact.dependencyHash);
     HashU64(artifactHash, artifact.reflectionHash);
@@ -517,14 +773,16 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     // The per-binary cache key combines the wrapper, its dependencies and the material type version,
     // so any of those changing forces a recompile rather than serving a stale binary.
     std::uint64_t cookKey = 1469598103934665603ULL;
-    HashU64(cookKey, kMaterialGraphShaderWrapperVersion);
+    HashU64(cookKey, kRenderMaterialGraphShaderWrapperVersion);
     HashU64(cookKey, artifact.wrapperHash);
     HashU64(cookKey, artifact.dependencyHash);
     HashU64(cookKey, artifact.materialTypeVersion);
 
     std::error_code error;
     const std::filesystem::path passRoot = std::filesystem::path{ request.cacheRoot } /
-        ("graph_" + std::to_string(shader.sourceHash)) / request.pass;
+        ("graph_" + std::to_string(shader.sourceHash)) /
+        ("variant_" + std::to_string(artifact.variantKey)) /
+        request.pass;
     std::filesystem::create_directories(passRoot, error);
     const std::filesystem::path wrapperPath = passRoot / "fs_graph.sc";
     {
@@ -616,12 +874,12 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
 
     // MAT-67/#54: when the graph drives vertex-domain outputs, cook the generated vertex shader too so the
     // scene program pairs it with the graph fragment shader and moves geometry / rewrites UVs before
-    // rasterization (shadow depth keeps the fixed shadow VS for now, so this only applies to visible passes).
+    // rasterization. ShadowDepth uses the same generated vertex-domain contract for WPO/displacement.
     const bool hasVertexDomainOutput =
         shader.reflection.hasWorldPositionOffset ||
         shader.reflection.hasCustomizedUv0 ||
         shader.reflection.hasDisplacement;
-    if (hasVertexDomainOutput && request.pass != "ShadowDepth") {
+    if (hasVertexDomainOutput) {
         artifact.hasVertexShader = true;
         artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader);
         const std::filesystem::path vsWrapperPath = passRoot / "vs_graph.sc";
@@ -729,6 +987,7 @@ RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
         for (const RenderMaterialGraphShaderBinary& binary : artifact.binaries) {
             manifest.entries.push_back(RenderMaterialGraphShaderManifestEntry{
                 .graphSourceHash = artifact.graphSourceHash,
+                .variantKey = artifact.variantKey,
                 .wrapperHash = artifact.wrapperHash,
                 .reflectionHash = artifact.reflectionHash,
                 .dependencyHash = artifact.dependencyHash,
@@ -745,6 +1004,9 @@ RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
         if (lhs.graphSourceHash != rhs.graphSourceHash) {
             return lhs.graphSourceHash < rhs.graphSourceHash;
         }
+        if (lhs.variantKey != rhs.variantKey) {
+            return lhs.variantKey < rhs.variantKey;
+        }
         if (lhs.pass != rhs.pass) {
             return lhs.pass < rhs.pass;
         }
@@ -752,8 +1014,10 @@ RenderMaterialGraphShaderManifest BuildRenderMaterialGraphShaderManifest(
     });
 
     std::uint64_t manifestHash = 1469598103934665603ULL;
+    HashU64(manifestHash, manifest.entries.size());
     for (const RenderMaterialGraphShaderManifestEntry& entry : manifest.entries) {
         HashU64(manifestHash, entry.graphSourceHash);
+        HashU64(manifestHash, entry.variantKey);
         HashU64(manifestHash, entry.wrapperHash);
         HashU64(manifestHash, entry.reflectionHash);
         HashU64(manifestHash, entry.dependencyHash);
@@ -794,11 +1058,12 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphShaderMani
 }
 
 void WriteRenderMaterialGraphShaderManifest(std::ostream& output, const RenderMaterialGraphShaderManifest& manifest) {
-    output << "graphShaderManifest 1\n";
+    output << "graphShaderManifest 2\n";
     output << "manifestHash " << manifest.manifestHash << '\n';
     for (const RenderMaterialGraphShaderManifestEntry& entry : manifest.entries) {
         output << "graphArtifact "
             << entry.graphSourceHash << ' '
+            << entry.variantKey << ' '
             << RenderMaterialGraphShaderBackendName(entry.backend) << ' '
             << entry.wrapperHash << ' '
             << entry.reflectionHash << ' '
@@ -813,11 +1078,16 @@ void WriteRenderMaterialGraphShaderManifest(std::ostream& output, const RenderMa
 
 RenderMaterialGraphShaderManifest ParseRenderMaterialGraphShaderManifest(std::istream& input) {
     RenderMaterialGraphShaderManifest manifest{};
+    std::uint32_t version = 1U;
     std::string line;
     while (std::getline(input, line)) {
         std::istringstream stream{ line };
         std::string token;
         stream >> token;
+        if (token == "graphShaderManifest") {
+            stream >> version;
+            continue;
+        }
         if (token == "manifestHash") {
             stream >> manifest.manifestHash;
             continue;
@@ -829,7 +1099,11 @@ RenderMaterialGraphShaderManifest ParseRenderMaterialGraphShaderManifest(std::is
         std::string backendName;
         std::string pass;
         std::uint32_t graphGenerated = 1U;
-        stream >> entry.graphSourceHash >> backendName >> entry.wrapperHash >> entry.reflectionHash >>
+        stream >> entry.graphSourceHash;
+        if (version >= 2U) {
+            stream >> entry.variantKey;
+        }
+        stream >> backendName >> entry.wrapperHash >> entry.reflectionHash >>
             entry.dependencyHash >> entry.artifactHash >> entry.materialTypeVersion >> graphGenerated >> pass;
         entry.backend = ParseRenderMaterialGraphShaderBackend(backendName).value_or(RenderMaterialGraphShaderBackend::Spirv);
         entry.graphGenerated = graphGenerated != 0U;

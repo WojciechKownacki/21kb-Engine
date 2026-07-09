@@ -113,6 +113,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "missing texture binding";
     case render::SceneRenderDiagnosticKind::MissingTextureResource:
         return "missing texture resource";
+    case render::SceneRenderDiagnosticKind::TextureDimensionMismatch:
+        return "texture dimension mismatch";
     case render::SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath:
         return "unresolved material texture path";
     case render::SceneRenderDiagnosticKind::MissingMaterialAsset:
@@ -149,6 +151,14 @@ void EnsureParentChildClipping(HWND parent) noexcept {
     }
     if (event.materialAssetId != 0U) {
         detail += " materialAsset=" + std::to_string(event.materialAssetId);
+    }
+    if (event.textureAssetId != 0U) {
+        detail += " textureAsset=" + std::to_string(event.textureAssetId);
+    }
+    if (event.kind == render::SceneRenderDiagnosticKind::TextureDimensionMismatch) {
+        detail += " expected=" + std::string{ render::RenderTextureDimensionName(event.expectedTextureDimension) };
+        detail += " actual=" + std::string{ render::RenderTextureDimensionName(event.actualTextureDimension) };
+        detail += " fallback=" + std::string{ render::RenderTextureDimensionName(event.fallbackTextureDimension) };
     }
     if (event.instanceCount != 0U) {
         detail += " instances=" + std::to_string(event.instanceCount);

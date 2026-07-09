@@ -15,6 +15,7 @@
 #include "scene/EditorSceneMeshAssetActions.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,14 +26,24 @@ namespace kb::editor {
 namespace {
 
 constexpr wchar_t kMeshPickerClassName[] = L"KBEditorMeshAssetPickerDialog";
-constexpr int kDialogWidth = 480;
-constexpr int kDialogHeight = 420;
-constexpr int kHeaderHeight = 58;
+constexpr int kListDialogWidth = 480;
+constexpr int kListDialogHeight = 420;
+constexpr int kTextureDialogWidth = 720;
+constexpr int kTextureDialogHeight = 560;
+constexpr int kListHeaderHeight = 58;
 constexpr int kFooterHeight = 42;
 constexpr int kRowHeight = 48;
 constexpr int kPad = 14;
 constexpr int kCloseSize = 24;
 constexpr int kScrollbarWidth = 10;
+constexpr int kTextureHeaderHeight = 34;
+constexpr int kTextureTileWidth = 158;
+constexpr int kTextureTileHeight = 150;
+constexpr int kTextureTileGap = 10;
+constexpr int kTextureColumns = 4;
+constexpr int kTextureViewportHeight = kTextureDialogHeight - 62;
+constexpr int kTextureSearchHeight = 28;
+constexpr int kTextureButtonWidth = 82;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -67,6 +78,27 @@ struct AssetPickerResult {
 
 [[nodiscard]] RECT Rect(int left, int top, int right, int bottom) noexcept {
     return RECT{ left, top, right, bottom };
+}
+
+[[nodiscard]] int LerpChannel(int a, int b, int num, int den) noexcept {
+    return a + ((b - a) * num) / std::max(1, den);
+}
+
+[[nodiscard]] COLORREF BlendColor(COLORREF a, COLORREF b, int num, int den) noexcept {
+    return RGB(
+        LerpChannel(GetRValue(a), GetRValue(b), num, den),
+        LerpChannel(GetGValue(a), GetGValue(b), num, den),
+        LerpChannel(GetBValue(a), GetBValue(b), num, den));
+}
+
+void FillVerticalGradient(HDC dc, RECT rect, COLORREF top, COLORREF bottom) {
+    const int height = RectHeight(rect);
+    for (int y = 0; y < height; ++y) {
+        GdiDrawing::FillRectColor(
+            dc,
+            Rect(rect.left, rect.top + y, rect.right, rect.top + y + 1),
+            BlendColor(top, bottom, y, std::max(1, height - 1)));
+    }
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
@@ -164,16 +196,36 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return rows;
 }
 
-[[nodiscard]] RECT CenteredWindowRect(HWND owner) {
+[[nodiscard]] std::string LowerAscii(std::string text) {
+    std::ranges::transform(text, text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text;
+}
+
+[[nodiscard]] bool TextureRowMatchesQuery(const AssetPickerRow& row, const std::string& query) {
+    if (query.empty()) {
+        return true;
+    }
+    const std::string needle = LowerAscii(query);
+    return LowerAscii(row.name).find(needle) != std::string::npos ||
+        LowerAscii(row.path).find(needle) != std::string::npos;
+}
+
+[[nodiscard]] bool ValidAsset(kb::assets::AssetId assetId) noexcept {
+    return assetId.value != 0U;
+}
+
+[[nodiscard]] RECT CenteredWindowRect(HWND owner, int width, int height) {
     RECT base{};
     if (owner != nullptr && IsWindow(owner) != 0) {
         GetWindowRect(owner, &base);
     } else {
         base = RECT{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
     }
-    const int left = base.left + std::max(0, (RectWidth(base) - kDialogWidth) / 2);
-    const int top = base.top + std::max(0, (RectHeight(base) - kDialogHeight) / 2);
-    return Rect(left, top, left + kDialogWidth, top + kDialogHeight);
+    const int left = base.left + std::max(0, (RectWidth(base) - width) / 2);
+    const int top = base.top + std::max(0, (RectHeight(base) - height) / 2);
+    return Rect(left, top, left + width, top + height);
 }
 
 class AssetPickerWindow {
@@ -191,6 +243,7 @@ public:
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
+        , selectedTextureAsset_()
         , title_(std::move(title))
         , description_(std::move(description))
         , clearDescription_(std::move(clearDescription))
@@ -203,9 +256,9 @@ public:
         if (!EnsureWindow()) {
             return {};
         }
-        const RECT bounds = CenteredWindowRect(owner);
+        const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
         EnableOwner(false);
-        SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
+        SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
         SetForegroundWindow(window_);
 
         MSG message{};
@@ -214,11 +267,11 @@ public:
             DispatchMessageW(&message);
         }
 
-        EnableOwner(true);
         if (window_ != nullptr && IsWindow(window_) != 0) {
             DestroyWindow(window_);
             window_ = nullptr;
         }
+        RestoreOwnerFocus();
         return result_;
     }
 
@@ -235,14 +288,34 @@ private:
         if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
             return false;
         }
-        window_ = CreateWindowExW(WS_EX_TOOLWINDOW, kMeshPickerClassName, L"Select Asset", WS_POPUP, 0, 0, kDialogWidth, kDialogHeight, owner_, nullptr, windowClass.hInstance, this);
+        window_ = CreateWindowExW(WS_EX_TOOLWINDOW, kMeshPickerClassName, L"Select Asset", WS_POPUP, 0, 0, DialogWidth(), DialogHeight(), owner_, nullptr, windowClass.hInstance, this);
         return window_ != nullptr;
+    }
+
+    [[nodiscard]] int DialogWidth() const noexcept {
+        return textureThumbnails_ ? kTextureDialogWidth : kListDialogWidth;
+    }
+
+    [[nodiscard]] int DialogHeight() const noexcept {
+        return textureThumbnails_ ? kTextureDialogHeight : kListDialogHeight;
     }
 
     void EnableOwner(bool enabled) const noexcept {
         if (owner_ != nullptr && IsWindow(owner_) != 0) {
             EnableWindow(owner_, enabled ? TRUE : FALSE);
         }
+    }
+
+    void RestoreOwnerFocus() const noexcept {
+        if (owner_ == nullptr || IsWindow(owner_) == 0) {
+            return;
+        }
+        EnableWindow(owner_, TRUE);
+        ShowWindow(owner_, SW_SHOW);
+        BringWindowToTop(owner_);
+        SetActiveWindow(owner_);
+        SetForegroundWindow(owner_);
+        SetFocus(owner_);
     }
 
     [[nodiscard]] RECT Client() const noexcept {
@@ -258,7 +331,7 @@ private:
 
     [[nodiscard]] RECT ListRect() const noexcept {
         const RECT client = Client();
-        return Rect(kPad, kHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
+        return Rect(kPad, kListHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
     }
 
     [[nodiscard]] int RowCount() const noexcept {
@@ -288,7 +361,213 @@ private:
         DestroyWindow(window_);
     }
 
+    [[nodiscard]] RECT TextureSearchRect() const noexcept {
+        const RECT client = Client();
+        const int right = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
+        return Rect(kTextureTileGap, kTextureTileGap, right, kTextureTileGap + kTextureSearchHeight);
+    }
+
+    [[nodiscard]] RECT TextureAcceptRect() const noexcept {
+        const RECT client = Client();
+        const int left = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
+        return Rect(left, kTextureTileGap, left + kTextureButtonWidth, kTextureTileGap + kTextureSearchHeight);
+    }
+
+    [[nodiscard]] RECT TextureCancelRect() const noexcept {
+        const RECT accept = TextureAcceptRect();
+        return Rect(accept.right + kTextureTileGap, accept.top, accept.right + kTextureTileGap + kTextureButtonWidth, accept.bottom);
+    }
+
+    [[nodiscard]] RECT TextureViewportRect() const noexcept {
+        const RECT client = Client();
+        const int top = kTextureTileGap + kTextureHeaderHeight;
+        return Rect(kTextureTileGap, top, client.right - kTextureTileGap, top + kTextureViewportHeight);
+    }
+
+    [[nodiscard]] std::vector<std::size_t> FilteredTextureRows() const {
+        std::vector<std::size_t> indices;
+        indices.reserve(rows_.size());
+        for (std::size_t index = 0U; index < rows_.size(); ++index) {
+            if (TextureRowMatchesQuery(rows_[index], textureQuery_)) {
+                indices.push_back(index);
+            }
+        }
+        return indices;
+    }
+
+    [[nodiscard]] int TextureContentHeight(const std::vector<std::size_t>& indices) const noexcept {
+        if (indices.empty()) {
+            return 0;
+        }
+        const int rowCount = (static_cast<int>(indices.size()) + kTextureColumns - 1) / kTextureColumns;
+        return (rowCount * kTextureTileHeight) + ((rowCount - 1) * kTextureTileGap);
+    }
+
+    [[nodiscard]] int MaxTextureScroll() const {
+        const std::vector<std::size_t> indices = FilteredTextureRows();
+        return std::max(0, TextureContentHeight(indices) - kTextureViewportHeight);
+    }
+
+    [[nodiscard]] int TextureGridLeft(const RECT& viewport) const noexcept {
+        const int gridWidth = (kTextureColumns * kTextureTileWidth) + ((kTextureColumns - 1) * kTextureTileGap);
+        const int usableWidth = std::max(0, RectWidth(viewport) - kScrollbarWidth);
+        return viewport.left + std::max(0, (usableWidth - gridWidth) / 2);
+    }
+
+    [[nodiscard]] int TextureTileAt(int x, int y) const {
+        const RECT viewport = TextureViewportRect();
+        if (!Contains(viewport, x, y)) {
+            return -1;
+        }
+        const std::vector<std::size_t> indices = FilteredTextureRows();
+        const int gridLeft = TextureGridLeft(viewport);
+        const int localX = x - gridLeft;
+        const int slotWidth = kTextureTileWidth + kTextureTileGap;
+        if (localX < 0) {
+            return -1;
+        }
+        const int column = localX / slotWidth;
+        if (column < 0 || column >= kTextureColumns || (localX % slotWidth) >= kTextureTileWidth) {
+            return -1;
+        }
+        const int localY = y - viewport.top + textureScrollOffset_;
+        const int slotHeight = kTextureTileHeight + kTextureTileGap;
+        if (localY < 0 || (localY % slotHeight) >= kTextureTileHeight) {
+            return -1;
+        }
+        const int row = localY / slotHeight;
+        const int textureIndex = (row * kTextureColumns) + column;
+        return textureIndex >= 0 && textureIndex < static_cast<int>(indices.size()) ? textureIndex : -1;
+    }
+
+    bool AcceptTextureSelection() noexcept {
+        if (!ValidAsset(selectedTextureAsset_)) {
+            return false;
+        }
+        result_.accepted = true;
+        result_.assetId = selectedTextureAsset_;
+        running_ = false;
+        DestroyWindow(window_);
+        return true;
+    }
+
+    void PaintTextureButton(HDC dc, RECT rect, std::string_view label, bool enabled, bool hovered) const {
+        const COLORREF fill = enabled
+            ? (hovered ? Rgb(58, 64, 76) : Rgb(51, 55, 65))
+            : Rgb(31, 33, 38);
+        const COLORREF border = enabled ? Rgb(64, 120, 217) : Rgb(0, 0, 0);
+        GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+        Text(dc, rect, label, enabled ? Rgb(209, 214, 224) : Rgb(128, 133, 145), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    void PaintTextureTile(
+        HDC dc,
+        RECT rect,
+        const AssetPickerRow& row,
+        int tileIndex,
+        bool selected,
+        bool hovered) const {
+        const COLORREF fill = selected || hovered ? Rgb(51, 55, 65) : Rgb(19, 20, 24);
+        const COLORREF border = selected ? Rgb(64, 120, 217) : Rgb(0, 0, 0);
+        GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+        if (selected) {
+            GdiDrawing::DrawSharpFrame(dc, GdiDrawing::Inset(rect, 1), fill, Rgb(64, 120, 217));
+        }
+
+        const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 110);
+        GdiDrawing::DrawSharpFrame(dc, image, Rgb(0, 0, 0), Rgb(0, 0, 0));
+        bool drewTexturePreview = false;
+        if (assetManager_ != nullptr) {
+            const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(row.assetId);
+            if (metadata != nullptr) {
+                if (const EditorTexturePreviewImage* preview = EditorTexturePreviewService::PreviewFor(*metadata); preview != nullptr) {
+                    EditorTexturePreviewService::DrawContain(dc, GdiDrawing::Inset(image, 1), *preview, false);
+                    drewTexturePreview = true;
+                }
+            }
+        }
+        if (!drewTexturePreview) {
+            HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 32), icon_, selected ? Rgb(64, 120, 217) : Rgb(128, 133, 145), 2);
+        }
+
+        RECT label = Rect(rect.left + 6, rect.top + 116, rect.right - 6, rect.bottom - 6);
+        ScopedFont labelFont(12, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, Rgb(209, 214, 224));
+        DrawTextA(dc, row.name.c_str(), static_cast<int>(row.name.size()), &label, DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX);
+        (void)tileIndex;
+    }
+
+    void PaintTextureScrollbar(HDC dc, RECT viewport, int contentHeight) const {
+        const int maxScroll = std::max(0, contentHeight - kTextureViewportHeight);
+        if (maxScroll <= 0) {
+            return;
+        }
+        const RECT track = Rect(viewport.right - kScrollbarWidth, viewport.top, viewport.right - 3, viewport.bottom);
+        GdiDrawing::FillRectColor(dc, track, Rgb(17, 18, 22));
+        const int thumbHeight = std::clamp((RectHeight(track) * kTextureViewportHeight) / std::max(1, contentHeight), 28, RectHeight(track));
+        const int travel = std::max(0, RectHeight(track) - thumbHeight);
+        const int thumbTop = track.top + (travel * std::clamp(textureScrollOffset_, 0, maxScroll)) / std::max(1, maxScroll);
+        GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
+    }
+
+    void PaintTextureBrowser(HDC dc) const {
+        const RECT client = Client();
+        GdiDrawing::DrawSharpFrame(dc, client, Rgb(30, 33, 39), Rgb(0, 0, 0));
+        FillVerticalGradient(dc, GdiDrawing::Inset(client, 1), Rgb(30, 33, 39), Rgb(23, 25, 31));
+
+        const RECT search = TextureSearchRect();
+        GdiDrawing::DrawSharpFrame(dc, search, Rgb(17, 18, 22), textureSearchFocused_ ? Rgb(64, 120, 217) : Rgb(0, 0, 0));
+        const std::string searchText = textureQuery_.empty()
+            ? (textureSearchFocused_ ? std::string{ "|" } : std::string{ "Search textures" })
+            : (textureSearchFocused_ ? textureQuery_ + "|" : textureQuery_);
+        Text(dc, Rect(search.left + 10, search.top, search.right - 10, search.bottom),
+            searchText,
+            textureQuery_.empty() && !textureSearchFocused_ ? Rgb(128, 133, 145) : Rgb(209, 214, 224));
+
+        PaintTextureButton(dc, TextureAcceptRect(), "Accept", ValidAsset(selectedTextureAsset_), hoveredRow_ == -3);
+        PaintTextureButton(dc, TextureCancelRect(), "Cancel", true, hoveredRow_ == -4);
+
+        const RECT viewport = TextureViewportRect();
+        const std::vector<std::size_t> indices = FilteredTextureRows();
+        const int contentHeight = TextureContentHeight(indices);
+        const int maxScroll = std::max(0, contentHeight - kTextureViewportHeight);
+        const int scroll = std::clamp(textureScrollOffset_, 0, maxScroll);
+        const int saved = SaveDC(dc);
+        IntersectClipRect(dc, viewport.left, viewport.top, viewport.right - kScrollbarWidth, viewport.bottom);
+        const int gridLeft = TextureGridLeft(viewport);
+        for (std::size_t tile = 0U; tile < indices.size(); ++tile) {
+            const int row = static_cast<int>(tile) / kTextureColumns;
+            const int column = static_cast<int>(tile) % kTextureColumns;
+            const int left = gridLeft + (column * (kTextureTileWidth + kTextureTileGap));
+            const int top = viewport.top + (row * (kTextureTileHeight + kTextureTileGap)) - scroll;
+            const RECT tileRect = Rect(left, top, left + kTextureTileWidth, top + kTextureTileHeight);
+            if (tileRect.bottom < viewport.top || tileRect.top > viewport.bottom) {
+                continue;
+            }
+            const AssetPickerRow& texture = rows_[indices[tile]];
+            PaintTextureTile(
+                dc,
+                tileRect,
+                texture,
+                static_cast<int>(tile),
+                texture.assetId.value == selectedTextureAsset_.value,
+                hoveredRow_ == static_cast<int>(tile));
+        }
+        if (indices.empty()) {
+            Text(dc, Rect(viewport.left, viewport.top + 8, viewport.right, viewport.top + 36), "No textures found", Rgb(128, 133, 145));
+        }
+        RestoreDC(dc, saved);
+        PaintTextureScrollbar(dc, viewport, contentHeight);
+    }
+
     void Paint(HDC dc) const {
+        if (textureThumbnails_) {
+            PaintTextureBrowser(dc);
+            return;
+        }
+
         const RECT client = Client();
         GdiDrawing::FillRectColor(dc, client, Rgb(17, 19, 23));
         GdiDrawing::DrawSharpFrame(dc, client, Rgb(17, 19, 23), Rgb(68, 76, 88));
@@ -362,7 +641,20 @@ private:
     }
 
     void UpdateHover(int x, int y) {
-        const int next = Contains(CloseButton(), x, y) ? -2 : RowAt(x, y);
+        int next = -1;
+        if (textureThumbnails_) {
+            if (Contains(TextureAcceptRect(), x, y)) {
+                next = -3;
+            } else if (Contains(TextureCancelRect(), x, y)) {
+                next = -4;
+            } else if (Contains(TextureSearchRect(), x, y)) {
+                next = -5;
+            } else {
+                next = TextureTileAt(x, y);
+            }
+        } else {
+            next = Contains(CloseButton(), x, y) ? -2 : RowAt(x, y);
+        }
         if (next != hoveredRow_) {
             hoveredRow_ = next;
             InvalidateRect(window_, nullptr, FALSE);
@@ -370,11 +662,132 @@ private:
     }
 
     void Scroll(int delta) {
+        if (textureThumbnails_) {
+            const int next = std::clamp(textureScrollOffset_ + delta, 0, MaxTextureScroll());
+            if (next != textureScrollOffset_) {
+                textureScrollOffset_ = next;
+                InvalidateRect(window_, nullptr, FALSE);
+            }
+            return;
+        }
+
         const int next = std::clamp(scrollOffset_ + delta, 0, MaxScroll());
         if (next != scrollOffset_) {
             scrollOffset_ = next;
             InvalidateRect(window_, nullptr, FALSE);
         }
+    }
+
+    void HandleTextureLeftButtonDown(int x, int y) {
+        pressedTextureTarget_ = -1;
+        if (Contains(TextureSearchRect(), x, y)) {
+            textureSearchFocused_ = true;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (Contains(TextureCancelRect(), x, y)) {
+            pressedTextureTarget_ = -4;
+            SetCapture(window_);
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (Contains(TextureAcceptRect(), x, y)) {
+            pressedTextureTarget_ = -3;
+            SetCapture(window_);
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        const int tile = TextureTileAt(x, y);
+        if (tile >= 0) {
+            pressedTextureTarget_ = tile;
+            SetCapture(window_);
+            textureSearchFocused_ = false;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        textureSearchFocused_ = false;
+        InvalidateRect(window_, nullptr, FALSE);
+    }
+
+    void HandleTextureLeftButtonUp(int x, int y) {
+        if (pressedTextureTarget_ == -1) {
+            return;
+        }
+        if (GetCapture() == window_) {
+            ReleaseCapture();
+        }
+
+        const int pressed = pressedTextureTarget_;
+        pressedTextureTarget_ = -1;
+        const int released = Contains(TextureAcceptRect(), x, y)
+            ? -3
+            : Contains(TextureCancelRect(), x, y)
+                ? -4
+                : TextureTileAt(x, y);
+        if (pressed != released) {
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+
+        if (released == -4) {
+            running_ = false;
+            DestroyWindow(window_);
+            return;
+        }
+        if (released == -3) {
+            static_cast<void>(AcceptTextureSelection());
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (released >= 0) {
+            const std::vector<std::size_t> indices = FilteredTextureRows();
+            if (released < static_cast<int>(indices.size())) {
+                const kb::assets::AssetId assetId = rows_[indices[static_cast<std::size_t>(released)]].assetId;
+                if (assetId.value == selectedTextureAsset_.value) {
+                    static_cast<void>(AcceptTextureSelection());
+                    return;
+                }
+                selectedTextureAsset_ = assetId;
+                InvalidateRect(window_, nullptr, FALSE);
+            }
+        }
+    }
+
+    bool HandleTextureKeyDown(WPARAM key) {
+        if (!textureThumbnails_) {
+            return false;
+        }
+        switch (key) {
+        case VK_ESCAPE:
+            running_ = false;
+            DestroyWindow(window_);
+            return true;
+        case VK_RETURN:
+            static_cast<void>(AcceptTextureSelection());
+            return true;
+        case VK_BACK:
+            if (textureSearchFocused_ && !textureQuery_.empty()) {
+                textureQuery_.pop_back();
+                textureScrollOffset_ = 0;
+                InvalidateRect(window_, nullptr, FALSE);
+            }
+            return true;
+        default:
+            return textureSearchFocused_;
+        }
+    }
+
+    bool HandleTextureChar(WPARAM ch) {
+        if (!textureThumbnails_ || !textureSearchFocused_) {
+            return false;
+        }
+        if (ch >= 32 && ch < 127 && textureQuery_.size() < 96U) {
+            textureQuery_.push_back(static_cast<char>(ch));
+            textureScrollOffset_ = 0;
+            InvalidateRect(window_, nullptr, FALSE);
+            return true;
+        }
+        return ch == 8 || ch == 13;
     }
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -406,12 +819,22 @@ private:
             if (picker != nullptr) {
                 const int x = GET_X_LPARAM(lparam);
                 const int y = GET_Y_LPARAM(lparam);
+                if (picker->textureThumbnails_) {
+                    picker->HandleTextureLeftButtonDown(x, y);
+                    return 0;
+                }
                 if (Contains(picker->CloseButton(), x, y)) {
                     picker->running_ = false;
                     DestroyWindow(window);
                     return 0;
                 }
                 picker->AcceptRow(picker->RowAt(x, y));
+                return 0;
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (picker != nullptr && picker->textureThumbnails_) {
+                picker->HandleTextureLeftButtonUp(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
                 return 0;
             }
             break;
@@ -422,9 +845,17 @@ private:
             }
             break;
         case WM_KEYDOWN:
+            if (picker != nullptr && picker->HandleTextureKeyDown(wparam)) {
+                return 0;
+            }
             if (picker != nullptr && wparam == VK_ESCAPE) {
                 picker->running_ = false;
                 DestroyWindow(window);
+                return 0;
+            }
+            break;
+        case WM_CHAR:
+            if (picker != nullptr && picker->HandleTextureChar(wparam)) {
                 return 0;
             }
             break;
@@ -450,6 +881,7 @@ private:
     EditorTheme theme_{};
     std::vector<AssetPickerRow> rows_;
     kb::assets::AssetId currentAsset_{};
+    kb::assets::AssetId selectedTextureAsset_{};
     std::string title_;
     std::string description_;
     std::string clearDescription_;
@@ -460,6 +892,10 @@ private:
     bool running_ = true;
     int hoveredRow_ = -1;
     int scrollOffset_ = 0;
+    int pressedTextureTarget_ = -1;
+    int textureScrollOffset_ = 0;
+    bool textureSearchFocused_ = true;
+    std::string textureQuery_;
 };
 
 } // namespace
