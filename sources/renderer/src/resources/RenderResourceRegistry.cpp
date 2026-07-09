@@ -163,12 +163,41 @@ void RenderResourceRegistry::DestroyMaterial(RenderMaterialHandle handle) noexce
 }
 
 RenderTextureHandle RenderResourceRegistry::RegisterTexture2D(const RenderTextureDesc& desc) {
+    if (desc.dimension != RenderTextureDimension::Texture2D) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-texture2d-rejected non-2d desc");
+        return {};
+    }
+    return RegisterTexture(desc);
+}
+
+RenderTextureHandle RenderResourceRegistry::RegisterTexture(const RenderTextureDesc& desc) {
     if (!RenderTextureResourceBuilder::IsValidDesc(desc)) {
         WriteRendererMaterialGraphDebugLog("resource", "register-texture-rejected invalid desc");
         return {};
     }
 
-    bgfx::TextureHandle texture = bgfx::createTexture2D(desc.width, desc.height, false, 1, desc.format, desc.flags, desc.memory);
+    const bool cube = desc.dimension == RenderTextureDimension::TextureCube;
+    const std::uint16_t validationDepth = desc.dimension == RenderTextureDimension::Texture3D ? desc.depth : 1U;
+    if (!bgfx::isTextureValid(validationDepth, cube, desc.layers, desc.format, desc.flags)) {
+        WriteRendererMaterialGraphDebugLog("resource", "register-texture-rejected unsupported dimension/format");
+        return {};
+    }
+
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    switch (desc.dimension) {
+    case RenderTextureDimension::Texture2D:
+        texture = bgfx::createTexture2D(desc.width, desc.height, desc.mipCount > 1U, 1U, desc.format, desc.flags, desc.memory);
+        break;
+    case RenderTextureDimension::TextureCube:
+        texture = bgfx::createTextureCube(desc.width, desc.mipCount > 1U, 1U, desc.format, desc.flags, desc.memory);
+        break;
+    case RenderTextureDimension::Texture3D:
+        texture = bgfx::createTexture3D(desc.width, desc.height, desc.depth, desc.mipCount > 1U, desc.format, desc.flags, desc.memory);
+        break;
+    case RenderTextureDimension::Texture2DArray:
+        texture = bgfx::createTexture2D(desc.width, desc.height, desc.mipCount > 1U, desc.layers, desc.format, desc.flags, desc.memory);
+        break;
+    }
     if (!bgfx::isValid(texture)) {
         WriteRendererMaterialGraphDebugLog("resource", "register-texture-failed bgfx invalid");
         return {};
@@ -184,6 +213,10 @@ RenderTextureHandle RenderResourceRegistry::RegisterTexture2D(const RenderTextur
         row << "register-texture-ok handle=" << handle.value
             << " bgfxHandle=" << texture.idx
             << " size=" << desc.width << "x" << desc.height
+            << "x" << desc.depth
+            << " layers=" << desc.layers
+            << " mips=" << static_cast<std::uint32_t>(desc.mipCount)
+            << " dimension=" << RenderTextureDimensionName(desc.dimension)
             << " format=" << static_cast<int>(desc.format)
             << " colorSpace=" << ResourceColorSpaceName(desc.colorSpace)
             << " flags=0x" << std::hex << desc.flags << std::dec;

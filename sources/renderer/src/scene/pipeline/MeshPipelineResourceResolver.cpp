@@ -72,6 +72,31 @@ void EmitInstanceDiagnostic(
     });
 }
 
+void EmitTextureDimensionMismatchDiagnostic(
+    SceneRenderDiagnostics* diagnostics,
+    const SceneRenderMeshInstance& instance,
+    std::uint64_t materialAssetId,
+    std::uint64_t textureAssetId,
+    RenderTextureDimension expected,
+    RenderTextureDimension actual) {
+    if (diagnostics == nullptr) {
+        return;
+    }
+
+    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+        .severity = SceneRenderDiagnosticSeverity::Error,
+        .kind = SceneRenderDiagnosticKind::TextureDimensionMismatch,
+        .entityId = instance.entityId,
+        .meshAssetId = instance.meshAssetId,
+        .materialAssetId = materialAssetId,
+        .textureAssetId = textureAssetId,
+        .instanceCount = 1U,
+        .expectedTextureDimension = expected,
+        .actualTextureDimension = actual,
+        .fallbackTextureDimension = expected,
+    });
+}
+
 } // namespace
 
 MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
@@ -163,36 +188,63 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         return;
     }
 
-    auto validateTexture = [&](RenderTextureHandle directHandle, std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) {
+    auto validateTexture = [&](RenderTextureHandle directHandle,
+                               std::uint64_t textureAssetId,
+                               RenderTextureColorSpace colorSpace,
+                               RenderTextureDimension expectedDimension) {
+        const RenderTextureResource* texture = nullptr;
         if (directHandle.IsValid()) {
-            if (resources.FindTexture(directHandle) == nullptr) {
+            texture = resources.FindTexture(directHandle);
+            if (texture == nullptr) {
                 ++stats.missingTextureResourceCount;
                 EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureResource, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
             }
-            return;
+        } else {
+            if (textureAssetId == 0U) {
+                return;
+            }
+
+            const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
+            if (!textureHandle.IsValid()) {
+                ++stats.missingTextureBindingCount;
+                EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureBinding, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
+                return;
+            }
+
+            texture = resources.FindTexture(textureHandle);
+            if (texture == nullptr) {
+                ++stats.missingTextureResourceCount;
+                EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureResource, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
+            }
         }
 
-        if (textureAssetId == 0U) {
-            return;
-        }
-
-        const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
-        if (!textureHandle.IsValid()) {
-            ++stats.missingTextureBindingCount;
-            EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureBinding, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
-            return;
-        }
-
-        if (resources.FindTexture(textureHandle) == nullptr) {
-            ++stats.missingTextureResourceCount;
-            EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureResource, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
+        if (texture != nullptr && texture->dimension != expectedDimension) {
+            ++stats.textureDimensionMismatchCount;
+            EmitTextureDimensionMismatchDiagnostic(
+                diagnostics,
+                instance,
+                materialAssetId,
+                textureAssetId,
+                expectedDimension,
+                texture->dimension);
         }
     };
 
     for (const RenderMaterialTextureSlotBinding slot : RenderMaterialTextureSlots(*material)) {
         if (slot.policy.runtimeSupport == RenderMaterialFeatureSupport::Supported) {
-            validateTexture(slot.directHandle, slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
+            validateTexture(
+                slot.directHandle,
+                slot.assetId,
+                RenderTextureBindingColorSpace(slot.policy.expectedColorSpace),
+                RenderTextureDimension::Texture2D);
         }
+    }
+    for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
+        validateTexture(
+            graphTexture.texture,
+            graphTexture.textureAssetId,
+            graphTexture.colorSpace,
+            graphTexture.dimension);
     }
 }
 

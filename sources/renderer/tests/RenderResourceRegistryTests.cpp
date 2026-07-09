@@ -14,6 +14,7 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "resources/RenderTextureResourceBuilder.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -53,6 +54,51 @@ void RunRenderTextureColorSpaceDescTest() {
     Require((linear.flags & BGFX_TEXTURE_SRGB) == 0U, "Linear texture desc should not request bgfx sRGB sampling");
     Require(srgb.colorSpace == RenderTextureColorSpace::Srgb, "sRGB texture desc did not preserve color-space metadata");
     Require((srgb.flags & BGFX_TEXTURE_SRGB) != 0U, "Base Color sRGB texture desc should request bgfx sRGB sampling");
+}
+
+void RunRenderTextureTextAssetPreservesDimensionTest() {
+    struct TextureCase {
+        const char* text;
+        RenderTextureDimension dimension;
+        std::uint16_t depth;
+        std::uint16_t layers;
+        std::size_t byteSize;
+    };
+    const std::array cases{
+        TextureCase{ "size 2 2\nrgba8 1 2 3 255\n", RenderTextureDimension::Texture2D, 1U, 1U, 16U },
+        TextureCase{ "dimension cube\nsize 2 2\nrgba8 4 5 6 255\n", RenderTextureDimension::TextureCube, 1U, 1U, 96U },
+        TextureCase{ "dimension 3d\nsize 2 2\ndepth 3\nrgba8 7 8 9 255\n", RenderTextureDimension::Texture3D, 3U, 1U, 48U },
+        TextureCase{ "dimension 2dArray\nsize 2 2\nlayers 3\nrgba8 10 11 12 255\n", RenderTextureDimension::Texture2DArray, 1U, 3U, 48U },
+    };
+
+    for (const TextureCase& textureCase : cases) {
+        std::istringstream input{ textureCase.text };
+        const std::optional<RenderTextureAssetData> loaded = RenderTextureAssetLoader::LoadTexture(input);
+        Require(loaded.has_value(), "Render texture text asset dimension fixture did not load");
+        Require(loaded->dimension == textureCase.dimension &&
+                loaded->depth == textureCase.depth &&
+                loaded->layers == textureCase.layers &&
+                loaded->mipCount == 1U,
+            "Render texture text asset did not preserve dimension metadata");
+        Require(loaded->rgba8.size() == textureCase.byteSize,
+            "Render texture text asset did not allocate every face/slice/layer");
+        const RenderTextureDesc desc = loaded->MakeDesc(nullptr);
+        Require(desc.dimension == textureCase.dimension && desc.depth == textureCase.depth &&
+                desc.layers == textureCase.layers && desc.mipCount == 1U,
+            "Render texture descriptor lost text asset dimension metadata");
+    }
+
+    std::istringstream invalidVolume{ "dimension 3d\nsize 2 2\ndepth 1\nrgba8 1 2 3 255\n" };
+    Require(!RenderTextureAssetLoader::LoadTexture(invalidVolume).has_value(),
+        "A depth-1 texture must not be accepted as Texture3D because bgfx classifies it as Texture2D");
+    RenderTextureDesc invalidVolumeDesc{};
+    invalidVolumeDesc.width = 2U;
+    invalidVolumeDesc.height = 2U;
+    invalidVolumeDesc.depth = 1U;
+    invalidVolumeDesc.dimension = RenderTextureDimension::Texture3D;
+    invalidVolumeDesc.format = bgfx::TextureFormat::RGBA8;
+    Require(!RenderTextureResourceBuilder::IsValidDesc(invalidVolumeDesc),
+        "Texture resource builder must reject a depth-1 Texture3D descriptor");
 }
 
 void RunMaterialHandlesAreGenerationalTest() {
@@ -2264,7 +2310,12 @@ void RunRenderTextureAssetLoaderLoadsImageThroughAssetManagerTest(
     const kb::assets::AssetHandle<RenderTextureAssetData> asset = manager.Load<RenderTextureAssetData>(metadata->id);
     Require(asset.IsLoaded(), "AssetManager did not load image through RenderTextureAssetLoader");
     Require(asset->width > 0U && asset->height > 0U, "Loaded image has invalid dimensions");
-    Require(asset->rgba8.size() == static_cast<std::size_t>(asset->width) * static_cast<std::size_t>(asset->height) * 4U, "Loaded image was not converted to RGBA8");
+    Require(asset->dimension == RenderTextureDimension::Texture2D && asset->depth == 1U && asset->layers == 1U,
+        "Legacy image asset must remain a 2D texture");
+    Require(asset->rgba8.size() == static_cast<std::size_t>(asset->width) * static_cast<std::size_t>(asset->height) * 4U,
+        "Loaded image did not preserve exactly the complete RGBA8 LOD0 payload");
+    Require(asset->mipCount == 1U,
+        "Legacy image loading must keep its release-safe LOD0-only runtime contract");
 }
 
 void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
@@ -2280,6 +2331,19 @@ void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
         "third_party/bgfx.cmake/bgfx/examples/runtime/textures/fieldstone-rgba.dds",
         "/Game/fieldstone-rgba.dds",
         "Render texture DDS fixture was not found");
+}
+
+void RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest() {
+    const std::filesystem::path cubePath = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/textures/uffizi.ktx");
+    Require(!cubePath.empty(), "Render texture cube KTX fixture was not found");
+    const std::optional<RenderTextureAssetData> cube = RenderTextureAssetLoader::LoadTexture(cubePath);
+    Require(cube.has_value(), "Render texture loader did not decode the cube KTX fixture");
+    Require(cube->dimension == RenderTextureDimension::TextureCube && cube->width == cube->height &&
+            cube->depth == 1U && cube->layers == 1U,
+        "Render texture loader did not derive TextureCube from bimg metadata");
+    Require(cube->mipCount == 1U &&
+            cube->rgba8.size() == static_cast<std::size_t>(cube->width) * cube->height * 6U * 4U,
+        "Render texture loader did not preserve exactly LOD0 for all cube faces");
 }
 
 void RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest() {
@@ -2346,9 +2410,11 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureColorSpaceDescTest();
+    RunRenderTextureTextAssetPreservesDimensionTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
+    RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();
 }

@@ -63,6 +63,38 @@ namespace {
         return false;
     }
 
+    if (sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        bool handled = true;
+        switch (key) {
+        case VK_BACK:
+            sceneContext.BackspaceMaterialGraphTexturePickerSearch();
+            break;
+        case VK_RETURN:
+            if (const kb::assets::AssetId textureId = sceneContext.MaterialGraphTexturePickerSelectedAssetId();
+                textureId.IsValid()) {
+                static_cast<void>(sceneContext.SetMaterialGraphTextureSampleAsset(
+                    sceneContext.MaterialGraphTexturePickerAssetId(),
+                    sceneContext.MaterialGraphTexturePickerNodeId(),
+                    textureId));
+                static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
+            }
+            break;
+        case VK_ESCAPE:
+            static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
+            break;
+        default:
+            handled = true;
+            break;
+        }
+        if (handled) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != mainWindow) {
+                InvalidateRect(mainWindow, nullptr, FALSE);
+            }
+            return true;
+        }
+    }
+
     if (sceneContext.IsMaterialGraphContextMenuOpen()) {
         bool handled = true;
         switch (key) {
@@ -295,6 +327,17 @@ namespace {
 [[nodiscard]] bool HandleMaterialGraphChar(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, wchar_t character) {
     if (!sceneContext.IsMaterialGraphFocused()) {
         return false;
+    }
+    if (sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
+            return false;
+        }
+        sceneContext.AppendMaterialGraphTexturePickerSearchText(character);
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
     }
     if (sceneContext.IsMaterialGraphContextMenuOpen()) {
         if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {

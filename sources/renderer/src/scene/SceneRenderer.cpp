@@ -236,6 +236,7 @@ void SceneRenderer::SubmitMeshPass(
                 << " missingMaterialResource=" << lastSubmitStats_.missingMaterialResourceCount
                 << " missingTextureBinding=" << lastSubmitStats_.missingTextureBindingCount
                 << " missingTextureResource=" << lastSubmitStats_.missingTextureResourceCount
+                << " textureDimensionMismatch=" << lastSubmitStats_.textureDimensionMismatchCount
                 << " diagnostics=" << lastDiagnostics_.events.size()
                 << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
         WriteRendererDebugLog("scene_renderer", message.str());

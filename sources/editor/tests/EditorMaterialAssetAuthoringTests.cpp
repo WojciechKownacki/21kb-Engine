@@ -1194,6 +1194,96 @@ void RunMaterialEditorWorkingCopySaveRevertUndoRedoTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialEditorDocumentHistoryIsolationTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorCommandStack commandStack;
+    kb::editor::MaterialEditorState materialEditor;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"),
+        "P0.1: document history test could not mount project assets");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "P0.1: document history test could not register material loader");
+
+    const std::filesystem::path materialAPath = TempRoot() / "Project" / "Assets" / "Materials" / "HistoryA.kbmat";
+    const std::filesystem::path materialBPath = TempRoot() / "Project" / "Assets" / "Materials" / "HistoryB.kbmat";
+    kb::render::RenderMaterialAssetData materialA{};
+    materialA.desc.roughnessFactor = 0.2F;
+    kb::render::RenderMaterialAssetData materialB{};
+    materialB.desc.roughnessFactor = 0.6F;
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(materialAPath, materialA) &&
+            kb::render::RenderMaterialAssetWriter::Save(materialBPath, materialB),
+        "P0.1: document history test could not seed material files");
+    kb::editor::tests::Require(scene.Assets().Discover() >= 2U,
+        "P0.1: document history test could not discover material files");
+    const kb::assets::AssetMetadata* metadataA = manager.Registry().FindByPath("/Game/Materials/HistoryA.kbmat");
+    const kb::assets::AssetMetadata* metadataB = manager.Registry().FindByPath("/Game/Materials/HistoryB.kbmat");
+    kb::editor::tests::Require(metadataA != nullptr && metadataB != nullptr,
+        "P0.1: document history test could not resolve both AssetIds");
+    const kb::assets::AssetId materialAId = metadataA->id;
+    const kb::assets::AssetId materialBId = metadataB->id;
+    const kb::editor::EditorCommandHistoryKey historyA = kb::editor::EditorCommandHistoryKey::MaterialAsset(materialAId.value);
+    const kb::editor::EditorCommandHistoryKey historyB = kb::editor::EditorCommandHistoryKey::MaterialAsset(materialBId.value);
+
+    materialEditor.Open(materialAId, kb::editor::EditorMaterialAssetGateway::Read(scene, materialAId));
+    kb::render::RenderMaterialAssetData editedA = *materialEditor.WorkingCopy();
+    editedA.desc.roughnessFactor = 0.4F;
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+            materialEditor,
+            materialAId,
+            "Edit A",
+            *materialEditor.WorkingCopy(),
+            editedA,
+            0U,
+            0U)),
+        "P0.1: Material A working-copy command failed");
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(
+            scene,
+            materialAId,
+            "Save A",
+            materialA,
+            editedA)),
+        "P0.1: Material A source save command failed");
+    materialEditor.MarkSaved();
+    kb::editor::tests::Require(commandStack.LastCompletedCommandHistoryKey() == historyA,
+        "P0.1: source command did not retain Material A identity");
+
+    commandStack.Clear(historyA);
+    materialEditor.Open(materialBId, kb::editor::EditorMaterialAssetGateway::Read(scene, materialBId));
+    kb::render::RenderMaterialAssetData editedB = *materialEditor.WorkingCopy();
+    editedB.desc.roughnessFactor = 0.8F;
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+            materialEditor,
+            materialBId,
+            "Edit B",
+            *materialEditor.WorkingCopy(),
+            editedB,
+            0U,
+            0U)),
+        "P0.1: Material B working-copy command failed");
+
+    kb::editor::tests::Require(commandStack.Undo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.6F),
+        "P0.1: scoped undo did not restore Material B");
+    std::optional<kb::render::RenderMaterialAssetData> diskA = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialAPath);
+    kb::editor::tests::Require(diskA.has_value() && kb::editor::tests::NearlyEqual(diskA->desc.roughnessFactor, 0.4F),
+        "P0.1: Undo in Material B changed the saved Material A source");
+    kb::editor::tests::Require(commandStack.Redo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.8F),
+        "P0.1: scoped redo did not restore Material B");
+
+    kb::editor::tests::Require(commandStack.Undo(historyB), "P0.1: setup undo before Revert failed");
+    materialEditor.RevertToCleanSnapshot();
+    commandStack.Clear(historyB);
+    kb::editor::tests::Require(!commandStack.Redo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.6F),
+        "P0.1: Redo resurrected a discarded Material B edit after Revert");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
 void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     CleanTempRoot();
 
@@ -4362,13 +4452,23 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         return property.stableId == "uvSet" && property.dropdownOpen;
     }),
         "KBMAT-MAT58: Details panel rows should be backed by typed node properties");
-    const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    const int optionY = layout.detailsPanel.top + 34 + 22 + (2 * kb::editor::MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight) + 6;
-    const std::optional<kb::editor::MaterialEditorGraphNodePropertyHit> optionHit =
-        kb::editor::MaterialEditorPanelRenderer::GraphNodePropertyAt(content, uvProperties, layout.detailsPanel.left + 44, optionY);
-    kb::editor::tests::Require(optionHit.has_value() &&
-            optionHit->kind == kb::editor::MaterialEditorGraphNodePropertyHitKind::EnumOption &&
-            optionHit->optionValue == "0",
+    const kb::editor::MaterialEditorDetailsLayout detailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, details, 0);
+    const auto optionItem = std::ranges::find_if(detailsLayout.items, [](const kb::editor::MaterialEditorDetailsLayoutItem& item) {
+        return item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyOptionRow;
+    });
+    kb::editor::tests::Require(optionItem != detailsLayout.items.end(),
+        "KBMAT-MAT58: Canonical Details layout should expose the open enum option rect");
+    const kb::editor::MaterialEditorDetailsHit optionHit = optionItem == detailsLayout.items.end()
+        ? kb::editor::MaterialEditorDetailsHit{}
+        : kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+              detailsLayout,
+              details,
+              (optionItem->clippedRect.left + optionItem->clippedRect.right) / 2,
+              (optionItem->clippedRect.top + optionItem->clippedRect.bottom) / 2);
+    kb::editor::tests::Require(optionHit.kind == kb::editor::MaterialEditorDetailsHitKind::NodeProperty &&
+            optionHit.nodeProperty.kind == kb::editor::MaterialEditorGraphNodePropertyHitKind::EnumOption &&
+            optionHit.nodeProperty.optionValue == "0",
         "KBMAT-MAT58: Details panel hit-test should resolve enum dropdown options");
 #endif
 
@@ -5003,11 +5103,25 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
 
 #if defined(_WIN32)
     const RECT content{ 0, 0, 960, 720 };
-    const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    const int textureRowY = layout.detailsPanel.top + 34 + 22 + (2 * 18) + 6 + 22 + 9;
-    const std::optional<kb::editor::MaterialEditorPanelParameterHit> textureHit =
-        kb::editor::MaterialEditorPanelRenderer::TextureParameterAt(content, editor.Parameters(), {}, 0U, layout.detailsPanel.left + 20, textureRowY);
-    kb::editor::tests::Require(textureHit.has_value() && textureHit->stableId == "paint" && textureHit->type == kb::render::RenderMaterialParameterType::Texture,
+    const kb::editor::MaterialEditorDetailsLayout initialDetailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, instanceDetails, 0);
+    const kb::editor::MaterialEditorDetailsLayout scrolledDetailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, instanceDetails, initialDetailsLayout.maxScroll);
+    const auto textureItem = std::ranges::find_if(scrolledDetailsLayout.items, [](const kb::editor::MaterialEditorDetailsLayoutItem& item) {
+        return item.kind == kb::editor::MaterialEditorDetailsItemKind::TextureParameterRow &&
+            item.clippedRect.right > item.clippedRect.left && item.clippedRect.bottom > item.clippedRect.top;
+    });
+    kb::editor::tests::Require(textureItem != scrolledDetailsLayout.items.end(),
+        "MAT-40 canonical instance Details layout should expose a visible texture row");
+    const kb::editor::MaterialEditorDetailsHit textureHit = textureItem == scrolledDetailsLayout.items.end()
+        ? kb::editor::MaterialEditorDetailsHit{}
+        : kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+              scrolledDetailsLayout,
+              instanceDetails,
+              (textureItem->clippedRect.left + textureItem->clippedRect.right) / 2,
+              (textureItem->clippedRect.top + textureItem->clippedRect.bottom) / 2);
+    kb::editor::tests::Require(textureHit.kind == kb::editor::MaterialEditorDetailsHitKind::TextureParameter &&
+            textureHit.parameter.stableId == "paint" && textureHit.parameter.type == kb::render::RenderMaterialParameterType::Texture,
         "MAT-40 instance editor texture row should be hit-testable for the picker");
 #endif
 
@@ -5018,6 +5132,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     std::ifstream savedTextInput{ instancePath };
     std::ostringstream savedText;
     savedText << savedTextInput.rdbuf();
+    savedTextInput.close();
     kb::editor::tests::Require(saved.has_value() && saved->hasOverrides &&
             saved->staticParameterOverrides.size() == 1U &&
             saved->staticParameterOverrides[0].stableId == "useBlue" &&
@@ -6606,6 +6721,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorNormalSlotBuildsGraphNormalMapTest();
     RunMaterialAssetEditCommandUndoRedoTest();
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
+    RunMaterialEditorDocumentHistoryIsolationTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
     RunMaterialEditorVariantSwitchAuthoringTest();
     RunMaterialEditorGraphRuntimeStateTest();

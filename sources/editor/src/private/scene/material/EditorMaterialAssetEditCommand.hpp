@@ -162,6 +162,7 @@ public:
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
     [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -196,6 +197,7 @@ public:
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
     [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -241,6 +243,7 @@ public:
     [[nodiscard]] std::string_view Label() const noexcept override;
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;

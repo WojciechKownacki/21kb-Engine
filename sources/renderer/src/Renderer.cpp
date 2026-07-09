@@ -681,11 +681,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " albedoTex=" << HandleValue(defaultSceneGBuffer_.AlbedoTexture())
                 << " normalTex=" << HandleValue(defaultSceneGBuffer_.NormalTexture())
                 << " materialTex=" << HandleValue(defaultSceneGBuffer_.MaterialTexture())
+                << " surfaceTex=" << HandleValue(defaultSceneGBuffer_.SurfaceTexture())
                 << " depthTex=" << HandleValue(defaultSceneGBuffer_.DepthTexture())
                 << " extent=" << defaultSceneGBuffer_.Width() << 'x' << defaultSceneGBuffer_.Height()
                 << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
                 << ',' << SceneTextureFormatName(selection.normalFormat)
                 << ',' << SceneTextureFormatName(selection.materialFormat)
+                << ',' << SceneTextureFormatName(selection.surfaceFormat)
                 << ',' << SceneTextureFormatName(selection.depth.format) << ')'
                 << " targetFb=" << HandleValue(desc.target.frameBuffer)
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
@@ -693,13 +695,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
-        RendererViewConfigurator::ConfigureFramebufferClear(
+        RendererViewConfigurator::ConfigureGBufferClear(
             viewportPlan.viewIds.gbufferGeometry,
             defaultSceneGBuffer_.FrameBuffer(),
             desc.target.viewport.extent,
-            "KB GBuffer Geometry",
-            BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
-            desc.clearRgba,
             desc.clearDepth,
             desc.clearStencil);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
@@ -845,6 +844,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                     << " missingMaterialResource=" << stats.missingMaterialResourceCount
                     << " missingTextureBinding=" << stats.missingTextureBindingCount
                     << " missingTextureResource=" << stats.missingTextureResourceCount
+                    << " textureDimensionMismatch=" << stats.textureDimensionMismatchCount
                     << " diagnostics=" << lastSceneDiagnostics_.events.size();
             WriteRendererBreadcrumb("renderer", message.str());
 

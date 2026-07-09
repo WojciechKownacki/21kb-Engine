@@ -154,6 +154,8 @@ struct MaterialEditorPanelDetailsRows {
     std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
     std::vector<std::string> materialDiffRows;
     std::vector<MaterialDebugChannelRow> debugChannelRows;
+    std::vector<MaterialEditorParameter> parameterModels;
+    std::vector<MaterialEditorParameter> textureSlotModels;
     std::vector<std::string> parameterRows;
     std::vector<std::string> textureSlotRows;
 };
@@ -253,6 +255,20 @@ struct MaterialEditorGraphContextMenuHit {
     MaterialEditorGraphMenuCommand command = MaterialEditorGraphMenuCommand::None;
 };
 
+enum class MaterialEditorGraphTexturePickerHitKind : std::uint8_t {
+    None,
+    Backdrop,
+    Search,
+    Texture,
+    Accept,
+    Cancel,
+};
+
+struct MaterialEditorGraphTexturePickerHit {
+    MaterialEditorGraphTexturePickerHitKind kind = MaterialEditorGraphTexturePickerHitKind::None;
+    kb::assets::AssetId assetId{};
+};
+
 struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
     RECT applyButton{};
@@ -288,6 +304,79 @@ inline constexpr int TextureSlotRowCount = 5;
 inline constexpr int DetailsNodePropertyRowHeight = 22;
 inline constexpr int DetailsNodePropertyOptionHeight = 20;
 } // namespace MaterialEditorPanelMetrics
+
+enum class MaterialEditorDetailsSection : std::uint8_t {
+    ParentChain,
+    InstanceOverrides,
+    StaticSwitches,
+    LayerStack,
+    FindResults,
+    NodeProperties,
+    MaterialDiff,
+    DebugChannels,
+    Parameters,
+    TextureSlots,
+    MaterialStats,
+    ShaderViewer,
+};
+
+enum class MaterialEditorDetailsItemKind : std::uint8_t {
+    SectionHeader,
+    ParentRow,
+    InstanceOverrideGroupRow,
+    StaticSwitchRow,
+    LayerRow,
+    FindResultRow,
+    NodePropertyRow,
+    NodePropertyOptionRow,
+    MaterialDiffRow,
+    DebugChannelRow,
+    ParameterRow,
+    TextureParameterRow,
+    MaterialStatsPassRow,
+    MaterialStatsWarningRow,
+    ShaderSourceRow,
+    ShaderReflectionRow,
+    ShaderWarningRow,
+};
+
+struct MaterialEditorDetailsLayoutItem {
+    MaterialEditorDetailsItemKind kind = MaterialEditorDetailsItemKind::SectionHeader;
+    MaterialEditorDetailsSection section = MaterialEditorDetailsSection::Parameters;
+    RECT rect{};
+    RECT clippedRect{};
+    std::size_t index = 0U;
+    std::size_t optionIndex = 0U;
+};
+
+struct MaterialEditorDetailsLayout {
+    RECT panel{};
+    RECT searchRect{};
+    RECT viewport{};
+    std::vector<MaterialEditorDetailsLayoutItem> items;
+    int contentHeight = 0;
+    int maxScroll = 0;
+    int scrollOffset = 0;
+    bool visible = false;
+};
+
+enum class MaterialEditorDetailsHitKind : std::uint8_t {
+    None,
+    Backdrop,
+    Search,
+    FindResult,
+    NodeProperty,
+    Parameter,
+    TextureParameter,
+};
+
+struct MaterialEditorDetailsHit {
+    MaterialEditorDetailsHitKind kind = MaterialEditorDetailsHitKind::None;
+    RECT rect{};
+    std::size_t resultIndex = 0U;
+    MaterialEditorGraphNodePropertyHit nodeProperty{};
+    MaterialEditorPanelParameterHit parameter{};
+};
 
 #endif
 
@@ -499,6 +588,19 @@ public:
         const std::vector<MaterialEditorParameter>& parameters,
         std::uint32_t selectedNodeId,
         const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties);
+    [[nodiscard]] static MaterialEditorPanelDetailsRows DetailsRowsForDocument(
+        const EditorSceneContext& sceneContext,
+        const kb::render::RenderMaterialAssetData& material,
+        bool materialInstance);
+    [[nodiscard]] static MaterialEditorDetailsLayout ResolveDetailsLayout(
+        const RECT& content,
+        const MaterialEditorPanelDetailsRows& rows,
+        int scrollOffset);
+    [[nodiscard]] static MaterialEditorDetailsHit DetailsHitAt(
+        const MaterialEditorDetailsLayout& layout,
+        const MaterialEditorPanelDetailsRows& rows,
+        int x,
+        int y);
     [[nodiscard]] static std::optional<MaterialEditorGraphNodePropertyHit> GraphNodePropertyAt(
         const RECT& content,
         const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
@@ -601,6 +703,12 @@ public:
         int y);
     [[nodiscard]] static RECT GraphContextMenuRect(const EditorSceneContext& sceneContext);
     [[nodiscard]] static MaterialEditorGraphContextMenuHit GraphContextMenuHit(const EditorSceneContext& sceneContext, int x, int y);
+    [[nodiscard]] static int GraphTexturePickerMaxScroll(const RECT& content, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static MaterialEditorGraphTexturePickerHit GraphTexturePickerHit(
+        const RECT& content,
+        const EditorSceneContext& sceneContext,
+        int x,
+        int y);
     [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept;
     [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept;
     [[nodiscard]] static std::optional<RECT> GraphCommentRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t commentId, const EditorSceneContext& sceneContext) noexcept;
@@ -824,6 +932,7 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
         if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
             continue;
         }
+        rows.parameterModels.push_back(parameter);
         std::string row{ MaterialEditorPanelParameterGroupName(parameter.group) };
         row += "  ";
         row += MaterialEditorPanelParameterTypeName(parameter.type);
@@ -858,6 +967,7 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
         if (parameter.type != kb::render::RenderMaterialParameterType::Texture) {
             continue;
         }
+        rows.textureSlotModels.push_back(parameter);
         std::string row{ MaterialEditorPanelParameterGroupName(parameter.group) };
         row += "  ";
         row += parameter.displayName.empty() ? parameter.stableId : parameter.displayName;
@@ -879,6 +989,328 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
         rows.textureSlotRows.push_back(std::move(row));
     }
     return rows;
+}
+
+inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRowsForDocument(
+    const EditorSceneContext& sceneContext,
+    const kb::render::RenderMaterialAssetData& material,
+    bool materialInstance) {
+    const std::vector<MaterialEditorGraphNodeProperty> nodeProperties = materialInstance
+        ? std::vector<MaterialEditorGraphNodeProperty>{}
+        : sceneContext.MaterialEditor().GraphNodeProperties(sceneContext.MaterialEditor().SelectedNodeId());
+    MaterialEditorPanelDetailsRows rows = DetailsRows(
+        sceneContext.MaterialEditor().Parameters(),
+        sceneContext.MaterialEditor().SelectedNodeId(),
+        nodeProperties);
+    if (sceneContext.MaterialEditor().SelectedNodeId() != 0U) {
+        rows.title = sceneContext.MaterialEditor().GraphNodeDisplayName(sceneContext.MaterialEditor().SelectedNodeId());
+    }
+    rows.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
+    rows.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
+    rows.instanceStaticSwitchRows = sceneContext.MaterialEditor().InstanceStaticSwitchRows();
+    rows.layerTreeRows = sceneContext.MaterialEditor().LayerTreeRows();
+    rows.materialStats = sceneContext.MaterialEditor().MaterialStats();
+    rows.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
+    rows.findQuery = std::string{ sceneContext.MaterialEditor().FindQuery() };
+    rows.findFocused = sceneContext.MaterialEditor().IsFindFocused();
+    rows.findResults = sceneContext.MaterialEditor().FindResults();
+    rows.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
+    rows.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(
+        material.desc,
+        sceneContext.MaterialEditor().OpenAssetId().value);
+    if (materialInstance) {
+        rows.title = "Material Instance Overrides";
+    }
+    return rows;
+}
+
+inline RECT MaterialEditorDetailsIntersectRect(const RECT& rect, const RECT& clip) noexcept {
+    const RECT result{
+        std::max(rect.left, clip.left),
+        std::max(rect.top, clip.top),
+        std::min(rect.right, clip.right),
+        std::min(rect.bottom, clip.bottom),
+    };
+    return result.right > result.left && result.bottom > result.top ? result : RECT{};
+}
+
+inline MaterialEditorDetailsLayout MaterialEditorPanelRenderer::ResolveDetailsLayout(
+    const RECT& content,
+    const MaterialEditorPanelDetailsRows& rows,
+    int requestedScrollOffset) {
+    MaterialEditorDetailsLayout result;
+    result.panel = ResolveLayout(content).detailsPanel;
+    if (MaterialEditorPanelRectWidth(result.panel) < 220 || MaterialEditorPanelRectHeight(result.panel) < 140) {
+        return result;
+    }
+
+    result.visible = true;
+    result.searchRect = RECT{
+        result.panel.left + 10,
+        result.panel.top + 34,
+        result.panel.right - 10,
+        result.panel.top + 58,
+    };
+    result.viewport = RECT{
+        result.panel.left + 1,
+        result.searchRect.bottom + 8,
+        result.panel.right - 1,
+        result.panel.bottom - 10,
+    };
+    const int contentTop = result.viewport.top;
+    int rowY = contentTop;
+    constexpr int rowHeight = 18;
+
+    const auto emit = [&](MaterialEditorDetailsItemKind kind,
+                          MaterialEditorDetailsSection section,
+                          std::size_t index,
+                          int height,
+                          int leftInset,
+                          std::size_t optionIndex = 0U) {
+        result.items.push_back(MaterialEditorDetailsLayoutItem{
+            .kind = kind,
+            .section = section,
+            .rect = RECT{ result.panel.left + leftInset, rowY, result.panel.right - 12, rowY + height },
+            .index = index,
+            .optionIndex = optionIndex,
+        });
+        rowY += height;
+    };
+    const auto header = [&](MaterialEditorDetailsSection section) {
+        emit(MaterialEditorDetailsItemKind::SectionHeader, section, 0U, 22, 10);
+    };
+    const auto gap = [&]() { rowY += 6; };
+
+    if (!rows.instanceParentRows.empty()) {
+        header(MaterialEditorDetailsSection::ParentChain);
+        for (std::size_t index = 0U; index < rows.instanceParentRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::ParentRow, MaterialEditorDetailsSection::ParentChain, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.instanceOverrideGroupRows.empty()) {
+        header(MaterialEditorDetailsSection::InstanceOverrides);
+        for (std::size_t index = 0U; index < rows.instanceOverrideGroupRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::InstanceOverrideGroupRow, MaterialEditorDetailsSection::InstanceOverrides, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.instanceStaticSwitchRows.empty()) {
+        header(MaterialEditorDetailsSection::StaticSwitches);
+        for (std::size_t index = 0U; index < rows.instanceStaticSwitchRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::StaticSwitchRow, MaterialEditorDetailsSection::StaticSwitches, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.layerTreeRows.empty()) {
+        header(MaterialEditorDetailsSection::LayerStack);
+        for (std::size_t index = 0U; index < rows.layerTreeRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::LayerRow, MaterialEditorDetailsSection::LayerStack, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.findResults.empty()) {
+        header(MaterialEditorDetailsSection::FindResults);
+        for (std::size_t index = 0U; index < rows.findResults.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::FindResultRow, MaterialEditorDetailsSection::FindResults, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.nodePropertyRows.empty()) {
+        header(MaterialEditorDetailsSection::NodeProperties);
+        for (std::size_t index = 0U; index < rows.nodePropertyRows.size(); ++index) {
+            const MaterialEditorGraphNodeProperty& property = rows.nodePropertyRows[index];
+            emit(MaterialEditorDetailsItemKind::NodePropertyRow, MaterialEditorDetailsSection::NodeProperties, index,
+                MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight, 12);
+            if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
+                for (std::size_t optionIndex = 0U; optionIndex < property.options.size(); ++optionIndex) {
+                    emit(MaterialEditorDetailsItemKind::NodePropertyOptionRow, MaterialEditorDetailsSection::NodeProperties, index,
+                        MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight, 28, optionIndex);
+                }
+            }
+        }
+        gap();
+    }
+    if (!rows.materialDiffRows.empty()) {
+        header(MaterialEditorDetailsSection::MaterialDiff);
+        for (std::size_t index = 0U; index < rows.materialDiffRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::MaterialDiffRow, MaterialEditorDetailsSection::MaterialDiff, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.debugChannelRows.empty()) {
+        header(MaterialEditorDetailsSection::DebugChannels);
+        for (std::size_t index = 0U; index < rows.debugChannelRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::DebugChannelRow, MaterialEditorDetailsSection::DebugChannels, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.parameterRows.empty()) {
+        header(MaterialEditorDetailsSection::Parameters);
+        for (std::size_t index = 0U; index < rows.parameterRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::ParameterRow, MaterialEditorDetailsSection::Parameters, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (!rows.textureSlotRows.empty()) {
+        header(MaterialEditorDetailsSection::TextureSlots);
+        for (std::size_t index = 0U; index < rows.textureSlotRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::TextureParameterRow, MaterialEditorDetailsSection::TextureSlots, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (rows.materialStats.available || !rows.materialStats.passRows.empty() || !rows.materialStats.warnings.empty()) {
+        header(MaterialEditorDetailsSection::MaterialStats);
+        for (std::size_t index = 0U; index < rows.materialStats.passRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::MaterialStatsPassRow, MaterialEditorDetailsSection::MaterialStats, index, rowHeight, 12);
+        }
+        for (std::size_t index = 0U; index < rows.materialStats.warnings.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::MaterialStatsWarningRow, MaterialEditorDetailsSection::MaterialStats, index, rowHeight, 12);
+        }
+        gap();
+    }
+    if (rows.shaderViewer.available || !rows.shaderViewer.sources.empty() ||
+        !rows.shaderViewer.reflectionRows.empty() || !rows.shaderViewer.warnings.empty()) {
+        header(MaterialEditorDetailsSection::ShaderViewer);
+        for (std::size_t index = 0U; index < rows.shaderViewer.sources.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::ShaderSourceRow, MaterialEditorDetailsSection::ShaderViewer, index, rowHeight, 12);
+        }
+        for (std::size_t index = 0U; index < rows.shaderViewer.reflectionRows.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::ShaderReflectionRow, MaterialEditorDetailsSection::ShaderViewer, index, rowHeight, 12);
+        }
+        for (std::size_t index = 0U; index < rows.shaderViewer.warnings.size(); ++index) {
+            emit(MaterialEditorDetailsItemKind::ShaderWarningRow, MaterialEditorDetailsSection::ShaderViewer, index, rowHeight, 12);
+        }
+    }
+
+    result.contentHeight = std::max(0, rowY - contentTop);
+    result.maxScroll = std::max(0, result.contentHeight - MaterialEditorPanelRectHeight(result.viewport));
+    result.scrollOffset = std::clamp(requestedScrollOffset, 0, result.maxScroll);
+    for (MaterialEditorDetailsLayoutItem& item : result.items) {
+        item.rect.top -= result.scrollOffset;
+        item.rect.bottom -= result.scrollOffset;
+        item.clippedRect = MaterialEditorDetailsIntersectRect(item.rect, result.viewport);
+    }
+    return result;
+}
+
+inline MaterialEditorGraphNodePropertyHit MaterialEditorDetailsPropertyHit(
+    const MaterialEditorGraphNodeProperty& property) {
+    MaterialEditorGraphNodePropertyHit hit{
+        .nodeId = property.nodeId,
+        .stableId = property.stableId,
+        .displayName = property.displayName,
+        .propertyKind = property.kind,
+        .type = property.type,
+        .value = property.value,
+        .componentIndex = property.componentIndex,
+    };
+    switch (property.kind) {
+    case MaterialEditorGraphNodePropertyKind::Text:
+        hit.kind = MaterialEditorGraphNodePropertyHitKind::TextField;
+        break;
+    case MaterialEditorGraphNodePropertyKind::Numeric:
+        hit.kind = MaterialEditorGraphNodePropertyHitKind::Slider;
+        break;
+    case MaterialEditorGraphNodePropertyKind::Color:
+        hit.kind = MaterialEditorGraphNodePropertyHitKind::ColorPicker;
+        break;
+    case MaterialEditorGraphNodePropertyKind::Enum:
+        hit.kind = MaterialEditorGraphNodePropertyHitKind::EnumField;
+        break;
+    case MaterialEditorGraphNodePropertyKind::TextureAsset:
+        hit.kind = MaterialEditorGraphNodePropertyHitKind::TexturePicker;
+        break;
+    }
+    return hit;
+}
+
+inline MaterialEditorPanelParameterHit MaterialEditorDetailsParameterHit(const MaterialEditorParameter& parameter) {
+    return MaterialEditorPanelParameterHit{
+        .stableId = parameter.stableId,
+        .displayName = parameter.displayName.empty() ? parameter.stableId : parameter.displayName,
+        .type = parameter.type,
+        .value = parameter.value,
+    };
+}
+
+inline MaterialEditorDetailsHit MaterialEditorPanelRenderer::DetailsHitAt(
+    const MaterialEditorDetailsLayout& layout,
+    const MaterialEditorPanelDetailsRows& rows,
+    int x,
+    int y) {
+    if (!layout.visible || !MaterialEditorPanelPointInRect(layout.panel, x, y)) {
+        return {};
+    }
+    if (MaterialEditorPanelPointInRect(layout.searchRect, x, y)) {
+        return MaterialEditorDetailsHit{ .kind = MaterialEditorDetailsHitKind::Search, .rect = layout.searchRect };
+    }
+    if (!MaterialEditorPanelPointInRect(layout.viewport, x, y)) {
+        return MaterialEditorDetailsHit{ .kind = MaterialEditorDetailsHitKind::Backdrop, .rect = layout.panel };
+    }
+    for (auto item = layout.items.rbegin(); item != layout.items.rend(); ++item) {
+        if (MaterialEditorPanelRectWidth(item->clippedRect) == 0 ||
+            MaterialEditorPanelRectHeight(item->clippedRect) == 0 ||
+            !MaterialEditorPanelPointInRect(item->clippedRect, x, y)) {
+            continue;
+        }
+        switch (item->kind) {
+        case MaterialEditorDetailsItemKind::FindResultRow:
+            return MaterialEditorDetailsHit{ .kind = MaterialEditorDetailsHitKind::FindResult, .rect = item->clippedRect, .resultIndex = item->index };
+        case MaterialEditorDetailsItemKind::NodePropertyRow:
+            if (item->index < rows.nodePropertyRows.size() && rows.nodePropertyRows[item->index].enabled) {
+                return MaterialEditorDetailsHit{
+                    .kind = MaterialEditorDetailsHitKind::NodeProperty,
+                    .rect = item->clippedRect,
+                    .nodeProperty = MaterialEditorDetailsPropertyHit(rows.nodePropertyRows[item->index]),
+                };
+            }
+            break;
+        case MaterialEditorDetailsItemKind::NodePropertyOptionRow:
+            if (item->index < rows.nodePropertyRows.size()) {
+                const MaterialEditorGraphNodeProperty& property = rows.nodePropertyRows[item->index];
+                if (property.enabled && item->optionIndex < property.options.size()) {
+                    MaterialEditorGraphNodePropertyHit propertyHit = MaterialEditorDetailsPropertyHit(property);
+                    propertyHit.kind = MaterialEditorGraphNodePropertyHitKind::EnumOption;
+                    propertyHit.optionValue = property.options[item->optionIndex].value;
+                    return MaterialEditorDetailsHit{
+                        .kind = MaterialEditorDetailsHitKind::NodeProperty,
+                        .rect = item->clippedRect,
+                        .nodeProperty = std::move(propertyHit),
+                    };
+                }
+            }
+            break;
+        case MaterialEditorDetailsItemKind::ParameterRow:
+            if (item->index < rows.parameterModels.size()) {
+                const MaterialEditorParameter& parameter = rows.parameterModels[item->index];
+                if (parameter.enabled && parameter.overrideEnabled) {
+                    return MaterialEditorDetailsHit{
+                        .kind = MaterialEditorDetailsHitKind::Parameter,
+                        .rect = item->clippedRect,
+                        .parameter = MaterialEditorDetailsParameterHit(parameter),
+                    };
+                }
+            }
+            break;
+        case MaterialEditorDetailsItemKind::TextureParameterRow:
+            if (item->index < rows.textureSlotModels.size()) {
+                const MaterialEditorParameter& parameter = rows.textureSlotModels[item->index];
+                if (parameter.enabled && parameter.overrideEnabled) {
+                    return MaterialEditorDetailsHit{
+                        .kind = MaterialEditorDetailsHitKind::TextureParameter,
+                        .rect = item->clippedRect,
+                        .parameter = MaterialEditorDetailsParameterHit(parameter),
+                    };
+                }
+            }
+            break;
+        default:
+            break;
+        }
+        return MaterialEditorDetailsHit{ .kind = MaterialEditorDetailsHitKind::Backdrop, .rect = layout.panel };
+    }
+    return MaterialEditorDetailsHit{ .kind = MaterialEditorDetailsHitKind::Backdrop, .rect = layout.panel };
 }
 
 inline int MaterialEditorPanelAdvancePastNodeProperties(
@@ -909,88 +1341,16 @@ inline std::optional<MaterialEditorGraphNodePropertyHit> MaterialEditorPanelRend
     const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
     int x,
     int y) noexcept {
-    const MaterialEditorPanelLayout layout = ResolveLayout(content);
-    if (nodeProperties.empty() ||
-        !MaterialEditorPanelPointInRect(layout.detailsPanel, x, y) ||
-        MaterialEditorPanelRectWidth(layout.detailsPanel) < 220 ||
-        MaterialEditorPanelRectHeight(layout.detailsPanel) < 140) {
+    try {
+        const std::uint32_t selectedNodeId = nodeProperties.empty() ? 0U : nodeProperties.front().nodeId;
+        const MaterialEditorPanelDetailsRows rows = DetailsRows({}, selectedNodeId, nodeProperties);
+        const MaterialEditorDetailsHit hit = DetailsHitAt(ResolveDetailsLayout(content, rows, 0), rows, x, y);
+        return hit.kind == MaterialEditorDetailsHitKind::NodeProperty
+            ? std::optional<MaterialEditorGraphNodePropertyHit>{ hit.nodeProperty }
+            : std::nullopt;
+    } catch (...) {
         return std::nullopt;
     }
-
-    int rowY = layout.detailsPanel.top + 34;
-    const int bottom = layout.detailsPanel.bottom - 10;
-    if (rowY + 20 <= bottom) {
-        rowY += 22;
-    }
-    for (const MaterialEditorGraphNodeProperty& property : nodeProperties) {
-        if (rowY + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight > bottom) {
-            break;
-        }
-        const RECT row{
-            layout.detailsPanel.left + 12,
-            rowY,
-            layout.detailsPanel.right - 12,
-            rowY + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight,
-        };
-        if (MaterialEditorPanelPointInRect(row, x, y) && property.enabled) {
-            MaterialEditorGraphNodePropertyHit hit{
-                .nodeId = property.nodeId,
-                .stableId = property.stableId,
-                .displayName = property.displayName,
-                .propertyKind = property.kind,
-                .type = property.type,
-                .value = property.value,
-                .componentIndex = property.componentIndex,
-            };
-            switch (property.kind) {
-            case MaterialEditorGraphNodePropertyKind::Text:
-                hit.kind = MaterialEditorGraphNodePropertyHitKind::TextField;
-                break;
-            case MaterialEditorGraphNodePropertyKind::Numeric:
-                hit.kind = MaterialEditorGraphNodePropertyHitKind::Slider;
-                break;
-            case MaterialEditorGraphNodePropertyKind::Color:
-                hit.kind = MaterialEditorGraphNodePropertyHitKind::ColorPicker;
-                break;
-            case MaterialEditorGraphNodePropertyKind::Enum:
-                hit.kind = MaterialEditorGraphNodePropertyHitKind::EnumField;
-                break;
-            case MaterialEditorGraphNodePropertyKind::TextureAsset:
-                hit.kind = MaterialEditorGraphNodePropertyHitKind::TexturePicker;
-                break;
-            }
-            return hit;
-        }
-        rowY += MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight;
-        if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
-            for (const MaterialEditorGraphNodePropertyOption& option : property.options) {
-                if (rowY + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight > bottom) {
-                    break;
-                }
-                const RECT optionRow{
-                    layout.detailsPanel.left + 28,
-                    rowY,
-                    layout.detailsPanel.right - 18,
-                    rowY + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight,
-                };
-                if (MaterialEditorPanelPointInRect(optionRow, x, y) && property.enabled) {
-                    return MaterialEditorGraphNodePropertyHit{
-                        .kind = MaterialEditorGraphNodePropertyHitKind::EnumOption,
-                        .nodeId = property.nodeId,
-                        .stableId = property.stableId,
-                        .displayName = property.displayName,
-                        .propertyKind = property.kind,
-                        .type = property.type,
-                        .value = property.value,
-                        .componentIndex = property.componentIndex,
-                        .optionValue = option.value,
-                    };
-                }
-                rowY += MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight;
-            }
-        }
-    }
-    return std::nullopt;
 }
 
 inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRenderer::ParameterAt(
@@ -1000,52 +1360,16 @@ inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRendere
     std::size_t debugRowCount,
     int x,
     int y) noexcept {
-    const MaterialEditorPanelLayout layout = ResolveLayout(content);
-    if (!MaterialEditorPanelPointInRect(layout.detailsPanel, x, y) ||
-        MaterialEditorPanelRectWidth(layout.detailsPanel) < 220 ||
-        MaterialEditorPanelRectHeight(layout.detailsPanel) < 140) {
+    try {
+        MaterialEditorPanelDetailsRows rows = DetailsRows(parameters, nodeProperties.empty() ? 0U : nodeProperties.front().nodeId, nodeProperties);
+        rows.debugChannelRows.resize(debugRowCount);
+        const MaterialEditorDetailsHit hit = DetailsHitAt(ResolveDetailsLayout(content, rows, 0), rows, x, y);
+        return hit.kind == MaterialEditorDetailsHitKind::Parameter
+            ? std::optional<MaterialEditorPanelParameterHit>{ hit.parameter }
+            : std::nullopt;
+    } catch (...) {
         return std::nullopt;
     }
-
-    int rowY = layout.detailsPanel.top + 34;
-    constexpr int rowHeight = 18;
-    const int bottom = layout.detailsPanel.bottom - 10;
-    rowY = MaterialEditorPanelAdvancePastNodeProperties(rowY, bottom, nodeProperties);
-    if (debugRowCount > 0U) {
-        rowY += 22;
-        rowY += static_cast<int>(std::min<std::size_t>(debugRowCount, 6U)) * rowHeight;
-        rowY += 6;
-    }
-    if (rowY + 20 <= bottom) {
-        rowY += 22;
-    }
-
-    std::size_t visibleParameter = 0U;
-    for (const MaterialEditorParameter& parameter : parameters) {
-        if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
-            continue;
-        }
-        if (rowY + rowHeight > bottom || visibleParameter >= 7U) {
-            break;
-        }
-        const RECT row{
-            layout.detailsPanel.left + 12,
-            rowY,
-            layout.detailsPanel.right - 12,
-            rowY + rowHeight,
-        };
-        if (MaterialEditorPanelPointInRect(row, x, y) && parameter.enabled && parameter.overrideEnabled) {
-            return MaterialEditorPanelParameterHit{
-                .stableId = parameter.stableId,
-                .displayName = parameter.displayName.empty() ? parameter.stableId : parameter.displayName,
-                .type = parameter.type,
-                .value = parameter.value,
-            };
-        }
-        rowY += rowHeight;
-        ++visibleParameter;
-    }
-    return std::nullopt;
 }
 
 inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRenderer::ParameterAt(
@@ -1064,69 +1388,16 @@ inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRendere
     std::size_t debugRowCount,
     int x,
     int y) noexcept {
-    const MaterialEditorPanelLayout layout = ResolveLayout(content);
-    if (!MaterialEditorPanelPointInRect(layout.detailsPanel, x, y) ||
-        MaterialEditorPanelRectWidth(layout.detailsPanel) < 220 ||
-        MaterialEditorPanelRectHeight(layout.detailsPanel) < 140) {
+    try {
+        MaterialEditorPanelDetailsRows rows = DetailsRows(parameters, nodeProperties.empty() ? 0U : nodeProperties.front().nodeId, nodeProperties);
+        rows.debugChannelRows.resize(debugRowCount);
+        const MaterialEditorDetailsHit hit = DetailsHitAt(ResolveDetailsLayout(content, rows, 0), rows, x, y);
+        return hit.kind == MaterialEditorDetailsHitKind::TextureParameter
+            ? std::optional<MaterialEditorPanelParameterHit>{ hit.parameter }
+            : std::nullopt;
+    } catch (...) {
         return std::nullopt;
     }
-
-    int rowY = layout.detailsPanel.top + 34;
-    constexpr int rowHeight = 18;
-    const int bottom = layout.detailsPanel.bottom - 10;
-    rowY = MaterialEditorPanelAdvancePastNodeProperties(rowY, bottom, nodeProperties);
-    if (debugRowCount > 0U) {
-        rowY += 22;
-        rowY += static_cast<int>(std::min<std::size_t>(debugRowCount, 6U)) * rowHeight;
-        rowY += 6;
-    }
-    if (rowY + 20 <= bottom) {
-        rowY += 22;
-    }
-
-    std::size_t visibleParameter = 0U;
-    for (const MaterialEditorParameter& parameter : parameters) {
-        if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
-            continue;
-        }
-        if (rowY + rowHeight > bottom || visibleParameter >= 7U) {
-            break;
-        }
-        rowY += rowHeight;
-        ++visibleParameter;
-    }
-
-    if (rowY + 28 <= bottom) {
-        rowY += 6;
-        rowY += 22;
-    }
-
-    std::size_t visibleTexture = 0U;
-    for (const MaterialEditorParameter& parameter : parameters) {
-        if (parameter.type != kb::render::RenderMaterialParameterType::Texture) {
-            continue;
-        }
-        if (rowY + rowHeight > bottom || visibleTexture >= 6U) {
-            break;
-        }
-        const RECT row{
-            layout.detailsPanel.left + 12,
-            rowY,
-            layout.detailsPanel.right - 12,
-            rowY + rowHeight,
-        };
-        if (MaterialEditorPanelPointInRect(row, x, y) && parameter.enabled && parameter.overrideEnabled) {
-            return MaterialEditorPanelParameterHit{
-                .stableId = parameter.stableId,
-                .displayName = parameter.displayName.empty() ? parameter.stableId : parameter.displayName,
-                .type = parameter.type,
-                .value = parameter.value,
-            };
-        }
-        rowY += rowHeight;
-        ++visibleTexture;
-    }
-    return std::nullopt;
 }
 
 inline MaterialEditorGraphPinDragState MaterialEditorPanelRenderer::GraphPinDragState(

@@ -8,6 +8,7 @@ add_library(kb_renderer STATIC
     include/kb/render/SceneDepthPolicy.hpp
     include/kb/render/SceneFramebuffer.hpp
     include/kb/render/SceneGBuffer.hpp
+    include/kb/render/SceneGBufferContract.hpp
     include/kb/render/SceneRenderTarget.hpp
     include/kb/render/SceneRenderTargetFormat.hpp
     include/kb/render/ShaderManifest.hpp

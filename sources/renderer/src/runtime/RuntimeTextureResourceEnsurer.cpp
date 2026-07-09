@@ -8,8 +8,12 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <bgfx/bgfx.h>
+
+#include <limits>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -34,7 +38,10 @@ void RuntimeTextureResourceEnsurer::Ensure(
     RuntimeTextureResourceMap& textures) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
-    auto ensureTexture = [&](std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) {
+    auto ensureTexture = [&](
+                             std::uint64_t textureAssetId,
+                             RenderTextureColorSpace colorSpace,
+                             RenderTextureDimension expectedDimension) {
         if (textureAssetId == 0U) {
             return;
         }
@@ -65,6 +72,13 @@ void RuntimeTextureResourceEnsurer::Ensure(
             RuntimeTextureResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, cached.handle);
+            if (cached.dimension != expectedDimension) {
+                std::ostringstream row;
+                row << "texture-dimension-mismatch assetId=" << textureAssetId
+                    << " expected=" << RenderTextureDimensionName(expectedDimension)
+                    << " actual=" << RenderTextureDimensionName(cached.dimension);
+                WriteRendererMaterialGraphDebugLog("resource", row.str());
+            }
             return;
         }
 
@@ -79,13 +93,14 @@ void RuntimeTextureResourceEnsurer::Ensure(
         const std::optional<RenderTextureAssetData> asset = texturePath.empty()
             ? std::nullopt
             : RenderTextureAssetLoader::LoadTexture(texturePath);
-        if (!asset.has_value() || asset->rgba8.empty()) {
+        if (!asset.has_value() || asset->rgba8.empty() ||
+            asset->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
         }
 
         const bgfx::Memory* memory = bgfx::copy(asset->rgba8.data(), static_cast<std::uint32_t>(asset->rgba8.size()));
-        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture2D(asset->MakeDesc(memory, colorSpace));
+        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture(asset->MakeDesc(memory, colorSpace));
         if (!handle.IsValid()) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             static_cast<void>(manager.Unload(assetId));
@@ -96,8 +111,16 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .handle = handle,
             .contentHash = metadata->contentHash,
             .lastReferencedFrame = context.currentFrame,
+            .dimension = asset->dimension,
         };
         context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, handle);
+        if (asset->dimension != expectedDimension) {
+            std::ostringstream row;
+            row << "texture-dimension-mismatch assetId=" << textureAssetId
+                << " expected=" << RenderTextureDimensionName(expectedDimension)
+                << " actual=" << RenderTextureDimensionName(asset->dimension);
+            WriteRendererMaterialGraphDebugLog("resource", row.str());
+        }
     };
 
     for (const RuntimeAssetKey& materialKey : context.frameReferences.Materials()) {
@@ -118,11 +141,14 @@ void RuntimeTextureResourceEnsurer::Ensure(
         }
         for (const RenderMaterialTextureSlotBinding slot : RenderMaterialTextureSlots(*material)) {
             if (slot.policy.runtimeSupport == RenderMaterialFeatureSupport::Supported) {
-                ensureTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
+                ensureTexture(
+                    slot.assetId,
+                    RenderTextureBindingColorSpace(slot.policy.expectedColorSpace),
+                    RenderTextureDimension::Texture2D);
             }
         }
         for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
-            ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
+            ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace, graphTexture.dimension);
         }
     }
 }

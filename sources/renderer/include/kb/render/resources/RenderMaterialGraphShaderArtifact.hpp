@@ -12,6 +12,8 @@
 
 namespace kb::render {
 
+inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 7ULL;
+
 enum class RenderMaterialGraphShaderBackend : std::uint8_t {
     Dxbc,
     Dxil,
@@ -52,6 +54,7 @@ struct RenderMaterialGraphShaderBinary {
 
 struct RenderMaterialGraphShaderArtifact {
     std::uint64_t graphSourceHash = 0U;
+    std::uint64_t variantKey = 0U;
     std::uint64_t wrapperHash = 0U;
     std::uint64_t reflectionHash = 0U;
     std::uint64_t dependencyHash = 0U;
@@ -83,6 +86,7 @@ struct RenderMaterialGraphShaderArtifactResult {
 
 struct RenderMaterialGraphShaderManifestEntry {
     std::uint64_t graphSourceHash = 0U;
+    std::uint64_t variantKey = 0U;
     std::uint64_t wrapperHash = 0U;
     std::uint64_t reflectionHash = 0U;
     std::uint64_t dependencyHash = 0U;
@@ -100,6 +104,12 @@ struct RenderMaterialGraphShaderManifest {
 
     [[nodiscard]] const RenderMaterialGraphShaderManifestEntry* Find(
         std::uint64_t graphSourceHash,
+        std::uint64_t variantKey,
+        std::string_view pass,
+        RenderMaterialGraphShaderBackend backend) const noexcept;
+    // Compatibility lookup for old single-variant manifests. Returns null when the identity is ambiguous.
+    [[nodiscard]] const RenderMaterialGraphShaderManifestEntry* Find(
+        std::uint64_t graphSourceHash,
         std::string_view pass,
         RenderMaterialGraphShaderBackend backend) const noexcept;
 };
@@ -109,6 +119,7 @@ struct RenderMaterialGraphShaderManifest {
     std::string_view pass);
 
 [[nodiscard]] std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraphReflection& reflection) noexcept;
+[[nodiscard]] std::uint64_t ComputeRenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept;
 
 [[nodiscard]] RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     const RenderMaterialGraphShaderSource& shader,

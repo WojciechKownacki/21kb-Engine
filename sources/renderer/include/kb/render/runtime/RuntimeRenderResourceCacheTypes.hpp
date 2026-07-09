@@ -59,6 +59,7 @@ struct RuntimeTextureResource {
     RenderTextureHandle handle{};
     std::uint64_t contentHash = 0;
     std::uint64_t lastReferencedFrame = 0;
+    RenderTextureDimension dimension = RenderTextureDimension::Texture2D;
 };
 
 } // namespace kb::render

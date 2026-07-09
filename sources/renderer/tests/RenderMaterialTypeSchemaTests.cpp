@@ -14,6 +14,16 @@
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
+#if defined(_WIN32)
+#if !defined(WIN32_LEAN_AND_MEAN)
+#define WIN32_LEAN_AND_MEAN
+#endif
+#if !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -928,6 +938,81 @@ void RunMaterialAssetAtomicSaveAndRoundTripTest() {
     std::error_code ec;
     std::filesystem::remove(tmpFile, ec);
 }
+
+#if defined(_WIN32)
+[[nodiscard]] bool HasMaterialWriterTempArtifacts(const std::filesystem::path& destination) {
+    const std::string prefix = destination.filename().string() + ".tmp.";
+    std::error_code error;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(destination.parent_path(), error)) {
+        if (entry.path().filename().string().starts_with(prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RunMaterialAtomicSaveFailurePreservesPreviousVersionTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kb_material_atomic_failure_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "P0.2: atomic failure test could not create its temp directory");
+
+    const auto lockDestinationAgainstReplace = [](const std::filesystem::path& path) {
+        return CreateFileW(
+            path.wstring().c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+    };
+
+    const std::filesystem::path materialPath = root / "Preserve.kbmat";
+    RenderMaterialAssetData materialBefore{};
+    materialBefore.desc.roughnessFactor = 0.2F;
+    RenderMaterialAssetData materialAfter = materialBefore;
+    materialAfter.desc.roughnessFactor = 0.9F;
+    Require(RenderMaterialAssetWriter::Save(materialPath, materialBefore),
+        "P0.2: atomic failure test could not seed a material");
+    HANDLE materialLock = lockDestinationAgainstReplace(materialPath);
+    Require(materialLock != INVALID_HANDLE_VALUE,
+        "P0.2: atomic failure test could not lock the material destination");
+    const bool materialSaveResult = RenderMaterialAssetWriter::Save(materialPath, materialAfter);
+    CloseHandle(materialLock);
+    Require(!materialSaveResult,
+        "P0.2: material save unexpectedly reported success while atomic replacement was denied");
+    const std::optional<RenderMaterialAssetData> preservedMaterial = RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    Require(preservedMaterial.has_value() && NearlyEqual(preservedMaterial->desc.roughnessFactor, 0.2F),
+        "P0.2: failed material replacement changed or corrupted the previous file");
+    Require(!HasMaterialWriterTempArtifacts(materialPath),
+        "P0.2: failed material replacement leaked a temp file");
+
+    const std::filesystem::path instancePath = root / "Preserve.kbmatinst";
+    RenderMaterialInstanceAssetData instanceBefore{};
+    instanceBefore.parentMaterialAssetId = kb::assets::AssetId{ 11U };
+    RenderMaterialInstanceAssetData instanceAfter = instanceBefore;
+    instanceAfter.parentMaterialAssetId = kb::assets::AssetId{ 22U };
+    Require(RenderMaterialInstanceAssetWriter::Save(instancePath, instanceBefore),
+        "P0.2: atomic failure test could not seed a material instance");
+    HANDLE instanceLock = lockDestinationAgainstReplace(instancePath);
+    Require(instanceLock != INVALID_HANDLE_VALUE,
+        "P0.2: atomic failure test could not lock the material-instance destination");
+    const bool instanceSaveResult = RenderMaterialInstanceAssetWriter::Save(instancePath, instanceAfter);
+    CloseHandle(instanceLock);
+    Require(!instanceSaveResult,
+        "P0.2: material-instance save unexpectedly reported success while atomic replacement was denied");
+    const std::optional<RenderMaterialInstanceAssetData> preservedInstance =
+        RenderMaterialInstanceAssetLoader::LoadInstance(instancePath);
+    Require(preservedInstance.has_value() && preservedInstance->parentMaterialAssetId == kb::assets::AssetId{ 11U },
+        "P0.2: failed material-instance replacement changed or corrupted the previous file");
+    Require(!HasMaterialWriterTempArtifacts(instancePath),
+        "P0.2: failed material-instance replacement leaked a temp file");
+
+    std::filesystem::remove_all(root, error);
+}
+#endif
 
 void RunMaterialInstanceOverrideRoundTripAndValidatorTest() {
     RenderMaterialAssetData parent{};
@@ -5705,7 +5790,8 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
             docs.find("kb_standalone_player") != std::string::npos &&
             docs.find("GpuDeferred` | Production") != std::string::npos &&
             docs.find("Forward+ / clustered lighting | Production") != std::string::npos &&
-            docs.find("Apple/Metal | Unsupported") != std::string::npos,
+            docs.find("Apple/Metal | Production shader profile") != std::string::npos &&
+            docs.find("native Metal GPU readback remains platform-specific") != std::string::npos,
         "MAT-71: Material Graph documentation must include support matrix, standalone runtime, render-path gating and Metal status");
 
     const std::filesystem::path gatePath = FindRepositoryFile("tests/run-material-graph-release-gate.ps1");
@@ -6028,6 +6114,9 @@ void RunRenderMaterialTypeSchemaTests() {
     RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest();
     RunBuiltInPbrSchemaParserWarnsForEveryIgnoredAdvancedFieldTest();
     RunMaterialAssetAtomicSaveAndRoundTripTest();
+#if defined(_WIN32)
+    RunMaterialAtomicSaveFailurePreservesPreviousVersionTest();
+#endif
     RunMaterialInstanceOverrideRoundTripAndValidatorTest();
     RunMaterialInstanceStaticAndBaseOverrideTest();
     RunBuiltInPbrSchemaParserReportsTextureColorSpaceDiagnosticsTest();

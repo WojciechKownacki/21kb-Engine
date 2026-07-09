@@ -34,6 +34,7 @@ constexpr RenderGraphResourceId GBufferAlbedo{ 13U };
 constexpr RenderGraphResourceId GBufferNormal{ 14U };
 constexpr RenderGraphResourceId GBufferMaterial{ 15U };
 constexpr RenderGraphResourceId GBufferDepth{ 16U };
+constexpr RenderGraphResourceId GBufferSurface{ 17U };
 constexpr std::uint16_t Max = 64U;
 
 } // namespace RenderGraphResource

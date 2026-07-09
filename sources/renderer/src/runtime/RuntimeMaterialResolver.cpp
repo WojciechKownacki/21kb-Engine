@@ -542,6 +542,50 @@ void AppendInstanceValidationDiagnostics(
     });
 }
 
+[[nodiscard]] std::optional<RenderMaterialGraphTextureDimension> GraphTextureDimensionForStableId(
+    const RenderMaterialGraphDocument& graph,
+    std::string_view stableId) {
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        bool stableIdMatches = node.parameter.stableId == stableId;
+        if (node.parameter.stableId.empty()) {
+            const std::string suffix = std::to_string(node.id);
+            switch (node.kind) {
+            case RenderMaterialGraphNodeKind::ParameterTexture: stableIdMatches = stableId == "texture" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureSample: stableIdMatches = stableId == "textureSample" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureObject: stableIdMatches = stableId == "textureObject" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureSampleCube: stableIdMatches = stableId == "textureSampleCube" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureObjectCube: stableIdMatches = stableId == "textureObjectCube" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureSampleVolume: stableIdMatches = stableId == "textureSampleVolume" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureObjectVolume: stableIdMatches = stableId == "textureObjectVolume" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureSample2DArray: stableIdMatches = stableId == "textureSample2DArray" + suffix; break;
+            case RenderMaterialGraphNodeKind::TextureObject2DArray: stableIdMatches = stableId == "textureObject2DArray" + suffix; break;
+            default: stableIdMatches = false; break;
+            }
+        }
+        if (!stableIdMatches) {
+            continue;
+        }
+        switch (node.kind) {
+        case RenderMaterialGraphNodeKind::TextureSampleCube:
+        case RenderMaterialGraphNodeKind::TextureObjectCube:
+            return RenderMaterialGraphTextureDimension::TextureCube;
+        case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        case RenderMaterialGraphNodeKind::TextureObjectVolume:
+            return RenderMaterialGraphTextureDimension::Texture3D;
+        case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        case RenderMaterialGraphNodeKind::TextureObject2DArray:
+            return RenderMaterialGraphTextureDimension::Texture2DArray;
+        case RenderMaterialGraphNodeKind::ParameterTexture:
+        case RenderMaterialGraphNodeKind::TextureSample:
+        case RenderMaterialGraphNodeKind::TextureObject:
+            return RenderMaterialGraphTextureDimension::Texture2D;
+        default:
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
 void ApplyTextureAssetIdByRole(RenderMaterialDesc& desc, std::string_view role, std::uint64_t assetId) noexcept {
     const std::string key = NormalizeMaterialParameterKey(role);
     if (IsAnyMaterialParameterKey(key, { "basecolor", "albedo" })) {
@@ -573,8 +617,8 @@ void ApplyTextureAssetIdByRole(RenderMaterialDesc& desc, std::string_view role, 
     }
 }
 
-void ApplyGraphParameterValuesToPbrDesc(RenderMaterialDesc& desc, const std::vector<RenderMaterialGraphParameterValue>& values) {
-    for (const RenderMaterialGraphParameterValue& value : values) {
+void ApplyGraphParameterValuesToPbrDesc(RenderMaterialDesc& desc, const RenderMaterialAssetData& materialAsset) {
+    for (const RenderMaterialGraphParameterValue& value : materialAsset.graphParameterValues) {
         const std::string key = NormalizeMaterialParameterKey(value.stableId);
         switch (value.type) {
         case RenderMaterialParameterType::Scalar:
@@ -612,6 +656,13 @@ void ApplyGraphParameterValuesToPbrDesc(RenderMaterialDesc& desc, const std::vec
             }
             break;
         case RenderMaterialParameterType::Texture:
+            if (const std::optional<RenderMaterialGraphTextureDimension> dimension =
+                    GraphTextureDimensionForStableId(materialAsset.graph, value.stableId);
+                dimension.has_value() && *dimension != RenderMaterialGraphTextureDimension::Texture2D) {
+                // Legacy PBR texture fields are sampler2D-only. Non-2D assets stay exclusively in
+                // graphProgram.textures, where their reflected sampler dimension is preserved.
+                break;
+            }
             if (IsAnyMaterialParameterKey(key, { "basecolor", "basecolortexture", "albedo", "albedotexture" })) {
                 desc.albedoTextureAssetId = value.assetId;
             } else if (IsAnyMaterialParameterKey(key, { "normal", "normalmap", "normaltexture" })) {
@@ -646,7 +697,11 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
                 continue;
             }
             if (slot.assetIdFieldName == value.stableId + "TextureAssetId") {
-                ApplyTextureAssetIdByRole(desc, slot.role, value.assetId);
+                const std::optional<RenderMaterialGraphTextureDimension> dimension =
+                    GraphTextureDimensionForStableId(materialAsset.graph, value.stableId);
+                if (!dimension.has_value() || *dimension == RenderMaterialGraphTextureDimension::Texture2D) {
+                    ApplyTextureAssetIdByRole(desc, slot.role, value.assetId);
+                }
                 break;
             }
         }
@@ -1924,7 +1979,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
         const std::uint64_t textureAssetId = ResolveTextureAssetIdOrCount(manager, materialMetadata, materialAsset.layerMaskTexturePath, resolved.unresolvedTexturePathCount);
         resolved.desc.layerMaskTextureAssetId = textureAssetId != 0U ? textureAssetId : resolved.desc.layerMaskTextureAssetId;
     }
-    ApplyGraphParameterValuesToPbrDesc(resolved.desc, materialAsset.graphParameterValues);
+    ApplyGraphParameterValuesToPbrDesc(resolved.desc, materialAsset);
     ApplyGraphTextureSlotValuesToPbrDesc(resolved.desc, materialAsset);
     ApplyMaterialOutputGraphToPbrDesc(resolved.desc, materialAsset);
 
