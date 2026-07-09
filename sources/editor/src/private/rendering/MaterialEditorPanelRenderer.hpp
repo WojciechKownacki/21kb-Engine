@@ -5,6 +5,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -18,6 +19,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -279,7 +281,7 @@ inline constexpr int PreviewWidth = 154;
 inline constexpr int PreviewHeight = 104;
 inline constexpr int GraphNodeWidth = 240;
 inline constexpr int GraphNodeHeight = 160;
-inline constexpr int GraphNodeHeaderHeight = 32;
+inline constexpr int GraphNodeHeaderHeight = 30;
 inline constexpr int GraphNodeBodyTopPadding = 10;
 inline constexpr int GraphNodePinRowHeight = 24;
 inline constexpr int TextureSlotRowCount = 5;
@@ -293,13 +295,14 @@ inline constexpr int DetailsNodePropertyOptionHeight = 20;
 inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
         return SIZE{ 204, 76 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         return SIZE{ 204, 100 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return SIZE{ 204, 196 };
+        return SIZE{ 320, 196 };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return SIZE{ 204, 196 };
+        return SIZE{ 320, 196 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
     case kb::render::RenderMaterialGraphNodeKind::TextureObject:
     case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
@@ -307,11 +310,12 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
         return SIZE{ 300, 162 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
+    case kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter:
         return SIZE{ 160, 66 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return SIZE{ 176, 72 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return SIZE{ 204, 196 };
+        return SIZE{ 320, 196 };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return SIZE{ 218, 176 };
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
@@ -563,7 +567,7 @@ public:
         const EditorSceneContext& sceneContext,
         kb::assets::AssetId assetId,
         int x,
-        int y) noexcept;
+        int y);
     [[nodiscard]] static std::optional<std::uint32_t> GraphTextureSampleAt(
         const RECT& content,
         const kb::render::RenderMaterialGraphDocument& graph,
@@ -1361,9 +1365,8 @@ inline std::vector<std::string> MaterialEditorPanelHitTestOutputPins(const kb::r
 
 inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, std::size_t index) noexcept {
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
-    const int pinInset = MaterialEditorPanelScaled(6, scale);
     return POINT{
-        node.left + pinInset,
+        node.left,
         node.top
             + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale)
             + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeBodyTopPadding, scale)
@@ -1376,7 +1379,6 @@ inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, kb::render::Rend
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    const int pinInset = MaterialEditorPanelScaled(6, scale);
     if (kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
         kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
         const int bodyTop = node.top + headerHeight;
@@ -1386,8 +1388,8 @@ inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, kb::render::Rend
             (static_cast<int>(index) * rowHeight) +
             (rowHeight / 2);
         return POINT{
-            node.left + pinInset,
-            std::clamp(y, bodyTop + pinInset, static_cast<int>(node.bottom) - pinInset),
+            node.left,
+            std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), static_cast<int>(node.bottom) - MaterialEditorPanelScaled(6, scale)),
         };
     }
     const int count = static_cast<int>(std::max<std::size_t>(1U, MaterialEditorPanelInputPins(kind).size()));
@@ -1401,38 +1403,36 @@ inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, kb::render::Rend
     const int y = bodyCenter - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2);
     const int bottom = static_cast<int>(node.bottom);
     return POINT{
-        node.left + pinInset,
-        std::clamp(y, bodyTop + pinInset, bottom - pinInset),
+        node.left,
+        std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), bottom - MaterialEditorPanelScaled(6, scale)),
     };
 }
 
 inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, std::size_t index, std::size_t count) noexcept {
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
-    const int pinInset = MaterialEditorPanelScaled(6, scale);
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     if (count <= 1U) {
-        return POINT{ node.right - pinInset, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
+        return POINT{ node.right, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
     }
     const int rowHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodePinRowHeight, scale);
     const int total = static_cast<int>(count) * rowHeight;
     const int top = static_cast<int>(node.top);
     const int bottom = static_cast<int>(node.bottom);
     return POINT{
-        node.right - pinInset,
+        node.right,
         std::clamp(
             top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2),
-            top + headerHeight + pinInset,
-            bottom - pinInset),
+            top + headerHeight + MaterialEditorPanelScaled(6, scale),
+            bottom - MaterialEditorPanelScaled(6, scale)),
     };
 }
 
 inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind, std::size_t index, std::size_t count) noexcept {
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
-    const int pinInset = MaterialEditorPanelScaled(6, scale);
     if (count <= 1U) {
         const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-        return POINT{ node.right - pinInset, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
+        return POINT{ node.right, node.top + headerHeight + ((MaterialEditorPanelRectHeight(node) - headerHeight) / 2) };
     }
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     if (kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
@@ -1444,7 +1444,7 @@ inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::Ren
             (static_cast<int>(index) * rowHeight) +
             (rowHeight / 2);
         const int bottom = static_cast<int>(node.bottom);
-        return POINT{ node.right - pinInset, std::clamp<int>(y, static_cast<int>(node.top) + headerHeight + pinInset, bottom - pinInset) };
+        return POINT{ node.right, std::clamp<int>(y, static_cast<int>(node.top) + headerHeight + MaterialEditorPanelScaled(6, scale), bottom - MaterialEditorPanelScaled(6, scale)) };
     }
     if (!MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
         const int bodyTop = node.top + headerHeight;
@@ -1456,7 +1456,7 @@ inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::Ren
         const int bodyCenter = bodyTop + (bodyHeight / 2);
         const int y = bodyCenter - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2);
         const int bottom = static_cast<int>(node.bottom);
-        return POINT{ node.right - pinInset, std::clamp(y, bodyTop + pinInset, bottom - pinInset) };
+        return POINT{ node.right, std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), bottom - MaterialEditorPanelScaled(6, scale)) };
     }
     const int previewTop = node.top + headerHeight + MaterialEditorPanelScaled(8, scale);
     const int previewBottom = node.bottom - MaterialEditorPanelScaled(10, scale);
@@ -1468,8 +1468,8 @@ inline POINT MaterialEditorPanelOutputPinPoint(const RECT& node, kb::render::Ren
     const int bodyCenter = previewTop + (previewHeight / 2);
     const int y = bodyCenter - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2);
     return POINT{
-        node.right - pinInset,
-        std::clamp(y, previewTop + pinInset, previewBottom - pinInset),
+        node.right,
+        std::clamp(y, previewTop + MaterialEditorPanelScaled(6, scale), previewBottom - MaterialEditorPanelScaled(6, scale)),
     };
 }
 
@@ -1485,7 +1485,6 @@ inline POINT MaterialEditorPanelOutputPinPoint(
 
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(graphNode.kind);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
-    const int pinInset = MaterialEditorPanelScaled(6, scale);
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, MaterialEditorPanelRectHeight(node) - headerHeight);
@@ -1501,8 +1500,8 @@ inline POINT MaterialEditorPanelOutputPinPoint(
     const int y = bodyCenter - (total / 2) + (outputRow * rowHeight) + (rowHeight / 2);
     const int bottom = static_cast<int>(node.bottom);
     return POINT{
-        node.right - pinInset,
-        std::clamp(y, bodyTop + pinInset, bottom - pinInset),
+        node.right,
+        std::clamp(y, bodyTop + MaterialEditorPanelScaled(6, scale), bottom - MaterialEditorPanelScaled(6, scale)),
     };
 }
 
@@ -1673,7 +1672,7 @@ inline RECT MaterialEditorPanelColorWatcherRect(const RECT& node, kb::render::Re
     const int headerHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
     const int left = node.left + MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 18 : 8, scale);
     const int top = node.top + headerHeight + MaterialEditorPanelScaled(10, scale);
-    const int right = node.right - MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 104 : 38, scale);
+    const int right = node.right - MaterialEditorPanelScaled(kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp ? 104 : 70, scale);
     const int bottom = node.bottom - MaterialEditorPanelScaled(12, scale);
     return RECT{ left, top, right, std::max(top + MaterialEditorPanelScaled(72, scale), bottom) };
 }
@@ -1711,7 +1710,7 @@ inline RECT MaterialEditorPanelColorWatcherChannelRect(
     const int count = static_cast<int>(std::max<std::size_t>(1U, componentCount));
     const int gap = std::max(3, MaterialEditorPanelScaled(6, scale));
     const int availableWidth = static_cast<int>(std::max<LONG>(1L, watcher.right - watcher.left));
-    const int fieldWidth = std::max(42, (availableWidth - ((count - 1) * gap)) / count);
+    const int fieldWidth = std::max(1, (availableWidth - ((count - 1) * gap)) / count);
     const int fieldHeight = std::max(18, MaterialEditorPanelScaled(22, scale));
     const int top = watcher.bottom - fieldHeight;
     const int left = watcher.left + static_cast<int>(componentIndex) * (fieldWidth + gap);
@@ -2354,6 +2353,71 @@ inline bool MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(
     return false;
 }
 
+inline void MaterialEditorPanelConfigureGraphCanvasViewport(
+    MaterialGraphCanvas& canvas,
+    const RECT& content,
+    float zoom,
+    int panX,
+    int panY) noexcept {
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    canvas.SetViewport(MaterialGraphCanvasRect{
+        static_cast<float>(layout.graphCanvas.left),
+        static_cast<float>(layout.graphCanvas.top),
+        static_cast<float>(std::max<LONG>(1, layout.graphCanvas.right - layout.graphCanvas.left)),
+        static_cast<float>(std::max<LONG>(1, layout.graphCanvas.bottom - layout.graphCanvas.top)),
+    });
+    const float clampedZoom = std::clamp(zoom, 0.25F, 2.0F);
+    canvas.SetView(
+        -static_cast<float>(panX) / clampedZoom,
+        -static_cast<float>(panY) / clampedZoom,
+        clampedZoom);
+}
+
+inline kb::render::RenderMaterialGraphDocument MaterialEditorPanelVisibleGraphDocument(
+    const kb::render::RenderMaterialGraphDocument& graph) {
+    kb::render::RenderMaterialGraphDocument visible = graph;
+    const auto hiddenNode = [&graph](const kb::render::RenderMaterialGraphNode& node) noexcept {
+        return MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graph, node.id);
+    };
+    visible.nodes.erase(std::remove_if(visible.nodes.begin(), visible.nodes.end(), hiddenNode), visible.nodes.end());
+    const auto nodeVisible = [&visible](std::uint32_t nodeId) noexcept {
+        return kb::render::FindRenderMaterialGraphNode(visible, nodeId) != nullptr;
+    };
+    visible.links.erase(
+        std::remove_if(
+            visible.links.begin(),
+            visible.links.end(),
+            [&nodeVisible](const kb::render::RenderMaterialGraphLink& link) noexcept {
+                return !nodeVisible(link.fromNodeId) || !nodeVisible(link.toNodeId);
+            }),
+        visible.links.end());
+    return visible;
+}
+
+inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiveGraphCanvas(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId) {
+    kb::render::RenderMaterialGraphDocument visible = MaterialEditorPanelVisibleGraphDocument(graph);
+    MaterialGraphCanvasDocumentBuildResult result = BuildMaterialGraphCanvasFromDocument(visible);
+    for (std::size_t index = 0U; index < visible.nodes.size(); ++index) {
+        MaterialGraphCanvasNode* canvasNode = result.canvas.MutableNodeAt(static_cast<std::uint32_t>(index));
+        if (canvasNode == nullptr) {
+            continue;
+        }
+        canvasNode->x += static_cast<float>(sceneContext.MaterialGraphNodeOffsetX(assetId, visible.nodes[index].id));
+        canvasNode->y += static_cast<float>(sceneContext.MaterialGraphNodeOffsetY(assetId, visible.nodes[index].id));
+    }
+    MaterialEditorPanelConfigureGraphCanvasViewport(
+        result.canvas,
+        content,
+        sceneContext.MaterialGraphZoom(),
+        sceneContext.MaterialGraphPanX(),
+        sceneContext.MaterialGraphPanY());
+    return result;
+}
+
 inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept {
     for (std::size_t index = graph.nodes.size(); index-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graph.nodes[index];
@@ -2448,47 +2512,34 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
-        const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
-        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
-            continue;
-        }
-        const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id);
-        if (!rect.has_value()) {
-            continue;
-        }
-        const float scale = static_cast<float>(MaterialEditorPanelRectWidth(*rect)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
-        const int radius = std::max(14, MaterialEditorPanelScaled(18, scale));
-        std::optional<MaterialEditorGraphPinHit> best;
-        long long bestDistanceSq = static_cast<long long>(radius) * static_cast<long long>(radius);
-        const auto consider = [&](const POINT& pinPoint, MaterialEditorGraphPinDirection direction, const std::string& pin) {
-            const long long dx = static_cast<long long>(pinPoint.x) - static_cast<long long>(x);
-            const long long dy = static_cast<long long>(pinPoint.y) - static_cast<long long>(y);
-            const long long distanceSq = (dx * dx) + (dy * dy);
-            if (distanceSq <= bestDistanceSq) {
-                bestDistanceSq = distanceSq;
-                const bool outputPin = direction == MaterialEditorGraphPinDirection::Output;
-                best = MaterialEditorGraphPinHit{
-                    .nodeId = node.id,
-                    .direction = direction,
-                    .pin = pin,
-                    .type = kb::render::RenderMaterialGraphPinDataType(node, pin, outputPin),
-                };
-            }
-        };
-        const std::vector<std::string> inputPins = MaterialEditorPanelHitTestInputPins(node);
-        for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
-            consider(MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex), MaterialEditorGraphPinDirection::Input, inputPins[pinIndex]);
-        }
-        const std::vector<std::string> outputPins = MaterialEditorPanelHitTestOutputPins(node);
-        for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
-            consider(MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex, outputPins.size()), MaterialEditorGraphPinDirection::Output, outputPins[pinIndex]);
-        }
-        if (best.has_value()) {
-            return best;
-        }
+    kb::render::RenderMaterialGraphDocument visible = MaterialEditorPanelVisibleGraphDocument(graphView);
+    MaterialGraphCanvasDocumentBuildResult canvasResult = BuildMaterialGraphCanvasFromDocument(visible);
+    MaterialEditorPanelConfigureGraphCanvasViewport(canvasResult.canvas, content, 1.0F, 0, 0);
+
+    const std::optional<MaterialGraphCanvasPinHit> hit = canvasResult.canvas.HitTestPin(static_cast<float>(x), static_cast<float>(y));
+    if (!hit.has_value()) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    const MaterialGraphCanvasNode* canvasNode = canvasResult.canvas.NodeAt(hit->node);
+    if (canvasNode == nullptr) {
+        return std::nullopt;
+    }
+    const std::uint32_t nodeId = static_cast<std::uint32_t>(std::strtoul(canvasNode->stableId.c_str(), nullptr, 10));
+    const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(visible, nodeId);
+    if (node == nullptr) {
+        return std::nullopt;
+    }
+    const std::vector<MaterialGraphCanvasPin>& pins = hit->output ? canvasNode->outputs : canvasNode->inputs;
+    if (hit->pin >= pins.size()) {
+        return std::nullopt;
+    }
+    const std::string& pin = pins[hit->pin].stableId;
+    return MaterialEditorGraphPinHit{
+        .nodeId = node->id,
+        .direction = hit->output ? MaterialEditorGraphPinDirection::Output : MaterialEditorGraphPinDirection::Input,
+        .pin = pin,
+        .type = kb::render::RenderMaterialGraphPinDataType(*node, pin, hit->output),
+    };
 }
 
 inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::GraphPinAt(
@@ -2502,49 +2553,31 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
-        const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
-        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
-            continue;
-        }
-        const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
-        if (!rect.has_value()) {
-            continue;
-        }
-        const float scale = static_cast<float>(MaterialEditorPanelRectWidth(*rect)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
-        const int radius = std::max(14, MaterialEditorPanelScaled(18, scale));
-        // Pick the nearest pin within the hit radius, so closely-spaced pins such as a texture
-        // node's Tex./UV inputs resolve to the one actually under the cursor.
-        std::optional<MaterialEditorGraphPinHit> best;
-        long long bestDistanceSq = static_cast<long long>(radius) * static_cast<long long>(radius);
-        const auto consider = [&](const POINT& pinPoint, MaterialEditorGraphPinDirection direction, const std::string& pin) {
-            const long long dx = static_cast<long long>(pinPoint.x) - static_cast<long long>(x);
-            const long long dy = static_cast<long long>(pinPoint.y) - static_cast<long long>(y);
-            const long long distanceSq = (dx * dx) + (dy * dy);
-            if (distanceSq <= bestDistanceSq) {
-                bestDistanceSq = distanceSq;
-                const bool outputPin = direction == MaterialEditorGraphPinDirection::Output;
-                best = MaterialEditorGraphPinHit{
-                    .nodeId = node.id,
-                    .direction = direction,
-                    .pin = pin,
-                    .type = kb::render::RenderMaterialGraphPinDataType(node, pin, outputPin),
-                };
-            }
-        };
-        const std::vector<std::string> inputPins = MaterialEditorPanelHitTestInputPins(node);
-        for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
-            consider(MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex), MaterialEditorGraphPinDirection::Input, inputPins[pinIndex]);
-        }
-        const std::vector<std::string> outputPins = MaterialEditorPanelHitTestOutputPins(node);
-        for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
-            consider(MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex, outputPins.size()), MaterialEditorGraphPinDirection::Output, outputPins[pinIndex]);
-        }
-        if (best.has_value()) {
-            return best;
-        }
+    MaterialGraphCanvasDocumentBuildResult canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
+    const std::optional<MaterialGraphCanvasPinHit> hit = canvasResult.canvas.HitTestPin(static_cast<float>(x), static_cast<float>(y));
+    if (!hit.has_value()) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    const MaterialGraphCanvasNode* canvasNode = canvasResult.canvas.NodeAt(hit->node);
+    if (canvasNode == nullptr) {
+        return std::nullopt;
+    }
+    const std::uint32_t nodeId = static_cast<std::uint32_t>(std::strtoul(canvasNode->stableId.c_str(), nullptr, 10));
+    const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(graphView, nodeId);
+    if (node == nullptr) {
+        return std::nullopt;
+    }
+    const std::vector<MaterialGraphCanvasPin>& pins = hit->output ? canvasNode->outputs : canvasNode->inputs;
+    if (hit->pin >= pins.size()) {
+        return std::nullopt;
+    }
+    const std::string& pin = pins[hit->pin].stableId;
+    return MaterialEditorGraphPinHit{
+        .nodeId = node->id,
+        .direction = hit->output ? MaterialEditorGraphPinDirection::Output : MaterialEditorGraphPinDirection::Input,
+        .pin = pin,
+        .type = kb::render::RenderMaterialGraphPinDataType(*node, pin, hit->output),
+    };
 }
 
 inline std::optional<EditorMaterialTextureSlot> MaterialEditorPanelRenderer::TextureSlotAt(
