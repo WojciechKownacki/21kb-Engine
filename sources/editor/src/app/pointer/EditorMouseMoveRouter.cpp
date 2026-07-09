@@ -123,13 +123,16 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
+        bool changed = false;
         if (!leftButtonDown) {
-            static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
+            changed = sceneContext_.EndMaterialGraphNodeDrag();
             ReleaseCapture();
         } else {
-            static_cast<void>(sceneContext_.DragMaterialGraphNode(x, y));
+            changed = sceneContext_.DragMaterialGraphNode(x, y);
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (changed) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
         return;
     }
 
