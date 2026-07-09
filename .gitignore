@@ -64,7 +64,6 @@ CMakeUserPresets.json
 # =========================
 # IDE / editor
 # =========================
-AGENTS.md
 .vscode/
 .idea/
 *.suo

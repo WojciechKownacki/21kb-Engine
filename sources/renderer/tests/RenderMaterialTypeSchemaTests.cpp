@@ -1542,7 +1542,8 @@ void RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest() {
 void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
     // MAT-50 gate: every graph node kind must lower to real shader code (no missing codegen, no fallback).
     // Route each value-producing node's first output into a type-compatible MaterialOutput input and require
-    // the whole graph to compile with zero diagnostics. Texture outputs are fed through a TextureSample.
+    // the graph to validate on declared render paths and compile across Forward/Forward+/Deferred contexts.
+    // Texture outputs are fed through a TextureSample.
     for (const RenderMaterialGraphNodeKind kind : AllRenderMaterialGraphNodeKinds()) {
         if (kind == RenderMaterialGraphNodeKind::MaterialOutput) {
             continue;
@@ -1653,14 +1654,64 @@ void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
             break;
         }
 
-        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
-            graph, RenderMaterialGraphBuildContext{ .assetId = 0x9000U + static_cast<std::uint32_t>(kind) });
-        std::string failure = "KBMAT-MAT50: node kind '" + kindName + "' must lower to shader code with no diagnostics";
-        if (!compiled.Succeeded() && !compiled.diagnostics.empty()) {
-            failure += " (first diagnostic: " + compiled.diagnostics.front().message + ")";
+        const auto requirePathValidation = [&](RenderMaterialGraphRenderPath path, const char* pathName) {
+            const std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(graph, path);
+            const bool unsupported = HasGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode);
+            bool error = false;
+            for (const RenderMaterialGraphDiagnostic& diagnostic : diagnostics) {
+                error = error || diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+            }
+
+            const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(kind, path);
+            if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported) {
+                Require(unsupported,
+                    ("KBMAT-MAT50: node kind '" + kindName + "' must fail closed on unsupported " + pathName + " validation").c_str());
+                return;
+            }
+
+            std::string failure = "KBMAT-MAT50: node kind '" + kindName + "' must validate on " + pathName;
+            if (error && !diagnostics.empty()) {
+                failure += " (first diagnostic: " + diagnostics.front().message + ")";
+            }
+            Require(!error, failure.c_str());
+        };
+
+        requirePathValidation(RenderMaterialGraphRenderPath::GpuForward, "GpuForward");
+        requirePathValidation(RenderMaterialGraphRenderPath::Preview, "Preview");
+        requirePathValidation(RenderMaterialGraphRenderPath::GpuDeferred, "GpuDeferred");
+
+        struct CompilePathCase {
+            RenderMaterialGraphShadingPath shadingPath;
+            std::uint32_t assetSalt;
+            const char* name;
+            bool required;
+        };
+        const bool deferredRequired =
+            RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::GpuDeferred) != RenderMaterialGraphNodeSupport::Unsupported;
+        const std::array<CompilePathCase, 3U> compilePaths{ {
+            CompilePathCase{ .shadingPath = RenderMaterialGraphShadingPath::Forward, .assetSalt = 0x0000U, .name = "Forward", .required = true },
+            CompilePathCase{ .shadingPath = RenderMaterialGraphShadingPath::ForwardPlus, .assetSalt = 0x1000U, .name = "Forward+", .required = true },
+            CompilePathCase{ .shadingPath = RenderMaterialGraphShadingPath::Deferred, .assetSalt = 0x2000U, .name = "Deferred", .required = deferredRequired },
+        } };
+
+        for (const CompilePathCase& compilePath : compilePaths) {
+            if (!compilePath.required) {
+                continue;
+            }
+            const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+                graph,
+                RenderMaterialGraphBuildContext{
+                    .assetId = 0x9000U + compilePath.assetSalt + static_cast<std::uint32_t>(kind),
+                    .shadingPath = compilePath.shadingPath,
+                });
+            std::string failure = "KBMAT-MAT50: node kind '" + kindName + "' must lower to " + compilePath.name + " shader code with no diagnostics";
+            if (!compiled.Succeeded() && !compiled.diagnostics.empty()) {
+                failure += " (first diagnostic: " + compiled.diagnostics.front().message + ")";
+            }
+            Require(compiled.Succeeded(), failure.c_str());
+            Require(!compiled.shader.source.empty(),
+                ("KBMAT-MAT50: node kind '" + kindName + "' must emit non-empty " + compilePath.name + " shader source").c_str());
         }
-        Require(compiled.Succeeded(), failure.c_str());
-        Require(!compiled.shader.source.empty(), ("KBMAT-MAT50: node kind '" + kindName + "' must emit non-empty shader source").c_str());
     }
 }
 

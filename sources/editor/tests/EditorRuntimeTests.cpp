@@ -6,6 +6,7 @@ int main() {
     kb::editor::tests::RunEditorHierarchyTests();
     kb::editor::tests::RunEditorAssetBrowserTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
+    kb::editor::tests::RunEditorMaterialGraphCanvasTests();
     kb::editor::tests::RunEditorMaterialGraphCookServiceTests();
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();

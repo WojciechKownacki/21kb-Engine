@@ -21,7 +21,7 @@ namespace kb::editor {
 
 namespace {
 
-[[nodiscard]] POINT MaterialGraphCanvasPoint(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+[[nodiscard]] POINT MaterialGraphDocumentPointFromWindow(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     return POINT{
         static_cast<LONG>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom),
@@ -128,7 +128,7 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
                 } else {
                     const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
                     if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
-                        const POINT graphPoint = MaterialGraphCanvasPoint(materialLayout, sceneContext_, x, y);
+                        const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
                         if (!sceneContext_.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphPoint.x, graphPoint.y)) {
                             static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
                         }
