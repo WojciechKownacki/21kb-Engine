@@ -68,23 +68,29 @@ void RunMaterialGraphCanvasPinRowsAreForgivingTest() {
     const std::optional<MaterialGraphCanvasPinHit> inputEdgeHit = canvas.HitTestPin(
         baseColor.x + 24.0F,
         baseColor.y);
-    Require(inputEdgeHit.has_value(), "Material graph canvas should hit an input pin from its edge halo.");
+    Require(inputEdgeHit.has_value(), "Material graph canvas should hit an input pin from its row edge.");
     Require(inputEdgeHit->node == 1U, "Material graph canvas hit the wrong input node.");
     Require(inputEdgeHit->pin == 0U, "Material graph canvas hit the wrong input pin.");
     Require(!inputEdgeHit->output, "Material graph canvas input edge should not hit as output.");
-    Require(!canvas.HitTestPin(baseColor.x + 92.0F, baseColor.y).has_value(),
-        "Material graph canvas should not start a link from the middle of an input row.");
+    const std::optional<MaterialGraphCanvasPinHit> inputLabelHit = canvas.HitTestPin(
+        baseColor.x + 160.0F,
+        baseColor.y);
+    Require(inputLabelHit.has_value(), "Material graph canvas should hit a one-sided input across the row.");
+    Require(inputLabelHit->node == 1U && inputLabelHit->pin == 0U && !inputLabelHit->output,
+        "Material graph canvas one-sided input row should preserve node, pin, and direction.");
 
     const MaterialGraphCanvasPoint rgba = canvas.PinCenterWindow(0U, 0U, true);
     const std::optional<MaterialGraphCanvasPinHit> outputEdgeHit = canvas.HitTestPin(
         rgba.x - 24.0F,
         rgba.y);
-    Require(outputEdgeHit.has_value(), "Material graph canvas should hit an output pin from its edge halo.");
+    Require(outputEdgeHit.has_value(), "Material graph canvas should hit a texture output from its row edge.");
     Require(outputEdgeHit->node == 0U, "Material graph canvas hit the wrong output node.");
     Require(outputEdgeHit->pin == 0U, "Material graph canvas hit the wrong output pin.");
     Require(outputEdgeHit->output, "Material graph canvas output edge should hit as output.");
-    Require(!canvas.HitTestPin(rgba.x - 70.0F, rgba.y).has_value(),
-        "Material graph canvas should not start a link from the middle of an output row.");
+    Require(canvas.HitTestPin(rgba.x - 70.0F, rgba.y).has_value(),
+        "Material graph canvas should hit a texture output from the reference side lane.");
+    Require(!canvas.HitTestPin(40.0F + 120.0F + 210.0F, rgba.y).has_value(),
+        "Material graph canvas texture preview center should stay reserved for picker interaction.");
 }
 
 void RunMaterialGraphCanvasConnectDragTest() {
@@ -92,9 +98,9 @@ void RunMaterialGraphCanvasConnectDragTest() {
     const MaterialGraphCanvasPoint rgba = canvas.PinCenterWindow(0U, 0U, true);
     const MaterialGraphCanvasPoint baseColor = canvas.PinCenterWindow(1U, 0U, false);
 
-    Require(canvas.OnPointerDown(rgba.x - 24.0F, rgba.y, false, false), "Material graph canvas should start wire drag.");
-    Require(canvas.OnPointerMove(baseColor.x + 24.0F, baseColor.y), "Material graph canvas should update wire drag.");
-    Require(canvas.OnPointerUp(baseColor.x + 24.0F, baseColor.y), "Material graph canvas should complete wire drag.");
+    Require(canvas.OnPointerDown(rgba.x - 70.0F, rgba.y, false, false), "Material graph canvas should start wire drag from the texture side lane.");
+    Require(canvas.OnPointerMove(baseColor.x + 160.0F, baseColor.y), "Material graph canvas should update wire drag across the input row.");
+    Require(canvas.OnPointerUp(baseColor.x + 160.0F, baseColor.y), "Material graph canvas should complete wire drag across the input row.");
 
     Require(canvas.LinkCount() == 1U, "Material graph canvas should create one link after output-to-input drag.");
     const MaterialGraphCanvasLink& link = canvas.Links().front();

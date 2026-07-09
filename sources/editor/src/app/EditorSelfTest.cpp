@@ -33,6 +33,8 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -48,9 +50,11 @@
 #include <cstdint>
 #include <cwchar>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -741,7 +745,7 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
         materialId,
         static_cast<int>(std::lround(baseColorPin.x + (24.0F * zoom))),
         static_cast<int>(std::lround(baseColorPin.y)));
-    report.Check(baseColor.has_value(), "Material panel graph hits an input pin from its edge halo");
+    report.Check(baseColor.has_value(), "Material panel graph hits an input pin from its row edge");
     report.Check(
         baseColor.has_value() &&
             baseColor->nodeId == 1U &&
@@ -749,15 +753,15 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
             baseColor->direction == MaterialEditorGraphPinDirection::Input,
         "Material panel graph input hit preserves node, pin, and direction");
     report.Check(
-        !MaterialEditorPanelRenderer::GraphPinAt(
+        MaterialEditorPanelRenderer::GraphPinAt(
             content,
             graph,
             context,
             materialId,
-            static_cast<int>(std::lround(baseColorPin.x + (92.0F * zoom))),
+            static_cast<int>(std::lround(baseColorPin.x + (160.0F * zoom))),
             static_cast<int>(std::lround(baseColorPin.y)))
              .has_value(),
-        "Material panel graph does not start a link from the middle of an input row");
+        "Material panel graph hits a one-sided input across the row");
 
     const MaterialGraphCanvasPoint colorPin = canvasResult.canvas.PinCenterWindow(0U, 0U, true);
     const std::optional<MaterialEditorGraphPinHit> color = MaterialEditorPanelRenderer::GraphPinAt(
@@ -765,9 +769,9 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
         graph,
         context,
         materialId,
-        static_cast<int>(std::lround(colorPin.x - (24.0F * zoom))),
+        static_cast<int>(std::lround(colorPin.x - (70.0F * zoom))),
         static_cast<int>(std::lround(colorPin.y)));
-    report.Check(color.has_value(), "Material panel graph hits an output pin from its edge halo");
+    report.Check(color.has_value(), "Material panel graph hits a texture output from its side lane");
     report.Check(
         color.has_value() &&
             color->nodeId == 2U &&
@@ -780,10 +784,10 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
             graph,
             context,
             materialId,
-            static_cast<int>(std::lround(colorPin.x - (70.0F * zoom))),
+            static_cast<int>(std::lround(colorPin.x - (210.0F * zoom))),
             static_cast<int>(std::lround(colorPin.y)))
              .has_value(),
-        "Material panel graph does not start a link from the middle of an output row");
+        "Material panel graph texture preview center stays reserved for picker interaction");
 
     const std::optional<MaterialEditorGraphLinkHit> link = MaterialEditorPanelRenderer::GraphLinkAt(
         content,
@@ -996,9 +1000,77 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
             },
         });
     }
+    std::vector<kb::assets::AssetId> pickerTextureIds;
+    bool pickerTexturesRegistered = true;
+    for (std::uint32_t index = 0U; index < 20U; ++index) {
+        const kb::assets::AssetId textureId{ 0x7E580U + index };
+        const std::string suffix = (index < 10U ? "0" : "") + std::to_string(index);
+        const std::string name = "PickerTexture" + suffix;
+        pickerTexturesRegistered = context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+            .id = textureId,
+            .type = "RenderTexture",
+            .name = name,
+            .virtualPath = "/Game/Textures/" + name + ".ktx",
+            .runtimeLoadable = true,
+        }) && pickerTexturesRegistered;
+        pickerTextureIds.push_back(textureId);
+    }
+    report.Check(pickerTexturesRegistered, "Register texture picker self-test texture assets");
     context.MaterialEditor().Open(materialId, material);
 
     const RECT content{ 0, 0, 1280, 1180 };
+    report.Check(context.OpenMaterialGraphTexturePicker(materialId, 50U, kb::assets::AssetId{}), "Texture graph picker opens inside Material Editor state");
+    report.Check(
+        context.IsMaterialGraphTexturePickerOpen() &&
+            context.MaterialGraphTexturePickerAssetId() == materialId &&
+            context.MaterialGraphTexturePickerNodeId() == 50U,
+        "Texture graph picker remembers the edited material and node");
+    const RECT pickerHost{
+        content.left + 12,
+        content.top + MaterialEditorPanelMetrics::HeaderHeight + 12,
+        content.right - 12,
+        content.bottom - 12,
+    };
+    const int pickerWidth = std::min(720, std::max(240, MaterialEditorPanelRectWidth(pickerHost)));
+    const int pickerHeight = std::min(560, std::max(220, MaterialEditorPanelRectHeight(pickerHost)));
+    const RECT pickerOverlay{
+        pickerHost.left + (MaterialEditorPanelRectWidth(pickerHost) - pickerWidth) / 2,
+        pickerHost.top + (MaterialEditorPanelRectHeight(pickerHost) - pickerHeight) / 2,
+        pickerHost.left + (MaterialEditorPanelRectWidth(pickerHost) - pickerWidth) / 2 + pickerWidth,
+        pickerHost.top + (MaterialEditorPanelRectHeight(pickerHost) - pickerHeight) / 2 + pickerHeight,
+    };
+    const RECT pickerSearch{ pickerOverlay.left + 10, pickerOverlay.top + 6, pickerOverlay.right - 184, pickerOverlay.top + 34 };
+    const RECT pickerAccept{ pickerOverlay.right - 174, pickerOverlay.top + 6, pickerOverlay.right - 92, pickerOverlay.top + 34 };
+    const RECT pickerViewport{ pickerOverlay.left + 10, pickerOverlay.top + 44, pickerOverlay.right - 10, pickerOverlay.bottom - 10 };
+    const MaterialEditorGraphTexturePickerHit searchHit =
+        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerSearch).x, Center(pickerSearch).y);
+    report.Check(searchHit.kind == MaterialEditorGraphTexturePickerHitKind::Search, "Texture graph picker search field owns its hit-test");
+    context.AppendMaterialGraphTexturePickerSearchText(L'P');
+    context.AppendMaterialGraphTexturePickerSearchText(L'i');
+    context.AppendMaterialGraphTexturePickerSearchText(L'c');
+    report.Check(context.MaterialGraphTexturePickerSearchQuery() == "Pic", "Texture graph picker search accepts text input");
+    context.BackspaceMaterialGraphTexturePickerSearch();
+    report.Check(context.MaterialGraphTexturePickerSearchQuery() == "Pi", "Texture graph picker search handles backspace");
+    context.ClearMaterialGraphTexturePickerSearch();
+    const MaterialEditorGraphTexturePickerHit tileHit =
+        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, pickerViewport.left + 79, pickerViewport.top + 75);
+    report.Check(
+        tileHit.kind == MaterialEditorGraphTexturePickerHitKind::Texture &&
+            !pickerTextureIds.empty() &&
+            tileHit.assetId == pickerTextureIds.front(),
+        "Texture graph picker tile hit-test resolves a texture asset without falling through to the graph canvas");
+    report.Check(context.SetMaterialGraphTexturePickerSelected(tileHit.assetId), "Texture graph picker selects a texture tile");
+    const int pickerMaxScroll = MaterialEditorPanelRenderer::GraphTexturePickerMaxScroll(content, context);
+    report.Check(pickerMaxScroll > 0, "Texture graph picker computes a scroll range for multi-row texture lists");
+    report.Check(context.ScrollMaterialGraphTexturePicker(-120, pickerMaxScroll), "Texture graph picker consumes wheel scrolling");
+    const MaterialEditorGraphTexturePickerHit acceptHit =
+        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerAccept).x, Center(pickerAccept).y);
+    report.Check(acceptHit.kind == MaterialEditorGraphTexturePickerHitKind::Accept, "Texture graph picker Accept button owns its hit-test");
+    report.Check(
+        context.SetMaterialGraphTextureSampleAsset(materialId, 50U, context.MaterialGraphTexturePickerSelectedAssetId()),
+        "Texture graph picker selected asset applies to the texture node");
+    report.Check(context.CloseMaterialGraphTexturePicker() && !context.IsMaterialGraphTexturePickerOpen(), "Texture graph picker closes cleanly");
+
     const std::optional<RECT> textureRect =
         MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 50U, context, materialId);
     const std::optional<RECT> parameterRect =
@@ -1566,10 +1638,28 @@ void RunMaterialGraphCanvasClipSuite(Report& report) {
 
 void RunMaterialEditorGlobalSaveSuite(Report& report) {
     std::error_code error;
+    const auto readFileBytes = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{
+            std::istreambuf_iterator<char>{ input },
+            std::istreambuf_iterator<char>{} };
+    };
+    const auto serializeMaterial = [](const kb::render::RenderMaterialAssetData& asset) {
+        std::ostringstream output;
+        kb::render::RenderMaterialAssetWriter::Write(output, asset);
+        return output.str();
+    };
+    const auto serializeInstance = [](const kb::render::RenderMaterialInstanceAssetData& asset) {
+        std::ostringstream output;
+        kb::render::RenderMaterialInstanceAssetWriter::Write(output, asset);
+        return output.str();
+    };
 
     EditorSceneContext context;
     report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
         "Register material loader for global Save fixture");
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()),
+        "Register material instance loader for global Save fixture");
     const kb::assets::AssetId normalTextureId{ 424242U };
     report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
                      .id = normalTextureId,
@@ -1585,6 +1675,7 @@ void RunMaterialEditorGlobalSaveSuite(Report& report) {
     kb::render::RenderMaterialAssetData material{};
     material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, material), "Create material fixture for global Save");
+    const std::string originalMaterialBytes = readFileBytes(materialPath);
     report.Check(context.Scene().Assets().Discover() >= 1U, "Discover global Save material fixture");
     const kb::assets::AssetMetadata* metadata =
         context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/GlobalSaveNormal.kbmat");
@@ -1675,6 +1766,139 @@ void RunMaterialEditorGlobalSaveSuite(Report& report) {
     report.Check(std::ranges::none_of(reloaded->graphParameterValues, [](const kb::render::RenderMaterialGraphParameterValue& value) {
         return value.stableId == "textureSample99";
     }), "Saved graph prunes orphan generated texture parameter values");
+
+    const std::string savedBytes = readFileBytes(materialPath);
+    const std::string savedSnapshot = context.MaterialEditor().CleanSnapshot().has_value()
+        ? serializeMaterial(*context.MaterialEditor().CleanSnapshot())
+        : std::string{};
+    kb::render::RenderMaterialAssetData invalid = *context.MaterialEditor().WorkingCopy();
+    invalid.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 99U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = -180,
+        .positionY = 40,
+    });
+    invalid.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .id = 99U,
+        .fromNodeId = 99U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, "value", true),
+        .fromPin = "value",
+        .toNodeId = 1U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    });
+    context.MaterialEditor().SetWorkingCopy(std::move(invalid));
+    const std::string invalidWorkingCopy = serializeMaterial(*context.MaterialEditor().WorkingCopy());
+    context.FocusMaterialGraph(true);
+    const bool materialCanUndoBeforeFailure = context.CanUndoSceneCommand();
+    const bool materialCanRedoBeforeFailure = context.CanRedoSceneCommand();
+    report.Check(context.MaterialEditor().Dirty(), "P0.2 invalid Save fixture is dirty before Save");
+    report.Check(!context.SaveOpenDocuments(), "P0.2 invalid material is rejected before source mutation");
+    report.Check(context.MaterialEditor().Dirty(), "P0.2 invalid Save leaves the working document dirty");
+    const std::string preservedBytes = readFileBytes(materialPath);
+    report.Check(preservedBytes == savedBytes, "P0.2 invalid Save preserves the previous material file byte-for-byte");
+    report.Check(context.MaterialEditor().WorkingCopy().has_value() &&
+            serializeMaterial(*context.MaterialEditor().WorkingCopy()) == invalidWorkingCopy,
+        "P0.2 invalid Save preserves the exact dirty material working copy");
+    report.Check(context.MaterialEditor().CleanSnapshot().has_value() &&
+            serializeMaterial(*context.MaterialEditor().CleanSnapshot()) == savedSnapshot,
+        "P0.2 invalid Save preserves the material clean snapshot");
+    report.Check(context.CanUndoSceneCommand() == materialCanUndoBeforeFailure &&
+            context.CanRedoSceneCommand() == materialCanRedoBeforeFailure,
+        "P0.2 invalid Save preserves the material history state");
+    report.Check(context.UndoSceneCommand(),
+        "P0.2 material history head remains the preceding successful Save after invalid preflight");
+    report.Check(readFileBytes(materialPath) == originalMaterialBytes,
+        "P0.2 first Undo after invalid material Save restores the pre-save source, proving no failed Save command was inserted");
+    report.Check(context.RedoSceneCommand(),
+        "P0.2 material history can redo the preceding successful Save after invalid preflight");
+    report.Check(readFileBytes(materialPath) == savedBytes,
+        "P0.2 material redo restores the last valid byte-identical source");
+
+    const kb::assets::AssetId parentMaterialId = metadata->id;
+    kb::render::RenderMaterialInstanceAssetData instance{};
+    instance.parentMaterialAssetId = parentMaterialId;
+    const std::filesystem::path instancePath =
+        EditorProjectPaths::AssetsRoot() / "Materials" / "GlobalSaveNormal_Inst.kbmatinst";
+    report.Check(kb::render::RenderMaterialInstanceAssetWriter::Save(instancePath, instance),
+        "Create material instance fixture for global Save preflight");
+    const std::string originalInstanceBytes = readFileBytes(instancePath);
+    report.Check(context.Scene().Assets().Discover() >= 2U,
+        "Discover global Save material instance fixture");
+    const kb::assets::AssetMetadata* instanceMetadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/GlobalSaveNormal_Inst.kbmatinst");
+    report.Check(instanceMetadata != nullptr, "Resolve global Save material instance metadata");
+    if (instanceMetadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(instanceMetadata->id),
+        "Open global Save material instance in Material Editor");
+    if (!context.MaterialEditor().InstanceWorkingCopy().has_value() ||
+        !context.MaterialEditor().InstanceParentSnapshot().has_value()) {
+        report.Check(false, "Global Save material instance working copy and parent snapshot exist");
+        return;
+    }
+
+    kb::render::RenderMaterialInstanceAssetData validInstance = *context.MaterialEditor().InstanceWorkingCopy();
+    validInstance.basePropertyOverrides.overrideTwoSided = true;
+    validInstance.basePropertyOverrides.twoSided = true;
+    context.MaterialEditor().SetInstanceWorkingCopy(
+        validInstance,
+        kb::render::BuildEffectiveRenderMaterialInstanceAsset(
+            *context.MaterialEditor().InstanceParentSnapshot(),
+            validInstance));
+    report.Check(context.SaveOpenDocuments(),
+        "Global Save persists the valid material instance working copy");
+    const std::string savedInstanceBytes = readFileBytes(instancePath);
+    const std::string savedInstanceSnapshot = context.MaterialEditor().InstanceCleanSnapshot().has_value()
+        ? serializeInstance(*context.MaterialEditor().InstanceCleanSnapshot())
+        : std::string{};
+
+    kb::render::RenderMaterialInstanceAssetData invalidInstance =
+        *context.MaterialEditor().InstanceWorkingCopy();
+    invalidInstance.hasOverrides = true;
+    invalidInstance.overrides = *context.MaterialEditor().InstanceParentSnapshot();
+    invalidInstance.overrides.graphParameterValues.clear();
+    invalidInstance.overrides.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "missingParameter",
+        .type = kb::render::RenderMaterialParameterType::Scalar,
+        .numbers = { 0.5F, 0.0F, 0.0F, 0.0F },
+    });
+    context.MaterialEditor().SetInstanceWorkingCopy(
+        invalidInstance,
+        kb::render::BuildEffectiveRenderMaterialInstanceAsset(
+            *context.MaterialEditor().InstanceParentSnapshot(),
+            invalidInstance));
+    const std::string invalidInstanceWorkingCopy =
+        serializeInstance(*context.MaterialEditor().InstanceWorkingCopy());
+    context.FocusMaterialGraph(true);
+    const bool instanceCanUndoBeforeFailure = context.CanUndoSceneCommand();
+    const bool instanceCanRedoBeforeFailure = context.CanRedoSceneCommand();
+    report.Check(context.MaterialEditor().Dirty(),
+        "P0.2 invalid instance Save fixture is dirty before Save");
+    report.Check(!context.SaveOpenDocuments(),
+        "P0.2 invalid material instance is rejected before source mutation");
+    report.Check(context.MaterialEditor().Dirty(),
+        "P0.2 invalid material instance Save leaves the working document dirty");
+    report.Check(readFileBytes(instancePath) == savedInstanceBytes,
+        "P0.2 invalid material instance Save preserves the previous file byte-for-byte");
+    report.Check(context.MaterialEditor().InstanceWorkingCopy().has_value() &&
+            serializeInstance(*context.MaterialEditor().InstanceWorkingCopy()) == invalidInstanceWorkingCopy,
+        "P0.2 invalid material instance Save preserves the exact dirty working copy");
+    report.Check(context.MaterialEditor().InstanceCleanSnapshot().has_value() &&
+            serializeInstance(*context.MaterialEditor().InstanceCleanSnapshot()) == savedInstanceSnapshot,
+        "P0.2 invalid material instance Save preserves the clean snapshot");
+    report.Check(context.CanUndoSceneCommand() == instanceCanUndoBeforeFailure &&
+            context.CanRedoSceneCommand() == instanceCanRedoBeforeFailure,
+        "P0.2 invalid material instance Save preserves the history state");
+    report.Check(context.UndoSceneCommand(),
+        "P0.2 material instance history head remains the preceding successful Save after invalid preflight");
+    report.Check(readFileBytes(instancePath) == originalInstanceBytes,
+        "P0.2 first Undo after invalid instance Save restores the pre-save source, proving no failed Save command was inserted");
+    report.Check(context.RedoSceneCommand(),
+        "P0.2 material instance history can redo the preceding successful Save after invalid preflight");
+    report.Check(readFileBytes(instancePath) == savedInstanceBytes,
+        "P0.2 material instance redo restores the last valid byte-identical source");
 }
 
 void RunInspectorLightComponentSuite(Report& report) {
