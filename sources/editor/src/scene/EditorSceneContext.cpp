@@ -3348,14 +3348,26 @@ bool EditorSceneContext::PromoteSelectedMaterialGraphNodeToParameter(kb::assets:
 }
 
 int EditorSceneContext::MaterialGraphNodeOffsetX(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
-    static_cast<void>(assetId);
-    static_cast<void>(nodeId);
+    if (!materialGraphNodeDragging_ || materialGraphDragAssetId_ != assetId || nodeId == 0U) {
+        return 0;
+    }
+    for (const MaterialGraphDragNodeStart& start : materialGraphDragStartNodes_) {
+        if (start.nodeId == nodeId) {
+            return materialGraphDragStartOffsetX_;
+        }
+    }
     return 0;
 }
 
 int EditorSceneContext::MaterialGraphNodeOffsetY(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
-    static_cast<void>(assetId);
-    static_cast<void>(nodeId);
+    if (!materialGraphNodeDragging_ || materialGraphDragAssetId_ != assetId || nodeId == 0U) {
+        return 0;
+    }
+    for (const MaterialGraphDragNodeStart& start : materialGraphDragStartNodes_) {
+        if (start.nodeId == nodeId) {
+            return materialGraphDragStartOffsetY_;
+        }
+    }
     return 0;
 }
 
@@ -3411,22 +3423,12 @@ bool EditorSceneContext::DragMaterialGraphNode(int x, int y) {
     }
     const int deltaX = static_cast<int>(std::lround(static_cast<float>(x - materialGraphDragStartX_) / std::max(0.1F, materialGraphZoom_)));
     const int deltaY = static_cast<int>(std::lround(static_cast<float>(y - materialGraphDragStartY_) / std::max(0.1F, materialGraphZoom_)));
-    std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>> positions;
-    positions.reserve(materialGraphDragStartNodes_.size());
-    for (const MaterialGraphDragNodeStart& start : materialGraphDragStartNodes_) {
-        positions.push_back({
-            start.nodeId,
-            {
-                static_cast<std::int32_t>(start.positionX + deltaX),
-                static_cast<std::int32_t>(start.positionY + deltaY),
-            },
-        });
-    }
-    if (!materialEditor_.MoveGraphNodes(positions)) {
+    if (deltaX == materialGraphDragStartOffsetX_ && deltaY == materialGraphDragStartOffsetY_) {
         return false;
     }
-    materialGraphDragChanged_ = true;
-    materialEditor_.ClearDiagnostics();
+    materialGraphDragStartOffsetX_ = deltaX;
+    materialGraphDragStartOffsetY_ = deltaY;
+    materialGraphDragChanged_ = deltaX != 0 || deltaY != 0;
     return true;
 }
 
@@ -3439,9 +3441,29 @@ bool EditorSceneContext::EndMaterialGraphNodeDrag() {
     std::optional<kb::render::RenderMaterialAssetData> before = std::move(materialGraphDragStartDocument_);
     const std::uint32_t beforeSelectedNodeId = materialGraphDragStartSelectedNodeId_;
     std::vector<std::uint32_t> beforeSelectedNodeIds = std::move(materialGraphDragStartSelectedNodeIds_);
+    const int deltaX = materialGraphDragStartOffsetX_;
+    const int deltaY = materialGraphDragStartOffsetY_;
+    std::vector<MaterialGraphDragNodeStart> dragStartNodes = std::move(materialGraphDragStartNodes_);
+    bool committedMove = !shouldRecord;
+    if (shouldRecord) {
+        std::vector<std::pair<std::uint32_t, std::pair<std::int32_t, std::int32_t>>> positions;
+        positions.reserve(dragStartNodes.size());
+        for (const MaterialGraphDragNodeStart& start : dragStartNodes) {
+            positions.push_back({
+                start.nodeId,
+                {
+                    static_cast<std::int32_t>(start.positionX + deltaX),
+                    static_cast<std::int32_t>(start.positionY + deltaY),
+                },
+            });
+        }
+        committedMove = materialEditor_.MoveGraphNodes(positions);
+    }
     materialGraphNodeDragging_ = false;
     materialGraphDragAssetId_ = {};
     materialGraphDragNodeId_ = 0U;
+    materialGraphDragStartOffsetX_ = 0;
+    materialGraphDragStartOffsetY_ = 0;
     materialGraphDragStartNodeX_ = 0;
     materialGraphDragStartNodeY_ = 0;
     materialGraphDragStartSelectedNodeId_ = 0U;
@@ -3449,6 +3471,9 @@ bool EditorSceneContext::EndMaterialGraphNodeDrag() {
     materialGraphDragStartNodes_.clear();
     materialGraphDragChanged_ = false;
     if (shouldRecord) {
+        if (!committedMove) {
+            return false;
+        }
         return RecordMaterialGraphWorkingCopyEdit(assetId, "Move Material Graph Node", std::move(*before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds));
     }
     return true;

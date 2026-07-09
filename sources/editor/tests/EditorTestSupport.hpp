@@ -12,7 +12,7 @@ namespace kb::editor::tests {
 
 inline void Require(bool condition, const char* message) {
     if (!condition) {
-        std::cerr << message << '\n';
+        std::cerr << message << std::endl;
         std::exit(EXIT_FAILURE);
     }
 }

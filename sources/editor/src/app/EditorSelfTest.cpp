@@ -97,6 +97,25 @@ constexpr RECT kContent{ 0, 0, 900, 560 };
     return POINT{ (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2 };
 }
 
+[[nodiscard]] kb::render::RenderMaterialGraphLink MakeSelfTestGraphLink(
+    kb::render::RenderMaterialGraphNodeKind fromKind,
+    std::uint32_t fromNodeId,
+    std::string fromPin,
+    kb::render::RenderMaterialGraphNodeKind toKind,
+    std::uint32_t toNodeId,
+    std::string toPin) {
+    kb::render::RenderMaterialGraphLink link{
+        .fromNodeId = fromNodeId,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(fromKind, fromPin, true),
+        .fromPin = std::move(fromPin),
+        .toNodeId = toNodeId,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(toKind, toPin, false),
+        .toPin = std::move(toPin),
+    };
+    link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+    return link;
+}
+
 // Centers of each interactive control, derived from the shared panel layout.
 struct ProjectSettingsClickPoints {
     POINT inputCategory{};    // First sidebar category ("Inputs").
@@ -681,6 +700,108 @@ void RunMaterialGraphContextMenuSuite(Report& report) {
         "PixelDepth context-menu command leaves a real node in the material graph working copy");
 }
 
+[[nodiscard]] kb::render::RenderMaterialGraphDocument MakeMaterialGraphPanelHitTestGraph() {
+    kb::render::RenderMaterialGraphDocument graph{};
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 120,
+        .positionY = 120,
+    });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 1U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        .positionX = 680,
+        .positionY = 132,
+    });
+    graph.links.push_back(MakeSelfTestGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        2U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    return graph;
+}
+
+void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0xCA11U };
+    const RECT content{ 0, 0, 1200, 800 };
+    const kb::render::RenderMaterialGraphDocument graph = MakeMaterialGraphPanelHitTestGraph();
+    const float zoom = std::max(0.1F, context.MaterialGraphZoom());
+    MaterialGraphCanvasDocumentBuildResult canvasResult =
+        MaterialEditorPanelBuildInteractiveGraphCanvas(content, graph, context, materialId);
+
+    const MaterialGraphCanvasPoint baseColorPin = canvasResult.canvas.PinCenterWindow(1U, 0U, false);
+    const std::optional<MaterialEditorGraphPinHit> baseColor = MaterialEditorPanelRenderer::GraphPinAt(
+        content,
+        graph,
+        context,
+        materialId,
+        static_cast<int>(std::lround(baseColorPin.x + (24.0F * zoom))),
+        static_cast<int>(std::lround(baseColorPin.y)));
+    report.Check(baseColor.has_value(), "Material panel graph hits an input pin from its edge halo");
+    report.Check(
+        baseColor.has_value() &&
+            baseColor->nodeId == 1U &&
+            baseColor->pin == "baseColor" &&
+            baseColor->direction == MaterialEditorGraphPinDirection::Input,
+        "Material panel graph input hit preserves node, pin, and direction");
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(
+            content,
+            graph,
+            context,
+            materialId,
+            static_cast<int>(std::lround(baseColorPin.x + (92.0F * zoom))),
+            static_cast<int>(std::lround(baseColorPin.y)))
+             .has_value(),
+        "Material panel graph does not start a link from the middle of an input row");
+
+    const MaterialGraphCanvasPoint colorPin = canvasResult.canvas.PinCenterWindow(0U, 0U, true);
+    const std::optional<MaterialEditorGraphPinHit> color = MaterialEditorPanelRenderer::GraphPinAt(
+        content,
+        graph,
+        context,
+        materialId,
+        static_cast<int>(std::lround(colorPin.x - (24.0F * zoom))),
+        static_cast<int>(std::lround(colorPin.y)));
+    report.Check(color.has_value(), "Material panel graph hits an output pin from its edge halo");
+    report.Check(
+        color.has_value() &&
+            color->nodeId == 2U &&
+            color->pin == "color" &&
+            color->direction == MaterialEditorGraphPinDirection::Output,
+        "Material panel graph output hit preserves node, pin, and direction");
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(
+            content,
+            graph,
+            context,
+            materialId,
+            static_cast<int>(std::lround(colorPin.x - (70.0F * zoom))),
+            static_cast<int>(std::lround(colorPin.y)))
+             .has_value(),
+        "Material panel graph does not start a link from the middle of an output row");
+
+    const std::optional<MaterialEditorGraphLinkHit> link = MaterialEditorPanelRenderer::GraphLinkAt(
+        content,
+        graph,
+        context,
+        materialId,
+        static_cast<int>(std::lround((colorPin.x + baseColorPin.x) * 0.5F)),
+        static_cast<int>(std::lround((colorPin.y + baseColorPin.y) * 0.5F)));
+    report.Check(link.has_value(), "Material panel graph hits links through canvas bezier distance");
+    report.Check(
+        link.has_value() &&
+            link->fromNodeId == 2U &&
+            link->fromPin == "color" &&
+            link->toNodeId == 1U &&
+            link->toPin == "baseColor",
+        "Material panel graph link hit preserves source and target endpoints");
+}
+
 void RunMaterialGraphColorWatcherSuite(Report& report) {
     EditorSceneContext context;
     const kb::assets::AssetId materialId{ 0xC010U };
@@ -700,7 +821,7 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
     material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
         .id = 41U,
         .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
-        .positionX = 20,
+        .positionX = 160,
         .positionY = 40,
         .parameter = kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "RGBA",
@@ -725,7 +846,7 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
     material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
         .id = 43U,
         .kind = kb::render::RenderMaterialGraphNodeKind::ColorRamp,
-        .positionX = 20,
+        .positionX = 160,
         .positionY = 240,
         .parameter = kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Color Ramp",
@@ -753,8 +874,8 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
     const SIZE rgbSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantVector);
     const SIZE rgbaSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantColor);
     const SIZE parameterSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ParameterColor);
-    report.Check(rgbSize.cx == 204 && rgbSize.cy == 196, "RGB node uses the Verth watcher footprint");
-    report.Check(rgbaSize.cx == 204 && rgbaSize.cy == 196, "RGBA node uses the Verth watcher footprint");
+    report.Check(rgbSize.cx == 320 && rgbSize.cy == 196, "RGB node uses the color watcher footprint");
+    report.Check(rgbaSize.cx == 320 && rgbaSize.cy == 196, "RGBA node uses the color watcher footprint");
     report.Check(parameterSize.cx == rgbaSize.cx && parameterSize.cy == rgbaSize.cy, "Color parameter node shares the RGBA watcher layout");
     const std::vector<std::string> rgbOutputPins =
         MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind::ConstantVector);
@@ -764,11 +885,16 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
             rgbOutputPins[1] == "r" &&
             rgbOutputPins[2] == "g" &&
             rgbOutputPins[3] == "b",
-        "RGB node exposes Verth-style RGB/R/G/B output pins");
+        "RGB node exposes RGB/R/G/B output pins");
 
     const RECT rgbSwatch = MaterialEditorPanelColorWatcherSwatchRect(*rgbRect, kb::render::RenderMaterialGraphNodeKind::ConstantVector);
+    const int rgbSwatchX = (rgbSwatch.left + rgbSwatch.right) / 2;
+    const int rgbSwatchY = (rgbSwatch.top + rgbSwatch.bottom) / 2;
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(content, material.graph, context, materialId, rgbSwatchX, rgbSwatchY).has_value(),
+        "RGB node swatch does not start a material graph wire drag");
     const std::optional<MaterialEditorGraphColorWatcherHit> rgbHit =
-        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbSwatch.left + 3, rgbSwatch.top + 3);
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbSwatchX, rgbSwatchY);
     report.Check(rgbHit.has_value() &&
             rgbHit->target == MaterialEditorGraphColorWatcherTarget::ConstantRgb &&
             rgbHit->value.numbers[0] > 0.24F &&
@@ -776,8 +902,15 @@ void RunMaterialGraphColorWatcherSuite(Report& report) {
         "RGB node swatch hit-test opens the color watcher picker with parsed RGB values");
 
     const RECT rgbaSwatch = MaterialEditorPanelColorWatcherSwatchRect(*rgbaRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor);
+    const int rgbaSwatchX = (rgbaSwatch.left + rgbaSwatch.right) / 2;
+    const int rgbaSwatchY = (rgbaSwatch.top + rgbaSwatch.bottom) / 2;
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(content, material.graph, context, materialId, rgbaSwatchX, rgbaSwatchY).has_value(),
+        "RGBA node swatch does not start a material graph wire drag");
+    const RECT rgbaAlphaChannel = MaterialEditorPanelColorWatcherChannelRect(*rgbaRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 3U, 4U);
+    report.Check(MaterialEditorPanelRectWidth(rgbaAlphaChannel) >= 36, "RGBA watcher keeps the alpha channel legible at default graph zoom");
     const std::optional<MaterialEditorGraphColorWatcherHit> rgbaHit =
-        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbaSwatch.left + 2, rgbaSwatch.top + 2);
+        MaterialEditorPanelRenderer::GraphColorWatcherAt(content, material, context, materialId, rgbaSwatchX, rgbaSwatchY);
     report.Check(rgbaHit.has_value() &&
             rgbaHit->target == MaterialEditorGraphColorWatcherTarget::ConstantColor &&
             !rgbaHit->applyImmediately &&
@@ -892,6 +1025,16 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     const std::optional<std::uint32_t> slotHit =
         MaterialEditorPanelRenderer::GraphTextureSampleAt(content, material.graph, context, materialId, (picker.left + picker.right) / 2, (picker.top + picker.bottom) / 2);
     report.Check(slotHit.has_value() && *slotHit == 50U, "TextureSample image slot opens the texture asset picker");
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(
+            content,
+            material.graph,
+            context,
+            materialId,
+            (picker.left + picker.right) / 2,
+            (picker.top + picker.bottom) / 2)
+             .has_value(),
+        "TextureSample image slot does not start a material graph wire drag");
 
     const RECT parameterValue = MaterialEditorPanelTextureParameterRect(*parameterRect);
     report.Check(
@@ -1246,6 +1389,90 @@ void RunMaterialGraphVisualRedesignSuite(Report& report) {
         report.Check(image.Save(outputPath.wstring().c_str(), &*bmpEncoder, nullptr) == Gdiplus::Ok,
             "Save material node visual redesign screenshot artifact");
         report.Note("Material node visual redesign screenshot: " + outputPath.string());
+    }
+
+    SelectObject(memoryDc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memoryDc);
+    ReleaseDC(nullptr, screenDc);
+}
+
+void RunMaterialGraphFirstNodeVisualCheckpointSuite(Report& report) {
+    std::error_code error;
+
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Register material loader for first material node checkpoint capture");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "FirstNodeCheckpoint.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+
+    kb::render::RenderMaterialAssetData material{};
+    material.materialType = kb::render::kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.hasExplicitMaterialType = true;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    for (kb::render::RenderMaterialGraphNode& node : material.graph.nodes) {
+        if (node.id == 1U) {
+            node.positionX = 560;
+            node.positionY = 165;
+        }
+    }
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 190,
+        .positionY = 170,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "RGBA Checkpoint",
+            .defaultValueHint = "0.92 0.18 0.10 1",
+        },
+    });
+    material.graph.links.push_back(MakeSelfTestGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, material), "Create first material node checkpoint fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Discover first material node checkpoint fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/FirstNodeCheckpoint.kbmat");
+    report.Check(metadata != nullptr, "Resolve first material node checkpoint metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(metadata->id), "Open first material node checkpoint in Material Editor");
+
+    constexpr int width = 960;
+    constexpr int height = 560;
+    const RECT content{ 0, 0, width, height };
+    const std::optional<RECT> colorRect =
+        MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 2U, context, metadata->id);
+    const std::optional<RECT> outputRect =
+        MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 1U, context, metadata->id);
+    report.Check(colorRect.has_value() && outputRect.has_value(), "First material node checkpoint resolves ConstantColor and MaterialOutput rects");
+
+    HDC screenDc = GetDC(nullptr);
+    report.Check(screenDc != nullptr, "Create screen DC for first material node checkpoint capture");
+    if (screenDc == nullptr) {
+        return;
+    }
+    HDC memoryDc = CreateCompatibleDC(screenDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(screenDc, width, height);
+    HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+
+    HeroIconGdiplusRuntime::EnsureStarted();
+    MaterialEditorPanelRenderer renderer;
+    renderer.Paint(memoryDc, content, EditorTheme{}, context);
+
+    const std::filesystem::path outputPath =
+        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorFirstNodeCheckpoint.bmp";
+    std::filesystem::create_directories(outputPath.parent_path(), error);
+    const std::optional<CLSID> bmpEncoder = GdiplusEncoderClsid(L"image/bmp");
+    report.Check(bmpEncoder.has_value(), "Resolve BMP encoder for first material node checkpoint capture");
+    if (bmpEncoder.has_value()) {
+        Gdiplus::Bitmap image(bitmap, nullptr);
+        report.Check(image.Save(outputPath.wstring().c_str(), &*bmpEncoder, nullptr) == Gdiplus::Ok,
+            "Save first material node checkpoint screenshot artifact");
+        report.Note("First material node checkpoint screenshot: " + outputPath.string());
     }
 
     SelectObject(memoryDc, previous);
@@ -1784,7 +2011,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph panel canvas hit-test + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -1804,9 +2031,11 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
+    RunSuiteInScratch(report, "material_graph_panel_canvas_hit_test", &RunMaterialGraphPanelCanvasHitTestSuite);
     RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);
     RunSuiteInScratch(report, "material_graph_texture_nodes", &RunMaterialGraphTextureNodeSuite);
     RunSuiteInScratch(report, "material_graph_dense_node_layout", &RunMaterialGraphDenseNodeLayoutSuite);
+    RunSuiteInScratch(report, "material_graph_first_node_checkpoint", &RunMaterialGraphFirstNodeVisualCheckpointSuite);
     RunSuiteInScratch(report, "material_graph_visual_redesign", &RunMaterialGraphVisualRedesignSuite);
     RunSuiteInScratch(report, "material_graph_canvas_clip", &RunMaterialGraphCanvasClipSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
