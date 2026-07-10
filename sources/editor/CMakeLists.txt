@@ -380,6 +380,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/scene/material/EditorTextureAssetMetadataResolver.hpp
     src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp

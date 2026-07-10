@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -118,6 +119,8 @@ struct MaterialGraphCanvasPinHit final {
     bool output{ false };
 };
 
+using MaterialGraphCanvasPinPredicate = std::function<bool(const MaterialGraphCanvasPinHit&)>;
+
 class MaterialGraphCanvas final {
 public:
     static constexpr float DefaultNodeWidth = 204.0F;
@@ -130,6 +133,7 @@ public:
 
     [[nodiscard]] std::uint32_t AddNode(MaterialGraphCanvasNode node);
     void AddLink(MaterialGraphCanvasLink link);
+    void AddOccluderWorld(MaterialGraphCanvasRect rect);
     void Clear() noexcept;
 
     void SetBound(bool bound) noexcept;
@@ -168,7 +172,10 @@ public:
         std::uint32_t pin,
         bool output) const noexcept;
 
-    [[nodiscard]] std::optional<MaterialGraphCanvasPinHit> HitTestPin(float windowX, float windowY) const noexcept;
+    [[nodiscard]] std::optional<MaterialGraphCanvasPinHit> HitTestPin(
+        float windowX,
+        float windowY,
+        const MaterialGraphCanvasPinPredicate& predicate = {}) const;
     [[nodiscard]] std::optional<std::uint32_t> HitTestNode(float windowX, float windowY) const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> HitTestLink(float windowX, float windowY) const noexcept;
 
@@ -213,9 +220,12 @@ private:
         std::uint32_t pin,
         bool output) const noexcept;
     [[nodiscard]] std::optional<MaterialGraphCanvasPinHit> HitTestPinLocal(
-        MaterialGraphCanvasPoint local) const noexcept;
+        MaterialGraphCanvasPoint local,
+        const MaterialGraphCanvasPinPredicate& predicate = {}) const;
     [[nodiscard]] std::optional<std::uint32_t> HitTestNodeLocal(MaterialGraphCanvasPoint local) const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> HitTestLinkLocal(MaterialGraphCanvasPoint local) const noexcept;
+    [[nodiscard]] bool PointInsideViewportLocal(MaterialGraphCanvasPoint local) const noexcept;
+    [[nodiscard]] bool PointOccludedForLinks(MaterialGraphCanvasPoint local) const noexcept;
     [[nodiscard]] bool IsSelected(std::uint32_t node) const noexcept;
     [[nodiscard]] bool TryConnectPins(MaterialGraphCanvasPinHit first, MaterialGraphCanvasPinHit second);
     [[nodiscard]] std::optional<std::uint32_t> ExistingInputLink(std::uint32_t node, std::uint32_t pin) const noexcept;
@@ -230,6 +240,7 @@ private:
 
     std::vector<MaterialGraphCanvasNode> nodes_;
     std::vector<MaterialGraphCanvasLink> links_;
+    std::vector<MaterialGraphCanvasRect> occluders_;
     std::vector<std::uint32_t> selection_;
     std::vector<MaterialGraphCanvasNode> clipboardNodes_;
     std::vector<MaterialGraphCanvasLink> clipboardLinks_;

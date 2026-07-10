@@ -736,6 +736,7 @@ RenderMaterialTypeDocumentParseResult ParseRenderMaterialTypeDocument(std::istre
             std::string editorOrderText;
             std::string role;
             std::string overrideText;
+            std::string stableId;
             RenderMaterialTextureColorSpace colorSpace{};
             RenderMaterialFeatureSupport support{};
             if (!(stream >> name >> assetIdField >> pathField >> colorSpaceText >> supportText) ||
@@ -757,11 +758,13 @@ RenderMaterialTypeDocumentParseResult ParseRenderMaterialTypeDocument(std::istre
                             AddDiagnostic(result.diagnostics, RenderMaterialTypeDocumentDiagnosticCode::InvalidFieldValue, lineNumber, "textureSlot", "Invalid Material Type texture slot override support flag.", std::string{ rest });
                             continue;
                         }
+                        static_cast<void>(stream >> stableId);
                     }
                 }
             }
             document.schema.textureSlots.push_back(RenderMaterialTextureSlotSchema{
                 .name = DecodeToken(name),
+                .stableId = stableId.empty() || stableId == "_" ? std::string{} : DecodeToken(stableId),
                 .role = role == "_" ? std::string{} : DecodeToken(role),
                 .assetIdFieldName = DecodeToken(assetIdField),
                 .pathFieldName = DecodeToken(pathField),
@@ -881,8 +884,11 @@ void WriteRenderMaterialTypeDocument(std::ostream& output, const RenderMaterialT
             << (slot.fallbackDescription.empty() ? "_" : EncodeToken(slot.fallbackDescription)) << ' '
             << slot.editorOrder
             << ' ' << (slot.role.empty() ? "_" : EncodeToken(slot.role))
-            << ' ' << (slot.overrideSupported ? "true" : "false")
-            << '\n';
+            << ' ' << (slot.overrideSupported ? "true" : "false");
+        if (!slot.stableId.empty()) {
+            output << ' ' << EncodeToken(slot.stableId);
+        }
+        output << '\n';
     }
     for (const RenderMaterialTypeMigrationOperation& migration : document.schema.migrations) {
         output << "migration " << MigrationOperationKindName(migration.kind) << ' '

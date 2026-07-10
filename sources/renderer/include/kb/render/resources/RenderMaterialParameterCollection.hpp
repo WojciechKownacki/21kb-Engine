@@ -76,6 +76,9 @@ struct RenderMaterialParameterCollectionRuntimeValue {
     std::string stableId;
     RenderMaterialParameterCollectionValueType type = RenderMaterialParameterCollectionValueType::Scalar;
     std::array<float, 4U> value{};
+
+    [[nodiscard]] friend bool operator==(const RenderMaterialParameterCollectionRuntimeValue&,
+        const RenderMaterialParameterCollectionRuntimeValue&) noexcept = default;
 };
 
 class RenderMaterialParameterCollectionRuntimeStore {
@@ -88,6 +91,8 @@ public:
         std::string_view stableId,
         RenderMaterialParameterCollectionValueType type,
         const std::array<float, 4U>& value);
+    [[nodiscard]] bool ClearOverride(std::uint64_t collectionAssetId, std::string_view stableId);
+    [[nodiscard]] bool UnloadCollection(std::uint64_t collectionAssetId);
     [[nodiscard]] bool RenameParameterStableId(
         std::uint64_t collectionAssetId,
         std::string_view oldStableId,
@@ -97,7 +102,8 @@ public:
         std::string_view stableId) const;
 
 private:
-    std::vector<RenderMaterialParameterCollectionRuntimeValue> values_;
+    std::vector<RenderMaterialParameterCollectionRuntimeValue> defaults_;
+    std::vector<RenderMaterialParameterCollectionRuntimeValue> overrides_;
     std::uint64_t revision_ = 1U;
 };
 

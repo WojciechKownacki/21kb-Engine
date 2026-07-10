@@ -15,7 +15,7 @@ namespace {
 
 [[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
     std::vector<EditorAssetContextMenuItem> items;
-    if (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance") {
+    if (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" || metadata.type == "RenderMaterialGraph") {
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
     }
     if (metadata.type == "RenderMaterial") {

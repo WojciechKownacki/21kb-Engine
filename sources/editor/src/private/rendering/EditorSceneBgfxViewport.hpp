@@ -54,6 +54,7 @@ public:
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
+        render::RenderMaterialGraphBuildContext materialGraphContext{};
         std::optional<render::ScenePostProcessSettings> postProcessSettings{};
         std::uint8_t msaaSamples = 0U;
         bool shadowPassEnabled = true;

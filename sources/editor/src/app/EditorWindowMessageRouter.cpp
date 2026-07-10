@@ -70,14 +70,11 @@ namespace {
             sceneContext.BackspaceMaterialGraphTexturePickerSearch();
             break;
         case VK_RETURN:
-            if (const kb::assets::AssetId textureId = sceneContext.MaterialGraphTexturePickerSelectedAssetId();
-                textureId.IsValid()) {
-                static_cast<void>(sceneContext.SetMaterialGraphTextureSampleAsset(
-                    sceneContext.MaterialGraphTexturePickerAssetId(),
-                    sceneContext.MaterialGraphTexturePickerNodeId(),
-                    textureId));
-                static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
-            }
+            static_cast<void>(sceneContext.SetMaterialGraphTextureSampleAsset(
+                sceneContext.MaterialGraphTexturePickerAssetId(),
+                sceneContext.MaterialGraphTexturePickerNodeId(),
+                sceneContext.MaterialGraphTexturePickerSelectedAssetId()));
+            static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
             break;
         case VK_ESCAPE:
             static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
@@ -428,6 +425,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
+        static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
         EditorSceneViewportCameraController{
             context_.mainWindow,
             context_.dockModel,
@@ -448,6 +446,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         HWND newCapture = reinterpret_cast<HWND>(lparam);
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
+            static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
             EditorSceneViewportCameraController{
                 context_.mainWindow,
                 context_.dockModel,

@@ -436,7 +436,8 @@ void RenderMaterialParameterCollectionWriter::Write(std::ostream& output, const 
 }
 
 void RenderMaterialParameterCollectionRuntimeStore::Clear() noexcept {
-    values_.clear();
+    defaults_.clear();
+    overrides_.clear();
     ++revision_;
 }
 
@@ -450,14 +451,44 @@ bool RenderMaterialParameterCollectionRuntimeStore::LoadDefaults(
     if (collectionAssetId == 0U) {
         return false;
     }
-    bool changed = false;
+    std::vector<RenderMaterialParameterCollectionRuntimeValue> refreshedDefaults;
+    refreshedDefaults.reserve(collection.parameters.size());
     for (const RenderMaterialParameterCollectionParameter& parameter : collection.parameters) {
         if (parameter.stableId.empty()) {
             continue;
         }
-        if (SetValue(collectionAssetId, parameter.stableId, parameter.type, parameter.defaultValue)) {
-            changed = true;
+        refreshedDefaults.push_back(RenderMaterialParameterCollectionRuntimeValue{
+            .collectionAssetId = collectionAssetId,
+            .stableId = parameter.stableId,
+            .type = parameter.type,
+            .value = parameter.defaultValue,
+        });
+    }
+
+    std::vector<RenderMaterialParameterCollectionRuntimeValue> previousDefaults;
+    for (const RenderMaterialParameterCollectionRuntimeValue& value : defaults_) {
+        if (value.collectionAssetId == collectionAssetId) {
+            previousDefaults.push_back(value);
         }
+    }
+    const bool defaultsChanged = previousDefaults != refreshedDefaults;
+    std::erase_if(defaults_, [collectionAssetId](const RenderMaterialParameterCollectionRuntimeValue& value) {
+        return value.collectionAssetId == collectionAssetId;
+    });
+    defaults_.insert(defaults_.end(), refreshedDefaults.begin(), refreshedDefaults.end());
+
+    const std::size_t overrideCountBefore = overrides_.size();
+    std::erase_if(overrides_, [collectionAssetId, &refreshedDefaults](const RenderMaterialParameterCollectionRuntimeValue& value) {
+        if (value.collectionAssetId != collectionAssetId) {
+            return false;
+        }
+        return std::ranges::none_of(refreshedDefaults, [&value](const RenderMaterialParameterCollectionRuntimeValue& defaultValue) {
+            return defaultValue.stableId == value.stableId && defaultValue.type == value.type;
+        });
+    });
+    const bool changed = defaultsChanged || overrides_.size() != overrideCountBefore;
+    if (changed) {
+        ++revision_;
     }
     return changed;
 }
@@ -470,7 +501,7 @@ bool RenderMaterialParameterCollectionRuntimeStore::SetValue(
     if (collectionAssetId == 0U || stableId.empty()) {
         return false;
     }
-    for (RenderMaterialParameterCollectionRuntimeValue& existing : values_) {
+    for (RenderMaterialParameterCollectionRuntimeValue& existing : overrides_) {
         if (existing.collectionAssetId == collectionAssetId && existing.stableId == stableId) {
             if (existing.type == type && existing.value == value) {
                 return false;
@@ -481,12 +512,42 @@ bool RenderMaterialParameterCollectionRuntimeStore::SetValue(
             return true;
         }
     }
-    values_.push_back(RenderMaterialParameterCollectionRuntimeValue{
+    overrides_.push_back(RenderMaterialParameterCollectionRuntimeValue{
         .collectionAssetId = collectionAssetId,
         .stableId = std::string{ stableId },
         .type = type,
         .value = value,
     });
+    ++revision_;
+    return true;
+}
+
+bool RenderMaterialParameterCollectionRuntimeStore::ClearOverride(
+    std::uint64_t collectionAssetId,
+    std::string_view stableId) {
+    const std::size_t before = overrides_.size();
+    std::erase_if(overrides_, [collectionAssetId, stableId](const RenderMaterialParameterCollectionRuntimeValue& value) {
+        return value.collectionAssetId == collectionAssetId && value.stableId == stableId;
+    });
+    if (overrides_.size() == before) {
+        return false;
+    }
+    ++revision_;
+    return true;
+}
+
+bool RenderMaterialParameterCollectionRuntimeStore::UnloadCollection(std::uint64_t collectionAssetId) {
+    const std::size_t defaultCount = defaults_.size();
+    const std::size_t overrideCount = overrides_.size();
+    std::erase_if(defaults_, [collectionAssetId](const RenderMaterialParameterCollectionRuntimeValue& value) {
+        return value.collectionAssetId == collectionAssetId;
+    });
+    std::erase_if(overrides_, [collectionAssetId](const RenderMaterialParameterCollectionRuntimeValue& value) {
+        return value.collectionAssetId == collectionAssetId;
+    });
+    if (defaults_.size() == defaultCount && overrides_.size() == overrideCount) {
+        return false;
+    }
     ++revision_;
     return true;
 }
@@ -498,20 +559,32 @@ bool RenderMaterialParameterCollectionRuntimeStore::RenameParameterStableId(
     if (collectionAssetId == 0U || oldStableId.empty() || newStableId.empty() || oldStableId == newStableId) {
         return false;
     }
-    for (RenderMaterialParameterCollectionRuntimeValue& existing : values_) {
-        if (existing.collectionAssetId == collectionAssetId && existing.stableId == oldStableId) {
-            existing.stableId = std::string{ newStableId };
-            ++revision_;
-            return true;
+    bool changed = false;
+    const auto rename = [&](std::vector<RenderMaterialParameterCollectionRuntimeValue>& values) {
+        for (RenderMaterialParameterCollectionRuntimeValue& existing : values) {
+            if (existing.collectionAssetId == collectionAssetId && existing.stableId == oldStableId) {
+                existing.stableId = std::string{ newStableId };
+                changed = true;
+            }
         }
+    };
+    rename(defaults_);
+    rename(overrides_);
+    if (changed) {
+        ++revision_;
     }
-    return false;
+    return changed;
 }
 
 std::optional<RenderMaterialParameterCollectionRuntimeValue> RenderMaterialParameterCollectionRuntimeStore::Resolve(
     std::uint64_t collectionAssetId,
     std::string_view stableId) const {
-    for (const RenderMaterialParameterCollectionRuntimeValue& value : values_) {
+    for (const RenderMaterialParameterCollectionRuntimeValue& value : overrides_) {
+        if (value.collectionAssetId == collectionAssetId && value.stableId == stableId) {
+            return value;
+        }
+    }
+    for (const RenderMaterialParameterCollectionRuntimeValue& value : defaults_) {
         if (value.collectionAssetId == collectionAssetId && value.stableId == stableId) {
             return value;
         }

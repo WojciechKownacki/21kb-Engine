@@ -611,6 +611,8 @@ std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyE
         std::move(after),
         std::move(beforeSelectedNodeIds),
         std::move(afterSelectedNodeIds),
+        beforeSelectedNodeId,
+        afterSelectedNodeId,
         0U,
         0U);
 }
@@ -623,6 +625,8 @@ std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyE
     kb::render::RenderMaterialAssetData after,
     std::vector<std::uint32_t> beforeSelectedNodeIds,
     std::vector<std::uint32_t> afterSelectedNodeIds,
+    std::uint32_t beforePrimaryNodeId,
+    std::uint32_t afterPrimaryNodeId,
     std::uint32_t beforeSelectedCommentId,
     std::uint32_t afterSelectedCommentId) {
     return std::unique_ptr<EditorMaterialWorkingCopyEditCommand>{ new EditorMaterialWorkingCopyEditCommand{
@@ -633,6 +637,8 @@ std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyE
         std::move(after),
         std::move(beforeSelectedNodeIds),
         std::move(afterSelectedNodeIds),
+        beforePrimaryNodeId,
+        afterPrimaryNodeId,
         beforeSelectedCommentId,
         afterSelectedCommentId,
     } };
@@ -646,6 +652,8 @@ EditorMaterialWorkingCopyEditCommand::EditorMaterialWorkingCopyEditCommand(
     kb::render::RenderMaterialAssetData after,
     std::vector<std::uint32_t> beforeSelectedNodeIds,
     std::vector<std::uint32_t> afterSelectedNodeIds,
+    std::uint32_t beforePrimaryNodeId,
+    std::uint32_t afterPrimaryNodeId,
     std::uint32_t beforeSelectedCommentId,
     std::uint32_t afterSelectedCommentId)
     : editor_(editor)
@@ -655,6 +663,8 @@ EditorMaterialWorkingCopyEditCommand::EditorMaterialWorkingCopyEditCommand(
     , after_(std::move(after))
     , beforeSelectedNodeIds_(std::move(beforeSelectedNodeIds))
     , afterSelectedNodeIds_(std::move(afterSelectedNodeIds))
+    , beforePrimaryNodeId_(beforePrimaryNodeId)
+    , afterPrimaryNodeId_(afterPrimaryNodeId)
     , beforeSelectedCommentId_(beforeSelectedCommentId)
     , afterSelectedCommentId_(afterSelectedCommentId) {}
 
@@ -675,27 +685,28 @@ EditorCommandHistoryKey EditorMaterialWorkingCopyEditCommand::HistoryKey() const
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Execute() {
-    return Apply(after_, afterSelectedNodeIds_, afterSelectedCommentId_);
+    return Apply(after_, afterSelectedNodeIds_, afterPrimaryNodeId_, afterSelectedCommentId_);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Undo() {
-    return Apply(before_, beforeSelectedNodeIds_, beforeSelectedCommentId_);
+    return Apply(before_, beforeSelectedNodeIds_, beforePrimaryNodeId_, beforeSelectedCommentId_);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Redo() {
-    return Apply(after_, afterSelectedNodeIds_, afterSelectedCommentId_);
+    return Apply(after_, afterSelectedNodeIds_, afterPrimaryNodeId_, afterSelectedCommentId_);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Apply(
     const kb::render::RenderMaterialAssetData& asset,
     const std::vector<std::uint32_t>& selectedNodeIds,
+    std::uint32_t primaryNodeId,
     std::uint32_t selectedCommentId) {
     if (editor_.OpenAssetId() != materialId_ || !editor_.WorkingCopy().has_value()) {
         return false;
     }
 
     editor_.SetWorkingCopy(asset);
-    static_cast<void>(editor_.SetNodeSelection(selectedNodeIds, selectedNodeIds.empty() ? 0U : selectedNodeIds.back()));
+    static_cast<void>(editor_.SetNodeSelection(selectedNodeIds, primaryNodeId));
     if (selectedCommentId != 0U) {
         static_cast<void>(editor_.SelectComment(selectedCommentId));
     } else {
