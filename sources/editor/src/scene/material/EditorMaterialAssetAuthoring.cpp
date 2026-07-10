@@ -339,7 +339,7 @@ bool EditorMaterialAssetAuthoring::CreateMaterialFromGraph(kb::assets::AssetId g
     material.graphSourceAssetId = sourceGraphId.value;
     material.graphSourceAssetPath = sourceGraphPath;
     material.graph = *graph;
-    material.graph.storageModel = "inline-kbmat";
+    material.graph.storageModel = "material-graph-asset";
     ApplySchemaDefaultsToMaterial(material, typeResult.document->schema);
 
     const std::filesystem::path materialPath = EditorMaterialAssetGateway::UniqueFilePath(folder, baseName + std::string{ "Material" });

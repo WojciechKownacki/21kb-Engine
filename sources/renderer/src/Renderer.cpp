@@ -257,6 +257,10 @@ void Renderer::Shutdown() {
     runtimeAssetDiscovery_.Clear();
     lastRuntimeMaterialLightingPath_.reset();
     lastRuntimeMaterialDebugView_.reset();
+    lastRuntimeMaterialQualityLevel_.reset();
+    lastRuntimeMaterialFeatureLevel_.reset();
+    lastRuntimeMaterialShaderStage_.reset();
+    lastRuntimeMaterialVariantUsage_.reset();
     sceneExposureMeter_.ShutdownGpuResources();
     editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
@@ -610,7 +614,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
         effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal;
-    RenderMaterialGraphBuildContext runtimeGraphContext{};
+    RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
         : effectiveLightingConfig.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
@@ -620,10 +624,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (!lastRuntimeMaterialLightingPath_.has_value() ||
         *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
         !lastRuntimeMaterialDebugView_.has_value() ||
-        *lastRuntimeMaterialDebugView_ != effectiveLightingConfig.debugView) {
+        *lastRuntimeMaterialDebugView_ != effectiveLightingConfig.debugView ||
+        !lastRuntimeMaterialQualityLevel_.has_value() ||
+        *lastRuntimeMaterialQualityLevel_ != runtimeGraphContext.qualityLevel ||
+        !lastRuntimeMaterialFeatureLevel_.has_value() ||
+        *lastRuntimeMaterialFeatureLevel_ != runtimeGraphContext.featureLevel ||
+        !lastRuntimeMaterialShaderStage_.has_value() ||
+        *lastRuntimeMaterialShaderStage_ != runtimeGraphContext.shaderStage ||
+        !lastRuntimeMaterialVariantUsage_.has_value() ||
+        *lastRuntimeMaterialVariantUsage_ != runtimeGraphContext.variantUsage) {
         runtimeResourceCache_.InvalidateMaterials(sceneRenderer_.get());
         lastRuntimeMaterialLightingPath_ = effectiveLightingConfig.lightingPath;
         lastRuntimeMaterialDebugView_ = effectiveLightingConfig.debugView;
+        lastRuntimeMaterialQualityLevel_ = runtimeGraphContext.qualityLevel;
+        lastRuntimeMaterialFeatureLevel_ = runtimeGraphContext.featureLevel;
+        lastRuntimeMaterialShaderStage_ = runtimeGraphContext.shaderStage;
+        lastRuntimeMaterialVariantUsage_ = runtimeGraphContext.variantUsage;
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path/debug view change");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");

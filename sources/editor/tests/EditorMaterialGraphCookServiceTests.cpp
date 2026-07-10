@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <filesystem>
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -405,6 +406,63 @@ void RunAsyncDebouncedCookTest() {
     Require(service.DrainResults().empty(), "KBMAT-MAT30: Completions must only be drained once");
 }
 
+void RunAsyncVariantCoexistenceTest() {
+    const RenderMaterialAssetData material = MakeQualitySwitchMaterial();
+    const kb::assets::AssetId assetId{ 0x3110U };
+    const std::array<kb::render::RenderMaterialGraphBuildContext, 3U> contexts{
+        kb::render::RenderMaterialGraphBuildContext{
+            .assetId = assetId.value,
+            .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::Low,
+            .variantUsage = kb::render::RenderMaterialGraphVariantUsage::Preview,
+        },
+        kb::render::RenderMaterialGraphBuildContext{
+            .assetId = assetId.value,
+            .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High,
+            .shadingPath = kb::render::RenderMaterialGraphShadingPath::Deferred,
+            .variantUsage = kb::render::RenderMaterialGraphVariantUsage::Scene,
+        },
+        kb::render::RenderMaterialGraphBuildContext{
+            .assetId = assetId.value,
+            .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::Medium,
+            .variantUsage = kb::render::RenderMaterialGraphVariantUsage::NodePreview,
+        },
+    };
+
+    const auto runOrder = [&](std::string_view suffix, bool reverse) {
+        EditorMaterialGraphCookConfig config = MakeCookConfig("p11_variant_coexistence_" + std::string{ suffix });
+        config.debounceMs = 10U;
+        std::error_code error;
+        std::filesystem::remove_all(config.cacheRoot, error);
+        EditorMaterialGraphCookService service{ config };
+        for (std::size_t offset = 0U; offset < contexts.size(); ++offset) {
+            const std::size_t index = reverse ? contexts.size() - 1U - offset : offset;
+            service.RequestCook(assetId, material, contexts[index]);
+        }
+        service.WaitForIdle();
+        const std::vector<EditorMaterialGraphCookResult> results = service.DrainResults();
+        Require(results.size() == contexts.size(),
+            "P1.1: preview, scene and node-preview requests for one material must coexist in the debounce queue");
+
+        std::array<bool, 3U> seen{};
+        for (const EditorMaterialGraphCookResult& result : results) {
+            Require(result.HasGpuProgram() && result.variantKey.materialAssetId == assetId.value,
+                "P1.1: every independently queued variant must produce a real GPU artifact");
+            const std::size_t slot = result.variantKey.usage == kb::render::RenderMaterialGraphVariantUsage::Preview
+                ? 0U
+                : result.variantKey.usage == kb::render::RenderMaterialGraphVariantUsage::Scene ? 1U : 2U;
+            seen[slot] = true;
+            const EditorMaterialGraphCookResult latest = service.LatestResult(result.variantKey);
+            Require(latest.variantKey.SameProgramFamily(result.variantKey) && latest.HasGpuProgram(),
+                "P1.1: status lookup must be scoped to the exact cook variant family");
+        }
+        Require(seen[0] && seen[1] && seen[2],
+            "P1.1: cook completion reporting lost a preview, scene or node-preview variant");
+    };
+
+    runOrder("forward", false);
+    runOrder("reverse", true);
+}
+
 void RunHotReloadLastGoodTest() {
     const EditorMaterialGraphCookConfig config = MakeCookConfig("mat33_lastgood");
     std::error_code error;
@@ -476,6 +534,7 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunQualityVariantCookContextTest();
     RunShadingPathVariantCookContextTest();
     RunAsyncDebouncedCookTest();
+    RunAsyncVariantCoexistenceTest();
     RunHotReloadLastGoodTest();
 #endif
 }

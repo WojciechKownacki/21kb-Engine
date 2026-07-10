@@ -1293,6 +1293,47 @@ void AddShaderGenerationDiagnostic(
     return "vec4(" + FloatLiteral(r) + ", " + FloatLiteral(g) + ", " + FloatLiteral(b) + ", " + FloatLiteral(a) + ")";
 }
 
+[[nodiscard]] std::array<float, 4U> DynamicParameterDefaultValue(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+    switch (node.kind) {
+    case RenderMaterialGraphNodeKind::ParameterScalar: {
+        const float value = values.empty() ? 0.0F : values[0];
+        return { value, 0.0F, 0.0F, 0.0F };
+    }
+    case RenderMaterialGraphNodeKind::ParameterVector: {
+        const float x = values.size() > 0U ? values[0] : 0.0F;
+        const float y = values.size() > 1U ? values[1] : x;
+        const float z = values.size() > 2U ? values[2] : y;
+        return { x, y, z, 0.0F };
+    }
+    case RenderMaterialGraphNodeKind::ParameterColor: {
+        const float r = values.size() > 0U ? values[0] : 0.0F;
+        const float g = values.size() > 1U ? values[1] : r;
+        const float b = values.size() > 2U ? values[2] : g;
+        const float a = values.size() > 3U ? values[3] : 1.0F;
+        return { r, g, b, a };
+    }
+    default:
+        return {};
+    }
+}
+
+[[nodiscard]] std::string_view SamplerFilterName(RenderMaterialGraphSamplerFilter filter) noexcept {
+    return filter == RenderMaterialGraphSamplerFilter::Point ? "Point" : "Linear";
+}
+
+[[nodiscard]] std::string_view SamplerWrapName(RenderMaterialGraphSamplerWrap wrap) noexcept {
+    switch (wrap) {
+    case RenderMaterialGraphSamplerWrap::Clamp:
+        return "Clamp";
+    case RenderMaterialGraphSamplerWrap::Mirror:
+        return "Mirror";
+    case RenderMaterialGraphSamplerWrap::Repeat:
+        return "Repeat";
+    }
+    return "Repeat";
+}
+
 [[nodiscard]] bool IsTextureObjectNode(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::ParameterTexture:
@@ -4925,6 +4966,8 @@ std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagno
         return "unsupported_shading_model";
     case RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion:
         return "static_permutation_explosion";
+    case RenderMaterialGraphDiagnosticKind::MissingSourceGraph:
+        return "missing_source_graph";
     case RenderMaterialGraphDiagnosticKind::MissingMaterialFunction:
         return "missing_material_function";
     case RenderMaterialGraphDiagnosticKind::MaterialFunctionCycle:
@@ -5568,6 +5611,13 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
                 << (node.parameter.overrideSupported ? "true" : "false") << ' '
                 << node.parameter.editorOrder << ' '
                 << (node.parameter.description.empty() ? "_" : EncodeToken(node.parameter.description)) << '\n';
+            output << "graphSamplerState "
+                << node.id << ' '
+                << SamplerFilterName(node.parameter.samplerState.minFilter) << ' '
+                << SamplerFilterName(node.parameter.samplerState.magFilter) << ' '
+                << SamplerFilterName(node.parameter.samplerState.mipFilter) << ' '
+                << SamplerWrapName(node.parameter.samplerState.wrapU) << ' '
+                << SamplerWrapName(node.parameter.samplerState.wrapV) << '\n';
         }
         if (node.kind == RenderMaterialGraphNodeKind::CustomCode ||
             node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
@@ -5920,7 +5970,10 @@ RenderMaterialGraphCompileArtifactCacheResult CompileRenderMaterialGraphWithArti
         RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(graph, context);
         result.compile.diagnostics = std::move(inlineResult.diagnostics);
         if (inlineResult.Succeeded()) {
-            std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(inlineResult.graph);
+            const RenderMaterialGraphRenderPath renderPath = context.shadingPath == RenderMaterialGraphShadingPath::Deferred
+                ? RenderMaterialGraphRenderPath::GpuDeferred
+                : RenderMaterialGraphRenderPath::GpuForward;
+            std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(inlineResult.graph, renderPath);
             AttachDiagnosticContext(inlineResult.graph, context, validationDiagnostics);
             result.compile.diagnostics.insert(
                 result.compile.diagnostics.end(),
@@ -6017,7 +6070,10 @@ RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
         }
     }
 
-    std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(graph);
+    const RenderMaterialGraphRenderPath renderPath = context.shadingPath == RenderMaterialGraphShadingPath::Deferred
+        ? RenderMaterialGraphRenderPath::GpuDeferred
+        : RenderMaterialGraphRenderPath::GpuForward;
+    std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(graph, renderPath);
     AttachDiagnosticContext(graph, context, validationDiagnostics);
     result.diagnostics.insert(
         result.diagnostics.end(),
@@ -6222,13 +6278,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             usesSobol = true;
             break;
         case RenderMaterialGraphNodeKind::ParameterScalar:
-            uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind });
+            uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind,
+                RenderMaterialGraphReflectionUniformSource::MaterialParameter, 0U, {}, DynamicParameterDefaultValue(node) });
             break;
         case RenderMaterialGraphNodeKind::ParameterVector:
-            uniformEntries.push_back({ ParameterUniformName(node, "_xyz"), StableParameterId(node), node.kind });
+            uniformEntries.push_back({ ParameterUniformName(node, "_xyz"), StableParameterId(node), node.kind,
+                RenderMaterialGraphReflectionUniformSource::MaterialParameter, 0U, {}, DynamicParameterDefaultValue(node) });
             break;
         case RenderMaterialGraphNodeKind::ParameterColor:
-            uniformEntries.push_back({ ParameterUniformName(node, "_rgba"), StableParameterId(node), node.kind });
+            uniformEntries.push_back({ ParameterUniformName(node, "_rgba"), StableParameterId(node), node.kind,
+                RenderMaterialGraphReflectionUniformSource::MaterialParameter, 0U, {}, DynamicParameterDefaultValue(node) });
             break;
         case RenderMaterialGraphNodeKind::CollectionParameter:
             uniformEntries.push_back(ReflectionUniformEntry{
@@ -6841,6 +6900,7 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
     RenderMaterialGraphRenderPath renderPath) {
     std::vector<RenderMaterialGraphDiagnostic> diagnostics;
     const RenderMaterialGraphNode* outputNode = nullptr;
+    std::size_t outputNodeCount = 0U;
     std::unordered_map<std::string, std::uint32_t> parameterStableIds;
     std::unordered_map<std::string, std::uint32_t> collectionParameterStableIds;
     for (const RenderMaterialGraphNode& node : graph.nodes) {
@@ -6875,8 +6935,11 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 {},
                 "Material graph node '" + std::string{ RenderMaterialGraphNodeKindName(node.kind) } + "' is " + std::string{ RenderMaterialGraphNodeSupportName(pathSupport) } + " on the " + std::string{ RenderMaterialGraphRenderPathName(renderPath) } + " render path.");
         }
-        if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput && outputNode == nullptr) {
-            outputNode = &node;
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            ++outputNodeCount;
+            if (outputNode == nullptr) {
+                outputNode = &node;
+            }
         }
         if (node.kind == RenderMaterialGraphNodeKind::CustomCode) {
             ValidateCustomCodeNode(node, diagnostics);
@@ -7089,8 +7152,18 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
             0U,
             "baseColor",
             "Material graph requires a Material Output node with a connected BaseColor input.");
+    } else if (outputNodeCount != 1U) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            outputNode->id,
+            0U,
+            {},
+            "Material graph requires exactly one Material Output node; found " + std::to_string(outputNodeCount) + ".");
     }
 
+    std::unordered_map<std::string, std::uint32_t> inputLinkOwners;
     for (const RenderMaterialGraphLink& link : graph.links) {
         const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link.fromNodeId);
         const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
@@ -7118,6 +7191,23 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 link.id,
                 link.toPin,
                 "Material graph link type mismatch: " + std::string{ RenderMaterialGraphPinTypeName(fromType) } + " cannot connect to " + std::string{ RenderMaterialGraphPinTypeName(toType) } + ".");
+        }
+
+        const std::uint32_t targetPinId = link.toPinId != 0U
+            ? link.toPinId
+            : RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
+        const std::string inputKey = std::to_string(link.toNodeId) + ":" + std::to_string(targetPinId);
+        const auto [owner, inserted] = inputLinkOwners.emplace(inputKey, link.id);
+        if (!inserted) {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                toNode->id,
+                link.id,
+                link.toPin,
+                "Material graph input '" + link.toPin + "' has multiple incoming links (including link " +
+                    std::to_string(owner->second) + "); each input accepts at most one link.");
         }
     }
 
@@ -8835,6 +8925,7 @@ RenderMaterialTypeSchema BuildRenderMaterialGraphParameterSchema(
             const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
             schema.textureSlots.push_back(RenderMaterialTextureSlotSchema{
                 .name = displayName,
+                .stableId = stableId,
                 .role = textureRole,
                 .assetIdFieldName = TextureAssetFieldName(stableId),
                 .pathFieldName = TexturePathFieldName(stableId),

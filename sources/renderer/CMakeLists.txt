@@ -46,6 +46,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMaterialFunctionAssetLoader.hpp
     include/kb/render/resources/RenderMaterialGraphAssetLoader.hpp
     include/kb/render/resources/RenderMaterialGraphDocument.hpp
+    include/kb/render/resources/RenderMaterialGraphVariantKey.hpp
     include/kb/render/resources/RenderMaterialParameterCollection.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetLoader.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetWriter.hpp

@@ -2,9 +2,8 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorTextureAssetMetadataResolver.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 
@@ -20,6 +19,7 @@ enum class EditorMaterialTextureSemantic {
 };
 
 enum class EditorMaterialTextureColorSpace {
+    Unknown,
     Srgb,
     Linear,
 };
@@ -28,8 +28,9 @@ struct EditorMaterialTextureSlotValidationResult {
     bool accepted = true;
     EditorMaterialTextureSemantic expectedSemantic = EditorMaterialTextureSemantic::Unknown;
     EditorMaterialTextureSemantic inferredSemantic = EditorMaterialTextureSemantic::Unknown;
-    EditorMaterialTextureColorSpace expectedColorSpace = EditorMaterialTextureColorSpace::Linear;
-    EditorMaterialTextureColorSpace inferredColorSpace = EditorMaterialTextureColorSpace::Linear;
+    EditorMaterialTextureColorSpace expectedColorSpace = EditorMaterialTextureColorSpace::Unknown;
+    EditorMaterialTextureColorSpace inferredColorSpace = EditorMaterialTextureColorSpace::Unknown;
+    std::string metadataDiagnostic;
 };
 
 class EditorMaterialTextureSlotValidation {
@@ -60,10 +61,11 @@ public:
         case EditorMaterialTextureSemantic::Normal:
         case EditorMaterialTextureSemantic::MetallicRoughness:
         case EditorMaterialTextureSemantic::Occlusion:
-        case EditorMaterialTextureSemantic::Unknown:
             return EditorMaterialTextureColorSpace::Linear;
+        case EditorMaterialTextureSemantic::Unknown:
+            return EditorMaterialTextureColorSpace::Unknown;
         }
-        return EditorMaterialTextureColorSpace::Linear;
+        return EditorMaterialTextureColorSpace::Unknown;
     }
 
     [[nodiscard]] static std::string_view SemanticName(EditorMaterialTextureSemantic semantic) noexcept {
@@ -85,59 +87,76 @@ public:
     }
 
     [[nodiscard]] static std::string_view ColorSpaceName(EditorMaterialTextureColorSpace colorSpace) noexcept {
-        return colorSpace == EditorMaterialTextureColorSpace::Srgb ? "sRGB" : "linear";
-    }
-
-    [[nodiscard]] static EditorMaterialTextureSemantic InferSemantic(const kb::assets::AssetMetadata& metadata) {
-        const std::string text = LowerAscii(metadata.name + " " + metadata.virtualPath.generic_string() + " " + metadata.physicalPath.generic_string());
-        if (ContainsToken(text, "normal") || ContainsToken(text, " nrm") || ContainsToken(text, "_nrm") || ContainsToken(text, "-nrm")) {
-            return EditorMaterialTextureSemantic::Normal;
+        switch (colorSpace) {
+        case EditorMaterialTextureColorSpace::Srgb:
+            return "sRGB";
+        case EditorMaterialTextureColorSpace::Linear:
+            return "linear";
+        case EditorMaterialTextureColorSpace::Unknown:
+            return "Unknown";
         }
-        if (ContainsToken(text, "metallicroughness") || ContainsToken(text, "metallic-roughness") || ContainsToken(text, "metallic_roughness")
-            || ContainsToken(text, "roughnessmetallic") || ContainsToken(text, "orm") || ContainsToken(text, "rmo") || ContainsToken(text, "mr.")) {
-            return EditorMaterialTextureSemantic::MetallicRoughness;
-        }
-        if (ContainsToken(text, "occlusion") || ContainsToken(text, "ambientocclusion") || ContainsToken(text, "ambient_occlusion") || ContainsToken(text, " ao")
-            || ContainsToken(text, "_ao") || ContainsToken(text, "-ao")) {
-            return EditorMaterialTextureSemantic::Occlusion;
-        }
-        if (ContainsToken(text, "emissive") || ContainsToken(text, "emission")) {
-            return EditorMaterialTextureSemantic::Emissive;
-        }
-        if (ContainsToken(text, "basecolor") || ContainsToken(text, "base_color") || ContainsToken(text, "albedo") || ContainsToken(text, "diffuse")) {
-            return EditorMaterialTextureSemantic::BaseColor;
-        }
-        return EditorMaterialTextureSemantic::Unknown;
+        return "Unknown";
     }
 
     [[nodiscard]] static EditorMaterialTextureSlotValidationResult Validate(const kb::assets::AssetMetadata& metadata, EditorMaterialTextureSlot slot) {
         EditorMaterialTextureSlotValidationResult result{};
         result.expectedSemantic = ExpectedSemantic(slot);
-        result.inferredSemantic = InferSemantic(metadata);
         result.expectedColorSpace = ExpectedColorSpace(result.expectedSemantic);
-        result.inferredColorSpace = ExpectedColorSpace(result.inferredSemantic);
-        result.accepted = result.inferredSemantic == EditorMaterialTextureSemantic::Unknown || result.inferredSemantic == result.expectedSemantic;
+        const EditorTextureAssetMetadataResolution resolved = EditorResolveTextureAssetMetadata(metadata);
+        if (!resolved.Resolved()) {
+            result.accepted = false;
+            result.metadataDiagnostic = resolved.diagnostic;
+            return result;
+        }
+
+        result.inferredSemantic = SemanticFromAsset(resolved.asset->semantic);
+        result.inferredColorSpace = ColorSpaceFromAsset(resolved.asset->colorSpace);
+        if (result.inferredSemantic == EditorMaterialTextureSemantic::Unknown) {
+            result.metadataDiagnostic = "Texture semantic metadata is Unknown.";
+        }
+        if (result.inferredColorSpace == EditorMaterialTextureColorSpace::Unknown) {
+            if (!result.metadataDiagnostic.empty()) {
+                result.metadataDiagnostic += " ";
+            }
+            result.metadataDiagnostic += "Texture color-space metadata is Unknown.";
+        }
+        result.accepted = result.inferredSemantic == result.expectedSemantic &&
+            result.inferredColorSpace == result.expectedColorSpace;
         return result;
     }
 
     [[nodiscard]] static std::string RejectionMessage(const kb::assets::AssetMetadata& metadata, const EditorMaterialTextureSlotValidationResult& validation) {
-        return "Texture '" + (metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name)
-            + "' looks like " + std::string{ SemanticName(validation.inferredSemantic) }
+        std::string message = "Texture '" + (metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name)
+            + "' declares " + std::string{ SemanticName(validation.inferredSemantic) }
             + "/" + std::string{ ColorSpaceName(validation.inferredColorSpace) }
             + ", but the " + std::string{ SemanticName(validation.expectedSemantic) }
-            + " slot expects " + std::string{ ColorSpaceName(validation.expectedColorSpace) } + ".";
+            + " slot requires " + std::string{ ColorSpaceName(validation.expectedColorSpace) } + ".";
+        if (!validation.metadataDiagnostic.empty()) {
+            message += " " + validation.metadataDiagnostic;
+        }
+        return message;
     }
 
 private:
-    [[nodiscard]] static std::string LowerAscii(std::string text) {
-        std::ranges::transform(text, text.begin(), [](unsigned char value) {
-            return static_cast<char>(std::tolower(value));
-        });
-        return text;
+    [[nodiscard]] static EditorMaterialTextureSemantic SemanticFromAsset(kb::render::RenderTextureAssetSemantic semantic) noexcept {
+        switch (semantic) {
+        case kb::render::RenderTextureAssetSemantic::BaseColor: return EditorMaterialTextureSemantic::BaseColor;
+        case kb::render::RenderTextureAssetSemantic::Normal: return EditorMaterialTextureSemantic::Normal;
+        case kb::render::RenderTextureAssetSemantic::MetallicRoughness: return EditorMaterialTextureSemantic::MetallicRoughness;
+        case kb::render::RenderTextureAssetSemantic::Occlusion: return EditorMaterialTextureSemantic::Occlusion;
+        case kb::render::RenderTextureAssetSemantic::Emissive: return EditorMaterialTextureSemantic::Emissive;
+        case kb::render::RenderTextureAssetSemantic::Unknown: return EditorMaterialTextureSemantic::Unknown;
+        }
+        return EditorMaterialTextureSemantic::Unknown;
     }
 
-    [[nodiscard]] static bool ContainsToken(std::string_view text, std::string_view token) noexcept {
-        return text.find(token) != std::string_view::npos;
+    [[nodiscard]] static EditorMaterialTextureColorSpace ColorSpaceFromAsset(kb::render::RenderTextureAssetColorSpace colorSpace) noexcept {
+        switch (colorSpace) {
+        case kb::render::RenderTextureAssetColorSpace::Srgb: return EditorMaterialTextureColorSpace::Srgb;
+        case kb::render::RenderTextureAssetColorSpace::Linear: return EditorMaterialTextureColorSpace::Linear;
+        case kb::render::RenderTextureAssetColorSpace::Unknown: return EditorMaterialTextureColorSpace::Unknown;
+        }
+        return EditorMaterialTextureColorSpace::Unknown;
     }
 };
 

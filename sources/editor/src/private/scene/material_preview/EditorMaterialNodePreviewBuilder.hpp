@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace kb::editor {
 
@@ -22,7 +23,7 @@ public:
             return std::nullopt;
         }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(source.graph, nodeId);
-        const kb::render::RenderMaterialGraphNode* outputNode = FirstMaterialOutputNode(source.graph);
+        const kb::render::RenderMaterialGraphNode* outputNode = SingleMaterialOutputNode(source.graph);
         if (node == nullptr || outputNode == nullptr || node->kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
             return std::nullopt;
         }
@@ -31,10 +32,32 @@ public:
             return std::nullopt;
         }
 
+        std::vector<std::uint32_t> requiredNodeIds{ nodeId };
+        for (std::size_t index = 0U; index < requiredNodeIds.size(); ++index) {
+            const std::uint32_t targetId = requiredNodeIds[index];
+            for (const kb::render::RenderMaterialGraphLink& candidate : source.graph.links) {
+                if (candidate.toNodeId == targetId &&
+                    std::ranges::find(requiredNodeIds, candidate.fromNodeId) == requiredNodeIds.end()) {
+                    requiredNodeIds.push_back(candidate.fromNodeId);
+                }
+            }
+        }
+        requiredNodeIds.push_back(outputNode->id);
+
         kb::render::RenderMaterialAssetData preview = source;
-        std::erase_if(preview.graph.links, [outputNode](const kb::render::RenderMaterialGraphLink& link) {
-            return link.toNodeId == outputNode->id && link.toPin == "baseColor";
+        preview.graph.shadingModel = "unlit";
+        preview.graph.blendMode = "opaque";
+        preview.graph.lastGoodArtifact = {};
+        std::erase_if(preview.graph.nodes, [&requiredNodeIds](const kb::render::RenderMaterialGraphNode& candidate) {
+            return std::ranges::find(requiredNodeIds, candidate.id) == requiredNodeIds.end();
         });
+        std::erase_if(preview.graph.links, [&requiredNodeIds, outputNode](const kb::render::RenderMaterialGraphLink& candidate) {
+            return candidate.toNodeId == outputNode->id ||
+                std::ranges::find(requiredNodeIds, candidate.fromNodeId) == requiredNodeIds.end() ||
+                std::ranges::find(requiredNodeIds, candidate.toNodeId) == requiredNodeIds.end();
+        });
+        preview.graph.comments.clear();
+        preview.graph.composites.clear();
 
         kb::render::RenderMaterialGraphLink link{
             .fromNodeId = node->id,
@@ -50,14 +73,18 @@ public:
     }
 
 private:
-    [[nodiscard]] static const kb::render::RenderMaterialGraphNode* FirstMaterialOutputNode(
+    [[nodiscard]] static const kb::render::RenderMaterialGraphNode* SingleMaterialOutputNode(
         const kb::render::RenderMaterialGraphDocument& graph) noexcept {
+        const kb::render::RenderMaterialGraphNode* output = nullptr;
         for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
             if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
-                return &node;
+                if (output != nullptr) {
+                    return nullptr;
+                }
+                output = &node;
             }
         }
-        return nullptr;
+        return output;
     }
 
     [[nodiscard]] static std::optional<std::string> PreviewableOutputPin(

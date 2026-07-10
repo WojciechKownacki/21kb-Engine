@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::render {
@@ -128,6 +129,32 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
     return false;
 }
 
+[[nodiscard]] const RenderMaterialParameterSchema* FindMaterialParameter(
+    const RenderMaterialTypeSchema& schema,
+    std::string_view stableId) noexcept {
+    for (const RenderMaterialParameterSchema& parameter : schema.parameters) {
+        if (parameter.name == stableId) {
+            return &parameter;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] const RenderMaterialTextureSlotSchema* FindMaterialTextureSlot(
+    const RenderMaterialTypeSchema& schema,
+    std::string_view stableId) noexcept {
+    for (const RenderMaterialTextureSlotSchema& slot : schema.textureSlots) {
+        if ((!slot.stableId.empty() ? std::string_view{ slot.stableId } : std::string_view{ slot.name }) == stableId) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool HasMaterialValue(const RenderMaterialTypeSchema& schema, std::string_view stableId) noexcept {
+    return HasMaterialParameter(schema, stableId) || FindMaterialTextureSlot(schema, stableId) != nullptr;
+}
+
 [[nodiscard]] std::vector<float> ParseDefaultNumbers(std::string_view text) {
     std::vector<float> numbers;
     if (text.empty() || text == "_") {
@@ -184,6 +211,22 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
         stableId == "alphaCutoff" ||
         stableId == "alphaMode" ||
         stableId == "doubleSided";
+}
+
+[[nodiscard]] bool IsBuiltInMaterialTextureField(std::string_view field) noexcept {
+    return field == "albedoTextureAssetId" ||
+        field == "normalTextureAssetId" ||
+        field == "metallicRoughnessTextureAssetId" ||
+        field == "occlusionTextureAssetId" ||
+        field == "emissiveTextureAssetId" ||
+        field == "clearcoatTextureAssetId" ||
+        field == "clearcoatRoughnessTextureAssetId" ||
+        field == "sheenColorTextureAssetId" ||
+        field == "transmissionTextureAssetId" ||
+        field == "thicknessTextureAssetId" ||
+        field == "anisotropyTextureAssetId" ||
+        field == "decalTextureAssetId" ||
+        field == "layerMaskTextureAssetId";
 }
 
 [[nodiscard]] std::filesystem::path ResolveAssetPath(
@@ -302,6 +345,48 @@ std::string_view RenderMaterialTypeReferenceDiagnosticCodeName(RenderMaterialTyp
 
 std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialAssetGraphDiagnostics(const RenderMaterialAssetData& asset) {
     std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(asset.graph);
+    const RenderMaterialTypeSchema graphSchema = BuildRenderMaterialGraphParameterSchema(asset.graph, "runtime.validation", 1U);
+    const bool graphDeclaresParameters = !graphSchema.parameters.empty() || !graphSchema.textureSlots.empty();
+    std::unordered_map<std::string, std::size_t> valueStableIds;
+    for (std::size_t index = 0U; index < asset.graphParameterValues.size(); ++index) {
+        const RenderMaterialGraphParameterValue& value = asset.graphParameterValues[index];
+        const auto [existing, inserted] = valueStableIds.emplace(value.stableId, index);
+        if (value.stableId.empty() || !inserted) {
+            diagnostics.push_back(RenderMaterialGraphDiagnostic{
+                .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+                .kind = RenderMaterialGraphDiagnosticKind::DuplicateParameterStableId,
+                .message = value.stableId.empty()
+                    ? "Material graph parameter value requires a non-empty stable id."
+                    : "Material graph parameter value stable id '" + value.stableId + "' is duplicated at entries " +
+                        std::to_string(existing->second) + " and " + std::to_string(index) + ".",
+            });
+            continue;
+        }
+        if (!graphDeclaresParameters) {
+            // Values may be declared by an external Material Type schema. That schema is not
+            // available to this graph-only validator, so only intrinsic duplicate/id checks apply.
+            continue;
+        }
+
+        const RenderMaterialParameterSchema* parameter = FindMaterialParameter(graphSchema, value.stableId);
+        const RenderMaterialTextureSlotSchema* texture = FindMaterialTextureSlot(graphSchema, value.stableId);
+        if (parameter == nullptr && texture == nullptr) {
+            diagnostics.push_back(RenderMaterialGraphDiagnostic{
+                .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+                .kind = RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                .message = "Material graph parameter value '" + value.stableId + "' does not match a declared graph parameter or texture slot.",
+            });
+            continue;
+        }
+        const RenderMaterialParameterType expectedType = texture != nullptr ? RenderMaterialParameterType::Texture : parameter->type;
+        if (value.type != expectedType) {
+            diagnostics.push_back(RenderMaterialGraphDiagnostic{
+                .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+                .kind = RenderMaterialGraphDiagnosticKind::TypeMismatch,
+                .message = "Material graph parameter value '" + value.stableId + "' has a type incompatible with its graph declaration.",
+            });
+        }
+    }
     if (asset.desc.alphaMode == RenderMaterialAlphaMode::Blend) {
         diagnostics.push_back(RenderMaterialGraphDiagnostic{
             .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
@@ -336,7 +421,7 @@ RenderMaterialSchemaRefreshResult RefreshRenderMaterialGraphBackedMaterialSchema
     }
 
     std::vector<RenderMaterialGraphParameterValue> refreshedValues;
-    refreshedValues.reserve(materialType.schema.parameters.size());
+    refreshedValues.reserve(materialType.schema.parameters.size() + materialType.schema.textureSlots.size());
     for (const RenderMaterialParameterSchema& parameter : materialType.schema.parameters) {
         if (IsBuiltInMaterialField(parameter.name)) {
             continue;
@@ -363,8 +448,41 @@ RenderMaterialSchemaRefreshResult RefreshRenderMaterialGraphBackedMaterialSchema
         });
     }
 
+    for (const RenderMaterialTextureSlotSchema& slot : materialType.schema.textureSlots) {
+        if (slot.stableId.empty() && IsBuiltInMaterialTextureField(slot.assetIdFieldName)) {
+            continue;
+        }
+        const std::string& stableId = slot.stableId.empty() ? slot.name : slot.stableId;
+        if (const RenderMaterialGraphParameterValue* existing = FindGraphParameterValue(material.graphParameterValues, stableId);
+            existing != nullptr) {
+            if (existing->type == RenderMaterialParameterType::Texture) {
+                refreshedValues.push_back(*existing);
+                continue;
+            }
+            refreshedValues.push_back(RenderMaterialGraphParameterValue{
+                .stableId = stableId,
+                .type = RenderMaterialParameterType::Texture,
+            });
+            result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+                .kind = RenderMaterialSchemaRefreshDiagnosticKind::ChangedParameterType,
+                .stableId = stableId,
+                .message = "Reset graph texture slot '" + stableId + "' because its stored value was not a texture.",
+            });
+            continue;
+        }
+        refreshedValues.push_back(RenderMaterialGraphParameterValue{
+            .stableId = stableId,
+            .type = RenderMaterialParameterType::Texture,
+        });
+        result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+            .kind = RenderMaterialSchemaRefreshDiagnosticKind::AddedDefaultParameter,
+            .stableId = stableId,
+            .message = "Added default value for graph texture slot '" + stableId + "'.",
+        });
+    }
+
     for (const RenderMaterialGraphParameterValue& existing : material.graphParameterValues) {
-        if (!HasMaterialParameter(materialType.schema, existing.stableId)) {
+        if (!HasMaterialValue(materialType.schema, existing.stableId)) {
             result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
                 .kind = RenderMaterialSchemaRefreshDiagnosticKind::RemovedUnknownParameter,
                 .stableId = existing.stableId,

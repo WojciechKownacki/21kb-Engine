@@ -93,6 +93,174 @@ void RunMaterialGraphCanvasPinRowsAreForgivingTest() {
         "Material graph canvas texture preview center should stay reserved for picker interaction.");
 }
 
+void RunMaterialGraphCanvasCanonicalPinGeometryTest() {
+    kb::render::RenderMaterialGraphNode vectorParameter{
+        .id = 17U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterVector,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "tint",
+            .displayName = "Tint",
+            .defaultValueHint = "0.2 0.4 0.8",
+        },
+    };
+    MaterialGraphCanvas canvas;
+    canvas.SetViewport(MaterialGraphCanvasRect{ 30.0F, 40.0F, 800.0F, 600.0F });
+    canvas.SetView(10.0F, 5.0F, 1.5F);
+    const std::uint32_t vectorNode = canvas.AddNode(BuildMaterialGraphCanvasNode(vectorParameter));
+    const MaterialGraphCanvasNode* canonicalNode = canvas.NodeAt(vectorNode);
+    Require(canonicalNode != nullptr, "Canonical geometry should preserve the vector parameter node.");
+    const MaterialGraphCanvasPoint vectorOutput = canvas.PinCenterWorld(vectorNode, 0U, true);
+    const MaterialGraphCanvasRect vectorBounds = canvas.NodeBoundsWorld(*canonicalNode);
+    Require(vectorOutput.y > vectorBounds.y && vectorOutput.y < vectorBounds.y + vectorBounds.height,
+        "ParameterVector output anchor must stay inside the rendered node body.");
+    Require(NearlyEqual(vectorOutput.y, vectorParameter.positionY + 51.0),
+        "ParameterVector must center its single output in the canonical node body.");
+    const MaterialGraphCanvasPoint vectorOutputWindow = canvas.PinCenterWindow(vectorNode, 0U, true);
+    const std::optional<MaterialGraphCanvasPinHit> vectorHit = canvas.HitTestPin(vectorOutputWindow.x, vectorOutputWindow.y);
+    Require(vectorHit.has_value() && vectorHit->node == vectorNode && vectorHit->pin == 0U && vectorHit->output,
+        "ParameterVector rendered center, wire anchor, and hit target must resolve to the same canonical pin.");
+
+    kb::render::RenderMaterialGraphNode asymmetric{
+        .id = 18U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CustomCode,
+        .positionX = 420,
+        .positionY = 80,
+    };
+    asymmetric.customCode.inputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "Input", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+    };
+    asymmetric.customCode.outputs = {
+        kb::render::RenderMaterialGraphCustomPin{ .name = "A", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "B", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "C", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+        kb::render::RenderMaterialGraphCustomPin{ .name = "D", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+    };
+    const std::uint32_t asymmetricNode = canvas.AddNode(BuildMaterialGraphCanvasNode(asymmetric));
+    const MaterialGraphCanvasPoint asymmetricInput = canvas.PinCenterWindow(asymmetricNode, 0U, false);
+    const std::optional<MaterialGraphCanvasPinHit> asymmetricHit = canvas.HitTestPin(asymmetricInput.x, asymmetricInput.y);
+    Require(asymmetricHit.has_value() && asymmetricHit->node == asymmetricNode && asymmetricHit->pin == 0U && !asymmetricHit->output,
+        "Asymmetric CustomCode input render, wire, and hit geometry must share the max-lane layout.");
+}
+
+void RunMaterialGraphCanvasNearestCompatiblePinTest() {
+    MaterialGraphCanvas canvas;
+    canvas.SetViewport(MaterialGraphCanvasRect{ 0.0F, 0.0F, 640.0F, 480.0F });
+    const std::uint32_t node = canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Two Inputs",
+        .stableId = "two.inputs",
+        .x = 120.0F,
+        .y = 80.0F,
+        .inputs = { Pin("First", "first"), Pin("Second", "second") },
+    });
+    const MaterialGraphCanvasPoint first = canvas.PinCenterWindow(node, 0U, false);
+    const MaterialGraphCanvasPoint second = canvas.PinCenterWindow(node, 1U, false);
+    const float overlapY = ((first.y + second.y) * 0.5F) + 1.0F;
+    const std::optional<MaterialGraphCanvasPinHit> nearest = canvas.HitTestPin(first.x, overlapY);
+    Require(nearest.has_value() && nearest->pin == 1U,
+        "Overlapping pin hit-zones must choose the geometrically nearest pin.");
+
+    const std::optional<MaterialGraphCanvasPinHit> nearestCompatible = canvas.HitTestPin(
+        first.x,
+        overlapY,
+        [](const MaterialGraphCanvasPinHit& candidate) { return candidate.pin == 0U; });
+    Require(nearestCompatible.has_value() && nearestCompatible->pin == 0U,
+        "Pin hit-testing must skip a nearer incompatible pin and choose the nearest compatible candidate.");
+}
+
+void RunMaterialGraphCanvasViewportClippingTest() {
+    MaterialGraphCanvas canvas;
+    canvas.SetViewport(MaterialGraphCanvasRect{ 100.0F, 120.0F, 240.0F, 180.0F });
+    const std::uint32_t node = canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Clipped",
+        .stableId = "clipped",
+        .x = -2.0F,
+        .y = 40.0F,
+        .inputs = { Pin("Input", "input") },
+    });
+    const MaterialGraphCanvasPoint center = canvas.PinCenterWindow(node, 0U, false);
+    Require(center.x < canvas.Viewport().x, "Viewport clipping fixture must place the pin center outside the viewport.");
+    Require(!canvas.HitTestPin(canvas.Viewport().x, center.y).has_value(),
+        "A clipped pin must remain inactive even when its forgiving hit band overlaps the viewport.");
+    Require(!canvas.HitTestPin(center.x, center.y).has_value(),
+        "Pin hit-testing must reject pointer coordinates outside the graph viewport.");
+}
+
+void RunMaterialGraphCanvasLinkOcclusionTest() {
+    MaterialGraphCanvas canvas;
+    canvas.SetViewport(MaterialGraphCanvasRect{ 0.0F, 0.0F, 900.0F, 600.0F });
+    const std::uint32_t source = canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Source",
+        .stableId = "source",
+        .x = 40.0F,
+        .y = 80.0F,
+        .outputs = { Pin("Out", "out") },
+    });
+    const std::uint32_t target = canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Target",
+        .stableId = "target",
+        .x = 640.0F,
+        .y = 80.0F,
+        .inputs = { Pin("In", "in") },
+    });
+    canvas.AddLink(MaterialGraphCanvasLink{
+        .fromNode = source,
+        .fromPin = 0U,
+        .toNode = target,
+        .toPin = 0U,
+        .stableId = "source.target",
+    });
+    const MaterialGraphCanvasPoint from = canvas.PinCenterWindow(source, 0U, true);
+    const MaterialGraphCanvasPoint to = canvas.PinCenterWindow(target, 0U, false);
+    const MaterialGraphCanvasPoint midpoint{ (from.x + to.x) * 0.5F, (from.y + to.y) * 0.5F };
+    Require(canvas.HitTestLink(midpoint.x, midpoint.y).has_value(),
+        "Link occlusion fixture must initially hit the visible wire.");
+
+    static_cast<void>(canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Opaque Node",
+        .stableId = "occluder.node",
+        .x = midpoint.x - 80.0F,
+        .y = midpoint.y - 40.0F,
+        .widthOverride = 160.0F,
+        .heightOverride = 80.0F,
+    }));
+    Require(!canvas.HitTestLink(midpoint.x, midpoint.y).has_value(),
+        "A wire hidden under an opaque node must not be hit-testable.");
+
+    MaterialGraphCanvas commentCanvas;
+    commentCanvas.SetViewport(MaterialGraphCanvasRect{ 0.0F, 0.0F, 900.0F, 600.0F });
+    const std::uint32_t commentSource = commentCanvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Source",
+        .stableId = "comment.source",
+        .x = 40.0F,
+        .y = 260.0F,
+        .outputs = { Pin("Out", "out") },
+    });
+    const std::uint32_t commentTarget = commentCanvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Target",
+        .stableId = "comment.target",
+        .x = 640.0F,
+        .y = 260.0F,
+        .inputs = { Pin("In", "in") },
+    });
+    commentCanvas.AddLink(MaterialGraphCanvasLink{ .fromNode = commentSource, .toNode = commentTarget, .stableId = "comment.link" });
+    const MaterialGraphCanvasPoint commentFrom = commentCanvas.PinCenterWindow(commentSource, 0U, true);
+    const MaterialGraphCanvasPoint commentTo = commentCanvas.PinCenterWindow(commentTarget, 0U, false);
+    const MaterialGraphCanvasPoint commentMidpoint{
+        (commentFrom.x + commentTo.x) * 0.5F,
+        (commentFrom.y + commentTo.y) * 0.5F,
+    };
+    commentCanvas.AddOccluderWorld(MaterialGraphCanvasRect{
+        commentMidpoint.x - 70.0F,
+        commentMidpoint.y - 35.0F,
+        140.0F,
+        70.0F,
+    });
+    Require(!commentCanvas.HitTestLink(commentMidpoint.x, commentMidpoint.y).has_value(),
+        "A wire hidden under an opaque comment must not be hit-testable.");
+}
+
 void RunMaterialGraphCanvasConnectDragTest() {
     MaterialGraphCanvas canvas = MakeSimpleCanvas();
     const MaterialGraphCanvasPoint rgba = canvas.PinCenterWindow(0U, 0U, true);
@@ -283,6 +451,10 @@ void RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest() {
 
 void RunEditorMaterialGraphCanvasTests() {
     RunMaterialGraphCanvasPinRowsAreForgivingTest();
+    RunMaterialGraphCanvasCanonicalPinGeometryTest();
+    RunMaterialGraphCanvasNearestCompatiblePinTest();
+    RunMaterialGraphCanvasViewportClippingTest();
+    RunMaterialGraphCanvasLinkOcclusionTest();
     RunMaterialGraphCanvasConnectDragTest();
     RunMaterialGraphCanvasBreakLinkTest();
     RunMaterialGraphCanvasNodeDragEmitsMoveTest();

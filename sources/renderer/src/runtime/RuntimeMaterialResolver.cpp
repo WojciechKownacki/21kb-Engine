@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
@@ -38,6 +39,32 @@ struct MaterialGraphRuntimeValue;
         return metadata.physicalPath;
     }
     return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+[[nodiscard]] const kb::assets::AssetMetadata* ResolveMaterialSourceGraphMetadata(
+    const kb::assets::AssetManager& manager,
+    const RenderMaterialAssetData& material) {
+    const kb::assets::AssetMetadata* metadata = material.graphSourceAssetId != 0U
+        ? manager.Registry().Find(kb::assets::AssetId{ material.graphSourceAssetId })
+        : nullptr;
+    if ((metadata == nullptr || metadata->type != kRenderMaterialGraphAssetType) &&
+        !material.graphSourceAssetPath.empty()) {
+        metadata = manager.Registry().FindByPath(std::filesystem::path{ material.graphSourceAssetPath });
+    }
+    return metadata != nullptr && metadata->type == kRenderMaterialGraphAssetType ? metadata : nullptr;
+}
+
+[[nodiscard]] std::optional<RenderMaterialGraphDocument> LoadAuthoritativeMaterialSourceGraph(
+    const kb::assets::AssetManager& manager,
+    const RenderMaterialAssetData& material) {
+    if (material.graphSourceAssetId == 0U && material.graphSourceAssetPath.empty()) {
+        return material.graph;
+    }
+    const kb::assets::AssetMetadata* metadata = ResolveMaterialSourceGraphMetadata(manager, material);
+    if (metadata == nullptr) {
+        return std::nullopt;
+    }
+    return RenderMaterialGraphAssetLoader::LoadGraph(ResolveAssetPhysicalPath(manager, *metadata));
 }
 
 [[nodiscard]] std::uint64_t MaterialRuntimeContentHashImpl(
@@ -446,7 +473,7 @@ void AppendInstanceValidationDiagnostics(
 
     if (metadata.type == "RenderMaterial") {
         const std::filesystem::path path = ResolveAssetPhysicalPath(manager, metadata);
-        const RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
         if (!loaded.asset.has_value()) {
             AppendParentMaterialParseDiagnostics(result, loaded, metadata.id, metadata.id);
             visited.erase(metadata.id.value);
@@ -1004,12 +1031,25 @@ struct MaterialGraphRuntimeValue {
     }
 
     switch (node.kind) {
-    case RenderMaterialGraphNodeKind::ParameterScalar:
-        return RuntimeValue(0.0F, false);
-    case RenderMaterialGraphNodeKind::ParameterVector:
-        return RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false);
-    case RenderMaterialGraphNodeKind::ParameterColor:
-        return RuntimeValue(1.0F, 1.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Color, false);
+    case RenderMaterialGraphNodeKind::ParameterScalar: {
+        const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+        return RuntimeValue(values.empty() ? 0.0F : values[0], !values.empty());
+    }
+    case RenderMaterialGraphNodeKind::ParameterVector: {
+        const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+        const float x = values.size() > 0U ? values[0] : 0.0F;
+        const float y = values.size() > 1U ? values[1] : x;
+        const float z = values.size() > 2U ? values[2] : y;
+        return RuntimeValue(x, y, z, 1.0F, RenderMaterialGraphPinType::Float3, !values.empty());
+    }
+    case RenderMaterialGraphNodeKind::ParameterColor: {
+        const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+        const float r = values.size() > 0U ? values[0] : 1.0F;
+        const float g = values.size() > 1U ? values[1] : r;
+        const float b = values.size() > 2U ? values[2] : g;
+        const float a = values.size() > 3U ? values[3] : 1.0F;
+        return RuntimeValue(r, g, b, a, RenderMaterialGraphPinType::Color, !values.empty());
+    }
     case RenderMaterialGraphNodeKind::ParameterTexture:
         return MaterialGraphRuntimeValue{ .type = RenderMaterialGraphPinType::Texture2D };
     default:
@@ -1067,6 +1107,17 @@ struct MaterialGraphRuntimeValue {
 [[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> ValidateMaterialOutputRuntimeGraphDiagnostics(const RenderMaterialAssetData& asset) {
     RenderMaterialAssetData runtimeAsset = asset;
     runtimeAsset.graph = MaterialOutputRuntimeGraph(asset.graph);
+    const RenderMaterialTypeSchema runtimeSchema =
+        BuildRenderMaterialGraphParameterSchema(runtimeAsset.graph, "runtime.validation", 1U);
+    std::erase_if(runtimeAsset.graphParameterValues, [&runtimeSchema](const RenderMaterialGraphParameterValue& value) {
+        const bool parameterExists = std::ranges::any_of(runtimeSchema.parameters, [&value](const RenderMaterialParameterSchema& parameter) {
+            return parameter.name == value.stableId;
+        });
+        const bool textureExists = std::ranges::any_of(runtimeSchema.textureSlots, [&value](const RenderMaterialTextureSlotSchema& slot) {
+            return (slot.stableId.empty() ? slot.name : slot.stableId) == value.stableId;
+        });
+        return !parameterExists && !textureExists;
+    });
     return ValidateRenderMaterialAssetGraphDiagnostics(runtimeAsset);
 }
 
@@ -1924,8 +1975,23 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveEmbeddedMaterial(
 ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     const kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& materialMetadata,
-    const RenderMaterialAssetData& materialAsset) const {
+    const RenderMaterialAssetData& inlineMaterialAsset) const {
     ResolvedRuntimeMaterialDesc resolved{};
+    const std::optional<RenderMaterialGraphDocument> authoritativeGraph =
+        LoadAuthoritativeMaterialSourceGraph(manager, inlineMaterialAsset);
+    if (!authoritativeGraph.has_value()) {
+        resolved.desc = inlineMaterialAsset.desc;
+        resolved.graphDiagnostics.push_back(RenderMaterialGraphDiagnostic{
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+            .kind = RenderMaterialGraphDiagnosticKind::MissingSourceGraph,
+            .assetId = materialMetadata.id.value,
+            .sourcePath = inlineMaterialAsset.graphSourceAssetPath,
+            .message = "The authoritative sourceGraph asset is missing or could not be loaded; the stale inline graph was not compiled.",
+        });
+        return resolved;
+    }
+    RenderMaterialAssetData materialAsset = inlineMaterialAsset;
+    materialAsset.graph = *authoritativeGraph;
     resolved.desc = materialAsset.desc;
     if (!materialAsset.albedoTexturePath.empty()) {
         const std::uint64_t textureAssetId = ResolveTextureAssetIdOrCount(manager, materialMetadata, materialAsset.albedoTexturePath, resolved.unresolvedTexturePathCount);
@@ -2082,7 +2148,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     if (metadata.type == "RenderMaterial") {
         const std::uint64_t runtimeContentHash = MaterialRuntimeContentHash(manager, metadata);
         const std::filesystem::path path = ResolveAssetPhysicalPath(manager, metadata);
-        const RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
         if (!loaded.asset.has_value()) {
             ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
                 RuntimeMaterialResolveStatus::ErrorMaterial,
@@ -2106,6 +2172,22 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
             return fallback;
         }
 
+        const std::optional<RenderMaterialGraphDocument> authoritativeGraph =
+            LoadAuthoritativeMaterialSourceGraph(manager, *loaded.asset);
+        if (!authoritativeGraph.has_value()) {
+            ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+                RuntimeMaterialResolveStatus::ErrorMaterial,
+                RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                RuntimeMaterialResolveDiagnosticSeverity::Error,
+                metadata.id,
+                path,
+                "The authoritative sourceGraph asset is missing or invalid; the stale inline graph was not used.");
+            fallback.contentHash = runtimeContentHash;
+            fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
+            return fallback;
+        }
+        loaded.asset->graph = *authoritativeGraph;
+
         const RenderMaterialTypeReferenceValidationResult typeReferenceValidation =
             ValidateRenderMaterialTypeReference(*loaded.asset, metadata, manager);
         if (!typeReferenceValidation.Succeeded()) {
@@ -2117,6 +2199,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
                 path,
                 "Material Type reference is invalid; using the error material.");
             fallback.contentHash = runtimeContentHash;
+            fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
             fallback.diagnostics.clear();
             AppendParseDiagnostics(fallback, loaded, metadata.id);
             AppendMaterialTypeReferenceDiagnostics(fallback, typeReferenceValidation, metadata.id, path);
@@ -2136,6 +2219,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
                 path,
                 "Material graph validation failed; using the error material.");
             fallback.contentHash = runtimeContentHash;
+            fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
             fallback.diagnostics.clear();
             AppendParseDiagnostics(fallback, loaded, metadata.id);
             AppendGraphValidationDiagnostics(fallback, graphDiagnostics, metadata.id, path);
@@ -2147,6 +2231,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
             .contentHash = runtimeContentHash,
             .status = RuntimeMaterialResolveStatus::Resolved,
             .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
+            .failurePolicy = loaded.asset->graph.artifactFailurePolicy,
             .resolved = true,
         };
         if (HasGraphAuthoringData(loaded.asset->graph)) {
@@ -2280,6 +2365,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
             ResolveAssetPhysicalPath(manager, metadata),
             "Material instance graph validation failed; using the error material.");
         fallback.contentHash = runtimeContentHash;
+        fallback.failurePolicy = instanceMaterial.graph.artifactFailurePolicy;
         fallback.diagnostics.clear();
         AppendGraphValidationDiagnostics(fallback, instanceGraphDiagnostics, metadata.id, ResolveAssetPhysicalPath(manager, metadata));
         for (RuntimeMaterialResolveDiagnostic& diagnostic : fallback.diagnostics) {
@@ -2294,6 +2380,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         .contentHash = runtimeContentHash,
         .status = RuntimeMaterialResolveStatus::Resolved,
         .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
+        .failurePolicy = instanceMaterial.graph.artifactFailurePolicy,
         .resolved = true,
     };
     if (HasGraphAuthoringData(instanceMaterial.graph)) {

@@ -178,6 +178,13 @@ namespace {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom);
     const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext.MaterialGraphPanY()) / zoom);
+    if (sceneContext.IsMaterialGraphContextMenuPinFiltered()) {
+        if (!sceneContext.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphX, graphY)) {
+            static_cast<void>(sceneContext.CancelMaterialGraphPinConnection());
+            return false;
+        }
+        return sceneContext.ExecuteMaterialGraphContextMenuCommand(command);
+    }
     static_cast<void>(sceneContext.OpenMaterialGraphContextMenu(materialId, x, y, graphX, graphY));
     return sceneContext.ExecuteMaterialGraphContextMenuCommand(command);
 }

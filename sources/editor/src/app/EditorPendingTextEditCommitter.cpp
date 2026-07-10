@@ -14,7 +14,10 @@ bool EditorPendingTextEditCommitter::CommitPendingEdits() {
     const bool committedMaterialGraphConstant = sceneContext_.IsMaterialGraphConstantInlineEditing()
         ? sceneContext_.CommitMaterialGraphConstantInlineEdit()
         : false;
-    return committedNewFolder || committedHierarchyRename || committedMaterialGraphConstant;
+    const bool committedMaterialGraphRename = sceneContext_.IsMaterialGraphNodeRenameEditing()
+        ? sceneContext_.CommitMaterialGraphNodeRenameEdit()
+        : false;
+    return committedNewFolder || committedHierarchyRename || committedMaterialGraphConstant || committedMaterialGraphRename;
 }
 
 bool EditorPendingTextEditCommitter::CommitPendingNewAssetFolder() {

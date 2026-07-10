@@ -20,6 +20,8 @@
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 
 #include <filesystem>
+#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -27,12 +29,21 @@
 #include <system_error>
 #include <tuple>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace kb::editor {
 namespace {
 
-[[nodiscard]] std::uint64_t MaterialContentHash(const kb::scene::Scene& scene, kb::assets::AssetId materialAssetId) noexcept {
-    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(materialAssetId);
-    return metadata == nullptr ? 0U : metadata->contentHash;
+[[nodiscard]] std::uint64_t ProcessIdentity() noexcept {
+#if defined(_WIN32)
+    return static_cast<std::uint64_t>(::_getpid());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
 }
 
 [[nodiscard]] std::uint64_t AssetDependencyHash(const kb::scene::Scene& scene, std::uint64_t assetId) noexcept {
@@ -98,36 +109,52 @@ namespace {
     return HashBytes(output.str());
 }
 
-[[nodiscard]] std::filesystem::path WorkingCopyPreviewPath(kb::assets::AssetId materialAssetId) {
-    return std::filesystem::temp_directory_path() / ("21kb_material_preview_working_" + std::to_string(materialAssetId.value) + ".kbmat");
+[[nodiscard]] std::filesystem::path WorkingCopyPreviewPath(
+    const kb::scene::Scene& scene,
+    kb::assets::AssetId materialAssetId,
+    std::uint64_t contentHash,
+    kb::render::RenderMaterialGraphQualityLevel quality,
+    const void* editorInstance) {
+    std::uint64_t projectHash = 1469598103934665603ULL;
+    if (const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(materialAssetId)) {
+        projectHash = HashBytes(metadata->physicalPath.parent_path().generic_string());
+    }
+    return std::filesystem::temp_directory_path() /
+        "21kb_material_preview" /
+        ("project_" + std::to_string(projectHash)) /
+        ("process_" + std::to_string(ProcessIdentity())) /
+        ("editor_" + std::to_string(reinterpret_cast<std::uintptr_t>(editorInstance))) /
+        ("material_" + std::to_string(materialAssetId.value)) /
+        ("variant_" + std::to_string(contentHash) + "_q" + std::to_string(static_cast<unsigned>(quality)) + ".kbmat");
 }
 
-[[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
-    if (!metadata.physicalPath.empty()) {
-        return metadata.physicalPath;
+[[nodiscard]] std::uint64_t TransitiveAssetDependencyHash(
+    const kb::scene::Scene& scene,
+    std::vector<kb::assets::AssetId> pending) noexcept {
+    const kb::assets::AssetRegistry& registry = scene.Assets().Manager().Registry();
+    std::vector<std::uint64_t> visited;
+    std::uint64_t hash = 0xD3A17E5C0FFEE123ULL;
+    while (!pending.empty()) {
+        const kb::assets::AssetId id = pending.back();
+        pending.pop_back();
+        if (!id.IsValid() || std::ranges::find(visited, id.value) != visited.end()) {
+            continue;
+        }
+        visited.push_back(id.value);
+        const kb::assets::AssetMetadata* metadata = registry.Find(id);
+        hash = HashCombine(hash, id.value);
+        hash = HashCombine(hash, metadata == nullptr ? 0U : metadata->contentHash);
+        if (metadata != nullptr) {
+            std::vector<kb::assets::AssetId> dependencies = metadata->dependencies;
+            std::ranges::sort(dependencies, {}, &kb::assets::AssetId::value);
+            pending.insert(pending.end(), dependencies.rbegin(), dependencies.rend());
+        }
     }
-    return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+    return hash;
 }
 
 [[nodiscard]] std::uint64_t MaterialDocumentContentHash(const kb::scene::Scene& scene, kb::assets::AssetId materialAssetId) {
-    const kb::assets::AssetManager& manager = scene.Assets().Manager();
-    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(materialAssetId);
-    if (metadata == nullptr) {
-        return 0U;
-    }
-    if (metadata->type != "RenderMaterialInstance") {
-        return metadata->contentHash;
-    }
-
-    const std::filesystem::path path = ResolveAssetPath(manager, *metadata);
-    if (path.empty()) {
-        return metadata->contentHash;
-    }
-    const std::optional<kb::render::RenderMaterialInstanceAssetData> instance = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(path);
-    if (!instance.has_value() || !instance->parentMaterialAssetId.IsValid()) {
-        return metadata->contentHash;
-    }
-    return HashCombine(metadata->contentHash, MaterialContentHash(scene, instance->parentMaterialAssetId));
+    return TransitiveAssetDependencyHash(scene, { materialAssetId });
 }
 
 [[nodiscard]] std::uint64_t MaterialPreviewContentHash(
@@ -135,8 +162,17 @@ namespace {
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* workingCopy) {
     if (workingCopy != nullptr) {
-        return HashCombine(
+        std::vector<kb::assets::AssetId> dependencies;
+        const kb::assets::AssetManager& manager = scene.Assets().Manager();
+        if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(materialAssetId)) {
+            dependencies = kb::render::RenderMaterialAssetLoader::DiscoverMaterialDependencies(
+                *workingCopy,
+                *metadata,
+                manager.Registry());
+        }
+        return HashCombine(HashCombine(
             HashCombine(WorkingCopyContentHash(*workingCopy), MaterialTextureDependencyHash(scene, *workingCopy)),
+            TransitiveAssetDependencyHash(scene, std::move(dependencies))),
             0xA11CE21FULL);
     }
     return MaterialDocumentContentHash(scene, materialAssetId);
@@ -176,7 +212,11 @@ void RegisterWorkingCopyMaterial(
     const kb::render::RenderMaterialAssetData& workingCopy,
     const std::filesystem::path& path,
     std::uint64_t contentHash) {
-    if (!kb::render::RenderMaterialAssetWriter::Save(path, workingCopy)) {
+    kb::render::RenderMaterialAssetData runtimeWorkingCopy = workingCopy;
+    runtimeWorkingCopy.graphSourceAssetId = 0U;
+    runtimeWorkingCopy.graphSourceAssetPath.clear();
+    runtimeWorkingCopy.graph.storageModel = "inline-kbmat";
+    if (!kb::render::RenderMaterialAssetWriter::Save(path, runtimeWorkingCopy)) {
         return;
     }
 
@@ -327,7 +367,14 @@ void EditorMaterialPreviewScene::Rebuild(
         workingCopyPath_.clear();
     }
     if (workingCopy != nullptr) {
-        workingCopyPath_ = WorkingCopyPreviewPath(materialAssetId);
+        workingCopyPath_ = WorkingCopyPreviewPath(
+            sourceScene,
+            materialAssetId,
+            contentHash,
+            sceneSettings_.qualityLevel,
+            this);
+        std::error_code directoryError;
+        std::filesystem::create_directories(workingCopyPath_.parent_path(), directoryError);
         RegisterWorkingCopyMaterial(sourceScene.Assets().Manager(), targetManager, materialAssetId, *workingCopy, workingCopyPath_, contentHash);
     }
     EditorMaterialPreviewPrimitivePolicy effectivePolicy = primitivePolicy_;
@@ -340,6 +387,7 @@ void EditorMaterialPreviewScene::Rebuild(
     kb::render::RenderMaterialGraphBuildContext graphContext{};
     graphContext.assetId = materialAssetId.value;
     graphContext.qualityLevel = sceneSettings_.qualityLevel;
+    graphContext.variantUsage = kb::render::RenderMaterialGraphVariantUsage::Preview;
     const kb::render::ResolvedRuntimeMaterialAsset resolved =
         kb::render::RuntimeMaterialResolver{ graphContext }.ResolveAsset(targetManager, materialAssetId);
     kb::render::RenderMaterialAssetData telemetryMaterial{};

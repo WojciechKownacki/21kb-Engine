@@ -115,6 +115,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .cameraOverride = present.settings.cameraOverride,
         .postProcessSettings = present.settings.postProcessSettings,
         .lightingConfig = present.settings.lightingConfig,
+        .materialGraphContext = present.settings.materialGraphContext,
         .meshPassMode = present.settings.meshPassMode,
         .selectedEntityIds = SelectedEntitySpan(session),
         .dirtySceneEntityIds = dirtySceneEntityIds,
