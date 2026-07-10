@@ -259,6 +259,7 @@ enum class MaterialEditorGraphTexturePickerHitKind : std::uint8_t {
     None,
     Backdrop,
     Search,
+    Clear,
     Texture,
     Accept,
     Cancel,
@@ -268,6 +269,37 @@ struct MaterialEditorGraphTexturePickerHit {
     MaterialEditorGraphTexturePickerHitKind kind = MaterialEditorGraphTexturePickerHitKind::None;
     kb::assets::AssetId assetId{};
 };
+
+#if defined(_WIN32)
+struct MaterialEditorGraphTexturePickerLayout {
+    RECT picker{};
+    RECT search{};
+    RECT accept{};
+    RECT cancel{};
+    RECT viewport{};
+    std::vector<RECT> itemRects;
+    int columns = 1;
+    int tileWidth = 0;
+    int maxScroll = 0;
+    int scrollOffset = 0;
+    bool acceptEnabled = true;
+};
+#endif
+
+enum class MaterialEditorOpaqueOverlayKind : std::uint8_t {
+    None,
+    Preview,
+    Diagnostics,
+    Details,
+    ContextMenu,
+};
+
+#if defined(_WIN32)
+struct MaterialEditorOpaqueOverlayHit {
+    MaterialEditorOpaqueOverlayKind kind = MaterialEditorOpaqueOverlayKind::None;
+    RECT rect{};
+};
+#endif
 
 struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
@@ -703,6 +735,15 @@ public:
         int y);
     [[nodiscard]] static RECT GraphContextMenuRect(const EditorSceneContext& sceneContext);
     [[nodiscard]] static MaterialEditorGraphContextMenuHit GraphContextMenuHit(const EditorSceneContext& sceneContext, int x, int y);
+    [[nodiscard]] static MaterialEditorOpaqueOverlayHit OpaqueOverlayAt(
+        const RECT& content,
+        const EditorSceneContext& sceneContext,
+        int x,
+        int y);
+    [[nodiscard]] static MaterialEditorGraphTexturePickerLayout ResolveGraphTexturePickerLayout(
+        const RECT& content,
+        std::size_t itemCount,
+        int requestedScrollOffset = 0);
     [[nodiscard]] static int GraphTexturePickerMaxScroll(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static MaterialEditorGraphTexturePickerHit GraphTexturePickerHit(
         const RECT& content,
@@ -2680,6 +2721,14 @@ inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiv
         canvasNode->x += static_cast<float>(sceneContext.MaterialGraphNodeOffsetX(assetId, visible.nodes[index].id));
         canvasNode->y += static_cast<float>(sceneContext.MaterialGraphNodeOffsetY(assetId, visible.nodes[index].id));
     }
+    for (const kb::render::RenderMaterialGraphCommentBox& comment : visible.comments) {
+        result.canvas.AddOccluderWorld(MaterialGraphCanvasRect{
+            static_cast<float>(comment.positionX),
+            static_cast<float>(comment.positionY),
+            static_cast<float>(std::max<std::int32_t>(32, comment.width)),
+            static_cast<float>(std::max<std::int32_t>(32, comment.height)),
+        });
+    }
     MaterialEditorPanelConfigureGraphCanvasViewport(
         result.canvas,
         content,
@@ -2825,7 +2874,35 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
     MaterialGraphCanvasDocumentBuildResult canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
-    const std::optional<MaterialGraphCanvasPinHit> hit = canvasResult.canvas.HitTestPin(static_cast<float>(x), static_cast<float>(y));
+    MaterialGraphCanvasPinPredicate compatibleCandidate;
+    if (sceneContext.HasMaterialGraphPinConnection() &&
+        sceneContext.MaterialGraphPinConnectionAssetId() == assetId) {
+        compatibleCandidate = [&](const MaterialGraphCanvasPinHit& candidate) {
+            const MaterialGraphCanvasNode* candidateCanvasNode = canvasResult.canvas.NodeAt(candidate.node);
+            if (candidateCanvasNode == nullptr) {
+                return false;
+            }
+            const std::vector<MaterialGraphCanvasPin>& candidatePins =
+                candidate.output ? candidateCanvasNode->outputs : candidateCanvasNode->inputs;
+            if (candidate.pin >= candidatePins.size()) {
+                return false;
+            }
+            const std::uint32_t candidateNodeId = static_cast<std::uint32_t>(
+                std::strtoul(candidateCanvasNode->stableId.c_str(), nullptr, 10));
+            return GraphPinDragState(
+                       graphView,
+                       sceneContext.MaterialGraphPinConnectionNodeId(),
+                       sceneContext.MaterialGraphPinConnectionPin(),
+                       sceneContext.MaterialGraphPinConnectionIsOutput(),
+                       candidateNodeId,
+                       candidatePins[candidate.pin].stableId,
+                       candidate.output) == MaterialEditorGraphPinDragState::Compatible;
+        };
+    }
+    const std::optional<MaterialGraphCanvasPinHit> hit = canvasResult.canvas.HitTestPin(
+        static_cast<float>(x),
+        static_cast<float>(y),
+        compatibleCandidate);
     if (!hit.has_value()) {
         return std::nullopt;
     }

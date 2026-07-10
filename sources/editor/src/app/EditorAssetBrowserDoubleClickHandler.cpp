@@ -7,6 +7,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
@@ -68,7 +69,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance") {
+        if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance" || metadata->type == kb::render::kRenderMaterialGraphAssetType) {
             if (!sceneContext.OpenMaterialEditorAsset(metadata->id)) {
                 return EditorAssetBrowserDoubleClickResult::None;
             }

@@ -89,6 +89,12 @@ namespace {
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
+        .materialGraphContext = kb::render::RenderMaterialGraphBuildContext{
+            .qualityLevel = previewSettings.qualityLevel,
+            .variantUsage = sceneContext.MaterialPreviewNodePreviewEnabled()
+                ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
+                : kb::render::RenderMaterialGraphVariantUsage::Preview,
+        },
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
         .postProcessEnabled = previewSettings.postProcessEnabled && !previewSettings.normalDebugView,
