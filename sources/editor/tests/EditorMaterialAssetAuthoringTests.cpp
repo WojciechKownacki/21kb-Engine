@@ -53,6 +53,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -651,6 +652,46 @@ void RunCreateMaterialFromGraphAndMaterialTypeThroughEditorAuthoringTest() {
                 return parameter.name == "sourceSynchronizedScalar";
             }),
         "P1.9: Material save did not regenerate the source graph Material Type schema");
+
+    kb::render::RenderMaterialAssetData rejectedTransaction = synchronizedMaterial;
+    rejectedTransaction.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 7U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 160,
+        .positionY = 520,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "transactionShouldNotPersist",
+            .displayName = "Transaction Should Not Persist",
+            .defaultValueHint = "0.25",
+        },
+    });
+    rejectedTransaction.desc.roughnessFactor = std::numeric_limits<float>::quiet_NaN();
+    kb::editor::tests::Require(
+        !kb::editor::EditorMaterialAssetGateway::WriteExisting(scene, graphMaterialId, rejectedTransaction),
+        "P2.11: invalid staged material must reject the multi-document save transaction");
+    const std::optional<kb::render::RenderMaterialGraphDocument> graphAfterRejectedTransaction =
+        kb::render::RenderMaterialGraphAssetLoader::LoadGraph(graphPath);
+    const std::optional<kb::render::RenderMaterialTypeDocument> typeAfterRejectedTransaction =
+        kb::render::RenderMaterialTypeAssetLoader::LoadType(generatedTypePath);
+    const std::optional<kb::render::RenderMaterialAssetData> materialAfterRejectedTransaction =
+        kb::render::RenderMaterialAssetLoader::LoadMaterial(graphMaterialPath);
+    bool transactionFilesRemain = false;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(graphMaterialPath.parent_path())) {
+        transactionFilesRemain = transactionFilesRemain || entry.path().filename().string().find(".kbtxn.") != std::string::npos;
+    }
+    kb::editor::tests::Require(
+        graphAfterRejectedTransaction.has_value() &&
+            kb::render::FindRenderMaterialGraphNode(*graphAfterRejectedTransaction, 7U) == nullptr &&
+            typeAfterRejectedTransaction.has_value() &&
+            std::ranges::none_of(
+                typeAfterRejectedTransaction->schema.parameters,
+                [](const kb::render::RenderMaterialParameterSchema& parameter) {
+                    return parameter.name == "transactionShouldNotPersist";
+                }) &&
+            materialAfterRejectedTransaction.has_value() &&
+            std::isfinite(materialAfterRejectedTransaction->desc.roughnessFactor) &&
+            !transactionFilesRemain,
+        "P2.11: rejected graph/type/material save must preserve every target and remove all transaction files");
     kb::editor::tests::Require(kb::editor::tests::NearlyEqual(graphMaterial->desc.roughnessFactor, 0.42F),
         "KBMAT-GRAPH-0301: Graph-backed Material did not apply scalar schema defaults");
 
@@ -1406,6 +1447,11 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -240, 64, &colorNodeId), "KBMAT-GRAPH-0101: Graph editor should recreate a color node before Save");
     kb::editor::tests::Require(materialEditor.MoveGraphNode(colorNodeId, -160, 96), "KBMAT-GRAPH-0101: Graph editor should move recreated node before Save");
     kb::editor::tests::Require(!materialEditor.SetGraphConstantValue(colorNodeId, "broken"), "KBMAT-GRAPH-0101: Constant Color should reject invalid authoring text");
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantValue(colorNodeId, "nan 0 0 1") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "inf 0 0 1") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "0 0 0 1 trailing") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "0 0 0 1 2"),
+        "P2.9: graph constants must reject non-finite, trailing and excess components without mutation");
     kb::editor::tests::Require(materialEditor.SetGraphConstantValue(colorNodeId, "0.25, 0.5, 0.75, 1"), "KBMAT-GRAPH-0101: Constant Color should accept comma or space separated authoring text");
     kb::editor::tests::Require(materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "baseColor"), "KBMAT-GRAPH-0101: Graph editor should reconnect before Save");
     kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Save Material Graph", *materialEditor.CleanSnapshot(), *materialEditor.WorkingCopy())),
@@ -3552,6 +3598,12 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     });
     kb::editor::tests::Require(colorProperty != colorProperties.end() && colorProperty->range.has_value(),
         "KBMAT-MAT58: Color constants should expose a typed color property with metadata range");
+    const std::string colorBeforeInvalidEdit = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint;
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantColorValue(
+            colorNodeId,
+            std::array<float, 4U>{ std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F, 1.0F }) &&
+            kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint == colorBeforeInvalidEdit,
+        "P2.9: direct color setter must reject NaN without changing the working copy");
     kb::editor::tests::Require(materialEditor.SetGraphConstantColorValue(colorNodeId, std::array<float, 4U>{ 1.4F, -0.25F, 0.5F, 2.0F }),
         "KBMAT-MAT58: Color picker result should update the selected color node");
     colorProperties = materialEditor.GraphNodeProperties(colorNodeId);
@@ -3572,6 +3624,13 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(scalarProperty != scalarProperties.end() && scalarProperty->range.has_value() &&
             scalarProperty->range->min == -2.0F && scalarProperty->range->max == 2.0F,
         "KBMAT-MAT58: Slider properties should read their min/max from graph metadata");
+    const std::optional<float> scalarBeforeInvalidEdit = materialEditor.GraphConstantComponentValue(scalarNodeId, 0U);
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantComponentValue(
+            scalarNodeId,
+            0U,
+            std::numeric_limits<float>::infinity()) &&
+            materialEditor.GraphConstantComponentValue(scalarNodeId, 0U) == scalarBeforeInvalidEdit,
+        "P2.9: direct numeric setter must reject infinity without changing the working copy");
     kb::editor::tests::Require(materialEditor.SetGraphConstantComponentValue(scalarNodeId, 0U, 7.5F),
         "KBMAT-MAT58: Slider setter should accept a numeric edit request");
     const std::optional<float> clampedScalar = materialEditor.GraphConstantComponentValue(scalarNodeId, 0U);
@@ -5377,32 +5436,48 @@ void RunMaterialEditorMaterialStatsPanelModelTest() {
 
     kb::editor::MaterialEditorState editor;
     editor.Open(kb::assets::AssetId{ 0x6100U }, material);
+    kb::editor::tests::Require(!editor.MaterialStats().available &&
+            std::ranges::any_of(editor.MaterialStats().warnings, [](const std::string& warning) {
+                return warning.find("Awaiting cooked GPU") != std::string::npos;
+            }),
+        "P2.7: Material Stats must not present frontend source heuristics as GPU statistics");
+    editor.ApplyCookMaterialStats(
+        compile.shader.sourceHash,
+        "dxbc",
+        static_cast<std::uint32_t>(compile.shader.reflection.textures.size()),
+        static_cast<std::uint32_t>(compile.shader.reflection.uniforms.size()),
+        static_cast<std::uint32_t>(compile.shader.reflection.requiredVaryings.size()),
+        std::vector<kb::editor::MaterialEditorCookPassTelemetry>{
+            { .passName = "BaseOpaque", .succeeded = true, .cacheHit = false, .binaryByteSize = 1024U },
+            { .passName = "GBuffer", .succeeded = true, .cacheHit = true, .binaryByteSize = 1536U },
+            { .passName = "ShadowDepth", .succeeded = true, .cacheHit = false, .binaryByteSize = 768U },
+            { .passName = "BaseTransparent", .succeeded = true, .cacheHit = true, .binaryByteSize = 1280U },
+        });
     const kb::editor::MaterialEditorMaterialStatsModel& stats = editor.MaterialStats();
     kb::editor::tests::Require(stats.available &&
             stats.sourceHash == compile.shader.sourceHash &&
-            stats.passRows.size() == 2U,
-        "KBMAT-MAT61: Material Editor must expose current graph stats rows per pass");
+            stats.passRows.size() == 4U,
+        "P2.7: Material Editor must expose every actually cooked GPU pass including GBuffer and ShadowDepth");
     const kb::editor::MaterialEditorMaterialStatsPassRow& base = stats.passRows[0];
     kb::editor::tests::Require(base.passName == "BaseOpaque" &&
             base.graphProgram &&
-            base.instructionEstimate > 0U &&
-            base.textureSampleCount >= 1U &&
+            !base.instructionCountAvailable &&
+            base.instructionCount == 0U &&
+            base.binaryByteSize == 1024U &&
             base.samplerCount == compile.shader.reflection.textures.size() &&
             base.uniformCount == compile.shader.reflection.uniforms.size() &&
             base.varyingCount == compile.shader.reflection.requiredVaryings.size() &&
-            base.staticVariantCount == 32U,
-        "KBMAT-MAT61: Base pass stats must match graph reflection and variant estimate");
-    const kb::editor::MaterialEditorMaterialStatsPassRow& shadow = stats.passRows[1];
-    kb::editor::tests::Require(shadow.passName == "ShadowDepth" &&
-            !shadow.graphProgram &&
-            shadow.instructionEstimate == 0U &&
-            shadow.samplerCount == 0U &&
-            shadow.staticVariantCount == 32U,
-        "KBMAT-MAT61: ShadowDepth stats must identify builtin shadow when the graph has no WPO");
+            base.staticVariantCount == 1U,
+        "P2.7/P2.8: pass stats must report real binary/reflection telemetry and one materialized variant, never a source estimate");
+    const kb::editor::MaterialEditorMaterialStatsPassRow& gbuffer = stats.passRows[1];
+    kb::editor::tests::Require(gbuffer.passName == "GBuffer" && gbuffer.graphProgram && gbuffer.cacheHit &&
+            stats.passRows[2].passName == "ShadowDepth" && stats.passRows[2].graphProgram &&
+            stats.passRows[2].binaryByteSize == 768U,
+        "P2.7: GBuffer and ShadowDepth rows must reflect their real cooked graph programs, including fragment-only shadow paths");
     kb::editor::tests::Require(std::ranges::any_of(stats.warnings, [](const std::string& warning) {
-            return warning.find("Variant count high") != std::string::npos;
+            return warning.find("instruction count unavailable") != std::string::npos;
         }),
-        "KBMAT-MAT61: Material stats must surface budget warnings for variant explosion");
+        "P2.7: unavailable backend instruction telemetry must be explicit instead of fabricated");
 
     kb::editor::MaterialEditorPanelDetailsRows details =
         kb::editor::MaterialEditorPanelRenderer::DetailsRows(editor.Parameters(), editor.SelectedNodeId(), {});

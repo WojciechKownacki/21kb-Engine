@@ -1,6 +1,5 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/SceneGBufferContract.hpp"
-#include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -12,6 +11,16 @@
 #include <sstream>
 #include <system_error>
 #include <unordered_set>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace kb::render {
 namespace {
@@ -241,6 +250,104 @@ struct ResolvedShaderDependency {
     return "\"" + value + "\"";
 }
 
+#if defined(_WIN32)
+[[nodiscard]] std::wstring ShaderCompilerWideCommand(std::string_view command) {
+    if (command.empty()) {
+        return {};
+    }
+    const int size = MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        command.data(),
+        static_cast<int>(command.size()),
+        nullptr,
+        0);
+    if (size <= 0) {
+        return {};
+    }
+    std::wstring result(static_cast<std::size_t>(size), L'\0');
+    if (MultiByteToWideChar(
+            CP_UTF8,
+            0,
+            command.data(),
+            static_cast<int>(command.size()),
+            result.data(),
+            size) != size) {
+        return {};
+    }
+    return result;
+}
+#endif
+
+[[nodiscard]] int RunShaderCompilerHidden(
+    const std::string& command,
+    const std::filesystem::path& diagnosticPath) {
+#if defined(_WIN32)
+    SECURITY_ATTRIBUTES security{
+        .nLength = sizeof(SECURITY_ATTRIBUTES),
+        .lpSecurityDescriptor = nullptr,
+        .bInheritHandle = TRUE,
+    };
+    const HANDLE diagnostic = CreateFileW(
+        diagnosticPath.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_TEMPORARY,
+        nullptr);
+    if (diagnostic == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    const HANDLE nullInput = CreateFileW(
+        L"NUL",
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
+    startup.hStdOutput = diagnostic;
+    startup.hStdError = diagnostic;
+    PROCESS_INFORMATION process{};
+    std::wstring commandLine = ShaderCompilerWideCommand(command);
+    const BOOL created = !commandLine.empty() && CreateProcessW(
+        nullptr,
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startup,
+        &process);
+    CloseHandle(diagnostic);
+    if (nullInput != INVALID_HANDLE_VALUE) {
+        CloseHandle(nullInput);
+    }
+    if (created == FALSE) {
+        return -1;
+    }
+
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exitCode = static_cast<DWORD>(-1);
+    static_cast<void>(GetExitCodeProcess(process.hProcess, &exitCode));
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return static_cast<int>(exitCode);
+#else
+    const std::string shellCommand = command + " > " + QuotePath(diagnosticPath.generic_string()) + " 2>&1";
+    return std::system(shellCommand.c_str());
+#endif
+}
+
 [[nodiscard]] std::string TrimDiagnosticText(std::string text) {
     const auto isTrimmed = [](char ch) {
         return ch == '\n' || ch == '\r' || ch == ' ' || ch == '\t';
@@ -268,54 +375,6 @@ void AddArtifactDiagnostic(
         .backend = std::move(backend),
         .message = std::move(message),
     });
-}
-
-[[nodiscard]] std::string SanitizeShaderDumpToken(std::string_view value) {
-    std::string output;
-    output.reserve(value.size());
-    for (const char ch : value) {
-        const bool ok = (ch >= 'a' && ch <= 'z') ||
-            (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') ||
-            ch == '_' ||
-            ch == '-';
-        output.push_back(ok ? ch : '_');
-    }
-    return output.empty() ? std::string{ "unknown" } : output;
-}
-
-void DumpMaterialGraphShaderSource(
-    const RenderMaterialGraphShaderSource& shader,
-    std::string_view pass,
-    std::string_view stage,
-    std::string_view source) {
-    try {
-        const std::filesystem::path path = RendererMaterialGraphDebugLogPath(
-            "_shader_" +
-            std::to_string(shader.sourceHash) +
-            "_" +
-            SanitizeShaderDumpToken(pass) +
-            "_" +
-            SanitizeShaderDumpToken(stage) +
-            ".sc");
-        {
-            std::ofstream output{ path, std::ios::out | std::ios::binary | std::ios::trunc };
-            if (output.is_open()) {
-                output << source;
-            }
-        }
-        std::ostringstream row;
-        row << "shader-dump pass=" << pass
-            << " stage=" << stage
-            << " sourceHash=" << shader.sourceHash
-            << " path=" << path.generic_string()
-            << " bytes=" << source.size()
-            << " containsSurfaceNormal=" << (source.find("surface.normal") != std::string_view::npos ? "true" : "false")
-            << " containsWorldNormal=" << (source.find("worldNormal") != std::string_view::npos ? "true" : "false")
-            << " containsTextureSample3=" << (source.find("u_textureSample3_texture") != std::string_view::npos ? "true" : "false");
-        WriteRendererMaterialGraphDebugLog("artifact", row.str());
-    } catch (...) {
-    }
 }
 
 void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
@@ -570,7 +629,6 @@ std::string BuildGraphFragmentWrapperSource(
         }
     }
     wrapper += "}\n";
-    DumpMaterialGraphShaderSource(shader, pass, "fragment", wrapper);
     return wrapper;
 }
 
@@ -657,7 +715,6 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    v_color0 = ctx.vertexColor;\n";
     vs += "    v_preSkinnedNormal = preSkinnedNormal;\n";
     vs += "}\n";
-    DumpMaterialGraphShaderSource(shader, "vertex", "vertex", vs);
     return vs;
 }
 
@@ -854,7 +911,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             continue;
         }
 
-        const std::filesystem::path errorPath = backendDir / "fs.shaderc.log";
+        const std::filesystem::path errorPath = backendDir / "fs.shaderc.tmp";
         const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
         std::string command = QuotePath(shadercExe);
         command += " --type fragment";
@@ -869,16 +926,16 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
             command += " -i " + QuotePath(includeDir);
         }
         command += request.debug ? " -O 0 --debug" : " -O 3";
-        command += " > " + QuotePath(errorPath.generic_string()) + " 2>&1";
 
         std::filesystem::remove(binaryPath, error);
-        const std::string shellCommand = "\"" + command + "\"";
-        const int exitCode = std::system(shellCommand.c_str());
+        const int exitCode = RunShaderCompilerHidden(command, errorPath);
 
         const bool produced = std::filesystem::exists(binaryPath, error) &&
             std::filesystem::file_size(binaryPath, error) > 0U;
         if (exitCode != 0 || !produced) {
             std::string log = TrimDiagnosticText(ReadTextFile(errorPath));
+            std::filesystem::remove(errorPath, error);
+            error.clear();
             if (log.empty()) {
                 log = "shaderc exited with code " + std::to_string(exitCode) + " without producing a binary.";
             }
@@ -889,6 +946,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
             continue;
         }
+        std::filesystem::remove(errorPath, error);
+        error.clear();
 
         {
             std::ofstream hashOut{ hashPath, std::ios::binary | std::ios::trunc };
@@ -957,7 +1016,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 continue;
             }
 
-            const std::filesystem::path vsErrorPath = backendDir / "vs.shaderc.log";
+            const std::filesystem::path vsErrorPath = backendDir / "vs.shaderc.tmp";
             const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
             std::string command = QuotePath(shadercExe);
             command += " --type vertex";
@@ -972,16 +1031,16 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 command += " -i " + QuotePath(includeDir);
             }
             command += request.debug ? " -O 0 --debug" : " -O 3";
-            command += " > " + QuotePath(vsErrorPath.generic_string()) + " 2>&1";
 
             std::filesystem::remove(vsBinaryPath, error);
-            const std::string shellCommand = "\"" + command + "\"";
-            const int exitCode = std::system(shellCommand.c_str());
+            const int exitCode = RunShaderCompilerHidden(command, vsErrorPath);
 
             const bool produced = std::filesystem::exists(vsBinaryPath, error) &&
                 std::filesystem::file_size(vsBinaryPath, error) > 0U;
             if (exitCode != 0 || !produced) {
                 std::string log = TrimDiagnosticText(ReadTextFile(vsErrorPath));
+                std::filesystem::remove(vsErrorPath, error);
+                error.clear();
                 if (log.empty()) {
                     log = "shaderc exited with code " + std::to_string(exitCode) + " without producing a vertex binary.";
                 }
@@ -992,6 +1051,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                     std::string{ RenderMaterialGraphShaderBackendName(backend) });
                 return result;
             }
+            std::filesystem::remove(vsErrorPath, error);
+            error.clear();
 
             {
                 std::ofstream vsHashOut{ vsHashPath, std::ios::binary | std::ios::trunc };

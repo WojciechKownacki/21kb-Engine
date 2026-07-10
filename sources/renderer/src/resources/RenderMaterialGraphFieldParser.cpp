@@ -1,4 +1,5 @@
 #include "resources/RenderMaterialGraphFieldParser.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
 #include <charconv>
 #include <sstream>
@@ -31,10 +32,7 @@ namespace {
 }
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(begin, end, output);
-    return result.ec == std::errc{} && result.ptr == end;
+    return ParseFiniteMaterialFloatToken(text, output);
 }
 
 [[nodiscard]] bool ParseBool(std::string_view text, bool& output) noexcept {
@@ -79,6 +77,10 @@ void AddGraphMigrationDiagnostic(
         .message = std::move(message),
         .text = std::move(text),
     });
+}
+
+[[nodiscard]] bool IsDeprecatedDefaultLitGraphShadingToken(std::string_view text) noexcept {
+    return text == "lit" || text == "default_lit" || text == "defaultlit";
 }
 
 [[nodiscard]] std::string DecodeToken(std::string_view value) {
@@ -1057,6 +1059,47 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
         return ParseGraphComposite(rest, line, asset.graph, diagnostics);
     }
     return RenderMaterialGraphFieldParseResult::Unknown;
+}
+
+void FinalizeRenderMaterialGraphDocument(
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t graphShadingModelLine,
+    std::string_view graphShadingModelSourceText,
+    std::size_t graphLastGoodArtifactLine) {
+    const std::uint32_t sourceVersion = graph.documentVersion == 0U ? 1U : graph.documentVersion;
+    if (sourceVersion <= kRenderMaterialGraphDocumentVersion) {
+        if (sourceVersion < 2U && IsDeprecatedDefaultLitGraphShadingToken(graph.shadingModel)) {
+            const std::string deprecatedToken = graph.shadingModel;
+            graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+            if (graphShadingModelLine > 0U) {
+                AddGraphMigrationDiagnostic(
+                    diagnostics,
+                    graphShadingModelLine,
+                    "graphShadingModel",
+                    "Migrated deprecated material graph shading token '" + deprecatedToken +
+                        "' to canonical 'defaultLit' while upgrading graph schema from version " +
+                        std::to_string(sourceVersion) + " to " + std::to_string(kRenderMaterialGraphDocumentVersion) + ".",
+                    std::string{ graphShadingModelSourceText });
+            }
+        }
+
+        if (graph.shadingModel.empty()) {
+            graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+        }
+        graph.documentVersion = kRenderMaterialGraphDocumentVersion;
+        graph.hasExplicitDocumentVersion = true;
+    }
+
+    if ((graph.lastGoodArtifact.assetId == 0U) != (graph.lastGoodArtifact.contentHash == 0U)) {
+        AddDiagnostic(
+            diagnostics,
+            RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
+            graphLastGoodArtifactLine,
+            "graphLastGoodArtifact",
+            "Material graph last-good artifact requires both asset id and content hash.",
+            {});
+    }
 }
 
 } // namespace kb::render
