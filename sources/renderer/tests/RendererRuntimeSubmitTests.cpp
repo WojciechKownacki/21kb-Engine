@@ -1480,6 +1480,22 @@ void RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest() {
     gpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
     gpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
     gpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    RenderMaterialGraphNode transitionUniform{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = -160,
+        .positionY = 220,
+    };
+    transitionUniform.parameter.stableId = "transition.roughness";
+    transitionUniform.parameter.defaultValueHint = "0.25";
+    gpuMaterial.graph.nodes.push_back(std::move(transitionUniform));
+    gpuMaterial.graph.links.push_back(MakeGraphLink(
+        RenderMaterialGraphNodeKind::ParameterScalar,
+        3U,
+        "value",
+        RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "roughness"));
     Require(RenderMaterialAssetWriter::Save(root / "graph.kbmat", gpuMaterial), "MAT-31 public cache root test could not save graph material");
 
     // Cook the graph's BaseOpaque binary for the headless Noop renderer (dxbc directory) into a
@@ -1553,6 +1569,23 @@ void RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest() {
         "MAT-31: The cooked graph program must be retained live in the material program registry");
 
     renderer.EndFrame();
+
+    // Regression for Material Editor -> Scene View: the graph frame has a reflected, graph-only
+    // numeric uniform in flight. Render an empty frame, return to the graph during the grace
+    // period, then leave it long enough to retire resources. Before the deferred-uniform fix,
+    // EndFrame destroyed the renderer-side uniform slot immediately and the render thread crashed
+    // in RendererContextD3D12::updateUniform while consuming the previous frame.
+    kb::scene::Scene emptyScene;
+    const auto submitTransitionFrame = [&](const kb::scene::Scene& submittedScene, const char* failure) {
+        Require(renderer.BeginFrame(), failure);
+        Require(renderer.SubmitScene(submittedScene, desc), failure);
+        renderer.EndFrame();
+    };
+    submitTransitionFrame(emptyScene, "Material graph transition test could not submit the first Scene View frame");
+    submitTransitionFrame(scene, "Material graph transition test could not reactivate the graph preview frame");
+    submitTransitionFrame(emptyScene, "Material graph transition test could not submit retirement frame one");
+    submitTransitionFrame(emptyScene, "Material graph transition test could not submit retirement frame two");
+    submitTransitionFrame(emptyScene, "Material graph transition test could not submit retirement frame three");
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
