@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
 #include <algorithm>
 #include <array>
@@ -216,19 +217,10 @@ struct HsvColor {
 }
 
 [[nodiscard]] std::optional<float> ParseFloat(std::string_view text) {
-    std::string copy{ text };
-    char* end = nullptr;
-    const float value = std::strtof(copy.c_str(), &end);
-    if (end == copy.c_str()) {
-        return std::nullopt;
-    }
-    while (end != nullptr && *end != '\0') {
-        if (!std::isspace(static_cast<unsigned char>(*end))) {
-            return std::nullopt;
-        }
-        ++end;
-    }
-    return value;
+    std::vector<float> values;
+    return kb::render::ParseFiniteMaterialFloatSequence(text, values, 1U, 1U, false)
+        ? std::optional<float>{ values.front() }
+        : std::nullopt;
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {

@@ -12,9 +12,13 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -28,6 +32,7 @@
 #include <string>
 #include <system_error>
 #include <tuple>
+#include <vector>
 
 #if defined(_WIN32)
 #include <process.h>
@@ -71,10 +76,10 @@ namespace {
 [[nodiscard]] std::uint64_t MaterialTextureDependencyHash(
     const kb::scene::Scene& scene,
     const kb::render::RenderMaterialAssetData& material) noexcept {
-    std::uint64_t hash = 0xBADC0FFEE0DDF00DULL;
-    const auto appendTexture = [&scene, &hash](std::uint64_t assetId) noexcept {
+    std::vector<std::uint64_t> textureAssetIds;
+    const auto appendTexture = [&textureAssetIds](std::uint64_t assetId) {
         if (assetId != 0U) {
-            hash = HashCombine(hash, AssetDependencyHash(scene, assetId));
+            textureAssetIds.push_back(assetId);
         }
     };
     appendTexture(material.desc.albedoTextureAssetId);
@@ -95,18 +100,17 @@ namespace {
             appendTexture(value.assetId);
         }
     }
+    std::ranges::sort(textureAssetIds);
+    textureAssetIds.erase(std::unique(textureAssetIds.begin(), textureAssetIds.end()), textureAssetIds.end());
+    std::uint64_t hash = 0xBADC0FFEE0DDF00DULL;
+    for (const std::uint64_t assetId : textureAssetIds) {
+        hash = HashCombine(hash, AssetDependencyHash(scene, assetId));
+    }
     return hash;
 }
 
 [[nodiscard]] std::uint64_t WorkingCopyContentHash(const kb::render::RenderMaterialAssetData& material) {
-    kb::render::RenderMaterialAssetData runtimeRelevant = material;
-    for (kb::render::RenderMaterialGraphNode& node : runtimeRelevant.graph.nodes) {
-        node.positionX = 0;
-        node.positionY = 0;
-    }
-    std::ostringstream output;
-    kb::render::RenderMaterialAssetWriter::Write(output, runtimeRelevant);
-    return HashBytes(output.str());
+    return kb::render::RenderMaterialRuntimeSemanticHash(material);
 }
 
 [[nodiscard]] std::filesystem::path WorkingCopyPreviewPath(
@@ -115,9 +119,17 @@ namespace {
     std::uint64_t contentHash,
     kb::render::RenderMaterialGraphQualityLevel quality,
     const void* editorInstance) {
-    std::uint64_t projectHash = 1469598103934665603ULL;
+    std::error_code canonicalError;
+    const std::filesystem::path projectRoot = std::filesystem::weakly_canonical(
+        EditorProjectPaths::ProjectRoot(),
+        canonicalError);
+    std::uint64_t projectHash = HashBytes(
+        (canonicalError ? EditorProjectPaths::ProjectRoot() : projectRoot).generic_string());
     if (const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(materialAssetId)) {
-        projectHash = HashBytes(metadata->physicalPath.parent_path().generic_string());
+        const std::filesystem::path materialRoot = metadata->physicalPath.empty()
+            ? metadata->virtualPath.parent_path()
+            : metadata->physicalPath.parent_path();
+        projectHash = HashCombine(projectHash, HashBytes(materialRoot.generic_string()));
     }
     return std::filesystem::temp_directory_path() /
         "21kb_material_preview" /
@@ -133,7 +145,6 @@ namespace {
     std::vector<kb::assets::AssetId> pending) noexcept {
     const kb::assets::AssetRegistry& registry = scene.Assets().Manager().Registry();
     std::vector<std::uint64_t> visited;
-    std::uint64_t hash = 0xD3A17E5C0FFEE123ULL;
     while (!pending.empty()) {
         const kb::assets::AssetId id = pending.back();
         pending.pop_back();
@@ -142,13 +153,18 @@ namespace {
         }
         visited.push_back(id.value);
         const kb::assets::AssetMetadata* metadata = registry.Find(id);
-        hash = HashCombine(hash, id.value);
-        hash = HashCombine(hash, metadata == nullptr ? 0U : metadata->contentHash);
         if (metadata != nullptr) {
             std::vector<kb::assets::AssetId> dependencies = metadata->dependencies;
             std::ranges::sort(dependencies, {}, &kb::assets::AssetId::value);
             pending.insert(pending.end(), dependencies.rbegin(), dependencies.rend());
         }
+    }
+    std::ranges::sort(visited);
+    std::uint64_t hash = 0xD3A17E5C0FFEE123ULL;
+    for (const std::uint64_t assetId : visited) {
+        const kb::assets::AssetMetadata* metadata = registry.Find(kb::assets::AssetId{ assetId });
+        hash = HashCombine(hash, assetId);
+        hash = HashCombine(hash, metadata == nullptr ? 0U : metadata->contentHash);
     }
     return hash;
 }
@@ -181,7 +197,9 @@ namespace {
 void RegisterPreviewLoaders(kb::assets::AssetManager& manager) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<EditorMaterialPreviewMeshLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialFunctionAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
 }
 

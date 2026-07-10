@@ -1,4 +1,5 @@
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
 #include <array>
 #include <charconv>
@@ -36,10 +37,7 @@ namespace {
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
     text = Trim(text);
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(begin, end, output);
-    return result.ec == std::errc{} && result.ptr == end;
+    return ParseFiniteMaterialFloatToken(text, output);
 }
 
 [[nodiscard]] bool ParseBool(std::string_view text, bool& output) noexcept {

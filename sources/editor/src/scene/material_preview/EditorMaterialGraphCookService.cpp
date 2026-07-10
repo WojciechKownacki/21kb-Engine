@@ -1,7 +1,7 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
-#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -167,10 +167,7 @@ void HashVariantBytes(std::uint64_t& hash, std::string_view value) noexcept {
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material,
     const kb::render::RenderMaterialGraphBuildContext& context) {
-    std::ostringstream serialized;
-    kb::render::RenderMaterialAssetWriter::Write(serialized, material);
-    std::uint64_t inputHash = 1469598103934665603ULL;
-    HashVariantBytes(inputHash, serialized.str());
+    std::uint64_t inputHash = kb::render::RenderMaterialShaderSemanticHash(material);
     HashVariantBytes(inputHash, config.shadercPath);
     HashVariantBytes(inputHash, config.varyingDefPath);
     for (const std::string& includeDir : config.includeDirs) {
@@ -298,6 +295,12 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
         return result;
     }
     result.graphSourceHash = compiled.shader.sourceHash;
+    result.backendName = std::string{ kb::render::RenderMaterialGraphShaderBackendName(config.backend) };
+    result.textureBindingCount = static_cast<std::uint32_t>(compiled.shader.reflection.textures.size()) +
+        (compiled.shader.reflection.usesSceneColor ? 1U : 0U) +
+        (compiled.shader.reflection.usesSceneDepth ? 1U : 0U);
+    result.uniformCount = static_cast<std::uint32_t>(compiled.shader.reflection.uniforms.size());
+    result.varyingCount = static_cast<std::uint32_t>(compiled.shader.reflection.requiredVaryings.size());
 
     const std::array<kb::render::RenderMaterialGraphShaderBackend, 1U> backends{ config.backend };
     bool anyFailure = false;
