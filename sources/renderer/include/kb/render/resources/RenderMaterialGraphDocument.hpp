@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/resources/RenderMaterialGraphVariantKey.hpp"
+
 #include <array>
 #include <cstdint>
 #include <cstddef>
@@ -14,7 +16,7 @@
 
 namespace kb::render {
 
-inline constexpr std::uint32_t kRenderMaterialGraphDocumentVersion = 2U;
+inline constexpr std::uint32_t kRenderMaterialGraphDocumentVersion = 3U;
 
 enum class RenderMaterialGraphNodeKind : std::uint8_t {
     MaterialOutput,
@@ -303,6 +305,7 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     UnsupportedMaterialDomain,
     UnsupportedShadingModel,
     StaticPermutationExplosion,
+    MissingSourceGraph,
     MissingMaterialFunction,
     MaterialFunctionCycle,
     MaterialFunctionSignatureMismatch,
@@ -499,6 +502,7 @@ struct RenderMaterialGraphBuildContext {
     RenderMaterialGraphFeatureLevel featureLevel = RenderMaterialGraphFeatureLevel::Sm5;
     RenderMaterialGraphShadingPath shadingPath = RenderMaterialGraphShadingPath::Forward;
     RenderMaterialGraphShaderStage shaderStage = RenderMaterialGraphShaderStage::Fragment;
+    RenderMaterialGraphVariantUsage variantUsage = RenderMaterialGraphVariantUsage::Runtime;
     const RenderMaterialGraphFunctionLibrary* functionLibrary = nullptr;
 };
 

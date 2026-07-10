@@ -19,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -2437,6 +2438,14 @@ public:
     }
 
     [[nodiscard]] bool MoveGraphCommentGroup(std::uint32_t commentId, std::int32_t positionX, std::int32_t positionY) {
+        return MoveGraphCommentGroup(commentId, positionX, positionY, GraphNodeIdsInsideComment(commentId));
+    }
+
+    [[nodiscard]] bool MoveGraphCommentGroup(
+        std::uint32_t commentId,
+        std::int32_t positionX,
+        std::int32_t positionY,
+        std::span<const std::uint32_t> memberNodeIds) {
         if (!workingCopy_.has_value() || commentId == 0U) {
             return false;
         }
@@ -2450,16 +2459,10 @@ public:
             return false;
         }
 
-        std::vector<std::uint32_t> containedNodeIds;
-        for (const kb::render::RenderMaterialGraphNode& node : workingCopy_->graph.nodes) {
-            if (GraphNodeInsideComment(node, *comment)) {
-                containedNodeIds.push_back(node.id);
-            }
-        }
         comment->positionX = positionX;
         comment->positionY = positionY;
         for (kb::render::RenderMaterialGraphNode& node : workingCopy_->graph.nodes) {
-            if (std::ranges::find(containedNodeIds, node.id) != containedNodeIds.end()) {
+            if (std::ranges::find(memberNodeIds, node.id) != memberNodeIds.end()) {
                 node.positionX += deltaX;
                 node.positionY += deltaY;
             }
@@ -2672,6 +2675,9 @@ public:
             ? std::move(*schema)
             : kb::render::GetBuiltInPbrMaterialTypeSchema();
         dirty_ = false;
+        externalDiagnostics_.clear();
+        externalDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         selectedNodeId_ = 0U;
         selectedNodeIds_.clear();
         selectedCommentId_ = 0U;
@@ -2709,8 +2715,16 @@ public:
         CloseGraphNodeEnumDropdown();
         CancelGraphNodeRenameEdit();
         diagnostics_.clear();
+        graphDiagnosticsLines_.clear();
+        compilerDiagnostics_.clear();
+        externalDiagnostics_.clear();
+        cookDiagnostics_.clear();
         graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = false;
+        graphDiagnosticsHaveError_ = false;
+        compilerDiagnosticsHaveError_ = false;
+        externalDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         materialStats_ = {};
         shaderViewer_ = {};
     }
@@ -2929,12 +2943,38 @@ public:
     }
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError) {
-        diagnostics_ = std::move(diagnostics);
-        graphDiagnosticMarkers_.clear();
-        diagnosticsHaveError_ = hasError;
+        externalDiagnostics_.clear();
+        externalDiagnostics_.reserve(diagnostics.size());
+        for (std::string& diagnostic : diagnostics) {
+            externalDiagnostics_.push_back("[schema] " + std::move(diagnostic));
+        }
+        externalDiagnosticsHaveError_ = hasError;
+        RebuildMergedDiagnostics();
+    }
+
+    void ApplyCookResult(
+        std::vector<std::string> diagnostics,
+        bool cookSucceeded,
+        bool hasGpuProgram,
+        bool hasLastGood,
+        bool fallbackApplied) {
+        cookDiagnostics_.clear();
+        cookDiagnostics_.reserve(diagnostics.size());
+        for (std::string& diagnostic : diagnostics) {
+            cookDiagnostics_.push_back("[cook] " + std::move(diagnostic));
+        }
+        cookCompleted_ = true;
+        cookSucceeded_ = cookSucceeded;
+        cookHasGpuProgram_ = hasGpuProgram;
+        cookHasLastGood_ = hasLastGood;
+        cookFallbackApplied_ = fallbackApplied;
+        RefreshGraphRuntimeState();
+        RebuildMergedDiagnostics();
     }
 
     void ClearDiagnostics() {
+        externalDiagnostics_.clear();
+        externalDiagnosticsHaveError_ = false;
         RefreshGraphDiagnostics();
     }
 
@@ -5542,20 +5582,24 @@ private:
     }
 
     void RefreshGraphDiagnostics() {
-        diagnostics_.clear();
+        graphDiagnosticsLines_.clear();
+        compilerDiagnostics_.clear();
         graphDiagnosticMarkers_.clear();
-        diagnosticsHaveError_ = false;
+        graphDiagnosticsHaveError_ = false;
+        compilerDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         materialStats_ = {};
         shaderViewer_ = {};
         if (!workingCopy_.has_value()) {
             graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
+            RebuildMergedDiagnostics();
             return;
         }
         const std::vector<kb::render::RenderMaterialGraphDiagnostic> graphDiagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(*workingCopy_);
-        diagnostics_.reserve(graphDiagnostics.size());
+        graphDiagnosticsLines_.reserve(graphDiagnostics.size());
         graphDiagnosticMarkers_.reserve(graphDiagnostics.size());
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : graphDiagnostics) {
-            diagnostics_.push_back(GraphDiagnosticLine(diagnostic));
+            graphDiagnosticsLines_.push_back("[validator] " + GraphDiagnosticLine(diagnostic));
             if (diagnostic.nodeId != 0U) {
                 graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
                     .nodeId = diagnostic.nodeId,
@@ -5568,27 +5612,80 @@ private:
                 });
             }
             if (diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error) {
-                diagnosticsHaveError_ = true;
+                graphDiagnosticsHaveError_ = true;
             }
         }
-        const bool valid = !diagnosticsHaveError_;
+        const bool valid = !graphDiagnosticsHaveError_;
+        bool compileSucceeded = false;
         if (valid) {
             kb::render::RenderMaterialGraphBuildContext context{};
-            context.assetId = workingCopy_->materialTypeAssetId;
+            context.assetId = openAssetId_.value;
             const kb::render::RenderMaterialGraphCompileResult compile =
                 kb::render::CompileRenderMaterialGraphToShaderSource(workingCopy_->graph, context);
+            compileSucceeded = compile.Succeeded();
+            for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compile.diagnostics) {
+                compilerDiagnostics_.push_back("[compiler] " + GraphDiagnosticLine(diagnostic));
+                compilerDiagnosticsHaveError_ = compilerDiagnosticsHaveError_ ||
+                    diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+                if (diagnostic.nodeId != 0U) {
+                    graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
+                        .nodeId = diagnostic.nodeId,
+                        .linkId = diagnostic.linkId,
+                        .pinId = diagnostic.pinId,
+                        .pin = diagnostic.pin,
+                        .severity = diagnostic.severity,
+                        .kind = diagnostic.kind,
+                        .message = diagnostic.message,
+                    });
+                }
+            }
             materialStats_ = BuildMaterialStats(*workingCopy_, compile);
             shaderViewer_ = BuildShaderViewer(compile);
         }
+        localCompileSucceeded_ = valid && compileSucceeded;
+        RefreshGraphRuntimeState();
+        RebuildMergedDiagnostics();
+    }
+
+    void ResetCookDiagnostics() {
+        cookDiagnostics_.clear();
+        cookCompleted_ = false;
+        cookSucceeded_ = false;
+        cookHasGpuProgram_ = false;
+        cookHasLastGood_ = false;
+        cookFallbackApplied_ = false;
+        localCompileSucceeded_ = false;
+    }
+
+    void RefreshGraphRuntimeState() {
+        if (!workingCopy_.has_value()) {
+            graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
+            return;
+        }
         graphRuntimeState_ = kb::render::ResolveRenderMaterialGraphRuntimeState(kb::render::RenderMaterialGraphRuntimeStateInput{
-            .phase = kb::render::RenderMaterialGraphCompilePhase::Compiled,
-            .validationSucceeded = valid,
-            .compileSucceeded = valid,
-            .hasGpuProgram = valid,
-            .hasLastGood = workingCopy_->graph.lastGoodArtifact.IsValid(),
-            .fallbackApplied = true,
+            .phase = cookCompleted_ || !localCompileSucceeded_
+                ? kb::render::RenderMaterialGraphCompilePhase::Compiled
+                : kb::render::RenderMaterialGraphCompilePhase::Compiling,
+            .validationSucceeded = !graphDiagnosticsHaveError_,
+            .compileSucceeded = localCompileSucceeded_ && cookSucceeded_,
+            .hasGpuProgram = cookHasGpuProgram_,
+            .hasLastGood = cookHasLastGood_,
+            .fallbackApplied = cookCompleted_ ? cookFallbackApplied_ : !localCompileSucceeded_,
             .failurePolicy = workingCopy_->graph.artifactFailurePolicy,
         });
+    }
+
+    void RebuildMergedDiagnostics() {
+        diagnostics_.clear();
+        const auto append = [this](const std::vector<std::string>& source) {
+            diagnostics_.insert(diagnostics_.end(), source.begin(), source.end());
+        };
+        append(graphDiagnosticsLines_);
+        append(compilerDiagnostics_);
+        append(externalDiagnostics_);
+        append(cookDiagnostics_);
+        diagnosticsHaveError_ = graphDiagnosticsHaveError_ || compilerDiagnosticsHaveError_ ||
+            externalDiagnosticsHaveError_ || (!cookSucceeded_ && cookCompleted_);
     }
 
     void RefreshParameters() {
@@ -5649,8 +5746,21 @@ private:
     std::array<bool, 4U> instanceOverrideGroupExpanded_{ true, true, true, true };
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
+    std::vector<std::string> graphDiagnosticsLines_;
+    std::vector<std::string> compilerDiagnostics_;
+    std::vector<std::string> externalDiagnostics_;
+    std::vector<std::string> cookDiagnostics_;
     std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
     bool diagnosticsHaveError_ = false;
+    bool graphDiagnosticsHaveError_ = false;
+    bool compilerDiagnosticsHaveError_ = false;
+    bool externalDiagnosticsHaveError_ = false;
+    bool localCompileSucceeded_ = false;
+    bool cookCompleted_ = false;
+    bool cookSucceeded_ = false;
+    bool cookHasGpuProgram_ = false;
+    bool cookHasLastGood_ = false;
+    bool cookFallbackApplied_ = false;
     MaterialEditorMaterialStatsModel materialStats_{};
     MaterialEditorShaderViewerModel shaderViewer_{};
     std::string findQuery_;

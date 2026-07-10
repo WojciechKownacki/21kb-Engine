@@ -33,6 +33,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 
@@ -1002,15 +1003,27 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     }
     std::vector<kb::assets::AssetId> pickerTextureIds;
     bool pickerTexturesRegistered = true;
+    const std::filesystem::path pickerTextureRoot =
+        std::filesystem::temp_directory_path() / "21kb_selftest" / "material_graph_picker_textures";
+    std::error_code pickerDirectoryError;
+    std::filesystem::create_directories(pickerTextureRoot, pickerDirectoryError);
+    report.Check(!pickerDirectoryError, "Create structural texture metadata fixtures for texture picker self-test");
     for (std::uint32_t index = 0U; index < 20U; ++index) {
         const kb::assets::AssetId textureId{ 0x7E580U + index };
         const std::string suffix = (index < 10U ? "0" : "") + std::to_string(index);
         const std::string name = "PickerTexture" + suffix;
+        const std::filesystem::path texturePath = pickerTextureRoot / (name + ".kbtex");
+        {
+            std::ofstream texture{ texturePath, std::ios::binary | std::ios::trunc };
+            texture << "size 1 1\nsemantic baseColor\ncolorSpace srgb\nrgba8 255 255 255 255\n";
+            pickerTexturesRegistered = static_cast<bool>(texture) && pickerTexturesRegistered;
+        }
         pickerTexturesRegistered = context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
             .id = textureId,
             .type = "RenderTexture",
             .name = name,
-            .virtualPath = "/Game/Textures/" + name + ".ktx",
+            .virtualPath = "/Game/Textures/" + name + ".kbtex",
+            .physicalPath = texturePath,
             .runtimeLoadable = true,
         }) && pickerTexturesRegistered;
         pickerTextureIds.push_back(textureId);
@@ -1025,25 +1038,23 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
             context.MaterialGraphTexturePickerAssetId() == materialId &&
             context.MaterialGraphTexturePickerNodeId() == 50U,
         "Texture graph picker remembers the edited material and node");
-    const RECT pickerHost{
-        content.left + 12,
-        content.top + MaterialEditorPanelMetrics::HeaderHeight + 12,
-        content.right - 12,
-        content.bottom - 12,
-    };
-    const int pickerWidth = std::min(720, std::max(240, MaterialEditorPanelRectWidth(pickerHost)));
-    const int pickerHeight = std::min(560, std::max(220, MaterialEditorPanelRectHeight(pickerHost)));
-    const RECT pickerOverlay{
-        pickerHost.left + (MaterialEditorPanelRectWidth(pickerHost) - pickerWidth) / 2,
-        pickerHost.top + (MaterialEditorPanelRectHeight(pickerHost) - pickerHeight) / 2,
-        pickerHost.left + (MaterialEditorPanelRectWidth(pickerHost) - pickerWidth) / 2 + pickerWidth,
-        pickerHost.top + (MaterialEditorPanelRectHeight(pickerHost) - pickerHeight) / 2 + pickerHeight,
-    };
-    const RECT pickerSearch{ pickerOverlay.left + 10, pickerOverlay.top + 6, pickerOverlay.right - 184, pickerOverlay.top + 34 };
-    const RECT pickerAccept{ pickerOverlay.right - 174, pickerOverlay.top + 6, pickerOverlay.right - 92, pickerOverlay.top + 34 };
-    const RECT pickerViewport{ pickerOverlay.left + 10, pickerOverlay.top + 44, pickerOverlay.right - 10, pickerOverlay.bottom - 10 };
+    const MaterialEditorGraphTexturePickerLayout pickerLayout =
+        MaterialEditorPanelRenderer::ResolveGraphTexturePickerLayout(content, pickerTextureIds.size() + 1U);
+    const RECT narrowContent{ 0, 0, 420, 360 };
+    const MaterialEditorGraphTexturePickerLayout narrowPickerLayout =
+        MaterialEditorPanelRenderer::ResolveGraphTexturePickerLayout(narrowContent, pickerTextureIds.size() + 1U);
+    report.Check(
+        narrowPickerLayout.picker.left >= narrowContent.left &&
+            narrowPickerLayout.picker.top >= narrowContent.top &&
+            narrowPickerLayout.picker.right <= narrowContent.right &&
+            narrowPickerLayout.picker.bottom <= narrowContent.bottom &&
+            narrowPickerLayout.viewport.top >= narrowPickerLayout.search.bottom &&
+            narrowPickerLayout.viewport.top >= narrowPickerLayout.accept.bottom &&
+            narrowPickerLayout.columns >= 1 &&
+            narrowPickerLayout.acceptEnabled,
+        "P1.34 texture picker reflows inside a narrow editor panel with active Accept/Clear controls");
     const MaterialEditorGraphTexturePickerHit searchHit =
-        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerSearch).x, Center(pickerSearch).y);
+        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerLayout.search).x, Center(pickerLayout.search).y);
     report.Check(searchHit.kind == MaterialEditorGraphTexturePickerHitKind::Search, "Texture graph picker search field owns its hit-test");
     context.AppendMaterialGraphTexturePickerSearchText(L'P');
     context.AppendMaterialGraphTexturePickerSearchText(L'i');
@@ -1052,8 +1063,19 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     context.BackspaceMaterialGraphTexturePickerSearch();
     report.Check(context.MaterialGraphTexturePickerSearchQuery() == "Pi", "Texture graph picker search handles backspace");
     context.ClearMaterialGraphTexturePickerSearch();
-    const MaterialEditorGraphTexturePickerHit tileHit =
-        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, pickerViewport.left + 79, pickerViewport.top + 75);
+    const MaterialEditorGraphTexturePickerHit clearHit = MaterialEditorPanelRenderer::GraphTexturePickerHit(
+        content,
+        context,
+        Center(pickerLayout.itemRects[0]).x,
+        Center(pickerLayout.itemRects[0]).y);
+    report.Check(
+        clearHit.kind == MaterialEditorGraphTexturePickerHitKind::Clear && !clearHit.assetId.IsValid(),
+        "Texture graph picker exposes an explicit None / Clear item");
+    const MaterialEditorGraphTexturePickerHit tileHit = MaterialEditorPanelRenderer::GraphTexturePickerHit(
+        content,
+        context,
+        Center(pickerLayout.itemRects[1]).x,
+        Center(pickerLayout.itemRects[1]).y);
     report.Check(
         tileHit.kind == MaterialEditorGraphTexturePickerHitKind::Texture &&
             !pickerTextureIds.empty() &&
@@ -1064,12 +1086,36 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     report.Check(pickerMaxScroll > 0, "Texture graph picker computes a scroll range for multi-row texture lists");
     report.Check(context.ScrollMaterialGraphTexturePicker(-120, pickerMaxScroll), "Texture graph picker consumes wheel scrolling");
     const MaterialEditorGraphTexturePickerHit acceptHit =
-        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerAccept).x, Center(pickerAccept).y);
+        MaterialEditorPanelRenderer::GraphTexturePickerHit(content, context, Center(pickerLayout.accept).x, Center(pickerLayout.accept).y);
     report.Check(acceptHit.kind == MaterialEditorGraphTexturePickerHitKind::Accept, "Texture graph picker Accept button owns its hit-test");
     report.Check(
         context.SetMaterialGraphTextureSampleAsset(materialId, 50U, context.MaterialGraphTexturePickerSelectedAssetId()),
         "Texture graph picker selected asset applies to the texture node");
     report.Check(context.CloseMaterialGraphTexturePicker() && !context.IsMaterialGraphTexturePickerOpen(), "Texture graph picker closes cleanly");
+
+    const MaterialEditorPanelLayout opaqueLayout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    context.MaterialEditor().SetInfoPanelVisible(true);
+    MaterialEditorOpaqueOverlayHit opaqueHit = MaterialEditorPanelRenderer::OpaqueOverlayAt(
+        content, context, Center(opaqueLayout.detailsPanel).x, Center(opaqueLayout.detailsPanel).y);
+    report.Check(opaqueHit.kind == MaterialEditorOpaqueOverlayKind::Details,
+        "P1.33 Details panel is an opaque input overlay over the graph canvas");
+    context.MaterialEditor().SetInfoPanelVisible(false);
+    context.MaterialEditor().SetDiagnostics({ "P1.33 diagnostic" }, true);
+    opaqueHit = MaterialEditorPanelRenderer::OpaqueOverlayAt(
+        content, context, Center(opaqueLayout.diagnosticsPanel).x, Center(opaqueLayout.diagnosticsPanel).y);
+    report.Check(opaqueHit.kind == MaterialEditorOpaqueOverlayKind::Diagnostics,
+        "P1.33 Diagnostics panel is an opaque input overlay over the graph canvas");
+    context.MaterialEditor().ClearDiagnostics();
+    opaqueHit = MaterialEditorPanelRenderer::OpaqueOverlayAt(
+        content, context, Center(opaqueLayout.previewFrame).x, Center(opaqueLayout.previewFrame).y);
+    report.Check(opaqueHit.kind == MaterialEditorOpaqueOverlayKind::Preview,
+        "P1.33 Preview frame is an opaque input overlay over the graph canvas");
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 300, 300, 0, 0),
+        "P1.33 context menu opens for opaque-overlay verification");
+    opaqueHit = MaterialEditorPanelRenderer::OpaqueOverlayAt(content, context, 305, 305);
+    report.Check(opaqueHit.kind == MaterialEditorOpaqueOverlayKind::ContextMenu,
+        "P1.33 blank context-menu pixels are owned by the context-menu overlay");
+    static_cast<void>(context.CloseMaterialGraphContextMenu());
 
     const std::optional<RECT> textureRect =
         MaterialEditorPanelRenderer::GraphNodeRect(content, material.graph, 50U, context, materialId);
@@ -1180,6 +1226,38 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
             }),
             "Texture object family exposes texture asset details property");
     }
+
+    context.MaterialEditor().MarkSaved();
+    const kb::assets::AssetId rawGraphId{ 0x7E5F0U };
+    const std::filesystem::path rawGraphPath =
+        std::filesystem::temp_directory_path() / "21kb_selftest" / "RawOpenGraph.kbmaterialgraph";
+    const kb::render::RenderMaterialGraphDocument rawGraph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialGraphAssetLoader::SaveGraph(rawGraphPath, rawGraph),
+        "P1.9 create standalone raw Material Graph fixture");
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+            .id = rawGraphId,
+            .type = kb::render::kRenderMaterialGraphAssetType,
+            .name = "RawOpenGraph",
+            .virtualPath = "/Game/Materials/RawOpenGraph.kbmaterialgraph",
+            .physicalPath = rawGraphPath,
+            .runtimeLoadable = true,
+        }),
+        "P1.9 register standalone raw Material Graph fixture");
+    report.Check(context.OpenMaterialEditorAsset(rawGraphId) &&
+            context.MaterialEditor().OpenAssetId() == rawGraphId &&
+            context.MaterialEditor().WorkingCopy().has_value(),
+        "P1.9 standalone raw Material Graph opens directly in Material Editor");
+    std::uint32_t rawNodeId = 0U;
+    const bool rawNodeAdded = context.AddMaterialGraphNode(rawGraphId, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -120, 80);
+    rawNodeId = context.SelectedMaterialGraphNodeId();
+    report.Check(rawNodeAdded && rawNodeId != 0U,
+        "P1.9 standalone raw Material Graph accepts working-copy edits");
+    report.Check(context.SaveMaterialEditorAsset(rawGraphId),
+        "P1.9 standalone raw Material Graph saves without creating a Material asset");
+    const std::optional<kb::render::RenderMaterialGraphDocument> savedRawGraph =
+        kb::render::RenderMaterialGraphAssetLoader::LoadGraph(rawGraphPath);
+    report.Check(savedRawGraph.has_value() && kb::render::FindRenderMaterialGraphNode(*savedRawGraph, rawNodeId) != nullptr,
+        "P1.9 standalone raw Material Graph persists direct editor changes");
 }
 
 void RunMaterialGraphDenseNodeLayoutSuite(Report& report) {
@@ -2212,6 +2290,84 @@ void RunPluginsPanelSuite(Report& report) {
     }
 }
 
+void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0x7110U };
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 20,
+        .positionY = 20,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .displayName = "Old Name" },
+    });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 320,
+        .positionY = 20,
+    });
+    kb::render::RenderMaterialGraphLink link{
+        .fromNodeId = 2U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
+        .fromPin = "rgba",
+        .toNodeId = 1U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    };
+    link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+    material.graph.links.push_back(link);
+    material.graph.comments.push_back(kb::render::RenderMaterialGraphCommentBox{
+        .id = 10U, .positionX = 0, .positionY = 0, .width = 200, .height = 200, .text = "Group",
+    });
+    material.graph.composites.push_back(kb::render::RenderMaterialGraphCompositeSubgraph{
+        .id = 20U, .positionX = 0, .positionY = 0, .width = 420, .height = 260,
+        .collapsed = true, .name = "Collapsed", .nodeIds = { 2U, 3U },
+    });
+    context.MaterialEditor().Open(materialId, material);
+    context.FocusMaterialGraph(true);
+
+    report.Check(context.DetachMaterialGraphInputPinConnection(materialId, 1U, "baseColor", 20, 20),
+        "P1.22 begin production rewire transaction");
+    report.Check(context.CancelMaterialGraphPinConnection() && context.MaterialEditor().WorkingCopy()->graph.links.size() == 1U &&
+            !context.MaterialEditor().Dirty() && !context.CanUndoSceneCommand(),
+        "P1.22 cancel rewire restores original link without history");
+
+    static_cast<void>(context.SetMaterialGraphNodeSelection({ 2U, 3U }, 2U));
+    static_cast<void>(context.SelectMaterialGraphContextTarget(3U, 0U));
+    report.Check(context.SelectedMaterialGraphNodeIds() == std::vector<std::uint32_t>({ 2U, 3U }) &&
+            context.SelectedMaterialGraphNodeId() == 2U,
+        "P1.27 RMB target preserves selected multi-selection and primary");
+    report.Check(context.BeginMaterialGraphPan(10, 10) && !context.DragMaterialGraphPan(11, 10) &&
+            !context.HasMaterialGraphPanMoved() && context.EndMaterialGraphPan(),
+        "P1.27 one-pixel RMB jitter remains a context-menu click");
+
+    static_cast<void>(context.SelectMaterialGraphComment(10U));
+    report.Check(context.BeginMaterialGraphCommentDrag(materialId, 10U, 0, 0) &&
+            context.DragMaterialGraphComment(300, 0) && context.DragMaterialGraphComment(320, 0),
+        "P1.25/P1.26 begin live comment drag with membership snapshot");
+    const auto outside = context.MaterialEditor().GraphNodePosition(3U);
+    report.Check(outside.has_value() && outside->first == 320 && outside->second == 20,
+        "P1.26 encountered node is not added to comment drag group");
+    report.Check(context.CancelMaterialGraphInteractions() && !context.MaterialEditor().Dirty() &&
+            context.MaterialEditor().GraphCommentPosition(10U)->first == 0 && !context.CanUndoSceneCommand(),
+        "P1.25 capture-loss rollback restores comment drag without history");
+
+    report.Check(context.ExpandMaterialGraphComposite(materialId, 20U) &&
+            !context.MaterialEditor().GraphCompositeSubgraph(20U)->collapsed && context.UndoSceneCommand() &&
+            context.MaterialEditor().GraphCompositeSubgraph(20U)->collapsed && context.RedoSceneCommand(),
+        "P1.30 production Expand supports Undo/Redo");
+
+    static_cast<void>(context.SelectMaterialGraphNode(2U));
+    report.Check(context.BeginMaterialGraphNodeRenameEdit(materialId, 2U), "P1.31 begin node rename");
+    context.ClearMaterialGraphNodeRenameEditText();
+    context.InsertMaterialGraphNodeRenameEditText("Committed Name");
+    static_cast<void>(context.SelectMaterialGraphNode(3U));
+    report.Check(!context.IsMaterialGraphNodeRenameEditing() && context.MaterialEditor().GraphNodeDisplayName(2U) == "Committed Name",
+        "P1.31 selection change commits rename into material history");
+}
+
 // Runs one suite in its own freshly-created scratch project (cwd-based bootstrap),
 // then restores the previous working directory.
 void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Report&)) {
@@ -2262,6 +2418,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_first_node_checkpoint", &RunMaterialGraphFirstNodeVisualCheckpointSuite);
     RunSuiteInScratch(report, "material_graph_visual_redesign", &RunMaterialGraphVisualRedesignSuite);
     RunSuiteInScratch(report, "material_graph_canvas_clip", &RunMaterialGraphCanvasClipSuite);
+    RunSuiteInScratch(report, "material_graph_interaction_lifecycle", &RunMaterialGraphInteractionLifecycleSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);

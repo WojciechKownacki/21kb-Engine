@@ -4,6 +4,7 @@
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -160,6 +161,7 @@ struct RenderSceneSubmitDesc {
     std::optional<ScenePostProcessSettings> postProcessSettings{};
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};
+    RenderMaterialGraphBuildContext materialGraphContext{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};

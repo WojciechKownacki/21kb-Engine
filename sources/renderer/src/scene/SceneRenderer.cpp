@@ -306,6 +306,9 @@ void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
 }
 
 void SceneRenderer::TickFrame() noexcept {
+    if (meshSubmitter_ != nullptr) {
+        meshSubmitter_->EndFrame(frameTimeIndex_);
+    }
     resources_.TickFrame();
     resourceMap_.PruneInvalidBindings(resources_);
 }

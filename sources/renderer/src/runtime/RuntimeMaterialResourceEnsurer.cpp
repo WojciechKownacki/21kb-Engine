@@ -177,6 +177,7 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         EmitRuntimeMaterialResolverDiagnostics(context, resolvedAsset, materialAssetId);
 
         if (resolvedAsset.status == RuntimeMaterialResolveStatus::ErrorMaterial &&
+            resolvedAsset.failurePolicy == RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial &&
             cacheIt != materials.end() &&
             cacheIt->second.status != RuntimeMaterialResolveStatus::ErrorMaterial &&
             context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {

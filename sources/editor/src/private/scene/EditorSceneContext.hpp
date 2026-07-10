@@ -298,6 +298,7 @@ public:
     [[nodiscard]] bool IsMaterialGraphCommentSelected(std::uint32_t commentId) const noexcept;
     [[nodiscard]] bool SelectMaterialGraphComment(std::uint32_t commentId);
     [[nodiscard]] bool ClearMaterialGraphCommentSelection();
+    [[nodiscard]] bool SelectMaterialGraphContextTarget(std::uint32_t nodeId, std::uint32_t commentId);
     void FocusMaterialGraph(bool focused) noexcept;
     [[nodiscard]] bool IsMaterialGraphFocused() const noexcept;
     [[nodiscard]] float MaterialGraphZoom() const noexcept;
@@ -337,6 +338,7 @@ public:
     [[nodiscard]] bool BeginMaterialGraphCommentDrag(kb::assets::AssetId assetId, std::uint32_t commentId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphComment(int x, int y);
     [[nodiscard]] bool EndMaterialGraphCommentDrag();
+    [[nodiscard]] bool CancelMaterialGraphCommentDrag();
     [[nodiscard]] bool IsMaterialGraphCommentDragging() const noexcept;
     [[nodiscard]] bool BeginMaterialGraphBoxSelection(kb::assets::AssetId assetId, int x, int y, bool additive) noexcept;
     [[nodiscard]] bool DragMaterialGraphBoxSelection(int x, int y) noexcept;
@@ -361,6 +363,7 @@ public:
         int graphY);
     [[nodiscard]] bool AddMaterialGraphComment(kb::assets::AssetId id, int graphX, int graphY);
     [[nodiscard]] bool AddMaterialGraphComposite(kb::assets::AssetId id, int graphX, int graphY);
+    [[nodiscard]] bool ExpandMaterialGraphComposite(kb::assets::AssetId id, std::uint32_t compositeId);
     [[nodiscard]] bool DeleteSelectedMaterialGraphNode(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteSelectedMaterialGraphComment(kb::assets::AssetId id);
     [[nodiscard]] bool DisconnectSelectedMaterialGraphNodeLinks(kb::assets::AssetId id);
@@ -411,6 +414,8 @@ public:
         int x,
         int y);
     [[nodiscard]] bool CancelMaterialGraphPinConnection();
+    [[nodiscard]] bool CancelMaterialGraphInteractions();
+    void ResetMaterialGraphTransientState();
     [[nodiscard]] bool HasMaterialGraphPinConnection() const noexcept;
     [[nodiscard]] kb::assets::AssetId MaterialGraphPinConnectionAssetId() const noexcept;
     [[nodiscard]] std::uint32_t MaterialGraphPinConnectionNodeId() const noexcept;
@@ -717,6 +722,7 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialGraphCommentDragStartDocument_;
     std::uint32_t materialGraphCommentDragStartSelectedNodeId_ = 0U;
     std::vector<std::uint32_t> materialGraphCommentDragStartSelectedNodeIds_;
+    std::vector<std::uint32_t> materialGraphCommentDragMemberNodeIds_;
     std::uint32_t materialGraphCommentDragStartSelectedCommentId_ = 0U;
     bool materialGraphCommentDragChanged_ = false;
     bool materialGraphCommentDragging_ = false;

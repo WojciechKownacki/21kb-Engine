@@ -17,6 +17,7 @@ struct MaterialProgramKey {
     std::uint64_t variantKey = 0U;
     std::string pass;
     std::uint32_t backend = 0U;
+    std::uint64_t binaryRevision = 0U;
     std::uint64_t pipelineStateKey = 0U;
     bool requiresGeneratedVertexShader = false;
     bool graphProgram = false;

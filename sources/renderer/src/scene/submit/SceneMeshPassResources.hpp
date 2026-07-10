@@ -11,6 +11,7 @@
 #include <array>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::render {
 
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
+    void EndFrame(std::uint64_t frameIndex) const;
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept;
@@ -70,6 +72,10 @@ private:
 
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
+    mutable std::vector<MaterialProgramKey> residentProgramKeys_;
+    mutable std::vector<MaterialProgramKey> usedProgramKeys_;
+    mutable std::vector<std::string> usedGraphSamplerUniforms_;
+    mutable std::vector<std::string> usedGraphUniforms_;
     mutable SceneMeshProgramBindStats programBindStats_{};
     mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
     mutable SceneMeshPassProgramResolution lastProgramResolution_{};

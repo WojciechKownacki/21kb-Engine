@@ -363,9 +363,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 MaterialEditorPanelRenderer::GraphTexturePickerHit(*materialEditorContent, sceneContext_, x, y);
             const auto acceptTexturePickerSelection = [&]() {
                 const kb::assets::AssetId textureId = sceneContext_.MaterialGraphTexturePickerSelectedAssetId();
-                if (!textureId.IsValid()) {
-                    return;
-                }
                 static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(
                     sceneContext_.MaterialGraphTexturePickerAssetId(),
                     sceneContext_.MaterialGraphTexturePickerNodeId(),
@@ -381,6 +378,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 } else {
                     static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected(pickerHit.assetId));
                 }
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::Clear:
+                static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected({}));
                 break;
             case MaterialEditorGraphTexturePickerHitKind::Accept:
                 acceptTexturePickerSelection();
@@ -449,6 +449,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (hadPendingPinConnection) {
                 static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
             }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
         if (command != MaterialEditorPanelCommand::None) {
@@ -458,6 +460,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
 
         const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        const MaterialEditorOpaqueOverlayHit opaqueOverlay =
+            MaterialEditorPanelRenderer::OpaqueOverlayAt(*materialEditorContent, sceneContext_, x, y);
+        if (opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::None &&
+            opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::Details) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
             sceneContext_.AssetBrowser().ClearSelection();
             sceneContext_.FocusMaterialGraph(true);

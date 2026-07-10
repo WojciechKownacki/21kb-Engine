@@ -81,6 +81,52 @@ template <typename T>
     return false;
 }
 
+[[nodiscard]] bool ParseColorSpace(std::string_view text, RenderTextureAssetColorSpace& colorSpace) noexcept {
+    text = Trim(text);
+    if (text == "unknown" || text == "Unknown") {
+        colorSpace = RenderTextureAssetColorSpace::Unknown;
+        return true;
+    }
+    if (text == "linear" || text == "Linear") {
+        colorSpace = RenderTextureAssetColorSpace::Linear;
+        return true;
+    }
+    if (text == "srgb" || text == "sRGB" || text == "Srgb") {
+        colorSpace = RenderTextureAssetColorSpace::Srgb;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseSemantic(std::string_view text, RenderTextureAssetSemantic& semantic) noexcept {
+    text = Trim(text);
+    if (text == "unknown" || text == "Unknown") {
+        semantic = RenderTextureAssetSemantic::Unknown;
+        return true;
+    }
+    if (text == "baseColor" || text == "BaseColor") {
+        semantic = RenderTextureAssetSemantic::BaseColor;
+        return true;
+    }
+    if (text == "normal" || text == "Normal") {
+        semantic = RenderTextureAssetSemantic::Normal;
+        return true;
+    }
+    if (text == "metallicRoughness" || text == "MetallicRoughness") {
+        semantic = RenderTextureAssetSemantic::MetallicRoughness;
+        return true;
+    }
+    if (text == "occlusion" || text == "Occlusion") {
+        semantic = RenderTextureAssetSemantic::Occlusion;
+        return true;
+    }
+    if (text == "emissive" || text == "Emissive") {
+        semantic = RenderTextureAssetSemantic::Emissive;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool ParseRgba8(std::string_view rest, std::uint8_t (&rgba)[4]) {
     std::istringstream stream{ std::string{ rest } };
     std::string r;
@@ -294,7 +340,7 @@ template <typename T>
 
 } // namespace
 
-RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace colorSpace) const noexcept {
+RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace runtimeColorSpace) const noexcept {
     return RenderTextureDesc{
         .width = width,
         .height = height,
@@ -303,9 +349,9 @@ RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, R
         .mipCount = mipCount,
         .dimension = dimension,
         .format = bgfx::TextureFormat::RGBA8,
-        .flags = BGFX_SAMPLER_NONE | (colorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
+        .flags = BGFX_SAMPLER_NONE | (runtimeColorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
         .memory = memory,
-        .colorSpace = colorSpace,
+        .colorSpace = runtimeColorSpace,
     };
 }
 
@@ -378,6 +424,14 @@ std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(std:
             }
         } else if (keyword == "layers") {
             if (!ParseUnsigned(rest, asset.layers) || asset.layers == 0U) {
+                return std::nullopt;
+            }
+        } else if (keyword == "colorSpace") {
+            if (!ParseColorSpace(rest, asset.colorSpace)) {
+                return std::nullopt;
+            }
+        } else if (keyword == "semantic") {
+            if (!ParseSemantic(rest, asset.semantic)) {
                 return std::nullopt;
             }
         } else if (keyword == "rgba8") {

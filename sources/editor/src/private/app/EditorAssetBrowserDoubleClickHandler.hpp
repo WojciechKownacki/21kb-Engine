@@ -32,7 +32,7 @@ public:
         const kb::assets::AssetMetadata& metadata,
         EditorAssetBrowserState& state,
         kb::assets::AssetManager& manager) {
-        return (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance") && state.SelectAsset(metadata.id, manager)
+        return (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" || metadata.type == "RenderMaterialGraph") && state.SelectAsset(metadata.id, manager)
             ? EditorAssetBrowserDoubleClickResult::MaterialEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }

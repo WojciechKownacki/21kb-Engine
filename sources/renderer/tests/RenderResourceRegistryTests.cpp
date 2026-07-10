@@ -99,6 +99,22 @@ void RunRenderTextureTextAssetPreservesDimensionTest() {
     invalidVolumeDesc.format = bgfx::TextureFormat::RGBA8;
     Require(!RenderTextureResourceBuilder::IsValidDesc(invalidVolumeDesc),
         "Texture resource builder must reject a depth-1 Texture3D descriptor");
+
+    std::istringstream declaredMetadata{
+        "dimension 2d\nsize 1 1\nsemantic normal\ncolorSpace linear\nrgba8 128 128 255 255\n"
+    };
+    const std::optional<RenderTextureAssetData> declared = RenderTextureAssetLoader::LoadTexture(declaredMetadata);
+    Require(declared.has_value() &&
+            declared->semantic == RenderTextureAssetSemantic::Normal &&
+            declared->colorSpace == RenderTextureAssetColorSpace::Linear,
+        "P1.35: Texture loader did not preserve authoritative semantic/color-space metadata");
+
+    std::istringstream legacyMetadata{ "size 1 1\nrgba8 255 255 255 255\n" };
+    const std::optional<RenderTextureAssetData> legacy = RenderTextureAssetLoader::LoadTexture(legacyMetadata);
+    Require(legacy.has_value() &&
+            legacy->semantic == RenderTextureAssetSemantic::Unknown &&
+            legacy->colorSpace == RenderTextureAssetColorSpace::Unknown,
+        "P1.35: Legacy texture assets must load compatibly with explicit Unknown authoring metadata");
 }
 
 void RunMaterialHandlesAreGenerationalTest() {
@@ -1998,7 +2014,7 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "layerWeight 1\n"
         "decalBlendMode DISABLED\n"
         "layerBlendMode REPLACE\n"
-        "graphVersion 2\n"
+        "graphVersion 3\n"
         "graphMaterialDomain surface\n"
         "graphShadingModel defaultLit\n"
         "graphBlendMode opaque\n"

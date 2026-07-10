@@ -1378,8 +1378,17 @@ void RunMaterialNodePreviewBuilderTest() {
         },
         kb::render::RenderMaterialGraphNode{
             .id = 3U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::Multiply,
+        },
+        kb::render::RenderMaterialGraphNode{
+            .id = 6U,
             .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
             .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+        },
+        kb::render::RenderMaterialGraphNode{
+            .id = 7U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" },
         },
     };
     material.graph.links.push_back(MakeInspectorMaterialGraphLink(
@@ -1389,12 +1398,23 @@ void RunMaterialNodePreviewBuilderTest() {
         kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
         1U,
         "baseColor"));
+    material.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor, 6U, "rgba",
+        kb::render::RenderMaterialGraphNodeKind::Multiply, 3U, "a"));
+    material.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor, 7U, "rgba",
+        kb::render::RenderMaterialGraphNodeKind::Multiply, 3U, "b"));
 
     const std::optional<kb::render::RenderMaterialAssetData> preview =
         kb::editor::EditorMaterialNodePreviewBuilder::Build(material, 3U);
     kb::editor::tests::Require(preview.has_value(), "KBMAT-PREVIEW-0004: Per-node preview should build a temporary graph-backed material");
-    kb::editor::tests::Require(preview->graph.links.size() == 1U && preview->graph.links.front().fromNodeId == 3U && preview->graph.links.front().toPin == "baseColor",
-        "KBMAT-PREVIEW-0004: Per-node preview should route the selected node to MaterialOutput.baseColor");
+    kb::editor::tests::Require(preview->graph.nodes.size() == 4U && preview->graph.links.size() == 3U &&
+            std::ranges::none_of(preview->graph.nodes, [](const kb::render::RenderMaterialGraphNode& node) { return node.id == 2U; }) &&
+            std::ranges::any_of(preview->graph.links, [](const kb::render::RenderMaterialGraphLink& link) {
+                return link.fromNodeId == 3U && link.toPin == "baseColor";
+            }) &&
+            preview->graph.shadingModel == "unlit" && preview->graph.blendMode == "opaque",
+        "P1.13: Per-node preview must contain only the selected node dependency closure and an isolated MaterialOutput");
 
     kb::assets::AssetMetadata metadata{
         .id = kb::assets::AssetId{ 0x51515151U },
@@ -1786,6 +1806,11 @@ void RunMaterialEditorDetailsCanonicalLayoutTest() {
     verifyRows(instanceRows, "Material Instance");
 }
 
+void RunMaterialEditorOpaqueOverlayAndTexturePickerLayoutTest() {
+    // Production-context coverage lives in EditorSelfTest; kb_editor_tests deliberately
+    // does not link EditorSceneContext/MaterialEditorPanelRenderer.cpp.
+}
+
 void RunMaterialEditorParserDiagnosticRowsTest() {
     std::istringstream input{
         "version 1\n"
@@ -1920,7 +1945,9 @@ void RunMaterialEditorGraphNodeRenameTest() {
         before,
         after,
         std::vector<std::uint32_t>{ 2U },
-        std::vector<std::uint32_t>{ 2U })),
+        std::vector<std::uint32_t>{ 2U },
+        2U,
+        2U)),
         "KBMAT-RENAME-0001: Material graph node rename should be recorded through the editor command stack");
     materialEditor.CancelGraphNodeRenameEdit();
     kb::editor::tests::Require(materialEditor.GraphNodeDisplayName(2U) == "Albedo Tint" && materialEditor.Dirty(),
@@ -1968,6 +1995,7 @@ void RunEditorInspectorTests() {
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();
     RunMaterialEditorDetailsCanonicalLayoutTest();
+    RunMaterialEditorOpaqueOverlayAndTexturePickerLayoutTest();
     RunMaterialEditorParserDiagnosticRowsTest();
     RunMaterialEditorGraphDiagnosticsRefreshTest();
     RunMaterialEditorGraphNodeRenameTest();

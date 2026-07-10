@@ -55,6 +55,8 @@ namespace {
 constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
 constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
 
+[[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept;
+
 [[nodiscard]] MaterialProgramKey BuiltinMeshProgramKey(std::string pass) {
     return MaterialProgramKey{
         .materialTypeId = kBuiltinMeshMaterialTypeId,
@@ -67,6 +69,44 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
         .requiresGeneratedVertexShader = false,
         .graphProgram = false,
     };
+}
+
+[[nodiscard]] std::uint64_t GraphBinaryRevision(
+    std::string_view cacheRoot,
+    std::uint64_t sourceHash,
+    std::uint64_t variantKey,
+    std::string_view pass,
+    std::uint32_t backend) {
+    if (cacheRoot.empty()) {
+        return 0U;
+    }
+    const std::filesystem::path root = std::filesystem::path{ cacheRoot } /
+        ("graph_" + std::to_string(sourceHash)) /
+        ("variant_" + std::to_string(variantKey)) /
+        pass /
+        GraphBackendDirectoryForKey(backend);
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char* name : { "fs.bin.hash", "vs.bin.hash" }) {
+        std::ifstream input{ root / name, std::ios::binary };
+        if (!input) {
+            continue;
+        }
+        char ch = 0;
+        while (input.get(ch)) {
+            hash ^= static_cast<unsigned char>(ch);
+            hash *= 1099511628211ULL;
+        }
+        hash ^= 0xffU;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+template <typename T>
+void AppendUniqueValue(std::vector<T>& values, const T& value) {
+    if (std::ranges::find(values, value) == values.end()) {
+        values.push_back(value);
+    }
 }
 
 [[nodiscard]] bgfx::ProgramHandle LoadBuiltinMeshProgram(const MaterialProgramKey& key) {
@@ -374,6 +414,10 @@ void SceneMeshPassResources::Shutdown() {
         }
     }
     graphUniforms_.clear();
+    residentProgramKeys_.clear();
+    usedProgramKeys_.clear();
+    usedGraphSamplerUniforms_.clear();
+    usedGraphUniforms_.clear();
     programRegistry_.Shutdown();
     meshProgram_ = BGFX_INVALID_HANDLE;
     gbufferProgram_ = BGFX_INVALID_HANDLE;
@@ -486,6 +530,40 @@ void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
     lastProgramResolution_ = SceneMeshPassProgramResolution{};
 }
 
+void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
+    for (const MaterialProgramKey& resident : residentProgramKeys_) {
+        if (std::ranges::find(usedProgramKeys_, resident) == usedProgramKeys_.end()) {
+            programRegistry_.Release(resident);
+        }
+    }
+    residentProgramKeys_ = usedProgramKeys_;
+    usedProgramKeys_.clear();
+    programRegistry_.BeginFrame(frameIndex);
+
+    for (auto it = graphUniforms_.begin(); it != graphUniforms_.end();) {
+        if (std::ranges::find(usedGraphUniforms_, it->first) == usedGraphUniforms_.end()) {
+            if (bgfx::isValid(it->second)) {
+                bgfx::destroy(it->second);
+            }
+            it = graphUniforms_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = graphSamplerUniforms_.begin(); it != graphSamplerUniforms_.end();) {
+        if (std::ranges::find(usedGraphSamplerUniforms_, it->first) == usedGraphSamplerUniforms_.end()) {
+            if (bgfx::isValid(it->second)) {
+                bgfx::destroy(it->second);
+            }
+            it = graphSamplerUniforms_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    usedGraphUniforms_.clear();
+    usedGraphSamplerUniforms_.clear();
+}
+
 SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept {
     SceneMeshPassProgramResolution resolution{};
     if (IsSelectionPass(pass)) {
@@ -506,6 +584,12 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                 .variantKey = material->graphProgram.variantKey,
                 .pass = GraphMeshPassName(pass),
                 .backend = static_cast<std::uint32_t>(bgfx::getRendererType()),
+                .binaryRevision = GraphBinaryRevision(
+                    graphShaderCacheRoot_,
+                    material->graphProgram.graphSourceHash,
+                    material->graphProgram.variantKey,
+                    GraphMeshPassName(pass),
+                    static_cast<std::uint32_t>(bgfx::getRendererType())),
                 .pipelineStateKey = material->graphProgram.pipelineStateKey,
                 .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
                 .graphProgram = true,
@@ -518,6 +602,8 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                 graphHandle = programRegistry_.Acquire(key);
             }
             if (bgfx::isValid(graphHandle)) {
+                AppendUniqueValue(usedProgramKeys_, key);
+                AppendUniqueValue(residentProgramKeys_, key);
                 resolution.program = graphHandle;
                 resolution.graphProgram = true;
                 resolution.status = SceneRenderMaterialProgramStatus::GraphReady;
@@ -619,6 +705,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             }
 
             bgfx::UniformHandle& uniform = graphUniforms_[graphUniform.name];
+            AppendUniqueValue(usedGraphUniforms_, graphUniform.name);
             if (!bgfx::isValid(uniform)) {
                 uniform = bgfx::createUniform(graphUniform.name.c_str(), bgfx::UniformType::Vec4);
             }
@@ -665,6 +752,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             }
 
             bgfx::UniformHandle& sampler = graphSamplerUniforms_[graphTexture.samplerName];
+            AppendUniqueValue(usedGraphSamplerUniforms_, graphTexture.samplerName);
             if (!bgfx::isValid(sampler)) {
                 sampler = bgfx::createUniform(graphTexture.samplerName.c_str(), bgfx::UniformType::Sampler);
             }
@@ -673,6 +761,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
 
         if (material->graphProgram.usesSceneColor && bgfx::isValid(desc.sceneColorTexture)) {
             bgfx::UniformHandle& colorSampler = graphSamplerUniforms_["s_kbSceneColor"];
+            AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneColor" });
             if (!bgfx::isValid(colorSampler)) {
                 colorSampler = bgfx::createUniform("s_kbSceneColor", bgfx::UniformType::Sampler);
             }
@@ -683,6 +772,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         // SceneDepth / DepthFade read real geometry depth in the transparent pass.
         if (material->graphProgram.usesSceneDepth && bgfx::isValid(desc.sceneDepthTexture)) {
             bgfx::UniformHandle& depthSampler = graphSamplerUniforms_["s_kbSceneDepth"];
+            AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneDepth" });
             if (!bgfx::isValid(depthSampler)) {
                 depthSampler = bgfx::createUniform("s_kbSceneDepth", bgfx::UniformType::Sampler);
             }

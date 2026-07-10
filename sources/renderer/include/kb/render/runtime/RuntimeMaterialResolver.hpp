@@ -91,6 +91,7 @@ struct ResolvedRuntimeMaterialAsset {
     RuntimeMaterialResolveStatus status = RuntimeMaterialResolveStatus::Resolved;
     RuntimeMaterialRenderMode renderMode = RuntimeMaterialRenderMode::BuiltinPbr;
     RuntimeMaterialCpuFallbackReason cpuFallbackReason = RuntimeMaterialCpuFallbackReason::None;
+    RenderMaterialGraphArtifactFailurePolicy failurePolicy = RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial;
     bool resolved = false;
 };
 

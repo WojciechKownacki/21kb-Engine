@@ -122,6 +122,9 @@ void RunMaterialProgramRegistryFullIdentityKeyTest() {
     MaterialProgramKey changedBackend = base;
     changedBackend.backend = 0x8000'0002U;
     distinctKeys.push_back(changedBackend);
+    MaterialProgramKey changedBinaryRevision = base;
+    changedBinaryRevision.binaryRevision = 0xB1A4'0000'0000'0001ULL;
+    distinctKeys.push_back(changedBinaryRevision);
     MaterialProgramKey changedPipeline = base;
     changedPipeline.pipelineStateKey ^= 0xBBBB'0000'0000'0000ULL;
     distinctKeys.push_back(changedPipeline);

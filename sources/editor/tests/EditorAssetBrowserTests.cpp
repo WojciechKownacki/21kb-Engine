@@ -630,12 +630,14 @@ void RunMaterialContextMenuCommandTest() {
     kb::editor::tests::Require(graph != nullptr && type != nullptr, "Asset browser material command test did not register graph/type assets");
     kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, graph->id, manager), "Asset browser should open a Material Graph context menu");
     const std::vector<kb::editor::EditorAssetContextMenuItem> graphItems = state.ContextMenuItems(manager);
-    kb::editor::tests::Require(!graphItems.empty() && graphItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialFromGraph,
-        "Material Graph context menu should expose Create Material From Graph first");
-    kb::editor::tests::Require(std::ranges::none_of(graphItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+    kb::editor::tests::Require(graphItems.size() >= 2U &&
+            graphItems[0].command == kb::editor::EditorAssetContextCommand::Open &&
+            graphItems[1].command == kb::editor::EditorAssetContextCommand::CreateMaterialFromGraph,
+        "P1.9: Material Graph context menu should expose Open and Create Material From Graph");
+    kb::editor::tests::Require(std::ranges::any_of(graphItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
             return item.command == kb::editor::EditorAssetContextCommand::Open;
         }),
-        "Material Graph context menu should not expose Material Editor Open");
+        "P1.9: Material Graph context menu should expose Material Editor Open");
     kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, type->id, manager), "Asset browser should open a Material Type context menu");
     const std::vector<kb::editor::EditorAssetContextMenuItem> typeItems = state.ContextMenuItems(manager);
     kb::editor::tests::Require(!typeItems.empty() && typeItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialFromMaterialType,

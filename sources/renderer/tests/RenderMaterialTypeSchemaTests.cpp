@@ -1423,7 +1423,7 @@ void RunMaterialGraphRoundTripTest() {
 
     std::ostringstream output;
     RenderMaterialAssetWriter::Write(output, original);
-    Require(output.str().find("graphVersion 2\n") != std::string::npos, "Material writer did not emit graph version");
+    Require(output.str().find("graphVersion " + std::to_string(kRenderMaterialGraphDocumentVersion) + "\n") != std::string::npos, "Material writer did not emit graph version");
     Require(output.str().find("graphMaterialDomain surface\n") != std::string::npos, "Material writer did not emit graph material domain");
     Require(output.str().find("graphShadingModel defaultLit\n") != std::string::npos, "Material writer did not emit graph shading model");
     Require(output.str().find("graphStorageModel inline-kbmat\n") != std::string::npos, "Material writer did not emit inline graph storage model");
@@ -1525,7 +1525,8 @@ void RunMaterialGraphSchemaMigrationGoldenTest() {
     std::ostringstream canonicalOutput;
     RenderMaterialAssetWriter::Write(canonicalOutput, asset);
     const std::string canonical = canonicalOutput.str();
-    Require(canonical.find("graphVersion 2\n") != std::string::npos, "MAT-70: canonical writer should emit the current graph schema version");
+    Require(canonical.find("graphVersion " + std::to_string(kRenderMaterialGraphDocumentVersion) + "\n") != std::string::npos,
+        "MAT-70: canonical writer should emit the current graph schema version");
     Require(canonical.find("graphShadingModel defaultLit\n") != std::string::npos, "MAT-70: canonical writer should emit the canonical shading model token");
     Require(canonical.find("graphShadingModel lit\n") == std::string::npos, "MAT-70: canonical writer should not preserve deprecated shading tokens");
     Require(canonical.find("graphNode 2 ConstantColor 120 80\n") != std::string::npos, "MAT-70: canonical writer should preserve migrated node data");
@@ -6089,9 +6090,209 @@ void RunMaterialGraphProductionNodeCompileTest() {
         "KBMAT-MAT03: Production Multiply node must emit a GPU multiply expression");
 }
 
+void RunP1DynamicParameterDefaultsReachRuntimeBindingTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "rough", .defaultValueHint = "0.375" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterVector,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "normal", .defaultValueHint = "0.1 0.2 0.9" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .defaultValueHint = "0.2 0.4 0.6 0.8" },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x106U });
+    Require(compiled.Succeeded() && compiled.shader.reflection.uniforms.size() == 3U,
+        "P1.6: dynamic parameter graph must compile with three reflected uniforms");
+    const RenderMaterialGraphProgramBindingResult binding = BuildRenderMaterialGraphProgramBinding(0x106U, 1U, compiled.shader, {});
+    const auto findUniform = [&binding](std::string_view stableId) -> const RenderMaterialGraphUniformBinding* {
+        const auto found = std::ranges::find_if(binding.binding.uniforms, [stableId](const RenderMaterialGraphUniformBinding& value) {
+            return value.stableId == stableId;
+        });
+        return found == binding.binding.uniforms.end() ? nullptr : &*found;
+    };
+    const RenderMaterialGraphUniformBinding* rough = findUniform("rough");
+    const RenderMaterialGraphUniformBinding* normal = findUniform("normal");
+    const RenderMaterialGraphUniformBinding* tint = findUniform("tint");
+    Require(rough != nullptr && NearlyEqual(rough->value[0], 0.375F),
+        "P1.6: scalar defaultValueHint must reach runtime binding when no override exists");
+    Require(normal != nullptr && NearlyEqual(normal->value[0], 0.1F) && NearlyEqual(normal->value[2], 0.9F),
+        "P1.6: vector defaultValueHint must reach runtime binding when no override exists");
+    Require(tint != nullptr && NearlyEqual(tint->value[0], 0.2F) && NearlyEqual(tint->value[3], 0.8F),
+        "P1.6: color defaultValueHint must reach runtime binding when no override exists");
+}
+
+void RunP1SamplerStateRoundTripAndLegacyDefaultTest() {
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode texture{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "surface",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+        },
+    };
+    texture.parameter.samplerState = RenderMaterialGraphSamplerState{
+        .minFilter = RenderMaterialGraphSamplerFilter::Point,
+        .magFilter = RenderMaterialGraphSamplerFilter::Point,
+        .mipFilter = RenderMaterialGraphSamplerFilter::Linear,
+        .wrapU = RenderMaterialGraphSamplerWrap::Clamp,
+        .wrapV = RenderMaterialGraphSamplerWrap::Mirror,
+    };
+    material.graph.nodes.push_back(texture);
+    material.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 2U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    std::ostringstream output;
+    RenderMaterialAssetWriter::Write(output, material);
+    Require(output.str().find("graphSamplerState 2 Point Point Linear Clamp Mirror\n") != std::string::npos,
+        "P1.7: writer must serialize every sampler-state field");
+    std::istringstream roundTripInput{ output.str() };
+    const RenderMaterialAssetParseResult roundTrip = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(roundTripInput);
+    const RenderMaterialGraphNode* parsed = roundTrip.asset.has_value() ? FindRenderMaterialGraphNode(roundTrip.asset->graph, 2U) : nullptr;
+    Require(roundTrip.Succeeded() && parsed != nullptr && parsed->parameter.samplerState == texture.parameter.samplerState,
+        "P1.7: Save/Reload must preserve Point/Clamp/Mirror sampler state semantically");
+
+    std::string legacy = output.str();
+    const std::string currentVersion = "graphVersion " + std::to_string(kRenderMaterialGraphDocumentVersion);
+    legacy.replace(legacy.find(currentVersion), currentVersion.size(), "graphVersion 2");
+    for (std::size_t line = legacy.find("graphSamplerState "); line != std::string::npos; line = legacy.find("graphSamplerState ")) {
+        legacy.erase(line, legacy.find('\n', line) - line + 1U);
+    }
+    std::istringstream legacyInput{ legacy };
+    const RenderMaterialAssetParseResult legacyResult = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(legacyInput);
+    const RenderMaterialGraphNode* legacyTexture = legacyResult.asset.has_value() ? FindRenderMaterialGraphNode(legacyResult.asset->graph, 2U) : nullptr;
+    Require(legacyResult.asset.has_value() && legacyTexture != nullptr &&
+            legacyTexture->parameter.samplerState == RenderMaterialGraphSamplerState{},
+        "P1.7: legacy graph assets without sampler records must migrate to Linear+Repeat defaults");
+}
+
+void RunP1MaterialTypeTextureSlotRefreshPreservesAssignmentsTest() {
+    RenderMaterialAssetData material{};
+    material.materialType = "old.type";
+    material.materialTypeVersion = 1U;
+    material.graphParameterValues = {
+        RenderMaterialGraphParameterValue{ .stableId = "albedo", .type = RenderMaterialParameterType::Texture, .assetId = 0xA1BED0U },
+        RenderMaterialGraphParameterValue{ .stableId = "obsolete", .type = RenderMaterialParameterType::Scalar, .numbers = { 1.0F } },
+    };
+    RenderMaterialTypeDocument type{};
+    type.stableTypeId = "new.type";
+    type.version = 2U;
+    type.schema.textureSlots.push_back(RenderMaterialTextureSlotSchema{ .name = "albedo", .role = "baseColor" });
+    const RenderMaterialSchemaRefreshResult refresh = RefreshRenderMaterialGraphBackedMaterialSchema(material, type);
+    Require(refresh.material.graphParameterValues.size() == 1U &&
+            refresh.material.graphParameterValues[0].stableId == "albedo" &&
+            refresh.material.graphParameterValues[0].type == RenderMaterialParameterType::Texture &&
+            refresh.material.graphParameterValues[0].assetId == 0xA1BED0U,
+        "P1.8: schema refresh must preserve valid texture-slot assignments and remove only truly unknown values");
+}
+
+void RunP1ProductionCompileUsesShadingPathValidationTest() {
+    for (const RenderMaterialGraphNodeKind kind : {
+             RenderMaterialGraphNodeKind::SceneColor,
+             RenderMaterialGraphNodeKind::SceneDepth,
+             RenderMaterialGraphNodeKind::DepthFade }) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind });
+        const std::string outputPin = RenderMaterialGraphNodeOutputPinNames(kind).front();
+        const std::string targetPin = kind == RenderMaterialGraphNodeKind::SceneColor ? "baseColor" : "roughness";
+        graph.links.push_back(MakeGraphLink(kind, 2U, outputPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, targetPin));
+        const RenderMaterialGraphCompileResult forward = CompileRenderMaterialGraphToShaderSource(
+            graph, RenderMaterialGraphBuildContext{ .assetId = 0x1100U + static_cast<std::uint64_t>(kind), .shadingPath = RenderMaterialGraphShadingPath::Forward });
+        const RenderMaterialGraphCompileResult deferred = CompileRenderMaterialGraphToShaderSource(
+            graph, RenderMaterialGraphBuildContext{ .assetId = 0x1200U + static_cast<std::uint64_t>(kind), .shadingPath = RenderMaterialGraphShadingPath::Deferred });
+        Require(forward.Succeeded(), "P1.10: forward production compile unexpectedly rejected a supported scene-input node");
+        Require(!deferred.Succeeded() && HasGraphDiagnostic(deferred.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+            "P1.10: deferred production compile must reject SceneColor/SceneDepth/DepthFade for opaque materials");
+    }
+}
+
+void RunP1GraphAndParameterCardinalityValidationTest() {
+    RenderMaterialGraphDocument duplicateOutput = MakeDefaultRenderMaterialGraphDocument();
+    duplicateOutput.nodes.push_back(RenderMaterialGraphNode{ .id = 99U, .kind = RenderMaterialGraphNodeKind::MaterialOutput });
+    Require(!CompileRenderMaterialGraphToShaderSource(duplicateOutput, {}).Succeeded(),
+        "P1.11: production compile must reject graphs with more than one MaterialOutput");
+
+    RenderMaterialGraphDocument multipleLinks = MakeDefaultRenderMaterialGraphDocument();
+    multipleLinks.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" } });
+    multipleLinks.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" } });
+    multipleLinks.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    multipleLinks.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    RenderMaterialGraphDocument reversedLinks = multipleLinks;
+    std::ranges::reverse(reversedLinks.links);
+    Require(!CompileRenderMaterialGraphToShaderSource(multipleLinks, {}).Succeeded() &&
+            !CompileRenderMaterialGraphToShaderSource(reversedLinks, {}).Succeeded(),
+        "P1.11: multiple incoming links must be rejected independently of file order");
+
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .defaultValueHint = "1 1 1 1" } });
+    material.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    material.graphParameterValues = {
+        RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color },
+        RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color },
+    };
+    Require(HasGraphDiagnostic(ValidateRenderMaterialAssetGraphDiagnostics(material), RenderMaterialGraphDiagnosticKind::DuplicateParameterStableId),
+        "P1.11: duplicate graphParameterValue stable ids must be rejected before binding");
+    material.graphParameterValues = { RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Scalar } };
+    Require(HasGraphDiagnostic(ValidateRenderMaterialAssetGraphDiagnostics(material), RenderMaterialGraphDiagnosticKind::TypeMismatch),
+        "P1.11: graphParameterValue declared type must match the graph parameter declaration");
+}
+
+void RunP1MpcDefaultsOverridesAndLifecycleTest() {
+    constexpr std::uint64_t collectionId = 0x1170U;
+    RenderMaterialParameterCollectionRuntimeStore store;
+    RenderMaterialParameterCollectionData collection{};
+    collection.parameters.push_back(RenderMaterialParameterCollectionParameter{
+        .stableId = "Exposure",
+        .type = RenderMaterialParameterCollectionValueType::Scalar,
+        .defaultValue = { 1.0F, 0.0F, 0.0F, 0.0F },
+    });
+    collection.parameters.push_back(RenderMaterialParameterCollectionParameter{
+        .stableId = "RemovedLater",
+        .type = RenderMaterialParameterCollectionValueType::Scalar,
+        .defaultValue = { 2.0F, 0.0F, 0.0F, 0.0F },
+    });
+    Require(store.LoadDefaults(collectionId, collection), "P1.17: initial defaults load must populate the collection");
+    Require(store.SetValue(collectionId, "Exposure", RenderMaterialParameterCollectionValueType::Scalar, { 4.0F, 0.0F, 0.0F, 0.0F }),
+        "P1.17: runtime override must be accepted");
+    static_cast<void>(store.LoadDefaults(collectionId, collection));
+    Require(store.Resolve(collectionId, "Exposure").has_value() && NearlyEqual(store.Resolve(collectionId, "Exposure")->value[0], 4.0F),
+        "P1.17: reloading defaults must not overwrite an active runtime override");
+
+    collection.parameters.erase(collection.parameters.begin() + 1);
+    Require(store.LoadDefaults(collectionId, collection) && !store.Resolve(collectionId, "RemovedLater").has_value(),
+        "P1.17: parameters removed from the collection schema must be pruned from runtime state");
+    Require(store.ClearOverride(collectionId, "Exposure") && NearlyEqual(store.Resolve(collectionId, "Exposure")->value[0], 1.0F),
+        "P1.17: clearing an override must reveal the current default value");
+    Require(store.UnloadCollection(collectionId) && !store.Resolve(collectionId, "Exposure").has_value(),
+        "P1.17: unloading a collection must remove both default and override lifecycle state");
+}
+
 } // namespace
 
 void RunRenderMaterialTypeSchemaTests() {
+    RunP1DynamicParameterDefaultsReachRuntimeBindingTest();
+    RunP1SamplerStateRoundTripAndLegacyDefaultTest();
+    RunP1MaterialTypeTextureSlotRefreshPreservesAssignmentsTest();
+    RunP1ProductionCompileUsesShadingPathValidationTest();
+    RunP1GraphAndParameterCardinalityValidationTest();
+    RunP1MpcDefaultsOverridesAndLifecycleTest();
     RunBuiltInPbrMaterialTypeSchemaExistsTest();
     RunBuiltInPbrMaterialTypeDocumentExistsTest();
     RunMaterialVersioningContractsTest();

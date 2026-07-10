@@ -57,6 +57,7 @@ struct EditorMaterialGraphCookPassResult {
 
 struct EditorMaterialGraphCookResult {
     kb::assets::AssetId materialAssetId{};
+    kb::render::RenderMaterialGraphVariantKey variantKey{};
     EditorMaterialGraphCookStatus status = EditorMaterialGraphCookStatus::Idle;
     std::uint64_t graphSourceHash = 0U;
     std::uint32_t materialTypeVersion = 1U;
@@ -81,6 +82,7 @@ struct EditorMaterialGraphCookConfig {
     std::string shadercPath;       // absolute path to bgfx shaderc; empty => CookUnavailable
     std::string varyingDefPath;    // varying.def.sc used by the mesh vertex shader
     std::vector<std::string> includeDirs; // graph shader include dirs (engine shaders + bgfx headers)
+    std::vector<std::string> dependencyFiles; // explicit custom/generated includes outside the wrapper include graph
     std::string cacheRoot;         // per-project graph shader cache root (shared with the renderer)
     std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + GBuffer + ShadowDepth + BaseTransparent
     std::uint32_t materialTypeVersion = 1U;
@@ -135,6 +137,10 @@ public:
 
     // Latest known result for an asset (Idle if never cooked).
     [[nodiscard]] EditorMaterialGraphCookResult LatestResult(kb::assets::AssetId assetId) const;
+    [[nodiscard]] EditorMaterialGraphCookResult LatestResult(const kb::render::RenderMaterialGraphVariantKey& variantKey) const;
+    [[nodiscard]] EditorMaterialGraphCookResult LatestResult(
+        kb::assets::AssetId assetId,
+        const kb::render::RenderMaterialGraphBuildContext& graphContext) const;
 
     // Block until no cook is pending or in flight (tests / save-before-build).
     void WaitForIdle();
@@ -156,9 +162,16 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wakeCv_;
     std::condition_variable idleCv_;
-    std::unordered_map<std::uint64_t, PendingEntry> pending_;
-    std::unordered_map<std::uint64_t, EditorMaterialGraphCookResult> latest_;
-    std::unordered_map<std::uint64_t, EditorMaterialGraphCookResult> lastGood_;
+    using VariantMap = std::unordered_map<
+        kb::render::RenderMaterialGraphVariantKey,
+        EditorMaterialGraphCookResult,
+        kb::render::RenderMaterialGraphVariantKeyHash>;
+    std::unordered_map<
+        kb::render::RenderMaterialGraphVariantKey,
+        PendingEntry,
+        kb::render::RenderMaterialGraphVariantKeyHash> pending_;
+    VariantMap latest_;
+    VariantMap lastGood_;
     std::vector<EditorMaterialGraphCookResult> completed_;
     std::uint64_t generationCounter_ = 0U;
     std::uint32_t inFlight_ = 0U;

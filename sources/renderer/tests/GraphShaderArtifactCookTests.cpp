@@ -487,6 +487,64 @@ void RunGraphShaderAutomaticIncludeInvalidationTest() {
             changed.artifact->artifactHash != first.artifact->artifactHash,
         "P0.7: editing a shared include must invalidate the binary and complete artifact identity without manual dependency registration");
 }
+
+void RunGraphShaderToolchainIdentityInvalidationTest() {
+    const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.15 0.35 0.75 1");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    const std::filesystem::path cacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "p13_toolchain_identity";
+    std::error_code error;
+    std::filesystem::remove_all(cacheRoot, error);
+    std::filesystem::create_directories(cacheRoot, error);
+
+    const std::filesystem::path shadercCopy = cacheRoot /
+        (std::filesystem::path{ KB_TEST_GRAPH_SHADERC_PATH }.extension().empty() ? "shaderc-copy" : "shaderc-copy.exe");
+    Require(std::filesystem::copy_file(
+                KB_TEST_GRAPH_SHADERC_PATH,
+                shadercCopy,
+                std::filesystem::copy_options::overwrite_existing,
+                error) && !error,
+        "P1.3: toolchain identity test could not copy shaderc");
+
+    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+    request.cacheRoot = cacheRoot.generic_string();
+    request.shadercPath = shadercCopy.generic_string();
+    const RenderMaterialGraphShaderArtifactResult first =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    Require(first.Succeeded() && first.artifact.has_value(),
+        "P1.3: initial cook with an explicit shaderc identity must succeed");
+
+    const RenderMaterialGraphShaderArtifactResult unchanged =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* unchangedBinary = unchanged.artifact.has_value()
+        ? unchanged.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(unchangedBinary != nullptr && unchangedBinary->cacheHit,
+        "P1.3: an unchanged shaderc and include search path must preserve the cache hit");
+
+    std::ranges::reverse(request.includeDirs);
+    const RenderMaterialGraphShaderArtifactResult reordered =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* reorderedBinary = reordered.artifact.has_value()
+        ? reordered.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(reordered.Succeeded() && reorderedBinary != nullptr && !reorderedBinary->cacheHit &&
+            reordered.artifact->dependencyHash != first.artifact->dependencyHash,
+        "P1.3: changing ordered include-directory resolution must force a recompile");
+
+    {
+        std::ofstream mutateTool{ shadercCopy, std::ios::binary | std::ios::app };
+        mutateTool.put('\0');
+    }
+    const RenderMaterialGraphShaderArtifactResult changedTool =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* changedToolBinary = changedTool.artifact.has_value()
+        ? changedTool.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(changedTool.Succeeded() && changedToolBinary != nullptr && !changedToolBinary->cacheHit &&
+            changedTool.artifact->dependencyHash != reordered.artifact->dependencyHash,
+        "P1.3: changing the shaderc binary identity must force a recompile");
+}
 #endif
 
 void RunGraphShaderManifestRoundTripTest() {
@@ -539,6 +597,7 @@ void RunGraphShaderArtifactCookTests() {
     RunGraphShaderCookShadercFailureTest();
     RunGraphShaderArtifactDependencyInvalidationTest();
     RunGraphShaderAutomaticIncludeInvalidationTest();
+    RunGraphShaderToolchainIdentityInvalidationTest();
 #endif
 }
 
