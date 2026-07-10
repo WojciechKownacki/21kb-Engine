@@ -407,6 +407,13 @@ void SceneMeshPassResources::Shutdown() {
         }
     }
     graphSamplerUniforms_.clear();
+    for (auto& [name, retired] : retiredGraphSamplerUniforms_) {
+        static_cast<void>(name);
+        if (bgfx::isValid(retired.handle)) {
+            bgfx::destroy(retired.handle);
+        }
+    }
+    retiredGraphSamplerUniforms_.clear();
     for (auto& [name, uniform] : graphUniforms_) {
         static_cast<void>(name);
         if (bgfx::isValid(uniform)) {
@@ -414,6 +421,13 @@ void SceneMeshPassResources::Shutdown() {
         }
     }
     graphUniforms_.clear();
+    for (auto& [name, retired] : retiredGraphUniforms_) {
+        static_cast<void>(name);
+        if (bgfx::isValid(retired.handle)) {
+            bgfx::destroy(retired.handle);
+        }
+    }
+    retiredGraphUniforms_.clear();
     residentProgramKeys_.clear();
     usedProgramKeys_.clear();
     usedGraphSamplerUniforms_.clear();
@@ -530,6 +544,29 @@ void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
     lastProgramResolution_ = SceneMeshPassProgramResolution{};
 }
 
+bgfx::UniformHandle& SceneMeshPassResources::AcquireGraphUniform(
+    std::string_view name,
+    bool sampler) const {
+    auto& active = sampler ? graphSamplerUniforms_ : graphUniforms_;
+    auto& retired = sampler ? retiredGraphSamplerUniforms_ : retiredGraphUniforms_;
+    const std::string key{ name };
+    const bgfx::UniformHandle invalid = BGFX_INVALID_HANDLE;
+    auto [activeIt, inserted] = active.try_emplace(key, invalid);
+    if (inserted) {
+        const auto retiredIt = retired.find(key);
+        if (retiredIt != retired.end()) {
+            activeIt->second = retiredIt->second.handle;
+            retired.erase(retiredIt);
+        }
+    }
+    if (!bgfx::isValid(activeIt->second)) {
+        activeIt->second = bgfx::createUniform(
+            key.c_str(),
+            sampler ? bgfx::UniformType::Sampler : bgfx::UniformType::Vec4);
+    }
+    return activeIt->second;
+}
+
 void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
     for (const MaterialProgramKey& resident : residentProgramKeys_) {
         if (std::ranges::find(usedProgramKeys_, resident) == usedProgramKeys_.end()) {
@@ -540,11 +577,32 @@ void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
     usedProgramKeys_.clear();
     programRegistry_.BeginFrame(frameIndex);
 
+    // bgfx's render thread can consume submitted uniform commands a couple of frames after the
+    // API thread built them. Destroying a graph-only uniform in the first frame where it is unused
+    // clears the renderer-side slot before those queued commands are read (for example when leaving
+    // Material Editor for Scene View). Match the program registry's two-frame retirement grace.
+    constexpr std::uint64_t uniformRetirementGraceFrames = 2U;
+    const auto destroyRetired = [frameIndex](auto& retired) {
+        for (auto it = retired.begin(); it != retired.end();) {
+            if (frameIndex >= it->second.destroyFrame) {
+                if (bgfx::isValid(it->second.handle)) {
+                    bgfx::destroy(it->second.handle);
+                }
+                it = retired.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    destroyRetired(retiredGraphUniforms_);
+    destroyRetired(retiredGraphSamplerUniforms_);
+
     for (auto it = graphUniforms_.begin(); it != graphUniforms_.end();) {
         if (std::ranges::find(usedGraphUniforms_, it->first) == usedGraphUniforms_.end()) {
-            if (bgfx::isValid(it->second)) {
-                bgfx::destroy(it->second);
-            }
+            retiredGraphUniforms_.insert_or_assign(it->first, RetiredGraphUniform{
+                .handle = it->second,
+                .destroyFrame = frameIndex + uniformRetirementGraceFrames,
+            });
             it = graphUniforms_.erase(it);
         } else {
             ++it;
@@ -552,9 +610,10 @@ void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
     }
     for (auto it = graphSamplerUniforms_.begin(); it != graphSamplerUniforms_.end();) {
         if (std::ranges::find(usedGraphSamplerUniforms_, it->first) == usedGraphSamplerUniforms_.end()) {
-            if (bgfx::isValid(it->second)) {
-                bgfx::destroy(it->second);
-            }
+            retiredGraphSamplerUniforms_.insert_or_assign(it->first, RetiredGraphUniform{
+                .handle = it->second,
+                .destroyFrame = frameIndex + uniformRetirementGraceFrames,
+            });
             it = graphSamplerUniforms_.erase(it);
         } else {
             ++it;
@@ -704,11 +763,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                 }
             }
 
-            bgfx::UniformHandle& uniform = graphUniforms_[graphUniform.name];
+            bgfx::UniformHandle& uniform = AcquireGraphUniform(graphUniform.name, false);
             AppendUniqueValue(usedGraphUniforms_, graphUniform.name);
-            if (!bgfx::isValid(uniform)) {
-                uniform = bgfx::createUniform(graphUniform.name.c_str(), bgfx::UniformType::Vec4);
-            }
             bgfx::setUniform(uniform, value.data());
         }
 
@@ -751,31 +807,22 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                 WriteRendererMaterialGraphDebugLog("gpu", row.str());
             }
 
-            bgfx::UniformHandle& sampler = graphSamplerUniforms_[graphTexture.samplerName];
+            bgfx::UniformHandle& sampler = AcquireGraphUniform(graphTexture.samplerName, true);
             AppendUniqueValue(usedGraphSamplerUniforms_, graphTexture.samplerName);
-            if (!bgfx::isValid(sampler)) {
-                sampler = bgfx::createUniform(graphTexture.samplerName.c_str(), bgfx::UniformType::Sampler);
-            }
             bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
         }
 
         if (material->graphProgram.usesSceneColor && bgfx::isValid(desc.sceneColorTexture)) {
-            bgfx::UniformHandle& colorSampler = graphSamplerUniforms_["s_kbSceneColor"];
+            bgfx::UniformHandle& colorSampler = AcquireGraphUniform("s_kbSceneColor", true);
             AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneColor" });
-            if (!bgfx::isValid(colorSampler)) {
-                colorSampler = bgfx::createUniform("s_kbSceneColor", bgfx::UniformType::Sampler);
-            }
             bgfx::setTexture(4U, colorSampler, desc.sceneColorTexture);
         }
 
         // MAT-80/#18b: bind the opaque scene depth at the reserved slot 5 for graphs that sample it, so
         // SceneDepth / DepthFade read real geometry depth in the transparent pass.
         if (material->graphProgram.usesSceneDepth && bgfx::isValid(desc.sceneDepthTexture)) {
-            bgfx::UniformHandle& depthSampler = graphSamplerUniforms_["s_kbSceneDepth"];
+            bgfx::UniformHandle& depthSampler = AcquireGraphUniform("s_kbSceneDepth", true);
             AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneDepth" });
-            if (!bgfx::isValid(depthSampler)) {
-                depthSampler = bgfx::createUniform("s_kbSceneDepth", bgfx::UniformType::Sampler);
-            }
             bgfx::setTexture(5U, depthSampler, desc.sceneDepthTexture);
         }
 

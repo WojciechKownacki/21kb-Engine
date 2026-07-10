@@ -11,6 +11,7 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
@@ -28,6 +29,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <sstream>
@@ -755,7 +757,7 @@ void RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest() {
     };
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(result.asset.has_value(), "KBMAT-UE-0014: Asset should still be parsed with unsupported advanced PBR fields");
-    Require(!result.Succeeded(), "KBMAT-UE-0014: Unsupported advanced PBR fields should keep warning diagnostics visible");
+    Require(result.Succeeded() && result.HasWarnings(), "KBMAT-UE-0014: Unsupported advanced PBR fields should keep the asset loadable and warning diagnostics visible");
     Require(result.diagnostics.size() == 2U, "KBMAT-UE-0014: Should report 2 unsupported advanced PBR field diagnostics");
     Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "KBMAT-UE-0014: First diagnostic should be UnsupportedAdvancedField");
     Require(result.diagnostics[0].field == "clearcoatFactor", "KBMAT-UE-0014: First diagnostic should be for clearcoatFactor");
@@ -1286,7 +1288,7 @@ void RunBuiltInPbrSchemaParserReportsTextureColorSpaceDiagnosticsTest() {
     };
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(result.asset.has_value(), "Asset should parse successfully with texture slots");
-    Require(!result.Succeeded(), "Should have warnings due to texture color space diagnostics");
+    Require(result.Succeeded() && result.HasWarnings(), "Texture color space warnings should keep the asset loadable");
 
     // Count TextureColorSpaceExpectation diagnostics
     std::size_t colorSpaceDiagnostics = 0;
@@ -1342,7 +1344,7 @@ void RunBuiltInPbrSchemaParserTextureColorSpaceDiagnosticsForPathFieldsTest() {
     };
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(result.asset.has_value(), "Asset should parse successfully with texture path fields");
-    Require(!result.Succeeded(), "Should have warnings due to texture color space diagnostics");
+    Require(result.Succeeded() && result.HasWarnings(), "Texture color space warnings should keep the asset loadable");
 
     std::size_t colorSpaceDiagnostics = 0;
     bool foundAlbedoPath = false;
@@ -1495,7 +1497,7 @@ void RunMaterialGraphSchemaMigrationGoldenTest() {
 
     const RenderMaterialAssetParseResult migrated = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(migrated.asset.has_value(), "MAT-70: v1 graph asset should remain loadable after migration");
-    Require(!migrated.Succeeded(), "MAT-70: migrated deprecated graph schema should keep a visible warning diagnostic");
+    Require(migrated.Succeeded() && migrated.HasWarnings(), "MAT-70: migrated deprecated graph schema should remain loadable with a visible warning diagnostic");
     const RenderMaterialAssetParseDiagnostic* migration = FindParseDiagnostic(migrated.diagnostics, RenderMaterialAssetParseDiagnosticCode::GraphMigration);
     Require(migration != nullptr, "MAT-70: v1 graph migration should emit a typed migration diagnostic");
     Require(migration->severity == RenderMaterialAssetParseDiagnosticSeverity::Warning, "MAT-70: graph migration diagnostic should be a warning");
@@ -1565,7 +1567,7 @@ void RunMaterialGraphStableLinkIdMigrationTest() {
     std::istringstream input{ text.str() };
     const RenderMaterialAssetParseResult migrated = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
     Require(migrated.asset.has_value(), "Material graph stable link id migration should keep the asset loadable");
-    Require(!migrated.Succeeded(), "Material graph stable link id migration should keep a visible warning diagnostic");
+    Require(migrated.Succeeded() && migrated.HasWarnings(), "Material graph stable link id migration should remain loadable with a visible warning diagnostic");
     const RenderMaterialAssetParseDiagnostic* migration = FindParseDiagnostic(migrated.diagnostics, RenderMaterialAssetParseDiagnosticCode::GraphMigration);
     Require(migration != nullptr && migration->field == "graphLink" && migration->severity == RenderMaterialAssetParseDiagnosticSeverity::Warning,
         "Material graph stable link id migration should emit a graphLink warning");
@@ -4504,6 +4506,151 @@ void RunMaterialGraphBlendSceneStateTest() {
     }
 }
 
+void RunMaterialGraphRejectsNonFiniteAndNonExactNumericDefaultsTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "nan" },
+    });
+    graph.links.push_back(MakeGraphLink(
+        RenderMaterialGraphNodeKind::ConstantScalar,
+        2U,
+        "value",
+        RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "roughness"));
+    RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+        graph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x0209U });
+    Require(!compiled.Succeeded() && HasGraphDiagnostic(compiled.diagnostics, RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed),
+        "P2.9: graph compiler must reject a non-finite constant before shader source generation");
+
+    graph.nodes.back().parameter.defaultValueHint = "0.5 trailing";
+    compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0209U });
+    Require(!compiled.Succeeded() && HasGraphDiagnostic(compiled.diagnostics, RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed),
+        "P2.9: graph compiler must reject trailing numeric default tokens");
+
+    graph.nodes.back().parameter.defaultValueHint = "0.5";
+    graph.nodes.back().parameter.hasRange = true;
+    graph.nodes.back().parameter.rangeMin = 0.0F;
+    graph.nodes.back().parameter.rangeMax = std::numeric_limits<float>::infinity();
+    compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0209U });
+    Require(!compiled.Succeeded() && HasGraphDiagnostic(compiled.diagnostics, RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed),
+        "P2.9: graph compiler must reject non-finite parameter ranges");
+}
+
+void RunMaterialGraphSemanticHashSeparatesEditorOnlyStateTest() {
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 32,
+        .positionY = 64,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .displayName = "Color",
+            .defaultValueHint = "1 0 0 1",
+        },
+    });
+    material.graph.links.push_back(MakeGraphLink(
+        RenderMaterialGraphNodeKind::ConstantColor,
+        2U,
+        "rgba",
+        RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    material.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "second", .type = RenderMaterialParameterType::Scalar, .numbers = { 0.2F, 0.0F, 0.0F, 0.0F },
+    });
+    material.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "first", .type = RenderMaterialParameterType::Scalar, .numbers = { 0.1F, 0.0F, 0.0F, 0.0F },
+    });
+    const std::uint64_t runtimeHash = RenderMaterialRuntimeSemanticHash(material);
+    const std::uint64_t shaderHash = RenderMaterialShaderSemanticHash(material);
+
+    RenderMaterialAssetData organized = material;
+    organized.graph.nodes[1].positionX = 4096;
+    organized.graph.nodes[1].positionY = -2048;
+    organized.graph.nodes[1].parameter.displayName = "Renamed for editor only";
+    organized.graph.nodes[1].parameter.description = "Editor-only description";
+    organized.graph.nodes[1].parameter.editorOrder = 91U;
+    organized.graph.comments.push_back(RenderMaterialGraphCommentBox{
+        .id = 7U, .positionX = 0, .positionY = 0, .width = 800, .height = 600, .text = "Organization",
+    });
+    organized.graph.composites.push_back(RenderMaterialGraphCompositeSubgraph{
+        .id = 8U, .positionX = 0, .positionY = 0, .width = 800, .height = 600, .collapsed = true, .name = "Group", .nodeIds = { 2U },
+    });
+    organized.graph.documentVersion = 1U;
+    organized.graph.hasExplicitDocumentVersion = false;
+    organized.graph.storageModel = "standalone-editor-document";
+    organized.graph.diagnosticSchemaVersion = 99U;
+    organized.graph.persistCompileDiagnostics = !material.graph.persistCompileDiagnostics;
+    organized.graph.links.front().id = 1U;
+    organized.graph.links.front().fromPinId = 0U;
+    organized.graph.links.front().toPinId = 0U;
+    std::ranges::reverse(organized.graph.nodes);
+    std::ranges::reverse(organized.graph.links);
+    std::ranges::reverse(organized.graphParameterValues);
+    Require(RenderMaterialRuntimeSemanticHash(organized) == runtimeHash &&
+            RenderMaterialShaderSemanticHash(organized) == shaderHash,
+        "P2.6: layout, organization and serialization/diagnostic metadata must not invalidate runtime preview or shader cook");
+
+    RenderMaterialAssetData layerLabels = material;
+    layerLabels.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 80U,
+        .kind = RenderMaterialGraphNodeKind::LayerStack,
+        .layerStack = {
+            RenderMaterialGraphLayerStackEntry{
+                .layerFunctionAssetId = 1001U,
+                .blendFunctionAssetId = 1002U,
+                .layerName = "Layer UI label",
+                .blendName = "Blend UI label",
+                .linkState = "expanded",
+            },
+        },
+    });
+    const std::uint64_t labeledRuntimeHash = RenderMaterialRuntimeSemanticHash(layerLabels);
+    const std::uint64_t labeledShaderHash = RenderMaterialShaderSemanticHash(layerLabels);
+    layerLabels.graph.nodes.back().layerStack.front().layerName = "Renamed layer label";
+    layerLabels.graph.nodes.back().layerStack.front().blendName = "Renamed blend label";
+    layerLabels.graph.nodes.back().layerStack.front().linkState = "collapsed";
+    Require(RenderMaterialRuntimeSemanticHash(layerLabels) == labeledRuntimeHash &&
+            RenderMaterialShaderSemanticHash(layerLabels) == labeledShaderHash,
+        "P2.6: Layer Stack labels and expansion state must remain editor-only semantic hash inputs");
+
+    RenderMaterialAssetData legacyIdentity = material;
+    legacyIdentity.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 81U,
+        .kind = RenderMaterialGraphNodeKind::NamedRerouteDeclaration,
+        .parameter = RenderMaterialGraphParameterMetadata{ .displayName = "LegacyIdentity" },
+    });
+    const std::uint64_t legacyIdentityHash = RenderMaterialShaderSemanticHash(legacyIdentity);
+    legacyIdentity.graph.nodes.back().parameter.displayName = "ChangedLegacyIdentity";
+    Require(RenderMaterialShaderSemanticHash(legacyIdentity) != legacyIdentityHash,
+        "P2.6: display names that provide a legacy Named Reroute identity must remain shader-semantic");
+
+    RenderMaterialAssetData failurePolicyEdit = material;
+    failurePolicyEdit.graph.artifactFailurePolicy = RenderMaterialGraphArtifactFailurePolicy::ErrorMaterial;
+    failurePolicyEdit.graph.hasExplicitArtifactFailurePolicy = true;
+    failurePolicyEdit.graph.lastGoodArtifact = RenderMaterialGraphLastGoodArtifact{ .assetId = 42U, .contentHash = 77U };
+    Require(RenderMaterialRuntimeSemanticHash(failurePolicyEdit) != runtimeHash &&
+            RenderMaterialShaderSemanticHash(failurePolicyEdit) == shaderHash,
+        "P2.6: runtime fallback policy may refresh runtime state but must not invalidate the shader binary");
+
+    RenderMaterialAssetData semanticEdit = material;
+    semanticEdit.graph.nodes[1].parameter.defaultValueHint = "0 1 0 1";
+    Require(RenderMaterialRuntimeSemanticHash(semanticEdit) != runtimeHash &&
+            RenderMaterialShaderSemanticHash(semanticEdit) != shaderHash,
+        "P2.6: a shader-semantic graph edit must invalidate runtime preview and shader cook");
+
+    RenderMaterialAssetData dynamicEdit = material;
+    dynamicEdit.desc.baseColor[0] = 0.25F;
+    Require(RenderMaterialRuntimeSemanticHash(dynamicEdit) != runtimeHash &&
+            RenderMaterialShaderSemanticHash(dynamicEdit) == shaderHash,
+        "P2.6: dynamic material values must refresh runtime state without invalidating shader semantics");
+}
+
 void RunMaterialStaticPermutationTest() {
     // A StaticBoolParameter selects which constant a StaticSwitch routes into MaterialOutput.baseColor.
     const auto buildSwitchGraph = [](const char* boolHint) {
@@ -4554,17 +4701,17 @@ void RunMaterialStaticPermutationTest() {
     Require(maskResult.shader.source.find(").x, ") != std::string::npos && maskResult.shader.source.find(", 0.0, 0.0)") != std::string::npos,
         "KBMAT-MAT39: an 'rg' component mask must pass x/y and zero the b/a channels");
 
-    // 2^n explosion warning past the static-switch budget.
+    // The production cook is on-demand: unreachable selectors do not materialize permutations and
+    // must not produce a theoretical 2^N warning.
     RenderMaterialGraphDocument manySwitches = buildSwitchGraph("true");
     for (std::uint32_t i = 0U; i < 9U; ++i) {
         manySwitches.nodes.push_back(RenderMaterialGraphNode{ .id = 100U + i, .kind = RenderMaterialGraphNodeKind::StaticSwitch });
     }
     const RenderMaterialGraphCompileResult explosionResult = CompileRenderMaterialGraphToShaderSource(manySwitches, RenderMaterialGraphBuildContext{ .assetId = 0x0394U });
-    const RenderMaterialGraphDiagnostic* explosionDiag = FindGraphDiagnostic(explosionResult.diagnostics, RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion);
-    Require(explosionDiag != nullptr && explosionDiag->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT39: exceeding the static-switch budget must emit a permutation-explosion warning");
-    Require(FindGraphDiagnostic(trueResult.diagnostics, RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion) == nullptr,
-        "KBMAT-MAT39: a single static switch must not warn about permutation explosion");
+    Require(explosionResult.Succeeded() &&
+            FindGraphDiagnostic(explosionResult.diagnostics, RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion) == nullptr &&
+            explosionResult.shader.sourceHash == trueResult.shader.sourceHash,
+        "P2.8: on-demand cook must report only the materialized selector context and deduplicate unreachable switch topology");
 }
 
 void RunMaterialGraphProgramBindingIdentityKeyTest() {
@@ -6369,6 +6516,8 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialShadingModelGatingTest();
     RunMaterialGraphBlendModeTest();
     RunMaterialGraphBlendSceneStateTest();
+    RunMaterialGraphRejectsNonFiniteAndNonExactNumericDefaultsTest();
+    RunMaterialGraphSemanticHashSeparatesEditorOnlyStateTest();
     RunMaterialStaticPermutationTest();
     RunMaterialGraphProgramBindingIdentityKeyTest();
     RunMaterialVertexDomainOutputCodegenTest();

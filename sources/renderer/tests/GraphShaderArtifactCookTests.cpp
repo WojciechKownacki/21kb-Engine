@@ -263,6 +263,17 @@ void RunGraphShaderCookProducesBinaryTest() {
     Require(!spirv->cacheHit, "KBMAT-MAT04: First cook of a fresh graph must be a real shaderc compile, not a cache hit");
     Require(std::filesystem::exists(spirv->binaryPath, error) && std::filesystem::file_size(spirv->binaryPath, error) > 0U,
         "KBMAT-MAT04: Cooked graph fragment binary must exist on disk in the staging cache");
+    const std::filesystem::path graphCacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(shader.sourceHash));
+    const bool leftCompilerLog = std::ranges::any_of(
+        std::filesystem::recursive_directory_iterator(graphCacheRoot),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return entry.is_regular_file() &&
+                (name.ends_with(".shaderc.log") || name.ends_with(".shaderc.tmp"));
+        });
+    Require(!leftCompilerLog,
+        "Material graph cook must not leave shaderc debug or temporary logs in the artifact cache");
 
     const std::array<RenderMaterialGraphShaderArtifact, 1U> manifestArtifacts{ *first.artifact };
     const RenderMaterialGraphShaderManifest manifest = BuildRenderMaterialGraphShaderManifest(manifestArtifacts);
@@ -383,6 +394,17 @@ void RunGraphShaderCookShadercFailureTest() {
         }
     }
     Require(hasError, "KBMAT-MAT04: shaderc compilation failure must produce an error diagnostic");
+    const std::filesystem::path brokenCacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(broken.sourceHash));
+    const bool leftFailureLog = std::filesystem::exists(brokenCacheRoot, error) && std::ranges::any_of(
+        std::filesystem::recursive_directory_iterator(brokenCacheRoot),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return entry.is_regular_file() &&
+                (name.ends_with(".shaderc.log") || name.ends_with(".shaderc.tmp"));
+        });
+    Require(!leftFailureLog,
+        "Failed material graph cook must return diagnostics without leaving shaderc log files");
 }
 
 void RunGraphShaderArtifactDependencyInvalidationTest() {

@@ -309,6 +309,7 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     MissingMaterialFunction,
     MaterialFunctionCycle,
     MaterialFunctionSignatureMismatch,
+    SourceGraphLoadDiagnostic,
 };
 
 enum class RenderMaterialGraphSamplerFilter : std::uint8_t {
@@ -716,6 +717,8 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
 [[nodiscard]] std::vector<RenderMaterialGraphNodeSupportMatrixEntry> BuildRenderMaterialGraphNodeSupportMatrix();
 [[nodiscard]] RenderMaterialGraphDocument MakeDefaultRenderMaterialGraphDocument();
 void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterialGraphDocument& graph);
+[[nodiscard]] std::uint64_t RenderMaterialGraphShaderSemanticHash(const RenderMaterialGraphDocument& graph);
+void StripRenderMaterialGraphEditorOnlyState(RenderMaterialGraphDocument& graph) noexcept;
 [[nodiscard]] RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});

@@ -24,6 +24,8 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -1081,6 +1083,7 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     workingCopyMaterial.desc.baseColor[0] = 0.21F;
     workingCopyMaterial.desc.baseColor[1] = 0.42F;
     workingCopyMaterial.desc.baseColor[2] = 0.84F;
+    workingCopyMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     kb::editor::EditorMaterialPreviewScene graphPreview;
     const kb::scene::Scene& graphPreviewScene = graphPreview.SceneFor(source, materialId, &workingCopyMaterial);
     const kb::render::ResolvedRuntimeMaterialAsset graphPreviewMaterial =
@@ -1091,6 +1094,15 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
             kb::editor::tests::NearlyEqual(graphPreviewMaterial.material.desc.baseColor[2], 0.84F),
         "KBMAT-GRAPH-0107: Graph preview should use the Material Editor working copy instead of the saved material file");
     const std::uint64_t graphPreviewRevision = graphPreview.Revision();
+    workingCopyMaterial.graph.nodes.front().positionX += 320;
+    workingCopyMaterial.graph.nodes.front().positionY -= 160;
+    workingCopyMaterial.graph.nodes.front().parameter.displayName = "Editor-only output label";
+    workingCopyMaterial.graph.comments.push_back(kb::render::RenderMaterialGraphCommentBox{
+        .id = 9U, .positionX = 0, .positionY = 0, .width = 640, .height = 320, .text = "Editor organization",
+    });
+    static_cast<void>(graphPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    kb::editor::tests::Require(graphPreview.Revision() == graphPreviewRevision,
+        "P2.6: layout, labels and comments must not rebuild the production material preview scene");
     workingCopyMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
         .id = 2U,
         .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
@@ -1100,6 +1112,67 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     static_cast<void>(graphPreview.SceneFor(source, materialId, &workingCopyMaterial));
     kb::editor::tests::Require(graphPreview.Revision() > graphPreviewRevision,
         "KBMAT-GRAPH-0107: Graph preview should rebuild when the working-copy graph changes");
+
+    const kb::assets::AssetId functionId{ 0x515101U };
+    const kb::assets::AssetId collectionId{ 0x515102U };
+    const std::filesystem::path dependencyRoot =
+        std::filesystem::temp_directory_path() / "21kb_editor_material_preview_dependencies";
+    kb::assets::AssetMetadata functionMetadata{
+        .id = functionId,
+        .type = std::string{ kb::render::kRenderMaterialFunctionAssetType },
+        .name = "PreviewFunction",
+        .virtualPath = "/Game/Materials/PreviewFunction.kbmatfn",
+        .physicalPath = dependencyRoot / "PreviewFunction.kbmatfn",
+        .contentHash = 11U,
+        .runtimeLoadable = true,
+    };
+    kb::assets::AssetMetadata collectionMetadata{
+        .id = collectionId,
+        .type = std::string{ kb::render::kRenderMaterialParameterCollectionAssetType },
+        .name = "PreviewGlobals",
+        .virtualPath = "/Game/Materials/PreviewGlobals.kbmatpc",
+        .physicalPath = dependencyRoot / "PreviewGlobals.kbmatpc",
+        .contentHash = 21U,
+        .runtimeLoadable = true,
+    };
+    kb::editor::tests::Require(source.Assets().Manager().RegisterAsset(functionMetadata) &&
+            source.Assets().Manager().RegisterAsset(collectionMetadata),
+        "P1.15: preview dependency fixtures must register function and parameter-collection assets");
+    workingCopyMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 20U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = std::to_string(functionId.value),
+        },
+    });
+    workingCopyMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 21U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "PreviewTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
+    kb::editor::EditorMaterialPreviewScene dependencyPreview;
+    static_cast<void>(dependencyPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    const std::uint64_t dependencyRevision = dependencyPreview.Revision();
+    std::ranges::reverse(workingCopyMaterial.graph.nodes);
+    static_cast<void>(dependencyPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    kb::editor::tests::Require(dependencyPreview.Revision() == dependencyRevision,
+        "P1.15/P2.6: dependency traversal and semantic preview hash must be invariant to graph node ordering");
+    functionMetadata.contentHash = 12U;
+    kb::editor::tests::Require(source.Assets().Manager().RegisterAsset(functionMetadata),
+        "P1.15: function dependency content hash must be refreshable");
+    static_cast<void>(dependencyPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    kb::editor::tests::Require(dependencyPreview.Revision() > dependencyRevision,
+        "P1.15: changing a Material Function content hash must invalidate working-copy preview");
+    const std::uint64_t functionDependencyRevision = dependencyPreview.Revision();
+    collectionMetadata.contentHash = 22U;
+    kb::editor::tests::Require(source.Assets().Manager().RegisterAsset(collectionMetadata),
+        "P1.15: parameter-collection dependency content hash must be refreshable");
+    static_cast<void>(dependencyPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    kb::editor::tests::Require(dependencyPreview.Revision() > functionDependencyRevision,
+        "P1.15: changing a Material Parameter Collection content hash must invalidate working-copy preview");
 
     kb::render::RenderScene renderScene;
     kb::render::EcsRenderSceneSynchronizer{}.Sync(previewScene, renderScene);
@@ -1474,6 +1547,24 @@ void RunMaterialValueFormatterTest() {
     kb::editor::tests::Require(rows[5].label == "Emissive" && rows[5].value.find("white fallback") != std::string::npos, "KBMAT-0611: emissive debug channel must report fallback source");
 }
 
+void RunMaterialEditorFinitePresentationParsingTest() {
+    const kb::editor::MaterialEditorParameterValue scalar = kb::editor::MaterialEditorPanelConstantParameterValue(
+        kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        "nan");
+    const kb::editor::MaterialEditorParameterValue vector = kb::editor::MaterialEditorPanelConstantParameterValue(
+        kb::render::RenderMaterialGraphNodeKind::ConstantVector,
+        "1 2 inf");
+    const kb::editor::MaterialEditorParameterValue color =
+        kb::editor::MaterialEditorPanelColorValueFromHint("nan 0 0 1", true);
+    const std::vector<kb::editor::MaterialEditorPanelColorRampStopModel> ramp =
+        kb::editor::MaterialEditorPanelColorRampStops("0 0 0 0 1 1 1 inf");
+    kb::editor::tests::Require(std::isfinite(scalar.numbers[0]) && scalar.numbers[0] == 0.0F &&
+            std::ranges::all_of(vector.numbers, [](float value) { return std::isfinite(value) && value == 0.0F; }) &&
+            std::ranges::all_of(color.numbers, [](float value) { return std::isfinite(value) && value == 1.0F; }) &&
+            ramp.size() == 2U && ramp.front().position == 0.0F && ramp.back().position == 1.0F,
+        "P2.9: node presentation parsers must reject NaN/Inf and use deterministic finite fallbacks");
+}
+
 void RunMaterialPreviewGpuGraphParityTest() {
     const auto makeLink = [](kb::render::RenderMaterialGraphNodeKind fromKind, std::uint32_t fromNode, std::string fromPin,
         kb::render::RenderMaterialGraphNodeKind toKind, std::uint32_t toNode, std::string toPin) {
@@ -1578,7 +1669,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
     kb::editor::tests::Require(layout.graphCanvas.left == content.left, "Material Editor graph should own the full tab width");
     kb::editor::tests::Require(layout.graphCanvas.right == content.right, "Material Editor graph should own the full tab width");
-    kb::editor::tests::Require(layout.graphCanvas.top == content.top + kb::editor::MaterialEditorPanelMetrics::HeaderHeight, "Material Editor graph should start directly below the toolbar");
+    kb::editor::tests::Require(layout.graphCanvas.top == content.top + layout.headerHeight, "Material Editor graph should start directly below the responsive toolbar");
     kb::editor::tests::Require(layout.graphCanvas.bottom == content.bottom, "Material Editor graph should fill the tab height");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.previewFrame.left + 2, layout.previewFrame.top + 2), "Material preview should be an overlay inside the graph workspace");
     kb::editor::tests::Require(layout.diagnosticsPanel.left >= layout.previewFrame.right, "Material diagnostics should not overlap the preview overlay");
@@ -1586,9 +1677,12 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
             layout.previewPrimitiveButton.right <= layout.previewSceneButton.left &&
             layout.previewSceneButton.right <= layout.previewQualityButton.left &&
             layout.previewQualityButton.right <= layout.previewNormalButton.left &&
-            layout.previewNormalButton.right <= layout.previewNodeButton.left &&
-            layout.previewNodeButton.right <= layout.applyButton.left,
-        "KBMAT-PREVIEW-0003: Material Editor preview commands should sit before Apply To Selection without overlap");
+            layout.previewNormalButton.right <= layout.previewNodeButton.left,
+        "KBMAT-PREVIEW-0003: Material Editor preview commands should preserve their order without overlap");
+    kb::editor::tests::Require(layout.applyButton.right <= layout.saveButton.left &&
+            layout.saveButton.right <= layout.revertButton.left &&
+            layout.revertButton.right <= layout.validateButton.left,
+        "Material Editor document commands should preserve their order without overlap after toolbar reflow");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewPrimitiveButton.left + 2, layout.previewPrimitiveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewPrimitive, "KBMAT-PREVIEW-0001: Material Editor should hit-test the preview primitive command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewSceneButton.left + 2, layout.previewSceneButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewScene, "KBMAT-PREVIEW-0003: Material Editor should hit-test the preview scene settings command");
@@ -1609,6 +1703,35 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
         kb::editor::tests::Require(name != "Create Shader From Material", "KBMAT-0808: Create Shader From Material cannot exist before a real graph backend");
     }
     kb::editor::tests::Require(!kb::editor::MaterialEditorPanelCommandHasBackendAction(kb::editor::MaterialEditorPanelCommand::None), "KBMAT-1002: empty Material Editor hit-test space must not route to a backend action");
+
+    const RECT narrowContent{ 0, 0, 434, 336 };
+    const kb::editor::MaterialEditorPanelLayout narrowLayout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(narrowContent);
+    kb::editor::tests::Require(narrowLayout.compactToolbar, "Material Editor should use the compact toolbar at the reported 434px production width");
+    kb::editor::tests::Require(narrowLayout.headerHeight > kb::editor::MaterialEditorPanelMetrics::HeaderHeight, "Compact Material Editor toolbar should wrap instead of clipping commands");
+    const std::array<RECT, 10U> narrowToolbarButtons{
+        narrowLayout.infoButton,
+        narrowLayout.previewPrimitiveButton,
+        narrowLayout.previewSceneButton,
+        narrowLayout.previewQualityButton,
+        narrowLayout.previewNormalButton,
+        narrowLayout.previewNodeButton,
+        narrowLayout.applyButton,
+        narrowLayout.saveButton,
+        narrowLayout.revertButton,
+        narrowLayout.validateButton,
+    };
+    for (const RECT& button : narrowToolbarButtons) {
+        kb::editor::tests::Require(
+            button.left >= narrowContent.left && button.right <= narrowContent.right &&
+                button.top >= narrowContent.top && button.bottom <= narrowLayout.header.bottom,
+            "Every compact Material Editor toolbar command must remain inside the visible header");
+    }
+    const RECT wideContent{ 0, 0, 1480, 900 };
+    const kb::editor::MaterialEditorPanelLayout wideLayout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(wideContent);
+    kb::editor::tests::Require(
+        wideLayout.graphCanvas.left == wideContent.left && wideLayout.graphCanvas.right == wideContent.right &&
+            wideLayout.previewFrame.left > wideLayout.graphCanvas.left,
+        "Wide Material Editor should keep the graph full-width with a compact preview overlay");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
@@ -1992,6 +2115,7 @@ void RunEditorInspectorTests() {
     RunMaterialNodePreviewBuilderTest();
     RunMaterialPreviewGpuGraphParityTest();
     RunMaterialValueFormatterTest();
+    RunMaterialEditorFinitePresentationParsingTest();
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();
     RunMaterialEditorDetailsCanonicalLayoutTest();

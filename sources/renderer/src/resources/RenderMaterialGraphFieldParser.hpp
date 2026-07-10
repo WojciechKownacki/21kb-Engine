@@ -27,4 +27,13 @@ public:
         std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics);
 };
 
+// Shared post-parse graph lifecycle for embedded materials, standalone graphs and material
+// functions. Warnings keep the document loadable; errors remain fatal at the codec boundary.
+void FinalizeRenderMaterialGraphDocument(
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t graphShadingModelLine = 0U,
+    std::string_view graphShadingModelSourceText = {},
+    std::size_t graphLastGoodArtifactLine = 0U);
+
 } // namespace kb::render

@@ -3,9 +3,11 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
+#include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -303,6 +305,8 @@ struct MaterialEditorOpaqueOverlayHit {
 
 struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
+    RECT header{};
+    RECT title{};
     RECT applyButton{};
     RECT infoButton{};
     RECT previewPrimitiveButton{};
@@ -318,6 +322,8 @@ struct MaterialEditorPanelLayout {
     RECT detailsPanel{};
     RECT graphCanvas{};
 #endif
+    int headerHeight = 0;
+    bool compactToolbar = false;
 };
 
 #if defined(_WIN32)
@@ -336,6 +342,16 @@ inline constexpr int TextureSlotRowCount = 5;
 inline constexpr int DetailsNodePropertyRowHeight = 22;
 inline constexpr int DetailsNodePropertyOptionHeight = 20;
 } // namespace MaterialEditorPanelMetrics
+
+[[nodiscard]] inline constexpr int MaterialEditorPanelHeaderHeightForWidth(int width) noexcept {
+    if (width >= 1080) {
+        return MaterialEditorPanelMetrics::HeaderHeight;
+    }
+    if (width >= 600) {
+        return 76;
+    }
+    return 110;
+}
 
 enum class MaterialEditorDetailsSection : std::uint8_t {
     ParentChain,
@@ -600,8 +616,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGra
 #endif
 
 /// Dedicated Material Editor panel. The selected material document is presented as
-/// a full-tab graph workspace; compact overlays provide preview and identity context
-/// without turning the tab back into an inspector-style property form.
+/// a full-tab graph workspace with responsive tool groups and compact overlays.
 class MaterialEditorPanelRenderer {
 public:
 #if defined(_WIN32)
@@ -776,23 +791,70 @@ inline int MaterialEditorPanelScaled(int value, float zoom) noexcept {
 
 inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT& content) noexcept {
     MaterialEditorPanelLayout layout{};
-    const int buttonTop = content.top + 8;
-    const int buttonBottom = buttonTop + 26;
+    const int width = std::max(0, static_cast<int>(content.right - content.left));
+    layout.headerHeight = MaterialEditorPanelHeaderHeightForWidth(width);
+    layout.compactToolbar = width < 600;
+    layout.header = RECT{ content.left, content.top, content.right, content.top + layout.headerHeight };
     const int buttonGap = 6;
-    layout.validateButton = RECT{ content.right - MaterialEditorPanelMetrics::Padding - 72, buttonTop, content.right - MaterialEditorPanelMetrics::Padding, buttonBottom };
-    layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
-    layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
-    layout.applyButton = RECT{ layout.saveButton.left - buttonGap - 118, buttonTop, layout.saveButton.left - buttonGap, buttonBottom };
-    layout.previewNodeButton = RECT{ layout.applyButton.left - buttonGap - 58, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
-    layout.previewNormalButton = RECT{ layout.previewNodeButton.left - buttonGap - 70, buttonTop, layout.previewNodeButton.left - buttonGap, buttonBottom };
-    layout.previewQualityButton = RECT{ layout.previewNormalButton.left - buttonGap - 62, buttonTop, layout.previewNormalButton.left - buttonGap, buttonBottom };
-    layout.previewSceneButton = RECT{ layout.previewQualityButton.left - buttonGap - 62, buttonTop, layout.previewQualityButton.left - buttonGap, buttonBottom };
-    layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - 66, buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
-    layout.infoButton = RECT{ layout.previewPrimitiveButton.left - buttonGap - 54, buttonTop, layout.previewPrimitiveButton.left - buttonGap, buttonBottom };
+    const auto placeButton = [](int& cursor, int top, int buttonWidth, int gap) noexcept {
+        const RECT rect{ cursor, top, cursor + buttonWidth, top + 26 };
+        cursor = rect.right + gap;
+        return rect;
+    };
+
+    if (width >= 1080) {
+        const int buttonTop = content.top + 8;
+        const int buttonBottom = buttonTop + 26;
+        layout.validateButton = RECT{ content.right - MaterialEditorPanelMetrics::Padding - 72, buttonTop, content.right - MaterialEditorPanelMetrics::Padding, buttonBottom };
+        layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
+        layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
+        layout.applyButton = RECT{ layout.saveButton.left - buttonGap - 118, buttonTop, layout.saveButton.left - buttonGap, buttonBottom };
+        layout.previewNodeButton = RECT{ layout.applyButton.left - buttonGap - 58, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
+        layout.previewNormalButton = RECT{ layout.previewNodeButton.left - buttonGap - 70, buttonTop, layout.previewNodeButton.left - buttonGap, buttonBottom };
+        layout.previewQualityButton = RECT{ layout.previewNormalButton.left - buttonGap - 62, buttonTop, layout.previewNormalButton.left - buttonGap, buttonBottom };
+        layout.previewSceneButton = RECT{ layout.previewQualityButton.left - buttonGap - 62, buttonTop, layout.previewQualityButton.left - buttonGap, buttonBottom };
+        layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - 66, buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
+        layout.infoButton = RECT{ layout.previewPrimitiveButton.left - buttonGap - 54, buttonTop, layout.previewPrimitiveButton.left - buttonGap, buttonBottom };
+        layout.title = RECT{ content.left + MaterialEditorPanelMetrics::Padding, content.top, layout.infoButton.left - 10, content.top + layout.headerHeight };
+    } else if (width >= 600) {
+        const int previewTop = content.top + 8;
+        int previewCursor = content.left + 154;
+        layout.title = RECT{ content.left + MaterialEditorPanelMetrics::Padding, content.top, previewCursor - 10, content.top + 42 };
+        layout.infoButton = placeButton(previewCursor, previewTop, 48, buttonGap);
+        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, 58, buttonGap);
+        layout.previewSceneButton = placeButton(previewCursor, previewTop, 54, buttonGap);
+        layout.previewQualityButton = placeButton(previewCursor, previewTop, 54, buttonGap);
+        layout.previewNormalButton = placeButton(previewCursor, previewTop, 60, buttonGap);
+        layout.previewNodeButton = placeButton(previewCursor, previewTop, 48, buttonGap);
+
+        int actionCursor = content.left + MaterialEditorPanelMetrics::Padding;
+        const int actionTop = content.top + 42;
+        layout.applyButton = placeButton(actionCursor, actionTop, 112, buttonGap);
+        layout.saveButton = placeButton(actionCursor, actionTop, 54, buttonGap);
+        layout.revertButton = placeButton(actionCursor, actionTop, 62, buttonGap);
+        layout.validateButton = placeButton(actionCursor, actionTop, 72, buttonGap);
+    } else {
+        layout.title = RECT{ content.left + MaterialEditorPanelMetrics::Padding, content.top, content.right - MaterialEditorPanelMetrics::Padding, content.top + 38 };
+        int previewCursor = content.left + MaterialEditorPanelMetrics::Padding;
+        const int previewTop = content.top + 38;
+        layout.infoButton = placeButton(previewCursor, previewTop, 42, 4);
+        layout.previewPrimitiveButton = placeButton(previewCursor, previewTop, 52, 4);
+        layout.previewSceneButton = placeButton(previewCursor, previewTop, 46, 4);
+        layout.previewQualityButton = placeButton(previewCursor, previewTop, 46, 4);
+        layout.previewNormalButton = placeButton(previewCursor, previewTop, 52, 4);
+        layout.previewNodeButton = placeButton(previewCursor, previewTop, 42, 4);
+
+        int actionCursor = content.left + MaterialEditorPanelMetrics::Padding;
+        const int actionTop = content.top + 72;
+        layout.applyButton = placeButton(actionCursor, actionTop, 88, 4);
+        layout.saveButton = placeButton(actionCursor, actionTop, 46, 4);
+        layout.revertButton = placeButton(actionCursor, actionTop, 54, 4);
+        layout.validateButton = placeButton(actionCursor, actionTop, 62, 4);
+    }
 
     layout.graphCanvas = RECT{
         content.left,
-        content.top + MaterialEditorPanelMetrics::HeaderHeight,
+        content.top + layout.headerHeight,
         content.right,
         content.bottom,
     };
@@ -801,8 +863,8 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     layout.previewFrame = RECT{
         overlayLeft,
         overlayTop,
-        overlayLeft + MaterialEditorPanelMetrics::PreviewWidth,
-        overlayTop + MaterialEditorPanelMetrics::PreviewHeight,
+        overlayLeft + (layout.compactToolbar ? 116 : MaterialEditorPanelMetrics::PreviewWidth),
+        overlayTop + (layout.compactToolbar ? 76 : MaterialEditorPanelMetrics::PreviewHeight),
     };
     layout.diagnosticsPanel = RECT{
         std::max(layout.previewFrame.right + MaterialEditorPanelMetrics::Padding, layout.graphCanvas.right - 372),
@@ -816,6 +878,7 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
         layout.diagnosticsPanel.right,
         layout.graphCanvas.bottom - MaterialEditorPanelMetrics::Padding,
     };
+
     return layout;
 }
 
@@ -1676,7 +1739,10 @@ inline std::vector<std::string> MaterialEditorPanelHitTestOutputPins(const kb::r
 }
 
 inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, std::size_t index) noexcept {
-    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+    const SIZE canonicalSize = MaterialEditorPanelGraphNodeSize(
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput);
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) /
+        static_cast<float>(std::max<LONG>(1, canonicalSize.cx));
     return POINT{
         node.left,
         node.top
@@ -1865,21 +1931,19 @@ inline kb::render::RenderMaterialParameterType MaterialEditorPanelConstantParame
 inline MaterialEditorParameterValue MaterialEditorPanelConstantParameterValue(
     kb::render::RenderMaterialGraphNodeKind kind,
     std::string_view defaultValueHint) {
-    std::string normalized{ defaultValueHint };
-    std::ranges::replace(normalized, ',', ' ');
-    std::istringstream input{ normalized };
-
     MaterialEditorParameterValue value{};
+    std::vector<float> parsed;
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
         value.kind = MaterialEditorParameterValueKind::Scalar;
-        if (!(input >> value.numbers[0])) {
+        if (!kb::render::ParseFiniteMaterialFloatSequence(defaultValueHint, parsed, 1U, 1U)) {
             value.numbers[0] = 0.0F;
+        } else {
+            value.numbers[0] = parsed[0];
         }
         break;
     case kb::render::RenderMaterialGraphNodeKind::ConstantBool: {
-        std::string boolText;
-        input >> boolText;
+        std::string boolText{ defaultValueHint };
         std::ranges::transform(boolText, boolText.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
@@ -1890,22 +1954,27 @@ inline MaterialEditorParameterValue MaterialEditorPanelConstantParameterValue(
     }
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         value.kind = MaterialEditorParameterValueKind::Vec2;
-        if (!(input >> value.numbers[0] >> value.numbers[1])) {
+        if (!kb::render::ParseFiniteMaterialFloatSequence(defaultValueHint, parsed, 2U, 2U)) {
             value.numbers = { 0.0F, 0.0F, 0.0F, 0.0F };
+        } else {
+            std::copy(parsed.begin(), parsed.end(), value.numbers.begin());
         }
         break;
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
         value.kind = MaterialEditorParameterValueKind::Vec3;
-        if (!(input >> value.numbers[0] >> value.numbers[1] >> value.numbers[2])) {
+        if (!kb::render::ParseFiniteMaterialFloatSequence(defaultValueHint, parsed, 3U, 3U)) {
             value.numbers = { 0.0F, 0.0F, 0.0F, 0.0F };
+        } else {
+            std::copy(parsed.begin(), parsed.end(), value.numbers.begin());
         }
         break;
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
         value.kind = MaterialEditorParameterValueKind::Color;
-        if (!(input >> value.numbers[0] >> value.numbers[1] >> value.numbers[2])) {
+        if (!kb::render::ParseFiniteMaterialFloatSequence(defaultValueHint, parsed, 3U, 4U)) {
             value.numbers = { 1.0F, 1.0F, 1.0F, 1.0F };
-        } else if (!(input >> value.numbers[3])) {
-            value.numbers[3] = 1.0F;
+        } else {
+            std::copy(parsed.begin(), parsed.end(), value.numbers.begin());
+            value.numbers[3] = parsed.size() == 4U ? parsed[3] : 1.0F;
         }
         break;
     default:
@@ -2107,11 +2176,14 @@ inline MaterialEditorParameterValue MaterialEditorPanelColorValue(
     float a = 1.0F) noexcept {
     MaterialEditorParameterValue value{};
     value.kind = MaterialEditorParameterValueKind::Color;
+    const auto finiteOr = [](float candidate, float fallback) noexcept {
+        return std::isfinite(candidate) ? candidate : fallback;
+    };
     value.numbers = {
-        std::clamp(r, 0.0F, 1.0F),
-        std::clamp(g, 0.0F, 1.0F),
-        std::clamp(b, 0.0F, 1.0F),
-        std::clamp(a, 0.0F, 1.0F),
+        std::clamp(finiteOr(r, 0.0F), 0.0F, 1.0F),
+        std::clamp(finiteOr(g, 0.0F), 0.0F, 1.0F),
+        std::clamp(finiteOr(b, 0.0F), 0.0F, 1.0F),
+        std::clamp(finiteOr(a, 1.0F), 0.0F, 1.0F),
     };
     return value;
 }
@@ -2120,16 +2192,14 @@ inline MaterialEditorParameterValue MaterialEditorPanelColorValueFromHint(
     std::string_view hint,
     bool hasAlpha,
     const std::array<float, 4U>& fallback = { 1.0F, 1.0F, 1.0F, 1.0F }) {
-    std::string normalized{ hint };
-    std::ranges::replace(normalized, ',', ' ');
-    std::istringstream input{ normalized };
     std::array<float, 4U> values = fallback;
-    if (!(input >> values[0] >> values[1] >> values[2])) {
+    std::vector<float> parsed;
+    const std::size_t maximumCount = hasAlpha ? 4U : 3U;
+    if (!kb::render::ParseFiniteMaterialFloatSequence(hint, parsed, 3U, maximumCount)) {
         values = fallback;
-    } else if (hasAlpha && !(input >> values[3])) {
-        values[3] = 1.0F;
-    } else if (!hasAlpha) {
-        values[3] = 1.0F;
+    } else {
+        std::copy(parsed.begin(), parsed.end(), values.begin());
+        values[3] = hasAlpha && parsed.size() == 4U ? parsed[3] : 1.0F;
     }
     return MaterialEditorPanelColorValue(values[0], values[1], values[2], values[3]);
 }
@@ -2156,15 +2226,13 @@ struct MaterialEditorPanelColorRampStopModel {
 };
 
 inline std::vector<MaterialEditorPanelColorRampStopModel> MaterialEditorPanelColorRampStops(std::string_view hint) {
-    std::string normalized{ hint };
-    std::ranges::replace(normalized, ',', ' ');
-    std::istringstream input{ normalized };
     std::vector<float> numbers;
-    for (float value = 0.0F; input >> value;) {
-        numbers.push_back(value);
-    }
+    const bool parsed = kb::render::ParseFiniteMaterialFloatSequence(hint, numbers, 8U, 4096U);
     std::vector<MaterialEditorPanelColorRampStopModel> stops;
-    for (std::size_t index = 0U; index + 3U < numbers.size(); index += 4U) {
+    if (parsed && numbers.size() % 4U == 0U) {
+        stops.reserve(numbers.size() / 4U);
+    }
+    for (std::size_t index = 0U; parsed && numbers.size() % 4U == 0U && index < numbers.size(); index += 4U) {
         stops.push_back(MaterialEditorPanelColorRampStopModel{
             .position = std::clamp(numbers[index], 0.0F, 1.0F),
             .r = std::clamp(numbers[index + 1U], 0.0F, 1.0F),
@@ -2572,7 +2640,7 @@ inline std::optional<RECT> MaterialEditorPanelGraphNodeRectWithView(
     }
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const RECT canvas = layout.graphCanvas;
-    const float clampedZoom = std::clamp(zoom, 0.25F, 2.0F);
+    const float clampedZoom = std::clamp(zoom, MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(*target);
     const int nodeWidth = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cx), clampedZoom);
     const int nodeHeight = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cy), clampedZoom);
@@ -2619,7 +2687,7 @@ inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCommentRect(
         return std::nullopt;
     }
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
-    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), 0.25F, 2.0F);
+    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
     const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
     const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
     const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(32, target->width), clampedZoom);
@@ -2643,7 +2711,7 @@ inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCompositeRect(
         return std::nullopt;
     }
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
-    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), 0.25F, 2.0F);
+    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
     const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
     const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
     const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(64, target->width), clampedZoom);
@@ -2678,7 +2746,7 @@ inline void MaterialEditorPanelConfigureGraphCanvasViewport(
         static_cast<float>(std::max<LONG>(1, layout.graphCanvas.right - layout.graphCanvas.left)),
         static_cast<float>(std::max<LONG>(1, layout.graphCanvas.bottom - layout.graphCanvas.top)),
     });
-    const float clampedZoom = std::clamp(zoom, 0.25F, 2.0F);
+    const float clampedZoom = std::clamp(zoom, MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
     canvas.SetView(
         -static_cast<float>(panX) / clampedZoom,
         -static_cast<float>(panY) / clampedZoom,

@@ -1,5 +1,7 @@
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
+#include "RenderMaterialAtomicFileWriter.hpp"
+
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -80,12 +82,9 @@ RenderMaterialTypeDocumentParseResult RenderMaterialTypeAssetLoader::LoadTypeWit
 }
 
 bool RenderMaterialTypeAssetLoader::SaveType(const std::filesystem::path& path, const RenderMaterialTypeDocument& document) {
-    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
-    if (!output) {
-        return false;
-    }
-    WriteRenderMaterialTypeDocument(output, document);
-    return static_cast<bool>(output);
+    return detail::WriteMaterialFileAtomically(path, [&document](std::ostream& output) {
+        WriteRenderMaterialTypeDocument(output, document);
+    });
 }
 
 } // namespace kb::render

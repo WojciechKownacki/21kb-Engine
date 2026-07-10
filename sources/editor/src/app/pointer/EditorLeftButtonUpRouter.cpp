@@ -63,13 +63,6 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
-    if (sceneContext_.IsMaterialGraphConstantSliderDragging()) {
-        static_cast<void>(sceneContext_.EndMaterialGraphConstantSliderDrag());
-        ReleaseCapture();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
-    }
-
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
         static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
         ReleaseCapture();

@@ -1,10 +1,12 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -13,6 +15,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -114,15 +117,14 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     if (text.empty() || text == "_") {
         return values;
     }
-    std::istringstream input{ std::string{ text } };
-    float value = 0.0F;
-    while (input >> value) {
-        values.push_back(value);
-    }
+    static_cast<void>(ParseFiniteMaterialFloatSequence(text, values, 1U, 64U));
     return values;
 }
 
 [[nodiscard]] std::string FloatLiteral(float value) {
+    if (!std::isfinite(value)) {
+        return "0.0";
+    }
     std::ostringstream output;
     output << value;
     std::string text = output.str();
@@ -4974,6 +4976,8 @@ std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagno
         return "material_function_cycle";
     case RenderMaterialGraphDiagnosticKind::MaterialFunctionSignatureMismatch:
         return "material_function_signature_mismatch";
+    case RenderMaterialGraphDiagnosticKind::SourceGraphLoadDiagnostic:
+        return "source_graph_load_diagnostic";
     }
     return "unsupported_node";
 }
@@ -5713,6 +5717,67 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     }
 }
 
+void StripRenderMaterialGraphEditorOnlyState(RenderMaterialGraphDocument& graph) noexcept {
+    graph.documentVersion = kRenderMaterialGraphDocumentVersion;
+    graph.hasExplicitDocumentVersion = true;
+    graph.comments.clear();
+    graph.composites.clear();
+    graph.storageModel.clear();
+    graph.diagnosticSchemaVersion = 0U;
+    graph.persistCompileDiagnostics = false;
+    for (RenderMaterialGraphNode& node : graph.nodes) {
+        node.positionX = 0;
+        node.positionY = 0;
+        const bool displayNameProvidesLegacyIdentity = node.parameter.stableId.empty() &&
+            (node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
+                node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
+                node.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration ||
+                node.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage);
+        if (!displayNameProvidesLegacyIdentity) {
+            node.parameter.displayName.clear();
+        }
+        node.parameter.description.clear();
+        node.parameter.group = RenderMaterialParameterGroup::Core;
+        node.parameter.editorOrder = 0U;
+        for (RenderMaterialGraphLayerStackEntry& entry : node.layerStack) {
+            entry.layerName.clear();
+            entry.blendName.clear();
+            entry.linkState.clear();
+        }
+    }
+    for (RenderMaterialGraphLink& link : graph.links) {
+        const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link.fromNodeId);
+        const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
+        if (fromNode != nullptr) {
+            link.fromPinId = RenderMaterialGraphStablePinId(*fromNode, link.fromPin, true);
+        }
+        if (toNode != nullptr) {
+            link.toPinId = RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
+        }
+        link.id = MakeRenderMaterialGraphLinkId(link);
+    }
+    std::ranges::sort(graph.nodes, [](const RenderMaterialGraphNode& lhs, const RenderMaterialGraphNode& rhs) {
+        return lhs.id < rhs.id;
+    });
+    std::ranges::sort(graph.links, [](const RenderMaterialGraphLink& lhs, const RenderMaterialGraphLink& rhs) {
+        return std::tie(lhs.id, lhs.fromNodeId, lhs.fromPinId, lhs.toNodeId, lhs.toPinId, lhs.fromPin, lhs.toPin) <
+            std::tie(rhs.id, rhs.fromNodeId, rhs.fromPinId, rhs.toNodeId, rhs.toPinId, rhs.fromPin, rhs.toPin);
+    });
+}
+
+std::uint64_t RenderMaterialGraphShaderSemanticHash(const RenderMaterialGraphDocument& graph) {
+    RenderMaterialGraphDocument semantic = graph;
+    StripRenderMaterialGraphEditorOnlyState(semantic);
+    semantic.artifactFailurePolicy = RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial;
+    semantic.hasExplicitArtifactFailurePolicy = false;
+    semantic.lastGoodArtifact = {};
+    std::ostringstream serialized;
+    WriteRenderMaterialGraphDocument(serialized, semantic);
+    std::uint64_t hash = 1469598103934665603ULL;
+    HashString64(hash, serialized.str());
+    return hash == 0U ? 1U : hash;
+}
+
 bool RenderMaterialGraphIrBuildResult::Succeeded() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
@@ -5888,11 +5953,7 @@ RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifa
     RenderMaterialGraphBuildContext context) {
     RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(sourceGraph, context);
     const RenderMaterialGraphDocument& graph = inlineResult.Succeeded() ? inlineResult.graph : sourceGraph;
-    std::ostringstream canonicalGraph;
-    WriteRenderMaterialGraphDocument(canonicalGraph, graph);
-
-    std::uint64_t graphHash = 1469598103934665603ULL;
-    HashString64(graphHash, canonicalGraph.str());
+    const std::uint64_t graphHash = RenderMaterialGraphShaderSemanticHash(graph);
 
     std::vector<RenderMaterialGraphDependencyHashInput> sortedDependencies(dependencies.begin(), dependencies.end());
     if (context.functionLibrary != nullptr) {
@@ -6149,25 +6210,6 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     // MAT-38: resolve the blend mode. All seven modes are implemented, so there is no fallback; the value
     // selects the masked clip in the wrapper and the transparent cook/scene blend equation downstream.
     const RenderMaterialGraphBlendMode resolvedBlendMode = ParseRenderMaterialGraphBlendMode(graph.blendMode);
-
-    // MAT-39: each StaticSwitch doubles the potential shader-permutation count (2^n). Warn past a budget so
-    // authors see the combinatorial cost before it explodes the cook.
-    constexpr std::size_t kStaticSwitchPermutationWarnThreshold = 8U; // 2^8 = 256 permutations.
-    std::size_t staticSwitchCount = 0U;
-    for (const RenderMaterialGraphNode& staticNode : graph.nodes) {
-        if (IsStaticVariantSwitchNode(staticNode.kind)) {
-            ++staticSwitchCount;
-        }
-    }
-    if (staticSwitchCount > kStaticSwitchPermutationWarnThreshold) {
-        result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
-            .kind = RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion,
-            .message = "Graph has " + std::to_string(staticSwitchCount) +
-                " static switches (up to 2^" + std::to_string(staticSwitchCount) +
-                " shader permutations); consider reducing static branching.",
-        });
-    }
 
     const RenderMaterialGraphNode* outputNode = nullptr;
     for (const RenderMaterialGraphNode& node : graph.nodes) {
@@ -6914,6 +6956,58 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 {},
                 "Material graph contains an unsupported node kind.");
             continue;
+        }
+        if (node.parameter.hasRange &&
+            (!std::isfinite(node.parameter.rangeMin) || !std::isfinite(node.parameter.rangeMax) ||
+             node.parameter.rangeMin > node.parameter.rangeMax)) {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                node.id,
+                0U,
+                "range",
+                "Material graph numeric range must contain finite ordered bounds.");
+        }
+        if (!node.parameter.defaultValueHint.empty() && node.parameter.defaultValueHint != "_") {
+            std::vector<float> numericDefault;
+            std::size_t minimumComponents = 0U;
+            std::size_t maximumComponents = 0U;
+            switch (node.kind) {
+            case RenderMaterialGraphNodeKind::ConstantScalar:
+            case RenderMaterialGraphNodeKind::ParameterScalar:
+                minimumComponents = maximumComponents = 1U;
+                break;
+            case RenderMaterialGraphNodeKind::ConstantVector2:
+                minimumComponents = maximumComponents = 2U;
+                break;
+            case RenderMaterialGraphNodeKind::ConstantVector:
+            case RenderMaterialGraphNodeKind::ParameterVector:
+                minimumComponents = maximumComponents = 3U;
+                break;
+            case RenderMaterialGraphNodeKind::ConstantColor:
+            case RenderMaterialGraphNodeKind::ParameterColor:
+                minimumComponents = 3U;
+                maximumComponents = 4U;
+                break;
+            default:
+                break;
+            }
+            if (minimumComponents != 0U &&
+                !ParseFiniteMaterialFloatSequence(
+                    node.parameter.defaultValueHint,
+                    numericDefault,
+                    minimumComponents,
+                    maximumComponents)) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "defaultValueHint",
+                    "Material graph numeric default must contain exactly the expected number of finite components.");
+            }
         }
         const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForDocumentPath(graph, node.kind, renderPath);
         if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported) {

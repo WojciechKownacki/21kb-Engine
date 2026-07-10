@@ -65,10 +65,18 @@ public:
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
 
 private:
+    struct RetiredGraphUniform {
+        bgfx::UniformHandle handle = BGFX_INVALID_HANDLE;
+        std::uint64_t destroyFrame = 0U;
+    };
+
     [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
     [[nodiscard]] bgfx::TextureHandle GraphFallbackTexture(
         RenderTextureDimension dimension,
         bool normal) const noexcept;
+    [[nodiscard]] bgfx::UniformHandle& AcquireGraphUniform(
+        std::string_view name,
+        bool sampler) const;
 
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
@@ -82,9 +90,11 @@ private:
     // MAT-78/#16: per-graph texture sampler uniforms, created lazily by name and reused across binds so the
     // scene actually binds a graph material's own textures (slot >= 6), not just the builtin PBR slots.
     mutable std::unordered_map<std::string, bgfx::UniformHandle> graphSamplerUniforms_;
+    mutable std::unordered_map<std::string, RetiredGraphUniform> retiredGraphSamplerUniforms_;
     // Numeric graph uniforms are created lazily by generated shader name. Collection-backed uniforms are
     // refreshed from the global runtime store at bind time so global parameter edits do not recompile graphs.
     mutable std::unordered_map<std::string, bgfx::UniformHandle> graphUniforms_;
+    mutable std::unordered_map<std::string, RetiredGraphUniform> retiredGraphUniforms_;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle gbufferProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
@@ -149,30 +148,8 @@ inline void WriteRendererDebugLog(std::string_view category, std::string_view me
 }
 
 inline void WriteRendererMaterialGraphDebugLog(std::string_view category, std::string_view message) {
-    try {
-        std::ostringstream line;
-        line << RendererDebugLogNowMs()
-             << " tid=" << RendererDebugLogThreadId()
-             << " [RendererMaterialGraph/" << category << "] " << message;
-
-        std::lock_guard lock{ RendererDebugLogMutex() };
-        const std::string text = line.str();
-        for (std::string_view extension : { std::string_view{ ".log" }, std::string_view{ ".md" } }) {
-            std::ofstream& output = RendererDebugLogStreamFor(RendererMaterialGraphDebugLogPath(extension));
-            if (output.is_open()) {
-                output << text << '\n';
-                output.flush();
-            }
-        }
-#if defined(_WIN32)
-        std::string debugLine = text;
-        debugLine.push_back('\n');
-        OutputDebugStringA(debugLine.c_str());
-#endif
-        std::fprintf(stderr, "%s\n", text.c_str());
-        std::fflush(stderr);
-    } catch (...) {
-    }
+    static_cast<void>(category);
+    static_cast<void>(message);
 }
 
 } // namespace kb::render

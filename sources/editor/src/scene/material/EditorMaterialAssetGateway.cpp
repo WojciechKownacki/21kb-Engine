@@ -19,12 +19,16 @@
 
 #include <algorithm>
 #include <array>
-#include <fstream>
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -68,24 +72,8 @@ void SyncBuiltInGraphParameterOverrides(kb::render::RenderMaterialAssetData& mat
     }
 }
 
-[[nodiscard]] std::filesystem::path MaterialGatewayDebugLogPath() {
-    return std::filesystem::temp_directory_path() / "_material_graph_debug.log";
-}
-
 void WriteMaterialGatewayDebugLog(std::string_view message) {
-    try {
-        std::ofstream output{ MaterialGatewayDebugLogPath(), std::ios::out | std::ios::app };
-        if (output.is_open()) {
-            output << "[MaterialGraph] " << message << '\n';
-        }
-#if defined(_WIN32)
-        std::string debugLine{ "[MaterialGraph] " };
-        debugLine += message;
-        debugLine.push_back('\n');
-        OutputDebugStringA(debugLine.c_str());
-#endif
-    } catch (...) {
-    }
+    static_cast<void>(message);
 }
 
 [[nodiscard]] bool GraphOutputHasNormalLink(const kb::render::RenderMaterialAssetData& asset) noexcept {
@@ -95,6 +83,111 @@ void WriteMaterialGatewayDebugLog(std::string_view message) {
         }
     }
     return false;
+}
+
+struct MaterialFileTransactionEntry {
+    std::filesystem::path target;
+    std::filesystem::path staged;
+    std::filesystem::path backup;
+    std::function<bool(const std::filesystem::path&)> writeStaged;
+    std::function<bool(const std::filesystem::path&)> validateStaged;
+    bool targetExisted = false;
+    bool committed = false;
+};
+
+[[nodiscard]] std::filesystem::path MaterialTransactionSiblingPath(
+    const std::filesystem::path& target,
+    std::string_view suffix) {
+    static std::atomic<std::uint64_t> counter{ 0U };
+    const std::uint64_t serial = counter.fetch_add(1U, std::memory_order_relaxed);
+    const std::uint64_t tick = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    std::filesystem::path result = target;
+    result += ".kbtxn." + std::to_string(tick) + "." + std::to_string(serial) + "." + std::string{ suffix };
+    return result;
+}
+
+void RemoveMaterialTransactionFile(const std::filesystem::path& path) noexcept {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+[[nodiscard]] bool ReplaceMaterialTransactionFile(
+    const std::filesystem::path& source,
+    const std::filesystem::path& target) noexcept {
+#if defined(_WIN32)
+    return MoveFileExW(
+               source.c_str(),
+               target.c_str(),
+               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+    std::error_code error;
+    std::filesystem::rename(source, target, error);
+    return !error;
+#endif
+}
+
+void CleanupMaterialTransaction(std::vector<MaterialFileTransactionEntry>& entries) noexcept {
+    for (MaterialFileTransactionEntry& entry : entries) {
+        RemoveMaterialTransactionFile(entry.staged);
+        RemoveMaterialTransactionFile(entry.backup);
+    }
+}
+
+[[nodiscard]] bool RollBackMaterialTransaction(std::vector<MaterialFileTransactionEntry>& entries) noexcept {
+    bool restored = true;
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+        MaterialFileTransactionEntry& entry = *it;
+        if (!entry.committed) {
+            continue;
+        }
+        if (entry.targetExisted) {
+            restored = ReplaceMaterialTransactionFile(entry.backup, entry.target) && restored;
+        } else {
+            std::error_code error;
+            std::filesystem::remove(entry.target, error);
+            restored = !error && restored;
+        }
+        entry.committed = false;
+    }
+    CleanupMaterialTransaction(entries);
+    return restored;
+}
+
+[[nodiscard]] bool ExecuteMaterialFileTransaction(std::vector<MaterialFileTransactionEntry>& entries) {
+    if (entries.empty()) {
+        return false;
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        entry.staged = MaterialTransactionSiblingPath(entry.target, "stage");
+        entry.backup = MaterialTransactionSiblingPath(entry.target, "backup");
+        if (!entry.writeStaged(entry.staged) || !entry.validateStaged(entry.staged)) {
+            CleanupMaterialTransaction(entries);
+            return false;
+        }
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        std::error_code error;
+        entry.targetExisted = std::filesystem::exists(entry.target, error);
+        if (error || (entry.targetExisted &&
+                !std::filesystem::copy_file(
+                    entry.target,
+                    entry.backup,
+                    std::filesystem::copy_options::overwrite_existing,
+                    error))) {
+            CleanupMaterialTransaction(entries);
+            return false;
+        }
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        if (!ReplaceMaterialTransactionFile(entry.staged, entry.target)) {
+            static_cast<void>(RollBackMaterialTransaction(entries));
+            return false;
+        }
+        entry.committed = true;
+    }
+    CleanupMaterialTransaction(entries);
+    return true;
 }
 
 } // namespace
@@ -208,17 +301,27 @@ bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::asse
             ? scene.Assets().Manager().Mounts().Resolve(referenced.virtualPath).value_or(std::filesystem::path{})
             : referenced.physicalPath;
     };
+    std::vector<MaterialFileTransactionEntry> pendingWrites;
     if (materialToWrite.graphSourceAssetId != 0U || !materialToWrite.graphSourceAssetPath.empty()) {
         const kb::assets::AssetMetadata* sourceGraph = resolveReferencedAsset(
             materialToWrite.graphSourceAssetId,
             materialToWrite.graphSourceAssetPath,
             kb::render::kRenderMaterialGraphAssetType);
         const std::filesystem::path sourceGraphPath = sourceGraph != nullptr ? physicalPath(*sourceGraph) : std::filesystem::path{};
-        if (sourceGraph == nullptr || sourceGraphPath.empty() ||
-            !kb::render::RenderMaterialGraphAssetLoader::SaveGraph(sourceGraphPath, materialToWrite.graph)) {
+        if (sourceGraph == nullptr || sourceGraphPath.empty()) {
             WriteMaterialGatewayDebugLog("gateway-write-material-source-graph-save-failed asset=" + std::to_string(id.value));
             return false;
         }
+        const kb::render::RenderMaterialGraphDocument sourceGraphDocument = materialToWrite.graph;
+        pendingWrites.push_back(MaterialFileTransactionEntry{
+            .target = sourceGraphPath,
+            .writeStaged = [sourceGraphDocument](const std::filesystem::path& staged) {
+                return kb::render::RenderMaterialGraphAssetLoader::SaveGraph(staged, sourceGraphDocument);
+            },
+            .validateStaged = [](const std::filesystem::path& staged) {
+                return kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(staged).Succeeded();
+            },
+        });
         materialToWrite.graph.storageModel = "material-graph-asset";
 
         const kb::assets::AssetMetadata* materialType = resolveReferencedAsset(
@@ -236,14 +339,34 @@ bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::asse
                         .sourcePath = sourceGraph->virtualPath.generic_string(),
                     });
             const std::filesystem::path materialTypePath = physicalPath(*materialType);
-            if (!generatedType.Succeeded() || !generatedType.document.has_value() || materialTypePath.empty() ||
-                !kb::render::RenderMaterialTypeAssetLoader::SaveType(materialTypePath, *generatedType.document)) {
+            if (!generatedType.Succeeded() || !generatedType.document.has_value() || materialTypePath.empty()) {
                 WriteMaterialGatewayDebugLog("gateway-write-material-type-regeneration-failed asset=" + std::to_string(id.value));
                 return false;
             }
+            const kb::render::RenderMaterialTypeDocument materialTypeDocument = *generatedType.document;
+            pendingWrites.push_back(MaterialFileTransactionEntry{
+                .target = materialTypePath,
+                .writeStaged = [materialTypeDocument](const std::filesystem::path& staged) {
+                    return kb::render::RenderMaterialTypeAssetLoader::SaveType(staged, materialTypeDocument);
+                },
+                .validateStaged = [](const std::filesystem::path& staged) {
+                    const kb::render::RenderMaterialTypeDocumentParseResult result =
+                        kb::render::RenderMaterialTypeAssetLoader::LoadTypeWithDiagnostics(staged);
+                    return result.document.has_value() && result.diagnostics.empty();
+                },
+            });
         }
     }
-    if (!kb::render::RenderMaterialAssetWriter::Save(*path, materialToWrite)) {
+    pendingWrites.push_back(MaterialFileTransactionEntry{
+        .target = *path,
+        .writeStaged = [materialToWrite](const std::filesystem::path& staged) {
+            return kb::render::RenderMaterialAssetWriter::Save(staged, materialToWrite);
+        },
+        .validateStaged = [](const std::filesystem::path& staged) {
+            return kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(staged).Succeeded();
+        },
+    });
+    if (!ExecuteMaterialFileTransaction(pendingWrites)) {
         WriteMaterialGatewayDebugLog("gateway-write-material-save-failed asset=" + std::to_string(id.value) + " path=" + path->generic_string());
         return false;
     }

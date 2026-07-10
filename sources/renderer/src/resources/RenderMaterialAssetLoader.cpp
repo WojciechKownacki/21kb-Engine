@@ -4,6 +4,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
@@ -160,11 +161,7 @@ void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::As
     if (text.empty() || text == "_") {
         return numbers;
     }
-    std::istringstream input{ std::string{ text } };
-    float value = 0.0F;
-    while (input >> value) {
-        numbers.push_back(value);
-    }
+    static_cast<void>(ParseFiniteMaterialFloatSequence(text, numbers, 1U, 64U));
     return numbers;
 }
 
@@ -621,18 +618,60 @@ bool RenderMaterialTypeReferenceValidationResult::Succeeded() const noexcept {
     return diagnostics.empty();
 }
 
+bool RenderMaterialAssetParseResult::HasErrors() const noexcept {
+    return std::ranges::any_of(diagnostics, [](const RenderMaterialAssetParseDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialAssetParseDiagnosticSeverity::Error;
+    });
+}
+
+bool RenderMaterialAssetParseResult::HasWarnings() const noexcept {
+    return std::ranges::any_of(diagnostics, [](const RenderMaterialAssetParseDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialAssetParseDiagnosticSeverity::Warning;
+    });
+}
+
 bool RenderMaterialAssetParseResult::Succeeded() const noexcept {
-    return asset.has_value() && diagnostics.empty();
+    return asset.has_value() && !HasErrors();
+}
+
+std::string RenderMaterialAssetParseResult::DiagnosticMessage() const {
+    if (diagnostics.empty()) {
+        return {};
+    }
+
+    std::ostringstream output;
+    output << "Render material asset diagnostics";
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : diagnostics) {
+        output << "; code " << RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code);
+        if (diagnostic.assetId.IsValid()) {
+            output << ", asset " << diagnostic.assetId.value;
+        }
+        if (!diagnostic.path.empty()) {
+            output << ", path " << diagnostic.path.generic_string();
+        }
+        output << ": ";
+        if (diagnostic.line > 0U) {
+            output << "line " << diagnostic.line << ": ";
+        }
+        output << diagnostic.message;
+        if (!diagnostic.text.empty()) {
+            output << " [" << diagnostic.text << "]";
+        }
+    }
+    return output.str();
 }
 
 std::string RenderMaterialAssetParseResult::ErrorMessage() const {
-    if (diagnostics.empty()) {
+    if (!HasErrors()) {
         return {};
     }
 
     std::ostringstream output;
     output << "Render material asset load failed";
     for (const RenderMaterialAssetParseDiagnostic& diagnostic : diagnostics) {
+        if (diagnostic.severity != RenderMaterialAssetParseDiagnosticSeverity::Error) {
+            continue;
+        }
         output << "; code " << RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code);
         if (diagnostic.assetId.IsValid()) {
             output << ", asset " << diagnostic.assetId.value;

@@ -27,6 +27,7 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <array>
 #include <string>
@@ -38,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -78,6 +80,29 @@ enum class EditorDirtySceneResolution {
     Save,
     Discard,
 };
+
+enum class MaterialGraphSelectionOperation : std::uint8_t {
+    Replace,
+    Add,
+    Invert,
+    Remove,
+};
+
+[[nodiscard]] constexpr MaterialGraphSelectionOperation ResolveMaterialGraphSelectionOperation(
+    bool altDown,
+    bool controlDown,
+    bool shiftDown) noexcept {
+    if (altDown) {
+        return MaterialGraphSelectionOperation::Remove;
+    }
+    if (controlDown) {
+        return MaterialGraphSelectionOperation::Invert;
+    }
+    if (shiftDown) {
+        return MaterialGraphSelectionOperation::Add;
+    }
+    return MaterialGraphSelectionOperation::Replace;
+}
 
 class EditorSceneContext {
     struct MaterialGraphDragNodeStart {
@@ -340,11 +365,16 @@ public:
     [[nodiscard]] bool EndMaterialGraphCommentDrag();
     [[nodiscard]] bool CancelMaterialGraphCommentDrag();
     [[nodiscard]] bool IsMaterialGraphCommentDragging() const noexcept;
-    [[nodiscard]] bool BeginMaterialGraphBoxSelection(kb::assets::AssetId assetId, int x, int y, bool additive) noexcept;
+    [[nodiscard]] bool BeginMaterialGraphBoxSelection(
+        kb::assets::AssetId assetId,
+        int x,
+        int y,
+        MaterialGraphSelectionOperation operation) noexcept;
     [[nodiscard]] bool DragMaterialGraphBoxSelection(int x, int y) noexcept;
     [[nodiscard]] bool EndMaterialGraphBoxSelection(std::vector<std::uint32_t> nodeIds, std::uint32_t primaryNodeId);
     [[nodiscard]] bool IsMaterialGraphBoxSelecting() const noexcept;
     [[nodiscard]] bool MaterialGraphBoxSelectionAdditive() const noexcept;
+    [[nodiscard]] MaterialGraphSelectionOperation MaterialGraphBoxSelectionOperation() const noexcept;
     [[nodiscard]] int MaterialGraphBoxSelectionStartX() const noexcept;
     [[nodiscard]] int MaterialGraphBoxSelectionStartY() const noexcept;
     [[nodiscard]] int MaterialGraphBoxSelectionCurrentX() const noexcept;
@@ -517,10 +547,6 @@ public:
     void CancelMaterialGraphNodeRenameEdit() noexcept;
     [[nodiscard]] bool BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId);
     [[nodiscard]] bool IsMaterialGraphConstantInlineEditing() const noexcept;
-    [[nodiscard]] bool BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x);
-    [[nodiscard]] bool DragMaterialGraphConstantSlider(int x);
-    [[nodiscard]] bool EndMaterialGraphConstantSliderDrag();
-    [[nodiscard]] bool IsMaterialGraphConstantSliderDragging() const noexcept;
     void AppendMaterialGraphConstantInlineEditText(wchar_t character);
     void BackspaceMaterialGraphConstantInlineEdit();
     [[nodiscard]] bool CommitMaterialGraphConstantInlineEdit();
@@ -692,7 +718,13 @@ private:
         int offsetX = 0;
         int offsetY = 0;
     };
-    float materialGraphZoom_ = 0.72F;
+    struct MaterialGraphViewState {
+        float zoom = MaterialGraphInteractionPolicy::DefaultZoom;
+        int panX = 0;
+        int panY = 0;
+    };
+    std::unordered_map<std::uint64_t, MaterialGraphViewState> materialGraphViewStates_;
+    float materialGraphZoom_ = MaterialGraphInteractionPolicy::DefaultZoom;
     int materialGraphPanX_ = 0;
     int materialGraphPanY_ = 0;
     int materialGraphCanvasWidth_ = 1280;
@@ -731,9 +763,11 @@ private:
     int materialGraphBoxSelectionStartY_ = 0;
     int materialGraphBoxSelectionCurrentX_ = 0;
     int materialGraphBoxSelectionCurrentY_ = 0;
-    bool materialGraphBoxSelectionAdditive_ = false;
+    MaterialGraphSelectionOperation materialGraphBoxSelectionOperation_ = MaterialGraphSelectionOperation::Replace;
+    std::vector<std::uint32_t> materialGraphBoxSelectionBaseNodeIds_;
+    std::uint32_t materialGraphBoxSelectionBasePrimaryNodeId_ = 0U;
+    bool materialGraphBoxSelectionMoved_ = false;
     bool materialGraphBoxSelecting_ = false;
-    bool materialGraphConstantSliderDragging_ = false;
     bool materialGraphFocused_ = false;
     int materialEditorDetailsScrollOffset_ = 0;
     int materialGraphPanStartX_ = 0;
