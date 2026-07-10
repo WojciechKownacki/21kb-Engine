@@ -154,6 +154,34 @@ void AddGraphMigrationDiagnostic(
     return false;
 }
 
+[[nodiscard]] bool ParseSamplerFilter(std::string_view text, RenderMaterialGraphSamplerFilter& output) noexcept {
+    if (text == "Linear") {
+        output = RenderMaterialGraphSamplerFilter::Linear;
+        return true;
+    }
+    if (text == "Point") {
+        output = RenderMaterialGraphSamplerFilter::Point;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseSamplerWrap(std::string_view text, RenderMaterialGraphSamplerWrap& output) noexcept {
+    if (text == "Repeat") {
+        output = RenderMaterialGraphSamplerWrap::Repeat;
+        return true;
+    }
+    if (text == "Clamp") {
+        output = RenderMaterialGraphSamplerWrap::Clamp;
+        return true;
+    }
+    if (text == "Mirror") {
+        output = RenderMaterialGraphSamplerWrap::Mirror;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] RenderMaterialGraphNode* FindMutableGraphNode(RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept {
     for (RenderMaterialGraphNode& node : graph.nodes) {
         if (node.id == nodeId) {
@@ -473,6 +501,44 @@ void AddGraphMigrationDiagnostic(
         .editorOrder = editorOrder,
         .description = description == "_" ? std::string{} : DecodeToken(description),
     };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphSamplerState(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string nodeIdText;
+    std::string minFilterText;
+    std::string magFilterText;
+    std::string mipFilterText;
+    std::string wrapUText;
+    std::string wrapVText;
+    std::string trailing;
+    if (!(stream >> nodeIdText >> minFilterText >> magFilterText >> mipFilterText >> wrapUText >> wrapVText) ||
+        (stream >> trailing)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line,
+            "graphSamplerState", "Material graph sampler state requires node id, min/mag/mip filters and U/V wrap modes.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    std::uint32_t nodeId = 0U;
+    RenderMaterialGraphNode* node = nullptr;
+    RenderMaterialGraphSamplerState state{};
+    if (!ParseUInt32(nodeIdText, nodeId) || nodeId == 0U ||
+        (node = FindMutableGraphNode(graph, nodeId)) == nullptr ||
+        !ParseSamplerFilter(minFilterText, state.minFilter) ||
+        !ParseSamplerFilter(magFilterText, state.magFilter) ||
+        !ParseSamplerFilter(mipFilterText, state.mipFilter) ||
+        !ParseSamplerWrap(wrapUText, state.wrapU) ||
+        !ParseSamplerWrap(wrapVText, state.wrapV)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line,
+            "graphSamplerState", "Material graph sampler state references an invalid node or enum value.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    node->parameter.samplerState = state;
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -968,6 +1034,9 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     }
     if (keyword == "graphParameter") {
         return ParseGraphParameter(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphSamplerState") {
+        return ParseGraphSamplerState(rest, line, asset.graph, diagnostics);
     }
     if (keyword == "graphCustomCode") {
         return ParseGraphCustomCode(rest, line, asset.graph, diagnostics);

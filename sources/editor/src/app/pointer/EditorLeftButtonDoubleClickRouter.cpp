@@ -7,6 +7,7 @@
 #include "docking/DockMainLayoutResolver.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 
 #include <optional>
 
@@ -47,6 +48,40 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
             static_cast<void>(dockModel_.Commands().ToggleMaximizedLeaf(tab->leafId));
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return true;
+        }
+    }
+
+    const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::MaterialEditor,
+        messageWindow,
+        mainWindow_,
+        dockModel_,
+        floatingWindows_,
+        metrics_);
+    if (materialEditorContent.has_value()) {
+        const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
+            const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+                ? sceneContext_.MaterialEditor().WorkingCopy()
+                : sceneContext_.ReadMaterialDocumentAsset(materialId);
+            if (material.has_value()) {
+                for (auto it = material->graph.composites.rbegin(); it != material->graph.composites.rend(); ++it) {
+                    if (!it->collapsed) {
+                        continue;
+                    }
+                    const std::optional<RECT> compositeRect = MaterialEditorPanelRenderer::GraphCompositeRect(
+                        *materialEditorContent,
+                        material->graph,
+                        it->id,
+                        sceneContext_);
+                    if (compositeRect.has_value() && MaterialEditorPanelPointInRect(*compositeRect, x, y) &&
+                        sceneContext_.ExpandMaterialGraphComposite(materialId, it->id)) {
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return true;
+                    }
+                }
+            }
         }
     }
 

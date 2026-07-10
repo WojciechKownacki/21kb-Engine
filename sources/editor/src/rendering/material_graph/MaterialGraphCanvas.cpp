@@ -101,9 +101,16 @@ void MaterialGraphCanvas::AddLink(MaterialGraphCanvasLink link) {
     links_.push_back(std::move(link));
 }
 
+void MaterialGraphCanvas::AddOccluderWorld(MaterialGraphCanvasRect rect) {
+    if (rect.width > 0.0F && rect.height > 0.0F) {
+        occluders_.push_back(rect);
+    }
+}
+
 void MaterialGraphCanvas::Clear() noexcept {
     nodes_.clear();
     links_.clear();
+    occluders_.clear();
     selection_.clear();
     dragOrigins_.clear();
     marqueeBaseSelection_.clear();
@@ -244,8 +251,6 @@ MaterialGraphCanvasPoint MaterialGraphCanvas::PinCenterWorld(
             ? static_cast<std::uint32_t>(rowCount / 2U)
             : pin;
         y = centeredY(row, rowCount);
-    } else if (output && node.inputs.empty() && !node.valueFields.empty() && node.outputs.size() == 1U) {
-        y = HeaderHeight + BodyTopPadding + (PinRowHeight * TotalValueFieldRows(node) * 0.5F);
     } else if (output && !node.valueFields.empty() && node.outputs.size() > 1U) {
         y = HeaderHeight + BodyTopPadding + (PinRowHeight * (static_cast<float>(pin) + 0.5F));
     } else if (output && node.texturePreview.enabled) {
@@ -287,7 +292,11 @@ MaterialGraphCanvasPoint MaterialGraphCanvas::PinCenterWindow(
 }
 
 std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
-    MaterialGraphCanvasPoint local) const noexcept {
+    MaterialGraphCanvasPoint local,
+    const MaterialGraphCanvasPinPredicate& predicate) const {
+    if (!PointInsideViewportLocal(local)) {
+        return std::nullopt;
+    }
     const float radius = PinRadius * zoom_;
     const float rowHalf = std::max(radius + 4.0F, (PinRowHeight * zoom_) * 0.65F);
     const float pad = radius + 12.0F;
@@ -338,6 +347,36 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             }
             return false;
         };
+        std::optional<MaterialGraphCanvasPinHit> bestHit;
+        float bestDistanceSquared = std::numeric_limits<float>::max();
+        const auto consider = [&](std::size_t pin, bool output, bool horizontallyEligible, float verticalHalf) {
+            const MaterialGraphCanvasPoint pinWorld = PinCenterWorld(
+                node,
+                static_cast<std::uint32_t>(pin),
+                output);
+            const MaterialGraphCanvasPoint centerLocal = WorldToLocal(pinWorld);
+            if (!PointInsideViewportLocal(centerLocal) ||
+                std::abs(by - (pinWorld.y - node.y) * zoom_) > verticalHalf ||
+                !horizontallyEligible) {
+                return;
+            }
+            const MaterialGraphCanvasPinHit candidate{
+                static_cast<std::uint32_t>(nodeIndex),
+                static_cast<std::uint32_t>(pin),
+                output,
+            };
+            if (predicate && !predicate(candidate)) {
+                return;
+            }
+            const float dx = local.x - centerLocal.x;
+            const float dy = local.y - centerLocal.y;
+            const float distanceSquared = (dx * dx) + (dy * dy);
+            if (!bestHit.has_value() || distanceSquared < bestDistanceSquared) {
+                bestHit = candidate;
+                bestDistanceSquared = distanceSquared;
+            }
+        };
+
         for (std::size_t pin = 0U; pin < node.inputs.size(); ++pin) {
             const MaterialGraphCanvasPoint pinWorld = PinCenterWorld(
                 node,
@@ -348,13 +387,11 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
                 continue;
             }
             const bool outputOnRow = hasOutputOnRow(cy);
-            if (node.texturePreview.enabled ? bx <= texturePinLaneWidth : (!outputOnRow || bx <= center)) {
-                return MaterialGraphCanvasPinHit{
-                    static_cast<std::uint32_t>(nodeIndex),
-                    static_cast<std::uint32_t>(pin),
-                    false,
-                };
-            }
+            consider(
+                pin,
+                false,
+                node.texturePreview.enabled ? bx <= texturePinLaneWidth : (!outputOnRow || bx <= center),
+                rowHalf);
         }
 
         for (std::size_t pin = 0U; pin < node.outputs.size(); ++pin) {
@@ -363,21 +400,19 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
                 static_cast<std::uint32_t>(pin),
                 true);
             const float cy = (pinWorld.y - node.y) * zoom_;
-            const float outputRowHalf = node.inputs.empty() && !node.valueFields.empty() && node.outputs.size() == 1U
-                ? std::max(rowHalf, (PinRowHeight * std::max(1.0F, TotalValueFieldRows(node)) * 0.5F) * zoom_)
-                : rowHalf;
-            if (std::abs(by - cy) > outputRowHalf) {
+            if (std::abs(by - cy) > rowHalf) {
                 continue;
             }
             const bool inputOnRow = hasInputOnRow(cy);
             const bool outputOnlyOwnsFullRow = !inputOnRow && !outputUsesValueRows;
-            if (node.texturePreview.enabled ? bx >= screenWidth - texturePinLaneWidth : (outputOnlyOwnsFullRow || bx >= center)) {
-                return MaterialGraphCanvasPinHit{
-                    static_cast<std::uint32_t>(nodeIndex),
-                    static_cast<std::uint32_t>(pin),
-                    true,
-                };
-            }
+            consider(
+                pin,
+                true,
+                node.texturePreview.enabled ? bx >= screenWidth - texturePinLaneWidth : (outputOnlyOwnsFullRow || bx >= center),
+                rowHalf);
+        }
+        if (bestHit.has_value()) {
+            return bestHit;
         }
     }
     return std::nullopt;
@@ -397,8 +432,11 @@ std::optional<std::uint32_t> MaterialGraphCanvas::HitTestNodeLocal(MaterialGraph
     return std::nullopt;
 }
 
-std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPin(float windowX, float windowY) const noexcept {
-    return HitTestPinLocal(WindowToLocal(windowX, windowY));
+std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPin(
+    float windowX,
+    float windowY,
+    const MaterialGraphCanvasPinPredicate& predicate) const {
+    return HitTestPinLocal(WindowToLocal(windowX, windowY), predicate);
 }
 
 std::optional<std::uint32_t> MaterialGraphCanvas::HitTestNode(float windowX, float windowY) const noexcept {
@@ -406,6 +444,9 @@ std::optional<std::uint32_t> MaterialGraphCanvas::HitTestNode(float windowX, flo
 }
 
 std::optional<std::uint32_t> MaterialGraphCanvas::HitTestLinkLocal(MaterialGraphCanvasPoint local) const noexcept {
+    if (!PointInsideViewportLocal(local) || PointOccludedForLinks(local)) {
+        return std::nullopt;
+    }
     float bestDistance = std::numeric_limits<float>::max();
     std::optional<std::uint32_t> bestLink;
     for (std::size_t linkIndex = 0U; linkIndex < links_.size(); ++linkIndex) {
@@ -429,6 +470,25 @@ std::optional<std::uint32_t> MaterialGraphCanvas::HitTestLinkLocal(MaterialGraph
         return bestLink;
     }
     return std::nullopt;
+}
+
+bool MaterialGraphCanvas::PointInsideViewportLocal(MaterialGraphCanvasPoint local) const noexcept {
+    return local.x >= 0.0F && local.y >= 0.0F &&
+        local.x < viewport_.width && local.y < viewport_.height;
+}
+
+bool MaterialGraphCanvas::PointOccludedForLinks(MaterialGraphCanvasPoint local) const noexcept {
+    const MaterialGraphCanvasPoint world = LocalToWorld(local);
+    const auto contains = [world](const MaterialGraphCanvasRect& rect) noexcept {
+        return world.x > rect.x && world.x < rect.x + rect.width &&
+            world.y > rect.y && world.y < rect.y + rect.height;
+    };
+    for (const MaterialGraphCanvasNode& node : nodes_) {
+        if (contains(NodeBoundsWorld(node))) {
+            return true;
+        }
+    }
+    return std::ranges::any_of(occluders_, contains);
 }
 
 std::optional<std::uint32_t> MaterialGraphCanvas::HitTestLink(float windowX, float windowY) const noexcept {

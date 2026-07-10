@@ -671,9 +671,8 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
         HashU64(hash, static_cast<std::uint64_t>(uniform.source));
         HashU64(hash, uniform.collectionAssetId);
         HashString64(hash, uniform.collectionParameterStableId);
-        for (const float value : uniform.defaultValue) {
-            HashU64(hash, std::bit_cast<std::uint32_t>(value));
-        }
+        // Dynamic parameter defaults are binding data, not shader/program identity. Changing a
+        // default must update uploaded uniforms without creating a new GPU permutation.
     }
     HashU64(hash, reflection.textures.size());
     for (const RenderMaterialGraphReflectionTexture& texture : reflection.textures) {
@@ -747,11 +746,50 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         return result;
     }
     std::uint64_t dependencyHash = 1469598103934665603ULL;
+    // Resolution order is compiler input: two include roots containing the same logical
+    // name may resolve to different files. Keep both the ordered roots and the resolved
+    // canonical path in the identity instead of hashing only logical name/content.
+    HashU64(dependencyHash, request.includeDirs.size());
+    for (std::size_t index = 0U; index < request.includeDirs.size(); ++index) {
+        std::error_code canonicalError;
+        std::filesystem::path includePath = std::filesystem::weakly_canonical(request.includeDirs[index], canonicalError);
+        if (canonicalError) {
+            includePath = std::filesystem::path{ request.includeDirs[index] }.lexically_normal();
+        }
+        HashU64(dependencyHash, index);
+        HashString64(dependencyHash, includePath.generic_string());
+        artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
+            .name = "include-dir[" + std::to_string(index) + "]:" + includePath.generic_string(),
+            .contentHash = 0U,
+        });
+    }
+
+    std::error_code shadercCanonicalError;
+    std::filesystem::path shadercPath = std::filesystem::weakly_canonical(request.shadercPath, shadercCanonicalError);
+    if (shadercCanonicalError) {
+        shadercPath = std::filesystem::path{ request.shadercPath }.lexically_normal();
+    }
+    std::string shadercBytes;
+    if (!ReadTextFileStrict(shadercPath, shadercBytes)) {
+        AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+            "Material graph shader compiler identity could not be read: " + shadercPath.generic_string() + ".");
+        return result;
+    }
+    std::uint64_t shadercHash = 1469598103934665603ULL;
+    HashString64(shadercHash, shadercBytes);
+    HashString64(dependencyHash, shadercPath.generic_string());
+    HashU64(dependencyHash, shadercHash);
+    artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
+        .name = "shaderc:" + shadercPath.generic_string(),
+        .contentHash = shadercHash,
+    });
+
     HashU64(dependencyHash, dependencies.size());
     for (const ResolvedShaderDependency& dependency : dependencies) {
         std::uint64_t contentHash = 1469598103934665603ULL;
         HashString64(contentHash, dependency.content);
         HashString64(dependencyHash, dependency.name);
+        HashString64(dependencyHash, dependency.path.generic_string());
         HashU64(dependencyHash, contentHash);
         artifact.dependencies.push_back(RenderMaterialGraphArtifactDependency{
             .name = dependency.name,

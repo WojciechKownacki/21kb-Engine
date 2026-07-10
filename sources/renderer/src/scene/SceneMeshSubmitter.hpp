@@ -51,6 +51,7 @@ public:
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
+    void EndFrame(std::uint64_t frameIndex) const { passResources_.EndFrame(frameIndex); }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
 
 private:
