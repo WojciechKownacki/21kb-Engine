@@ -13,10 +13,12 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -98,10 +100,7 @@ namespace {
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& value) noexcept {
     text = Trim(text);
-    const char* first = text.data();
-    const char* last = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(first, last, value);
-    return result.ec == std::errc{} && result.ptr == last;
+    return kb::render::ParseFiniteMaterialFloatToken(text, value);
 }
 
 [[nodiscard]] bool IsMaterialFloatProperty(InspectorPropertyId property) noexcept {
@@ -380,7 +379,7 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool EvaluateMath(std::string_view text, float currentValue, float& output) noexcept {
     text = Trim(text);
-    if (text.empty()) {
+    if (text.empty() || !std::isfinite(currentValue)) {
         return false;
     }
 
@@ -427,9 +426,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         default:
             return false;
         }
+        if (!std::isfinite(value)) {
+            return false;
+        }
         index = next == std::string_view::npos ? text.size() : next;
     }
 
+    if (!std::isfinite(value)) {
+        return false;
+    }
     output = value;
     return true;
 }

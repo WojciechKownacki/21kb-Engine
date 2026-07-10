@@ -2,8 +2,9 @@
 
 #include "engine/assets/AssetRegistry.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "RenderMaterialAtomicFileWriter.hpp"
 
-#include <fstream>
 #include <memory>
 
 namespace kb::render {
@@ -97,6 +98,13 @@ std::vector<kb::assets::AssetId> RenderMaterialFunctionAssetLoader::DiscoverDepe
             AppendUnique(dependencies, id);
         }
     }
+    for (const std::uint64_t collectionAssetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(result.asset->graph)) {
+        const kb::assets::AssetId id{ collectionAssetId };
+        const kb::assets::AssetMetadata* dependency = registry.Find(id);
+        if (dependency != nullptr && dependency->type == kRenderMaterialParameterCollectionAssetType) {
+            AppendUnique(dependencies, id);
+        }
+    }
     return dependencies;
 }
 
@@ -127,13 +135,10 @@ RenderMaterialAssetParseResult RenderMaterialFunctionAssetLoader::LoadFunctionWi
 }
 
 bool RenderMaterialFunctionAssetLoader::SaveFunction(const std::filesystem::path& path, const RenderMaterialFunctionAssetData& function) {
-    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
-    if (!output) {
-        return false;
-    }
-    output << "# KB material function\n";
-    WriteRenderMaterialGraphDocument(output, function.graph);
-    return static_cast<bool>(output);
+    return detail::WriteMaterialFileAtomically(path, [&function](std::ostream& output) {
+        output << "# KB material function\n";
+        WriteRenderMaterialGraphDocument(output, function.graph);
+    });
 }
 
 } // namespace kb::render

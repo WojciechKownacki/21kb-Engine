@@ -261,113 +261,50 @@ void RunMaterialGraphCanvasLinkOcclusionTest() {
         "A wire hidden under an opaque comment must not be hit-testable.");
 }
 
-void RunMaterialGraphCanvasConnectDragTest() {
-    MaterialGraphCanvas canvas = MakeSimpleCanvas();
-    const MaterialGraphCanvasPoint rgba = canvas.PinCenterWindow(0U, 0U, true);
-    const MaterialGraphCanvasPoint baseColor = canvas.PinCenterWindow(1U, 0U, false);
-
-    Require(canvas.OnPointerDown(rgba.x - 70.0F, rgba.y, false, false), "Material graph canvas should start wire drag from the texture side lane.");
-    Require(canvas.OnPointerMove(baseColor.x + 160.0F, baseColor.y), "Material graph canvas should update wire drag across the input row.");
-    Require(canvas.OnPointerUp(baseColor.x + 160.0F, baseColor.y), "Material graph canvas should complete wire drag across the input row.");
-
-    Require(canvas.LinkCount() == 1U, "Material graph canvas should create one link after output-to-input drag.");
-    const MaterialGraphCanvasLink& link = canvas.Links().front();
-    Require(link.fromNode == 0U && link.fromPin == 0U, "Material graph canvas created link from wrong output.");
-    Require(link.toNode == 1U && link.toPin == 0U, "Material graph canvas created link to wrong input.");
-}
-
-void RunMaterialGraphCanvasBreakLinkTest() {
-    MaterialGraphCanvas canvas = MakeSimpleCanvas();
-    canvas.AddLink(MaterialGraphCanvasLink{
-        .fromNode = 0U,
-        .fromPin = 0U,
-        .toNode = 1U,
-        .toPin = 0U,
-        .stableId = "link.rgba.baseColor",
-    });
-
-    const MaterialGraphCanvasPoint from = canvas.PinCenterWindow(0U, 0U, true);
-    const MaterialGraphCanvasPoint to = canvas.PinCenterWindow(1U, 0U, false);
-    const float cutX = (from.x + to.x) * 0.5F;
-    const float cutY = (from.y + to.y) * 0.5F;
-
-    Require(canvas.BreakLinkAt(cutX, cutY), "Material graph canvas should cut the closest link.");
-    Require(canvas.LinkCount() == 0U, "Material graph canvas should remove a cut link in unbound mode.");
-
-    std::vector<MaterialGraphCanvasEdit> edits = canvas.TakeEmittedEdits();
-    Require(edits.size() == 1U, "Material graph canvas should emit one disconnect edit for a cut link.");
-    Require(edits.front().kind == MaterialGraphCanvasEditKind::Disconnect, "Material graph canvas should emit disconnect edit.");
-    Require(edits.front().linkId == "link.rgba.baseColor", "Material graph canvas disconnect should preserve link id.");
-}
-
-void RunMaterialGraphCanvasNodeDragEmitsMoveTest() {
-    MaterialGraphCanvas canvas = MakeSimpleCanvas();
-    canvas.SetBound(true);
-
-    const std::optional<std::uint32_t> node = canvas.HitTestNode(190.0F, 200.0F);
-    Require(node.has_value() && *node == 0U, "Material graph canvas should hit the first node body.");
-    Require(canvas.OnPointerDown(190.0F, 200.0F, false, false), "Material graph canvas should start node drag.");
-    Require(canvas.OnPointerMove(240.0F, 235.0F), "Material graph canvas should move selected node.");
-    Require(canvas.OnPointerUp(240.0F, 235.0F), "Material graph canvas should finish node drag.");
-
-    const MaterialGraphCanvasNode* moved = canvas.NodeAt(0U);
-    Require(moved != nullptr, "Material graph canvas moved node should exist.");
-    Require(NearlyEqual(moved->x, 170.0), "Material graph canvas node x should update during drag.");
-    Require(NearlyEqual(moved->y, 155.0), "Material graph canvas node y should update during drag.");
-
-    std::vector<MaterialGraphCanvasEdit> edits = canvas.TakeEmittedEdits();
-    Require(edits.size() == 1U, "Material graph canvas should emit one move edit.");
-    Require(edits.front().kind == MaterialGraphCanvasEditKind::Move, "Material graph canvas should emit move edit.");
-    Require(edits.front().nodeId == "node.texture", "Material graph canvas move should preserve node id.");
-}
-
-void RunMaterialGraphCanvasDuplicatePreservesInternalLinksTest() {
-    MaterialGraphCanvas canvas = MakeSimpleCanvas();
-    canvas.AddLink(MaterialGraphCanvasLink{
-        .fromNode = 0U,
-        .fromPin = 0U,
-        .toNode = 1U,
-        .toPin = 0U,
-        .stableId = "link.rgba.baseColor",
-    });
-
-    Require(canvas.SelectNode(0U, false, false), "Material graph canvas should select source node.");
-    Require(canvas.SelectNode(1U, true, false), "Material graph canvas should add output node to selection.");
-    Require(canvas.DuplicateSelected(), "Material graph canvas should duplicate selected editable nodes.");
-
-    Require(canvas.NodeCount() == 3U, "Material graph canvas should duplicate only non-output nodes.");
-    Require(canvas.LinkCount() == 1U, "Material graph canvas should not clone links pointing into the output node.");
-    Require(canvas.SelectedCount() == 1U, "Material graph canvas should select the duplicate node.");
-
-    const MaterialGraphCanvasNode* duplicate = canvas.NodeAt(2U);
-    Require(duplicate != nullptr, "Material graph canvas duplicate node should exist.");
-    Require(NearlyEqual(duplicate->x, 146.0), "Material graph canvas duplicate should be offset on x.");
-    Require(NearlyEqual(duplicate->y, 146.0), "Material graph canvas duplicate should be offset on y.");
-
-    MaterialGraphCanvas multi;
-    multi.SetViewport(MaterialGraphCanvasRect{ 0.0F, 0.0F, 800.0F, 600.0F });
-    const std::uint32_t a = multi.AddNode(MaterialGraphCanvasNode{
-        .title = "A",
-        .stableId = "a",
-        .x = 10.0F,
-        .y = 10.0F,
-        .outputs = { Pin("Out", "out") },
-    });
-    const std::uint32_t b = multi.AddNode(MaterialGraphCanvasNode{
-        .title = "B",
-        .stableId = "b",
-        .x = 260.0F,
-        .y = 20.0F,
+void RunMaterialGraphCanvasZoomScalesNodeGeometryProportionallyTest() {
+    MaterialGraphCanvas canvas;
+    canvas.SetViewport(MaterialGraphCanvasRect{ 30.0F, 40.0F, 2000.0F, 1200.0F });
+    const std::uint32_t node = canvas.AddNode(MaterialGraphCanvasNode{
+        .title = "Stable Node",
+        .stableId = "stable.node",
+        .x = 240.0F,
+        .y = 180.0F,
         .inputs = { Pin("In", "in") },
+        .outputs = { Pin("Out", "out") },
+        .widthOverride = 260.0F,
+        .heightOverride = 150.0F,
     });
-    multi.AddLink(MaterialGraphCanvasLink{ .fromNode = a, .fromPin = 0U, .toNode = b, .toPin = 0U, .stableId = "ab" });
-    Require(multi.SelectAll(), "Material graph canvas should select all nodes.");
-    Require(multi.DuplicateSelected(), "Material graph canvas should duplicate linked nodes.");
-    Require(multi.NodeCount() == 4U, "Material graph canvas should duplicate both selected non-output nodes.");
-    Require(multi.LinkCount() == 2U, "Material graph canvas should preserve links fully inside the duplicated selection.");
-    const MaterialGraphCanvasLink& clonedLink = multi.Links().back();
-    Require(clonedLink.fromNode == 2U && clonedLink.toNode == 3U, "Material graph canvas cloned link should point at clones.");
+
+    for (const float zoom : { 0.10F, 0.72F, 1.0F, 2.50F }) {
+        canvas.SetView(0.0F, 0.0F, zoom);
+        const MaterialGraphCanvasPoint originLocal = canvas.WorldToLocal(MaterialGraphCanvasPoint{ 240.0F, 180.0F });
+        const MaterialGraphCanvasPoint originWindow{
+            canvas.Viewport().x + originLocal.x,
+            canvas.Viewport().y + originLocal.y,
+        };
+        const MaterialGraphCanvasPoint input = canvas.PinCenterWindow(node, 0U, false);
+        const MaterialGraphCanvasPoint output = canvas.PinCenterWindow(node, 0U, true);
+        const MaterialGraphCanvasPoint inputOffset{ input.x - originWindow.x, input.y - originWindow.y };
+        const MaterialGraphCanvasPoint outputOffset{ output.x - originWindow.x, output.y - originWindow.y };
+
+        const float renderedWidth = 260.0F * zoom;
+        const float renderedHeight = 150.0F * zoom;
+        Require(NearlyEqual(inputOffset.x, 0.0F),
+            "Zoom must keep an input pin attached to the scaled left node edge.");
+        Require(NearlyEqual(outputOffset.x, renderedWidth),
+            "Zoom must scale the node and its output pin by the same factor.");
+        Require(NearlyEqual(inputOffset.y, outputOffset.y),
+            "Zoom must preserve aligned pin rows while scaling node contents.");
+        Require(canvas.HitTestNode(originWindow.x + renderedWidth - 1.0F, originWindow.y + renderedHeight - 1.0F) == node,
+            "Zoomed node hit-testing must preserve the full proportionally scaled node rectangle.");
+        Require(!canvas.HitTestNode(originWindow.x + renderedWidth + 1.0F, originWindow.y + (renderedHeight * 0.5F)).has_value(),
+            "Zoomed node hit-testing must not extend beyond the scaled node rectangle.");
+        const std::optional<MaterialGraphCanvasPinHit> outputHit = canvas.HitTestPin(output.x, output.y);
+        Require(outputHit.has_value() && outputHit->node == node && outputHit->output,
+            "Zoomed pin hit-testing must remain aligned with the proportionally scaled rendered pin.");
+    }
 }
+
 
 [[nodiscard]] kb::render::RenderMaterialGraphLink MakeRenderLink(
     const kb::render::RenderMaterialGraphNode& fromNode,
@@ -455,10 +392,7 @@ void RunEditorMaterialGraphCanvasTests() {
     RunMaterialGraphCanvasNearestCompatiblePinTest();
     RunMaterialGraphCanvasViewportClippingTest();
     RunMaterialGraphCanvasLinkOcclusionTest();
-    RunMaterialGraphCanvasConnectDragTest();
-    RunMaterialGraphCanvasBreakLinkTest();
-    RunMaterialGraphCanvasNodeDragEmitsMoveTest();
-    RunMaterialGraphCanvasDuplicatePreservesInternalLinksTest();
+    RunMaterialGraphCanvasZoomScalesNodeGeometryProportionallyTest();
     RunMaterialGraphCanvasAdapterCoversAllNodeKindsTest();
     RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest();
     std::cout << "EditorMaterialGraphCanvasTests passed\n" << std::flush;

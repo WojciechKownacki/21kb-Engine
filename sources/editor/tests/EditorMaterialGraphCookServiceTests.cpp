@@ -209,6 +209,32 @@ void RunFailedGraphTest() {
 #endif
 }
 
+void RunEditorOnlyGraphChangesKeepCookVariantIdentityTest() {
+    EditorMaterialGraphCookConfig config{};
+    config.cacheRoot = (std::filesystem::temp_directory_path() / "kb_cook_semantic_identity").generic_string();
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x9026U };
+
+    RenderMaterialAssetData original = MakeConstantColorMaterial("1 0 0 1");
+    RenderMaterialAssetData organized = original;
+    organized.graph.nodes[1].positionX = 4096;
+    organized.graph.nodes[1].positionY = -2048;
+    organized.graph.nodes[1].parameter.displayName = "Editor-only rename";
+    organized.graph.comments.push_back(kb::render::RenderMaterialGraphCommentBox{
+        .id = 8U, .positionX = 0, .positionY = 0, .width = 640, .height = 480, .text = "Layout",
+    });
+    const EditorMaterialGraphCookResult first = service.CookNow(assetId, original);
+    const EditorMaterialGraphCookResult editorOnly = service.CookNow(assetId, organized);
+    Require(first.variantKey == editorOnly.variantKey,
+        "P2.6: layout, comment and display-name edits must preserve the canonical cook variant identity");
+
+    RenderMaterialAssetData semantic = original;
+    semantic.graph.nodes[1].parameter.defaultValueHint = "0 1 0 1";
+    const EditorMaterialGraphCookResult changed = service.CookNow(assetId, semantic);
+    Require(!(first.variantKey == changed.variantKey),
+        "P2.6: a shader-semantic graph edit must produce a different cook variant identity");
+}
+
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
 [[nodiscard]] EditorMaterialGraphCookConfig MakeCookConfig(std::string cacheSubdir) {
     EditorMaterialGraphCookConfig config{};
@@ -527,6 +553,7 @@ void RunCookBannerMappingTest() {
 void RunEditorMaterialGraphCookServiceTests() {
     RunCookUnavailableTest();
     RunFailedGraphTest();
+    RunEditorOnlyGraphChangesKeepCookVariantIdentityTest();
     RunCookBannerMappingTest();
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
     RunSynchronousCookProducesBinaryTest();

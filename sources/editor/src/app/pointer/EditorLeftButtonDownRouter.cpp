@@ -535,9 +535,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         case MaterialEditorGraphNodePropertyHitKind::Slider:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
                             static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property.nodeId));
-                            if (sceneContext_.BeginMaterialGraphConstantSliderDrag(materialId, property.nodeId, property.componentIndex, x)) {
-                                SetCapture(messageWindow);
-                            }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::EnumField:
                             sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
@@ -663,9 +660,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
                     static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
-                    if (sceneContext_.BeginMaterialGraphConstantSliderDrag(materialId, constant->nodeId, constant->componentIndex, x)) {
-                        SetCapture(messageWindow);
-                    }
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
                 }
@@ -707,7 +701,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     static_cast<void>(sceneContext_.AddMaterialGraphNode(materialId, *shortcutKind, graphPoint.x, graphPoint.y));
                 } else {
                     static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
-                    if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, KeyDown(VK_CONTROL) || KeyDown(VK_SHIFT))) {
+                    const MaterialGraphSelectionOperation selectionOperation =
+                        ResolveMaterialGraphSelectionOperation(
+                            KeyDown(VK_MENU),
+                            KeyDown(VK_CONTROL),
+                            KeyDown(VK_SHIFT));
+                    if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, selectionOperation)) {
                         SetCapture(messageWindow);
                     }
                 }

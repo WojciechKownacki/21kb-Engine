@@ -1543,6 +1543,41 @@ void RunMaterialGraphVisualRedesignSuite(Report& report) {
 
     SelectObject(memoryDc, previous);
     DeleteObject(bitmap);
+
+    constexpr int narrowWidth = 434;
+    constexpr int narrowHeight = 336;
+    const RECT narrowContent{ 0, 0, narrowWidth, narrowHeight };
+    const MaterialEditorPanelLayout narrowLayout = MaterialEditorPanelRenderer::ResolveLayout(narrowContent);
+    report.Check(narrowLayout.compactToolbar, "Use responsive Material Editor toolbar for the reported narrow production viewport");
+    report.Check(
+        narrowLayout.infoButton.left >= narrowContent.left && narrowLayout.validateButton.right <= narrowContent.right,
+        "Keep all Material Editor toolbar command groups inside the narrow production viewport");
+    std::vector<std::uint32_t> narrowFrameNodeIds;
+    narrowFrameNodeIds.reserve(material.graph.nodes.size());
+    for (const kb::render::RenderMaterialGraphNode& node : material.graph.nodes) {
+        narrowFrameNodeIds.push_back(node.id);
+    }
+    if (!narrowFrameNodeIds.empty()) {
+        static_cast<void>(context.SetMaterialGraphNodeSelection(narrowFrameNodeIds, narrowFrameNodeIds.front()));
+        static_cast<void>(context.FrameSelectedMaterialGraphNodes(
+            MaterialEditorPanelRectWidth(narrowLayout.graphCanvas),
+            MaterialEditorPanelRectHeight(narrowLayout.graphCanvas)));
+        static_cast<void>(context.ClearMaterialGraphNodeSelection());
+    }
+
+    HBITMAP narrowBitmap = CreateCompatibleBitmap(screenDc, narrowWidth, narrowHeight);
+    HGDIOBJ narrowPrevious = SelectObject(memoryDc, narrowBitmap);
+    renderer.Paint(memoryDc, narrowContent, EditorTheme{}, context);
+    const std::filesystem::path narrowOutputPath =
+        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorResponsiveNarrow.bmp";
+    if (bmpEncoder.has_value()) {
+        Gdiplus::Bitmap narrowImage(narrowBitmap, nullptr);
+        report.Check(narrowImage.Save(narrowOutputPath.wstring().c_str(), &*bmpEncoder, nullptr) == Gdiplus::Ok,
+            "Save responsive narrow Material Editor screenshot artifact");
+        report.Note("Responsive narrow Material Editor screenshot: " + narrowOutputPath.string());
+    }
+    SelectObject(memoryDc, narrowPrevious);
+    DeleteObject(narrowBitmap);
     DeleteDC(memoryDc);
     ReleaseDC(nullptr, screenDc);
 }
@@ -2293,6 +2328,7 @@ void RunPluginsPanelSuite(Report& report) {
 void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
     EditorSceneContext context;
     const kb::assets::AssetId materialId{ 0x7110U };
+    const kb::assets::AssetId secondMaterialId{ 0x7111U };
     kb::render::RenderMaterialAssetData material{};
     material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
@@ -2308,6 +2344,12 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         .positionX = 320,
         .positionY = 20,
     });
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 320,
+        .positionY = 300,
+    });
     kb::render::RenderMaterialGraphLink link{
         .fromNodeId = 2U,
         .fromPinId = kb::render::RenderMaterialGraphStablePinId(kb::render::RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
@@ -2321,11 +2363,95 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
     material.graph.comments.push_back(kb::render::RenderMaterialGraphCommentBox{
         .id = 10U, .positionX = 0, .positionY = 0, .width = 200, .height = 200, .text = "Group",
     });
+    material.graph.comments.push_back(kb::render::RenderMaterialGraphCommentBox{
+        .id = 11U, .positionX = 520, .positionY = 280, .width = 240, .height = 160, .text = "Context target",
+    });
     material.graph.composites.push_back(kb::render::RenderMaterialGraphCompositeSubgraph{
         .id = 20U, .positionX = 0, .positionY = 0, .width = 420, .height = 260,
         .collapsed = true, .name = "Collapsed", .nodeIds = { 2U, 3U },
     });
-    context.MaterialEditor().Open(materialId, material);
+    const std::filesystem::path viewStateRoot =
+        std::filesystem::temp_directory_path() / "21kb_selftest" / "material_graph_view_state";
+    const std::filesystem::path firstGraphPath = viewStateRoot / "First.kbmaterialgraph";
+    const std::filesystem::path secondGraphPath = viewStateRoot / "Second.kbmaterialgraph";
+    const bool firstViewFixtureSaved =
+        kb::render::RenderMaterialGraphAssetLoader::SaveGraph(firstGraphPath, material.graph);
+    std::filesystem::create_directories(secondGraphPath.parent_path());
+    std::ofstream legacySecondGraph{ secondGraphPath, std::ios::trunc };
+    legacySecondGraph << "graphVersion 1\n"
+                      << "graphShadingModel lit\n"
+                      << "graphNode 1 MaterialOutput 640 240\n";
+    legacySecondGraph.close();
+    const bool viewFixturesSaved = firstViewFixtureSaved && static_cast<bool>(legacySecondGraph);
+    const bool viewFixturesRegistered = viewFixturesSaved &&
+        context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+            .id = materialId,
+            .type = kb::render::kRenderMaterialGraphAssetType,
+            .name = "FirstGraphViewState",
+            .virtualPath = "/Game/Materials/FirstGraphViewState.kbmaterialgraph",
+            .physicalPath = firstGraphPath,
+            .runtimeLoadable = true,
+        }) &&
+        context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+            .id = secondMaterialId,
+            .type = kb::render::kRenderMaterialGraphAssetType,
+            .name = "SecondGraphViewState",
+            .virtualPath = "/Game/Materials/SecondGraphViewState.kbmaterialgraph",
+            .physicalPath = secondGraphPath,
+            .runtimeLoadable = true,
+        });
+    const bool firstOpened = viewFixturesRegistered && context.OpenMaterialEditorAsset(materialId);
+    report.Check(firstOpened, "P2.3 open first production graph document for per-document view-state verification");
+    if (!firstOpened) {
+        return;
+    }
+    context.FocusMaterialGraph(true);
+
+    static_cast<void>(context.ZoomMaterialGraph(120, 240, 180));
+    static_cast<void>(context.BeginMaterialGraphPan(0, 0));
+    static_cast<void>(context.DragMaterialGraphPan(48, 32));
+    static_cast<void>(context.EndMaterialGraphPan());
+    const float firstZoom = context.MaterialGraphZoom();
+    const int firstPanX = context.MaterialGraphPanX();
+    const int firstPanY = context.MaterialGraphPanY();
+    const bool firstTransientStateStarted =
+        context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 320, 240) &&
+        context.OpenMaterialGraphContextMenuForPinConnection(materialId, 320, 240, 180, 120) &&
+        context.BeginMaterialGraphPan(20, 20);
+    const bool secondOpened = context.OpenMaterialEditorAsset(secondMaterialId);
+    const bool secondMigrationWarningVisible = secondOpened &&
+        std::ranges::any_of(context.MaterialEditor().Diagnostics(), [](const std::string& diagnostic) {
+            return diagnostic.find("graph_migration") != std::string::npos;
+        });
+    const bool secondStartsDefault = secondOpened &&
+        std::fabs(context.MaterialGraphZoom() - MaterialGraphInteractionPolicy::DefaultZoom) < 0.0001F &&
+        context.MaterialGraphPanX() == 0 && context.MaterialGraphPanY() == 0 &&
+        !context.HasMaterialGraphPinConnection() &&
+        !context.IsMaterialGraphContextMenuOpen() &&
+        !context.IsMaterialGraphFocused() &&
+        !context.EndMaterialGraphPan();
+    static_cast<void>(context.ZoomMaterialGraph(-120, 320, 220));
+    static_cast<void>(context.BeginMaterialGraphPan(0, 0));
+    static_cast<void>(context.DragMaterialGraphPan(-64, 24));
+    static_cast<void>(context.EndMaterialGraphPan());
+    const float secondZoom = context.MaterialGraphZoom();
+    const int secondPanX = context.MaterialGraphPanX();
+    const int secondPanY = context.MaterialGraphPanY();
+    const bool firstRestored = context.OpenMaterialEditorAsset(materialId) &&
+        std::fabs(context.MaterialGraphZoom() - firstZoom) < 0.0001F &&
+        context.MaterialGraphPanX() == firstPanX && context.MaterialGraphPanY() == firstPanY;
+    const bool texturePickerStarted = firstRestored &&
+        context.OpenMaterialGraphTexturePicker(materialId, 4U, {});
+    const bool secondRestored = texturePickerStarted && context.OpenMaterialEditorAsset(secondMaterialId) &&
+        std::fabs(context.MaterialGraphZoom() - secondZoom) < 0.0001F &&
+        context.MaterialGraphPanX() == secondPanX && context.MaterialGraphPanY() == secondPanY &&
+        !context.IsMaterialGraphTexturePickerOpen();
+    const bool firstReopenedForRemainingTests = context.OpenMaterialEditorAsset(materialId);
+    report.Check(firstTransientStateStarted && secondStartsDefault && secondMigrationWarningVisible && firstRestored && texturePickerStarted && secondRestored && firstReopenedForRemainingTests,
+        "P1.24/P2.3/P2.11 production switching resets transient interaction state, isolates view state and keeps standalone graph migration warnings visible");
+    if (!firstReopenedForRemainingTests) {
+        return;
+    }
     context.FocusMaterialGraph(true);
 
     report.Check(context.DetachMaterialGraphInputPinConnection(materialId, 1U, "baseColor", 20, 20),
@@ -2333,6 +2459,21 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
     report.Check(context.CancelMaterialGraphPinConnection() && context.MaterialEditor().WorkingCopy()->graph.links.size() == 1U &&
             !context.MaterialEditor().Dirty() && !context.CanUndoSceneCommand(),
         "P1.22 cancel rewire restores original link without history");
+
+    const bool dragCreateOpened = context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 420, 260) &&
+        context.OpenMaterialGraphContextMenuForPinConnection(materialId, 420, 260, 460, 180) &&
+        context.IsMaterialGraphContextMenuPinFiltered();
+    const bool dragCreateExecuted = dragCreateOpened &&
+        context.ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand::CreateMultiply);
+    const std::uint32_t dragCreatedNodeId = context.SelectedMaterialGraphNodeId();
+    const bool dragCreateConnected = dragCreateExecuted && dragCreatedNodeId != 0U &&
+        std::ranges::any_of(context.MaterialEditor().WorkingCopy()->graph.links,
+            [dragCreatedNodeId](const kb::render::RenderMaterialGraphLink& createdLink) {
+                return createdLink.fromNodeId == 2U && createdLink.toNodeId == dragCreatedNodeId;
+            });
+    report.Check(dragCreateConnected && !context.HasMaterialGraphPinConnection() &&
+            !context.IsMaterialGraphContextMenuOpen() && context.UndoSceneCommand(),
+        "P1.23 filtered drag-create atomically creates, autoconnects and records the compatible node");
 
     static_cast<void>(context.SetMaterialGraphNodeSelection({ 2U, 3U }, 2U));
     static_cast<void>(context.SelectMaterialGraphContextTarget(3U, 0U));
@@ -2344,6 +2485,171 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         "P1.27 one-pixel RMB jitter remains a context-menu click");
 
     static_cast<void>(context.SelectMaterialGraphComment(10U));
+    const bool contextCommentRetargeted = context.SelectMaterialGraphContextTarget(0U, 11U) &&
+        context.SelectedMaterialGraphCommentId() == 11U;
+    const bool contextCommentDeleted = contextCommentRetargeted &&
+        context.DeleteSelectedMaterialGraphComment(materialId) &&
+        context.MaterialEditor().GraphComment(10U).has_value() &&
+        !context.MaterialEditor().GraphComment(11U).has_value();
+    report.Check(contextCommentDeleted && context.UndoSceneCommand() &&
+            context.MaterialEditor().GraphComment(11U).has_value(),
+        "P1.28 RMB comment context retargets deletion to the comment under the pointer and supports Undo");
+
+    static_cast<void>(context.SetMaterialGraphNodeSelection({ 2U, 3U }, 2U));
+    report.Check(
+        ResolveMaterialGraphSelectionOperation(false, true, false) == MaterialGraphSelectionOperation::Invert &&
+            ResolveMaterialGraphSelectionOperation(false, false, true) == MaterialGraphSelectionOperation::Add &&
+            ResolveMaterialGraphSelectionOperation(true, true, true) == MaterialGraphSelectionOperation::Remove &&
+            ResolveMaterialGraphSelectionOperation(false, false, false) == MaterialGraphSelectionOperation::Replace,
+        "P2.1 production modifier mapping preserves Ctrl-invert, Shift-add, Alt-remove and plain-replace");
+    report.Check(context.BeginMaterialGraphBoxSelection(materialId, 0, 0, MaterialGraphSelectionOperation::Invert) &&
+            context.EndMaterialGraphBoxSelection({ 3U }, 3U) &&
+            context.SelectedMaterialGraphNodeIds() == std::vector<std::uint32_t>{ 2U } &&
+            context.SelectedMaterialGraphNodeId() == 2U,
+        "P2.1 Ctrl marquee inverts membership instead of behaving like Shift-add");
+    report.Check(context.BeginMaterialGraphBoxSelection(materialId, 0, 0, MaterialGraphSelectionOperation::Add) &&
+            context.EndMaterialGraphBoxSelection({ 3U }, 3U) &&
+            context.SelectedMaterialGraphNodeIds() == std::vector<std::uint32_t>({ 2U, 3U }) &&
+            context.SelectedMaterialGraphNodeId() == 3U,
+        "P2.1 Shift marquee adds hits and assigns an explicit primary node");
+    report.Check(context.BeginMaterialGraphBoxSelection(materialId, 0, 0, MaterialGraphSelectionOperation::Remove) &&
+            context.EndMaterialGraphBoxSelection({ 2U }, 2U) &&
+            context.SelectedMaterialGraphNodeIds() == std::vector<std::uint32_t>{ 3U } &&
+            context.SelectedMaterialGraphNodeId() == 3U,
+        "P2.1 Alt marquee removes hits and preserves a deterministic primary node");
+    report.Check(context.BeginMaterialGraphBoxSelection(materialId, 0, 0, MaterialGraphSelectionOperation::Replace) &&
+            context.EndMaterialGraphBoxSelection({ 2U }, 2U) &&
+            context.SelectedMaterialGraphNodeIds() == std::vector<std::uint32_t>{ 2U } &&
+            context.SelectedMaterialGraphNodeId() == 2U,
+        "P2.1 plain marquee replaces selection");
+
+    report.Check(context.BeginMaterialGraphNodeDrag(materialId, 2U, 100, 100) &&
+            !context.DragMaterialGraphNode(101, 101) && context.EndMaterialGraphNodeDrag() &&
+            context.MaterialEditor().GraphNodePosition(2U) == std::optional<std::pair<std::int32_t, std::int32_t>>{ { 20, 20 } } &&
+            !context.MaterialEditor().Dirty(),
+        "P2.2 one-pixel node jitter stays below the shared drag threshold and creates no edit");
+    report.Check(context.BeginMaterialGraphNodeDrag(materialId, 2U, 100, 100) &&
+            context.DragMaterialGraphNode(120, 100) && context.EndMaterialGraphNodeDrag() &&
+            context.MaterialEditor().GraphNodePosition(2U)->first % MaterialGraphInteractionPolicy::GridSpacing == 0 &&
+            context.CanUndoSceneCommand() && context.UndoSceneCommand() &&
+            context.MaterialEditor().GraphNodePosition(2U) == std::optional<std::pair<std::int32_t, std::int32_t>>{ { 20, 20 } },
+        "P2.2 committed node drag snaps its anchor to the visible graph grid and records one undo command");
+
+    const RECT feedbackContent{ 0, 0, 1280, 820 };
+    const kb::render::RenderMaterialGraphDocument& feedbackGraph = context.MaterialEditor().WorkingCopy()->graph;
+    MaterialGraphCanvasDocumentBuildResult feedbackCanvas =
+        MaterialEditorPanelBuildInteractiveGraphCanvas(feedbackContent, feedbackGraph, context, materialId);
+    const auto feedbackPinCenter = [&feedbackCanvas](std::uint32_t nodeId, std::string_view pin, bool output) -> std::optional<POINT> {
+        for (std::uint32_t nodeIndex = 0U; nodeIndex < feedbackCanvas.canvas.NodeCount(); ++nodeIndex) {
+            const MaterialGraphCanvasNode* node = feedbackCanvas.canvas.NodeAt(nodeIndex);
+            if (node == nullptr || node->stableId != std::to_string(nodeId)) {
+                continue;
+            }
+            const std::vector<MaterialGraphCanvasPin>& pins = output ? node->outputs : node->inputs;
+            for (std::uint32_t pinIndex = 0U; pinIndex < pins.size(); ++pinIndex) {
+                if (pins[pinIndex].stableId == pin) {
+                    const MaterialGraphCanvasPoint center =
+                        feedbackCanvas.canvas.PinCenterWindow(nodeIndex, pinIndex, output);
+                    return POINT{
+                        static_cast<LONG>(std::lround(center.x)),
+                        static_cast<LONG>(std::lround(center.y)),
+                    };
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    const std::optional<POINT> compatiblePinCenter = feedbackPinCenter(1U, "baseColor", false);
+    const std::optional<POINT> incompatiblePinCenter = feedbackPinCenter(4U, "texture", false);
+    bool compatibleRingRendered = false;
+    bool incompatibleRingRendered = false;
+    int compatibleFeedbackPixelCount = 0;
+    int incompatibleFeedbackPixelCount = 0;
+    if (compatiblePinCenter.has_value() && incompatiblePinCenter.has_value()) {
+        const POINT compatiblePin = *compatiblePinCenter;
+        const POINT incompatiblePin = *incompatiblePinCenter;
+        HDC screenDc = GetDC(nullptr);
+        HDC memoryDc = screenDc == nullptr ? nullptr : CreateCompatibleDC(screenDc);
+        HBITMAP bitmap = screenDc == nullptr ? nullptr : CreateCompatibleBitmap(screenDc, 1280, 820);
+        HGDIOBJ previous = memoryDc != nullptr && bitmap != nullptr ? SelectObject(memoryDc, bitmap) : nullptr;
+        if (memoryDc != nullptr && bitmap != nullptr && previous != nullptr &&
+            context.BeginMaterialGraphPinConnection(materialId, 4U, "color", true, compatiblePin.x, compatiblePin.y)) {
+            MaterialEditorPanelRenderer renderer;
+            const auto countFeedbackPixels = [memoryDc](POINT center, COLORREF expected) {
+                int count = 0;
+                for (int dy = -10; dy <= 10; ++dy) {
+                    for (int dx = -10; dx <= 10; ++dx) {
+                        const int radiusSquared = dx * dx + dy * dy;
+                        if (radiusSquared < 16 || radiusSquared > 100) {
+                            continue;
+                        }
+                        const COLORREF pixel = GetPixel(memoryDc, center.x + dx, center.y + dy);
+                        if (pixel != CLR_INVALID &&
+                            std::abs(static_cast<int>(GetRValue(pixel)) - static_cast<int>(GetRValue(expected))) <= 24 &&
+                            std::abs(static_cast<int>(GetGValue(pixel)) - static_cast<int>(GetGValue(expected))) <= 24 &&
+                            std::abs(static_cast<int>(GetBValue(pixel)) - static_cast<int>(GetBValue(expected))) <= 24) {
+                            ++count;
+                        }
+                    }
+                }
+                return count;
+            };
+            renderer.Paint(memoryDc, feedbackContent, EditorTheme{}, context);
+            compatibleFeedbackPixelCount = countFeedbackPixels(compatiblePin, RGB(72, 220, 126));
+            compatibleRingRendered = compatibleFeedbackPixelCount >= 8;
+            static_cast<void>(context.DragMaterialGraphPinConnection(incompatiblePin.x, incompatiblePin.y));
+            renderer.Paint(memoryDc, feedbackContent, EditorTheme{}, context);
+            incompatibleFeedbackPixelCount = countFeedbackPixels(incompatiblePin, RGB(235, 76, 86));
+            incompatibleRingRendered = incompatibleFeedbackPixelCount >= 8;
+            if (const std::optional<CLSID> encoder = GdiplusEncoderClsid(L"image/bmp")) {
+                const std::filesystem::path feedbackPath =
+                    std::filesystem::temp_directory_path() / "21kb_selftest" / "_materialGraphPinFeedback.bmp";
+                Gdiplus::Bitmap feedbackImage(bitmap, nullptr);
+                static_cast<void>(feedbackImage.Save(feedbackPath.wstring().c_str(), &*encoder, nullptr));
+            }
+            static_cast<void>(context.CancelMaterialGraphPinConnection());
+        }
+        if (previous != nullptr) {
+            SelectObject(memoryDc, previous);
+        }
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (memoryDc != nullptr) {
+            DeleteDC(memoryDc);
+        }
+        if (screenDc != nullptr) {
+            ReleaseDC(nullptr, screenDc);
+        }
+    }
+    report.Check(
+        compatibleRingRendered && incompatibleRingRendered,
+        "P2.10 production paint renders green compatible and red incompatible pin feedback rings (green=" +
+            std::to_string(compatibleFeedbackPixelCount) + ", red=" +
+            std::to_string(incompatibleFeedbackPixelCount) + ")");
+
+    static_cast<void>(context.MaterialEditor().MoveGraphNode(3U, 4000, 20));
+    static_cast<void>(context.SetMaterialGraphNodeSelection({ 2U, 3U }, 2U));
+    const bool framedLargeSelection = context.FrameSelectedMaterialGraphNodes(800, 600);
+#if defined(_WIN32)
+    const SIZE framedNodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::ConstantScalar);
+    const float framedRight = static_cast<float>(context.MaterialGraphPanX()) +
+        (4000.0F + static_cast<float>(framedNodeSize.cx)) * context.MaterialGraphZoom();
+#else
+    const float framedRight = static_cast<float>(context.MaterialGraphPanX()) + 4240.0F * context.MaterialGraphZoom();
+#endif
+    report.Check(framedLargeSelection && context.MaterialGraphZoom() < 0.45F && framedRight <= 800.0F,
+        "P2.4 Frame Selected may zoom below the old interactive floor and keeps a large selection inside the viewport");
+    context.MaterialEditor().SetWorkingCopy(material);
+    context.MaterialEditor().MarkSaved();
+    static_cast<void>(context.SetMaterialGraphNodeSelection({ 2U }, 2U));
+
+    static_cast<void>(context.SelectMaterialGraphComment(10U));
+    report.Check(context.BeginMaterialGraphCommentDrag(materialId, 10U, 100, 100) &&
+            !context.DragMaterialGraphComment(101, 101) && context.EndMaterialGraphCommentDrag() &&
+            context.MaterialEditor().GraphCommentPosition(10U) == std::optional<std::pair<std::int32_t, std::int32_t>>{ { 0, 0 } } &&
+            !context.MaterialEditor().Dirty(),
+        "P2.2 one-pixel comment jitter stays below the shared drag threshold and creates no edit");
     report.Check(context.BeginMaterialGraphCommentDrag(materialId, 10U, 0, 0) &&
             context.DragMaterialGraphComment(300, 0) && context.DragMaterialGraphComment(320, 0),
         "P1.25/P1.26 begin live comment drag with membership snapshot");

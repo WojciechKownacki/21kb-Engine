@@ -67,6 +67,10 @@ struct EditorMaterialGraphCookResult {
     std::uint32_t cacheHitPassCount = 0U;
     std::uint32_t cacheEntryCount = 0U;
     std::uint64_t cacheByteSize = 0U;
+    std::uint32_t textureBindingCount = 0U;
+    std::uint32_t uniformCount = 0U;
+    std::uint32_t varyingCount = 0U;
+    std::string backendName;
     bool budgetWarning = false;
     std::vector<EditorMaterialGraphCookPassResult> passes;
     std::vector<std::string> diagnostics;

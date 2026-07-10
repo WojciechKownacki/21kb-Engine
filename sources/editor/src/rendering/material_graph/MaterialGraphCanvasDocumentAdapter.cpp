@@ -1,4 +1,5 @@
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
 #include <algorithm>
 #include <array>
@@ -411,29 +412,16 @@ namespace {
 }
 
 [[nodiscard]] std::array<float, 4U> ParseFloat4(std::string_view text, std::array<float, 4U> fallback) noexcept {
-    std::array<float, 4U> value = fallback;
-    std::size_t index = 0U;
-    while (!text.empty() && index < value.size()) {
-        const std::size_t start = text.find_first_not_of(" \t\r\n,;");
-        if (start == std::string_view::npos) {
-            break;
-        }
-        text.remove_prefix(start);
-        const std::size_t end = text.find_first_of(" \t\r\n,;");
-        const std::string_view token = end == std::string_view::npos ? text : text.substr(0U, end);
-        float parsed = value[index];
-        const char* first = token.data();
-        const char* last = token.data() + token.size();
-        const std::from_chars_result result = std::from_chars(first, last, parsed);
-        if (result.ec == std::errc{} && result.ptr == last) {
-            value[index++] = parsed;
-        }
-        if (end == std::string_view::npos) {
-            break;
-        }
-        text.remove_prefix(end);
+    std::string normalized{ text };
+    std::ranges::replace(normalized, ';', ',');
+    std::vector<float> parsed;
+    if (!kb::render::ParseFiniteMaterialFloatSequence(normalized, parsed, 1U, 4U)) {
+        return fallback;
     }
-    return value;
+    for (std::size_t index = 0U; index < parsed.size(); ++index) {
+        fallback[index] = parsed[index];
+    }
+    return fallback;
 }
 
 void AddScalarField(MaterialGraphCanvasNode& canvasNode, const std::string& text) {

@@ -1,8 +1,12 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
+#include "RenderMaterialAtomicFileWriter.hpp"
 #include "resources/RenderMaterialGraphFieldParser.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -43,11 +47,20 @@ void AddDiagnostic(
     });
 }
 
+[[nodiscard]] bool HasError(const std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) noexcept {
+    return std::ranges::any_of(diagnostics, [](const RenderMaterialAssetParseDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialAssetParseDiagnosticSeverity::Error;
+    });
+}
+
 [[nodiscard]] RenderMaterialAssetParseResult ParseGraph(std::istream& input) {
     RenderMaterialAssetParseResult result{};
     RenderMaterialAssetData carrier{};
     carrier.graph = RenderMaterialGraphDocument{};
     bool sawContent = false;
+    std::size_t graphShadingModelLine = 0U;
+    std::string graphShadingModelSourceText;
+    std::size_t graphLastGoodArtifactLine = 0U;
 
     std::string line;
     std::size_t lineNumber = 0U;
@@ -62,6 +75,12 @@ void AddDiagnostic(
         const std::size_t split = trimmed.find_first_of(" \t");
         const std::string_view keyword = split == std::string_view::npos ? trimmed : trimmed.substr(0U, split);
         const std::string_view rest = split == std::string_view::npos ? std::string_view{} : Trim(trimmed.substr(split + 1U));
+        if (keyword == "graphShadingModel") {
+            graphShadingModelLine = lineNumber;
+            graphShadingModelSourceText = std::string{ trimmed };
+        } else if (keyword == "graphLastGoodArtifactAssetId" || keyword == "graphLastGoodArtifactHash") {
+            graphLastGoodArtifactLine = lineNumber;
+        }
         const RenderMaterialGraphFieldParseResult parsed =
             RenderMaterialGraphFieldParser::Apply(keyword, rest, lineNumber, carrier, result.diagnostics);
         if (parsed == RenderMaterialGraphFieldParseResult::Unknown) {
@@ -81,7 +100,17 @@ void AddDiagnostic(
     if (carrier.graph.nodes.empty()) {
         AddDiagnostic(result, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, 0U, "graphNode", "Material graph asset must contain at least one node.");
     }
-    if (result.diagnostics.empty()) {
+    if (sawContent) {
+        FinalizeRenderMaterialGraphDocument(
+            carrier.graph,
+            result.diagnostics,
+            graphShadingModelLine,
+            graphShadingModelSourceText,
+            graphLastGoodArtifactLine);
+    }
+    // Migration and compatibility diagnostics are warnings. They must remain visible without
+    // making an otherwise valid standalone graph unloadable.
+    if (!HasError(result.diagnostics)) {
         result.asset = std::move(carrier);
     }
     return result;
@@ -115,12 +144,30 @@ kb::assets::AssetLoadResult RenderMaterialGraphAssetLoader::Load(const kb::asset
 std::vector<kb::assets::AssetId> RenderMaterialGraphAssetLoader::DiscoverDependencies(
     const kb::assets::AssetMetadata& metadata,
     const kb::assets::AssetRegistry& registry) const {
-    static_cast<void>(registry);
     const RenderMaterialAssetParseResult result = LoadGraphWithDiagnostics(metadata.physicalPath, metadata.id);
-    if (!result.asset.has_value() || result.asset->graph.lastGoodArtifact.assetId == 0U) {
+    if (!result.asset.has_value()) {
         return {};
     }
-    return { kb::assets::AssetId{ result.asset->graph.lastGoodArtifact.assetId } };
+    std::vector<kb::assets::AssetId> dependencies;
+    const auto appendTyped = [&dependencies, &registry](std::uint64_t assetId, std::string_view expectedType) {
+        if (assetId == 0U || std::ranges::find(dependencies, kb::assets::AssetId{ assetId }) != dependencies.end()) {
+            return;
+        }
+        const kb::assets::AssetMetadata* dependency = registry.Find(kb::assets::AssetId{ assetId });
+        if (dependency != nullptr && dependency->type == expectedType) {
+            dependencies.push_back(dependency->id);
+        }
+    };
+    if (result.asset->graph.lastGoodArtifact.assetId != 0U) {
+        dependencies.push_back(kb::assets::AssetId{ result.asset->graph.lastGoodArtifact.assetId });
+    }
+    for (const std::uint64_t assetId : DiscoverRenderMaterialGraphFunctionDependencies(result.asset->graph)) {
+        appendTyped(assetId, kRenderMaterialFunctionAssetType);
+    }
+    for (const std::uint64_t assetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(result.asset->graph)) {
+        appendTyped(assetId, kRenderMaterialParameterCollectionAssetType);
+    }
+    return dependencies;
 }
 
 std::optional<RenderMaterialGraphDocument> RenderMaterialGraphAssetLoader::LoadGraph(const std::filesystem::path& path) {
@@ -163,13 +210,10 @@ RenderMaterialAssetParseResult RenderMaterialGraphAssetLoader::LoadGraphWithDiag
 }
 
 bool RenderMaterialGraphAssetLoader::SaveGraph(const std::filesystem::path& path, const RenderMaterialGraphDocument& graph) {
-    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
-    if (!output) {
-        return false;
-    }
-    output << "# KB material graph\n";
-    WriteRenderMaterialGraphDocument(output, graph);
-    return static_cast<bool>(output);
+    return detail::WriteMaterialFileAtomically(path, [&graph](std::ostream& output) {
+        output << "# KB material graph\n";
+        WriteRenderMaterialGraphDocument(output, graph);
+    });
 }
 
 } // namespace kb::render

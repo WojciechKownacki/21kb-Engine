@@ -6,6 +6,8 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -1314,14 +1316,67 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root / "MaterialTypes", error);
     std::filesystem::create_directories(root / "Graphs", error);
+    std::filesystem::create_directories(root / "Functions", error);
+    std::filesystem::create_directories(root / "Collections", error);
     Require(!error, "KBMAT-GRAPH-0005: Material graph/type asset test could not create temp root");
+
+    const kb::assets::AssetId functionId = kb::assets::MakeAssetId(
+        "/Game/Functions/Tint.kbmatfn:" + std::string{ kRenderMaterialFunctionAssetType });
+    const kb::assets::AssetId collectionId = kb::assets::MakeAssetId(
+        "/Game/Collections/Globals.kbmpc:" + std::string{ kRenderMaterialParameterCollectionAssetType });
 
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.storageModel = "material-graph-asset";
     graph.lastGoodArtifact.assetId = 0xA771U;
     graph.lastGoodArtifact.contentHash = 0xBEEFU;
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = std::to_string(functionId.value) },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
     Require(RenderMaterialGraphAssetLoader::SaveGraph(root / "Graphs" / "Surface.kbmaterialgraph", graph),
         "KBMAT-GRAPH-0005: Material Graph asset writer failed");
+
+    RenderMaterialGraphDocument functionGraph{};
+    functionGraph.storageModel = "material-function-asset";
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 1U,
+        .kind = RenderMaterialGraphNodeKind::FunctionOutput,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "Output",
+            .defaultValueHint = "float4",
+        },
+    });
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
+    Require(RenderMaterialFunctionAssetLoader::SaveFunction(
+            root / "Functions" / "Tint.kbmatfn",
+            RenderMaterialFunctionAssetData{ .graph = functionGraph }),
+        "P1.15: Material Function dependency fixture failed to save");
+    RenderMaterialParameterCollectionData collection{};
+    collection.displayName = "Globals";
+    collection.parameters.push_back(RenderMaterialParameterCollectionParameter{
+        .stableId = "GlobalTint",
+        .displayName = "Global Tint",
+        .type = RenderMaterialParameterCollectionValueType::Vector,
+        .defaultValue = { 1.0F, 1.0F, 1.0F, 1.0F },
+    });
+    Require(RenderMaterialParameterCollectionWriter::Save(root / "Collections" / "Globals.kbmpc", collection),
+        "P1.15: Material Parameter Collection dependency fixture failed to save");
 
     RenderMaterialTypeDocument type = GetBuiltInPbrMaterialTypeDocument();
     type.stableTypeId = "graph.surface";
@@ -1343,19 +1398,26 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     kb::assets::AssetManager manager;
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material loader");
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material graph loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialFunctionAssetLoader>()), "P1.15: Could not register material function loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialParameterCollectionAssetLoader>()), "P1.15: Could not register parameter collection loader");
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialTypeAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material type loader");
     Require(manager.Mounts().Mount("Game", root), "KBMAT-GRAPH-0005: Could not mount graph/type asset root");
-    Require(manager.DiscoverMountedAssets() >= 3U, "KBMAT-GRAPH-0005: Asset discovery missed material graph/type/material files");
+    Require(manager.DiscoverMountedAssets() >= 5U, "KBMAT-GRAPH-0005: Asset discovery missed material graph/type/material dependency files");
 
     const kb::assets::AssetMetadata* graphMetadata = manager.Registry().FindByPath("/Game/Graphs/Surface.kbmaterialgraph");
     const kb::assets::AssetMetadata* typeMetadata = manager.Registry().FindByPath("/Game/MaterialTypes/GraphSurface.kbmaterialtype");
     const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/GraphBacked.kbmat");
+    const kb::assets::AssetMetadata* functionMetadata = manager.Registry().FindByPath("/Game/Functions/Tint.kbmatfn");
+    const kb::assets::AssetMetadata* collectionMetadata = manager.Registry().FindByPath("/Game/Collections/Globals.kbmpc");
     Require(graphMetadata != nullptr && graphMetadata->type == kRenderMaterialGraphAssetType,
         "KBMAT-GRAPH-0005: Material Graph metadata was not discovered");
     Require(typeMetadata != nullptr && typeMetadata->type == kRenderMaterialTypeAssetType,
         "KBMAT-GRAPH-0005: Material Type metadata was not discovered");
     Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
         "KBMAT-GRAPH-0005: Graph-backed material metadata was not discovered");
+    Require(functionMetadata != nullptr && functionMetadata->id == functionId &&
+            collectionMetadata != nullptr && collectionMetadata->id == collectionId,
+        "P1.15: Function/MPC dependency metadata was not discovered with stable identities");
 
     const kb::assets::AssetHandle<RenderMaterialGraphDocument> graphHandle =
         manager.Load<RenderMaterialGraphDocument>(graphMetadata->id);
@@ -1367,11 +1429,103 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
         "KBMAT-GRAPH-0005: Material Type asset should be runtime loadable with schema");
     Require(ContainsDependency(graphMetadata->dependencies, kb::assets::AssetId{ 0xA771U }),
         "KBMAT-GRAPH-0005: Material Graph dependency discovery should include last-good artifact asset id");
+    Require(ContainsDependency(graphMetadata->dependencies, functionId) &&
+            ContainsDependency(graphMetadata->dependencies, collectionId),
+        "P1.15: standalone Material Graph dependency discovery must include Function and MPC assets");
+    Require(ContainsDependency(functionMetadata->dependencies, collectionId),
+        "P1.15: Material Function dependency discovery must include nested MPC assets");
     Require(ContainsDependency(materialMetadata->dependencies, typeMetadata->id),
         "KBMAT-GRAPH-0005: .kbmat dependency discovery should link to referenced Material Type asset");
     Require(ContainsDependency(materialMetadata->dependencies, graphMetadata->id),
         "KBMAT-GRAPH-0304: .kbmat dependency discovery should link to source Material Graph asset");
 
+    std::filesystem::remove_all(root, error);
+}
+
+void RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest() {
+    const std::uint32_t fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true);
+    const std::uint32_t toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false);
+    RenderMaterialGraphLink canonicalLink{
+        .fromNodeId = 2U,
+        .fromPinId = fromPinId,
+        .toNodeId = 1U,
+        .toPinId = toPinId,
+    };
+    const std::uint32_t canonicalLinkId = MakeRenderMaterialGraphLinkId(canonicalLink);
+    const std::uint32_t staleLinkId = canonicalLinkId == 123U ? 124U : 123U;
+    std::ostringstream source;
+    source << "graphVersion 1\n"
+           << "graphShadingModel lit\n"
+           << "graphStorageModel material-graph-asset\n"
+           << "graphNode 1 MaterialOutput 640 240\n"
+           << "graphNode 2 TextureSample 240 180\n"
+           << "graphLink " << staleLinkId << " 2 " << fromPinId << " color 1 " << toPinId << " baseColor\n";
+
+    std::istringstream input{ source.str() };
+    const RenderMaterialAssetParseResult migrated = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(input);
+    Require(migrated.Succeeded() && migrated.HasWarnings() && !migrated.HasErrors() && migrated.asset.has_value(),
+        "P2.11: standalone graph migrations must keep a valid graph loadable with visible warnings");
+    Require(migrated.asset->graph.documentVersion == kRenderMaterialGraphDocumentVersion &&
+            migrated.asset->graph.shadingModel == "defaultLit" &&
+            migrated.asset->graph.links.size() == 1U &&
+            migrated.asset->graph.links.front().id == canonicalLinkId,
+        "P2.11: standalone graph codec must apply the same version and stable-link migrations as embedded graphs");
+
+    std::istringstream invalid{ "graphVersion 1\ngraphNode 1 MaterialOutput 640 240\nunknownGraphField value\n" };
+    const RenderMaterialAssetParseResult failed = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(invalid);
+    Require(!failed.Succeeded() && failed.HasErrors() && !failed.asset.has_value(),
+        "P2.11: standalone graph codec must keep error diagnostics fatal");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_standalone_graph_atomic_save";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const std::filesystem::path graphPath = root / "Nested" / "Surface.kbmaterialgraph";
+    Require(RenderMaterialGraphAssetLoader::SaveGraph(graphPath, migrated.asset->graph),
+        "P2.11: atomic standalone graph save must create its parent directory");
+    const RenderMaterialAssetParseResult reloaded = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(graphPath);
+    Require(reloaded.Succeeded() && reloaded.asset.has_value() &&
+            reloaded.asset->graph.documentVersion == kRenderMaterialGraphDocumentVersion &&
+            reloaded.asset->graph.links.size() == 1U,
+        "P2.11: atomically saved standalone graph must round-trip through the production loader");
+    std::size_t fileCount = 0U;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(graphPath.parent_path())) {
+        if (entry.is_regular_file()) {
+            ++fileCount;
+        }
+    }
+    Require(fileCount == 1U, "P2.11: successful standalone graph save must not leave temporary files behind");
+
+    const std::filesystem::path legacyGraphPath = root / "LegacyRuntime.kbmaterialgraph";
+    {
+        std::ofstream legacyGraph{ legacyGraphPath, std::ios::trunc };
+        legacyGraph << "graphVersion 1\n"
+                    << "graphShadingModel lit\n"
+                    << "graphNode 1 MaterialOutput 640 240\n";
+    }
+    RenderMaterialAssetData graphBackedMaterial{};
+    graphBackedMaterial.graphSourceAssetPath = "/Game/LegacyRuntime.kbmaterialgraph";
+    graphBackedMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    const std::filesystem::path materialPath = root / "LegacyRuntimeMaterial.kbmat";
+    Require(RenderMaterialAssetWriter::Save(materialPath, graphBackedMaterial),
+        "P2.11: runtime warning propagation fixture material must save");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()) &&
+            manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 2U,
+        "P2.11: runtime warning propagation fixtures must be discoverable");
+    const kb::assets::AssetMetadata* materialMetadata =
+        manager.Registry().FindByPath("/Game/LegacyRuntimeMaterial.kbmat");
+    Require(materialMetadata != nullptr,
+        "P2.11: runtime warning propagation material metadata must resolve");
+    const ResolvedRuntimeMaterialAsset runtimeResolved =
+        RuntimeMaterialResolver{}.ResolveAsset(manager, *materialMetadata);
+    Require(runtimeResolved.status == RuntimeMaterialResolveStatus::Resolved &&
+            std::ranges::any_of(runtimeResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.severity == RuntimeMaterialResolveDiagnosticSeverity::Warning &&
+                    diagnostic.message.find("graph_migration") != std::string::npos;
+            }),
+        "P2.11: production runtime must keep migrated source graphs loadable and surface their warning diagnostics");
     std::filesystem::remove_all(root, error);
 }
 
@@ -2060,6 +2214,24 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
     }
     {
         std::istringstream input{
+            "metallicFactor nan\n"
+            "tiling inf 1\n"
+            "baseColor 1 1 1 1 trailing\n"
+            "graphParameterValue unsafe Scalar 1 trailing\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.Succeeded() && result.HasErrors() && !result.asset.has_value(),
+            "P2.9: non-finite or non-exact material numeric fields must be fatal");
+        Require(result.diagnostics.size() == 4U,
+            "P2.9: parser must diagnose every non-finite, trailing or excess numeric field");
+        Require(result.diagnostics[0].field == "metallicFactor" &&
+                result.diagnostics[1].field == "tiling" &&
+                result.diagnostics[2].field == "baseColor" &&
+                result.diagnostics[3].field == "graphParameterValue",
+            "P2.9: numeric parser diagnostics must identify the rejected production fields");
+    }
+    {
+        std::istringstream input{
             "baseColor 1.2 0.5 0.5 1\n"
             "roughnessFactor -0.1\n"
             "normalScale 9\n"
@@ -2083,7 +2255,7 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
         };
         const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
         Require(result.asset.has_value(), "Unsupported advanced material field warnings should keep the parsed asset available");
-        Require(!result.Succeeded(), "Unsupported advanced material field warnings should keep diagnostics visible");
+        Require(result.Succeeded() && result.HasWarnings(), "Unsupported advanced material field warnings should keep the asset loadable and diagnostics visible");
         Require(result.diagnostics.size() == 3U, "Unsupported advanced material field diagnostics should report each active advanced field");
         Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost clearcoat code");
         Require(result.diagnostics[0].severity == RenderMaterialAssetParseDiagnosticSeverity::Warning, "Unsupported advanced material diagnostics should be warnings");
@@ -2092,7 +2264,7 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
         Require(result.diagnostics[1].field == "transmissionTexture", "Unsupported advanced material diagnostics lost transmission texture field");
         Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost decal code");
         Require(result.diagnostics[2].field == "decalBlendMode", "Unsupported advanced material diagnostics lost decal field");
-        Require(result.ErrorMessage().find("code unsupported_advanced_field") != std::string::npos, "Unsupported advanced material diagnostics did not include the warning code");
+        Require(result.DiagnosticMessage().find("code unsupported_advanced_field") != std::string::npos, "Unsupported advanced material diagnostics did not include the warning code");
     }
     {
         std::istringstream input{
@@ -2421,6 +2593,7 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
     RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest();
     RunMaterialGraphAndTypeAssetDiscoveryTest();
+    RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest();
     RunMaterialTypeReferenceValidationDrivesRuntimeErrorMaterialTest();
     RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest();
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();

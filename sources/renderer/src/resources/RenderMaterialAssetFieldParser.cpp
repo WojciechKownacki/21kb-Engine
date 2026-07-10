@@ -1,11 +1,13 @@
 #include "resources/RenderMaterialAssetFieldParser.hpp"
 
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "resources/RenderMaterialTextureFieldParser.hpp"
 
-#include <charconv>
+#include <algorithm>
 #include <cstddef>
-#include <sstream>
+#include <iterator>
 #include <string>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -22,49 +24,34 @@ namespace {
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
     text = Trim(text);
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(begin, end, output);
-    return result.ec == std::errc{} && result.ptr == end;
+    return ParseFiniteMaterialFloatToken(text, output);
 }
 
 [[nodiscard]] bool ParseBaseColor(std::string_view rest, RenderMaterialDesc& desc) {
-    std::istringstream stream{ std::string{ rest } };
-    std::string r;
-    std::string g;
-    std::string b;
-    std::string a;
-    if (!(stream >> r >> g >> b >> a)) {
+    std::vector<float> values;
+    if (!ParseFiniteMaterialFloatSequence(rest, values, 4U, 4U, false)) {
         return false;
     }
-    return ParseFloat(r, desc.baseColor[0]) &&
-        ParseFloat(g, desc.baseColor[1]) &&
-        ParseFloat(b, desc.baseColor[2]) &&
-        ParseFloat(a, desc.baseColor[3]);
+    std::copy(values.begin(), values.end(), std::begin(desc.baseColor));
+    return true;
 }
 
 [[nodiscard]] bool ParseVec2(std::string_view rest, float (&output)[2]) {
-    std::istringstream stream{ std::string{ rest } };
-    std::string x;
-    std::string y;
-    if (!(stream >> x >> y)) {
+    std::vector<float> values;
+    if (!ParseFiniteMaterialFloatSequence(rest, values, 2U, 2U, false)) {
         return false;
     }
-    return ParseFloat(x, output[0]) &&
-        ParseFloat(y, output[1]);
+    std::copy(values.begin(), values.end(), std::begin(output));
+    return true;
 }
 
 [[nodiscard]] bool ParseVec3(std::string_view rest, float (&output)[3]) {
-    std::istringstream stream{ std::string{ rest } };
-    std::string x;
-    std::string y;
-    std::string z;
-    if (!(stream >> x >> y >> z)) {
+    std::vector<float> values;
+    if (!ParseFiniteMaterialFloatSequence(rest, values, 3U, 3U, false)) {
         return false;
     }
-    return ParseFloat(x, output[0]) &&
-        ParseFloat(y, output[1]) &&
-        ParseFloat(z, output[2]);
+    std::copy(values.begin(), values.end(), std::begin(output));
+    return true;
 }
 
 [[nodiscard]] bool EqualsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept {
