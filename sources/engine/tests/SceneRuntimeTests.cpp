@@ -25,6 +25,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunProjectSceneTests();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-api") {
+        kb::tests::RunScriptApiCatalogTests();
     } else if (suite == "visual-graph") {
         kb::tests::RunVisualGraphTests();
     } else if (suite == "input") {
@@ -45,6 +47,7 @@ void RunAllSuites() {
     kb::tests::RunScenePrefabTests();
     kb::tests::RunProjectSceneTests();
     kb::tests::RunScriptRuntimeTests();
+    kb::tests::RunScriptApiCatalogTests();
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();
     kb::tests::RunEngineModuleTests();

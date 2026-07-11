@@ -38,6 +38,13 @@ bool SceneDocumentService::Save(Scene& scene, const std::filesystem::path& path,
     return SceneAssetWriter::Write(path, captured);
 }
 
+bool SceneDocumentService::Save(const SceneDocument& document, const std::filesystem::path& path) {
+    if (path.extension() != SceneAssetFormat::Extension) {
+        return false;
+    }
+    return SceneAssetWriter::Write(path, document);
+}
+
 SceneDocumentLoadResult SceneDocumentService::Load(const std::filesystem::path& path) {
     if (path.extension() != SceneAssetFormat::Extension) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset extension is not supported." };
