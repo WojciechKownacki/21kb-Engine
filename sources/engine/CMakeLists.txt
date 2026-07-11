@@ -162,6 +162,9 @@ add_library(kb_engine STATIC
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
+    include/engine/script/ScriptAgentProjectFiles.hpp
+    include/engine/script/ScriptApiCatalog.hpp
+    include/engine/script/ScriptApiExport.hpp
     include/engine/script/ScriptApiNameCollector.hpp
     include/engine/script/ScriptApiNameRegistry.hpp
     include/engine/script/ScriptApiDeclarationParser.hpp
@@ -581,6 +584,9 @@ add_library(kb_engine STATIC
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/ScriptAgentProjectFiles.cpp
+    src/script/ScriptApiCatalog.cpp
+    src/script/ScriptApiExport.cpp
     src/script/ScriptApiNameCollector.cpp
     src/script/ScriptApiNameRegistry.cpp
     src/script/ScriptApiDeclarationParser.cpp
@@ -1019,6 +1025,7 @@ if(BUILD_TESTING)
         tests/SceneSystemTestSuites.hpp
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
+        tests/ScriptApiCatalogTests.cpp
         tests/ScriptRuntimeTests.cpp
         tests/SystemLifecycleTests.cpp
         tests/TestSuites.hpp
