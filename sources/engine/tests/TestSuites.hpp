@@ -9,6 +9,7 @@ void RunSceneSystemTests();
 void RunScenePrefabTests();
 void RunProjectSceneTests();
 void RunScriptRuntimeTests();
+void RunScriptApiCatalogTests();
 void RunVisualGraphTests();
 void RunInputTests();
 void RunEngineModuleTests();
