@@ -1,4 +1,5 @@
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/InspectorPanelSectionRows.hpp"
 
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
@@ -48,6 +49,19 @@
 namespace kb::editor {
 namespace {
 
+using inspector_panel_rows::AssetPickerButtonRect;
+using inspector_panel_rows::AssetPickerTextRect;
+using inspector_panel_rows::CheckboxRectForRow;
+using inspector_panel_rows::ComponentRemoveButtonRect;
+using inspector_panel_rows::DrawAssetFieldRow;
+using inspector_panel_rows::DrawBoolRow;
+using inspector_panel_rows::DrawFieldRow;
+using inspector_panel_rows::DrawRotationRow;
+using inspector_panel_rows::DrawSectionHeader;
+using inspector_panel_rows::DrawValueBox;
+using inspector_panel_rows::DrawVec3Row;
+using inspector_panel_rows::SectionWriter;
+
 constexpr int kHeaderHeight = 62;
 constexpr int kHeaderIcon = 36;
 constexpr int kHeaderPad = 8;
@@ -57,14 +71,10 @@ constexpr int kSectionHeaderHeight = 24;
 constexpr int kFieldRowHeight = 24;
 constexpr int kValueHeight = 20;
 constexpr int kRowPadX = 16;
-constexpr int kValuePadX = 10;
-constexpr int kAssetPickerButtonSize = 18;
-constexpr int kAssetPickerButtonGap = 3;
 constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
 constexpr int kDividerHeight = 1;
-constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 constexpr int kAssetPreviewMaxHeight = 214;
 constexpr int kAssetPreviewMinHeight = 142;
@@ -75,7 +85,6 @@ constexpr std::size_t kMaterialPreviewMaxMissingRows = 2U;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
-constexpr int kComponentMenuButtonSize = 18;
 constexpr int kAddComponentButtonHeight = 24;
 constexpr int kAddComponentBrowserMaxHeight = 280;
 constexpr int kAddComponentSearchHeight = 24;
@@ -227,14 +236,6 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
-void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE) {
-    rect.top += kTextBaselineOffsetY;
-    rect.bottom += kTextBaselineOffsetY;
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    DrawTextW(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
-}
-
 void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
 }
@@ -273,312 +274,6 @@ void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailIm
 void DrawDivider(HDC dc, int left, int right, int y) {
     GdiDrawing::FillRectColor(dc, Rect(left, y, right, y + kDividerHeight), Rgb(0, 0, 0));
 }
-
-[[nodiscard]] bool RowHovered(const InspectorPanelState& state, InspectorPropertyId property) noexcept {
-    return property != InspectorPropertyId::None && state.HoveredProperty() == property;
-}
-
-void DrawTriangle(HDC dc, RECT rect, bool expanded, COLORREF color) {
-    ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, rect, color, expanded);
-}
-
-[[nodiscard]] RECT ComponentRemoveButtonRect(RECT header) noexcept {
-    const int top = CenteredY(header, kComponentMenuButtonSize);
-    return Rect(header.right - kRowPadX - kComponentMenuButtonSize, top, header.right - kRowPadX, top + kComponentMenuButtonSize);
-}
-
-void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool removeButton = false) {
-    const bool hovered = state.IsHovered(InspectorHitKind::SectionHeader, section, InspectorPropertyId::None);
-    GdiDrawing::FillRectColor(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
-
-    RECT chevron = Rect(rect.left + 9, rect.top, rect.left + 29, rect.bottom);
-    DrawTriangle(dc, Shrink(chevron, 4, 4, 4, 4), !state.IsCollapsed(section), Color(theme.textSecondary));
-
-    RECT iconRect = Rect(rect.left + 35, rect.top + 3, rect.left + 53, rect.top + 21);
-    HeroIconPainter::Draw(dc, iconRect, icon, Color(theme.textSecondary), 2);
-
-    RECT titleRect = Rect(rect.left + 59, rect.top, removeButton ? rect.right - 44 : rect.right - 8, rect.bottom);
-    ScopedFont font(13, FW_SEMIBOLD);
-    const ScopedGdiObject selectedFont(dc, font.handle);
-    Text(dc, titleRect, title, Color(theme.textPrimary));
-
-    if (removeButton) {
-        const RECT button = ComponentRemoveButtonRect(rect);
-        const bool buttonHovered = state.IsHovered(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove);
-        DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.strip), Color(theme.borderPanel));
-        ScopedFont xFont(11, FW_SEMIBOLD);
-        const ScopedGdiObject selectedXFont(dc, xFont.handle);
-        RECT glyph = button;
-        glyph.top -= 1;
-        glyph.bottom -= 1;
-        Text(dc, glyph, "x", Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-}
-
-void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false) {
-    DrawFrame(dc, rect, hovered ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
-    ScopedFont valueFont(12, FW_NORMAL);
-    const ScopedGdiObject selectedFont(dc, valueFont.handle);
-    Text(dc, Shrink(rect, kValuePadX, 0, 4, 0), value, Color(theme.textPrimary));
-}
-
-[[nodiscard]] COLORREF AxisColor(char axis) noexcept {
-    switch (axis) {
-    case 'X':
-        return Rgb(255, 66, 47);
-    case 'Y':
-        return Rgb(36, 123, 255);
-    case 'Z':
-        return Rgb(90, 216, 57);
-    default:
-        return Rgb(178, 184, 199);
-    }
-}
-
-void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, char axis, std::string_view value) {
-    RECT letter = Rect(rect.left, rect.top, rect.left + kAxisLetterWidth, rect.bottom);
-    {
-        ScopedFont font(11, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, font.handle);
-        char label[2]{ axis, '\0' };
-        Text(dc, letter, label, AxisColor(axis), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-
-    const bool editing = property != InspectorPropertyId::None && state.EditedProperty() == property;
-    const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : value;
-    RECT box = Rect(letter.right + kAxisGap, CenteredY(rect, kValueHeight), rect.right, CenteredY(rect, kValueHeight) + kValueHeight);
-    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
-}
-
-void DrawVec3Row(
-    HDC dc,
-    RECT row,
-    const EditorTheme& theme,
-    const InspectorPanelState& state,
-    InspectorSectionId section,
-    std::string_view label,
-    const kb::scene::Vec3& value,
-    InspectorPropertyId xProperty,
-    InspectorPropertyId yProperty,
-    InspectorPropertyId zProperty) {
-    if (RowHovered(state, xProperty) || RowHovered(state, yProperty) || RowHovered(state, zProperty)) {
-        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
-    }
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
-
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-
-    const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
-    const int available = std::max(0, valueWidth - (kLaneGap * 2));
-    const int laneWidth = std::max<int>(44, available / 3);
-    const int lanesWidth = laneWidth * 3 + kLaneGap * 2;
-    const int laneLeft = static_cast<int>(valueRect.left) + std::max(0, (valueWidth - lanesWidth) / 2);
-    RECT x = Rect(laneLeft, valueRect.top, laneLeft + laneWidth, valueRect.bottom);
-    RECT y = Rect(x.right + kLaneGap, valueRect.top, x.right + kLaneGap + laneWidth, valueRect.bottom);
-    RECT z = Rect(y.right + kLaneGap, valueRect.top, y.right + kLaneGap + laneWidth, valueRect.bottom);
-    DrawAxisLane(dc, x, theme, state, section, xProperty, 'X', FormatFloat(value.x));
-    DrawAxisLane(dc, y, theme, state, section, yProperty, 'Y', FormatFloat(value.y));
-    DrawAxisLane(dc, z, theme, state, section, zProperty, 'Z', FormatFloat(value.z));
-}
-
-void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, std::string_view label, const kb::scene::Quat& value) {
-    if (RowHovered(state, InspectorPropertyId::RotationX) || RowHovered(state, InspectorPropertyId::RotationY) || RowHovered(state, InspectorPropertyId::RotationZ)) {
-        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
-    }
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-
-    const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
-    const int available = std::max(0, valueWidth - (kLaneGap * 2));
-    const int laneWidth = std::max<int>(44, available / 3);
-    const int lanesWidth = laneWidth * 3 + kLaneGap * 2;
-    const int laneLeft = static_cast<int>(valueRect.left) + std::max(0, (valueWidth - lanesWidth) / 2);
-    RECT x = Rect(laneLeft, valueRect.top, laneLeft + laneWidth, valueRect.bottom);
-    RECT y = Rect(x.right + kLaneGap, valueRect.top, x.right + kLaneGap + laneWidth, valueRect.bottom);
-    RECT z = Rect(y.right + kLaneGap, valueRect.top, y.right + kLaneGap + laneWidth, valueRect.bottom);
-    DrawAxisLane(dc, x, theme, state, InspectorSectionId::Transform, InspectorPropertyId::RotationX, 'X', FormatFloat(value.x));
-    DrawAxisLane(dc, y, theme, state, InspectorSectionId::Transform, InspectorPropertyId::RotationY, 'Y', FormatFloat(value.y));
-    DrawAxisLane(dc, z, theme, state, InspectorSectionId::Transform, InspectorPropertyId::RotationZ, 'Z', FormatFloat(value.z));
-}
-
-void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value) {
-    if (RowHovered(state, property)) {
-        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
-    }
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
-    const bool editing = property != InspectorPropertyId::None && state.EditedProperty() == property;
-    const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : value;
-
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-    DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
-}
-
-[[nodiscard]] RECT AssetPickerButtonRect(RECT valueRect) noexcept {
-    const int top = CenteredY(valueRect, kAssetPickerButtonSize);
-    return Rect(valueRect.right - kAssetPickerButtonSize - 1, top, valueRect.right - 1, top + kAssetPickerButtonSize);
-}
-
-[[nodiscard]] RECT AssetPickerTextRect(RECT valueRect) noexcept {
-    valueRect.right -= kAssetPickerButtonSize + kAssetPickerButtonGap;
-    return valueRect;
-}
-
-void DrawAssetFieldRow(
-    HDC dc,
-    RECT row,
-    const EditorTheme& theme,
-    const InspectorPanelState& state,
-    InspectorSectionId section,
-    InspectorPropertyId property,
-    InspectorPropertyId buttonProperty,
-    std::string_view label,
-    std::string_view value) {
-    if (RowHovered(state, property) || RowHovered(state, buttonProperty)) {
-        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
-    }
-
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
-    RECT textRect = AssetPickerTextRect(valueRect);
-    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
-    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
-
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-    DrawValueBox(dc, textRect, theme, value, valueHovered);
-
-    const RECT button = AssetPickerButtonRect(valueRect);
-    DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
-    RECT icon = Shrink(button, 3, 3, 3, 3);
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
-}
-
-[[nodiscard]] RECT CheckboxRectForRow(RECT row) noexcept {
-    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);
-}
-
-void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, bool checked) {
-    if (RowHovered(state, property)) {
-        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
-    }
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT box = CheckboxRectForRow(row);
-    ScopedFont labelFont(12, FW_SEMIBOLD);
-    {
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        Text(dc, labelRect, label, Color(theme.textSecondary));
-    }
-    const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, property);
-    DrawFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
-    if (checked) {
-        ScopedFont markFont(10, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, markFont.handle);
-        RECT glyph = box;
-        glyph.top -= 1;
-        glyph.bottom -= 1;
-        TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
-    }
-}
-
-class SectionWriter {
-public:
-    SectionWriter(HDC dc, RECT bounds, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool menuButton = false)
-        : dc_(dc), bounds_(bounds), theme_(theme), state_(state), section_(section), collapsed_(state.IsCollapsed(section)) {
-        DrawSectionHeader(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kSectionHeaderHeight), theme_, state_, section_, icon, title, menuButton);
-        y_ += kSectionHeaderHeight;
-        if (collapsed_) {
-            return;
-        }
-        DrawDivider(dc_, bounds_.left, bounds_.right, y_);
-        y_ += kDividerHeight;
-    }
-
-    void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None) {
-        if (collapsed_) {
-            return;
-        }
-        DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value);
-        Advance();
-    }
-
-    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty) {
-        if (collapsed_) {
-            return;
-        }
-        DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value);
-        Advance();
-    }
-
-    void Float(std::string_view label, std::string_view value, InspectorPropertyId property) {
-        Field(label, value, property);
-    }
-
-    void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None) {
-        if (collapsed_) {
-            return;
-        }
-        DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value);
-        Advance();
-    }
-
-    void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) {
-        if (collapsed_) {
-            return;
-        }
-        DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z);
-        Advance();
-    }
-
-    void Rotation(std::string_view label, const kb::scene::Quat& value) {
-        if (collapsed_) {
-            return;
-        }
-        DrawRotationRow(dc_, Row(), theme_, state_, label, value);
-        Advance();
-    }
-
-    [[nodiscard]] int Bottom() const noexcept {
-        return y_;
-    }
-
-private:
-    [[nodiscard]] RECT Row() const noexcept {
-        return Rect(bounds_.left, y_, bounds_.right, y_ + kFieldRowHeight);
-    }
-
-    void Advance() {
-        y_ += kFieldRowHeight;
-        DrawDivider(dc_, bounds_.left, bounds_.right, y_);
-        y_ += kDividerHeight;
-    }
-
-    HDC dc_ = nullptr;
-    RECT bounds_{};
-    const EditorTheme& theme_;
-    const InspectorPanelState& state_;
-    InspectorSectionId section_ = InspectorSectionId::None;
-    bool collapsed_ = false;
-    int y_ = bounds_.top;
-};
 
 [[nodiscard]] RECT AddComponentButtonRect(RECT content, int y) noexcept {
     const int width = std::min<int>(240, std::max<int>(120, static_cast<int>(content.right - content.left) - 32));

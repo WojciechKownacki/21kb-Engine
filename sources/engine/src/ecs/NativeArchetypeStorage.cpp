@@ -1,5 +1,7 @@
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
+#include "ecs/NativeArchetypeLayout.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -18,15 +20,16 @@
 namespace kb::ecs {
 namespace {
 
+using detail::ArchetypeLayout;
+using detail::BuildNativeArchetypeLayout;
+using detail::ComponentLayout;
+using detail::ValidateNativeComponentType;
+
 constexpr std::size_t kChunkAlignment = 64;
 constexpr std::uint32_t kInvalidEntityIndex = std::numeric_limits<std::uint32_t>::max();
 
 static_assert(sizeof(Entity) == sizeof(Entity::IdType), "Native ECS query batches require Entity to store exactly one id");
 static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batches require Entity id-compatible alignment");
-
-[[nodiscard]] std::size_t AlignUp(std::size_t value, std::size_t alignment) {
-    return (value + alignment - 1U) & ~(alignment - 1U);
-}
 
 [[nodiscard]] bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
     return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
@@ -117,137 +120,6 @@ void AssertComponentAlignment(const void* pointer, const NativeComponentType& ty
 
 [[nodiscard]] Entity::IdType StripEntityGeneration(Entity entity) noexcept {
     return entity.Id() & 0xFFFFFFFFULL;
-}
-
-void ValidateComponentType(const NativeComponentType& type) {
-    if (type.id == 0 || type.size == 0 || type.alignment == 0 || !std::has_single_bit(type.alignment)) {
-        throw std::invalid_argument("Invalid native ECS component type");
-    }
-    if (type.alignment > kChunkAlignment) {
-        throw std::invalid_argument("Native ECS component alignment exceeds chunk alignment");
-    }
-    if ((type.size % type.alignment) != 0U) {
-        throw std::invalid_argument("Native ECS component size must preserve row alignment");
-    }
-}
-
-struct ComponentLayout {
-    NativeComponentType type{};
-    std::size_t offset = 0;
-    bool primaryPayload = true;
-};
-
-struct ArchetypeLayout {
-    std::vector<ComponentLayout> columns;
-    std::size_t capacity = 0;
-    std::size_t hotOnlyCapacity = 0;
-    std::size_t capacityLostToNonHotStorage = 0;
-    std::size_t bytesPerEntity = 0;
-    std::size_t hotBytesPerEntity = 0;
-    std::size_t nonHotBytesPerEntity = 0;
-    std::size_t usedPayloadBytes = 0;
-    std::size_t hotOnlyUsedPayloadBytes = 0;
-    std::size_t nonHotUsedPayloadBytes = 0;
-    std::size_t sidePayloadBytes = 0;
-};
-
-[[nodiscard]] std::size_t PayloadBytesForCapacity(std::span<const NativeComponentType> types, std::size_t capacity) {
-    std::size_t offset = 0;
-    for (const NativeComponentType& type : types) {
-        offset = AlignUp(offset, type.alignment);
-        offset += type.size * capacity;
-    }
-    return offset;
-}
-
-[[nodiscard]] std::size_t HotPayloadBytesForCapacity(std::span<const NativeComponentType> types, std::size_t capacity) {
-    std::size_t offset = 0;
-    bool hasHotTableComponent = false;
-    for (const NativeComponentType& type : types) {
-        if (!UsesHotChunkPayload(type.storageClass)) {
-            continue;
-        }
-        hasHotTableComponent = true;
-        offset = AlignUp(offset, type.alignment);
-        offset += type.size * capacity;
-    }
-
-    return hasHotTableComponent ? offset : capacity * sizeof(Entity);
-}
-
-[[nodiscard]] std::size_t FindPayloadCapacity(
-    std::span<const NativeComponentType> types,
-    std::size_t payloadBytes,
-    std::size_t bytesPerEntity,
-    std::size_t (*payloadForCapacity)(std::span<const NativeComponentType>, std::size_t)) {
-    std::size_t low = 0;
-    std::size_t high = std::max<std::size_t>(1, payloadBytes / std::max<std::size_t>(bytesPerEntity, 1));
-    while (payloadForCapacity(types, high) <= payloadBytes && high < (std::numeric_limits<std::size_t>::max() / 2U)) {
-        high *= 2U;
-    }
-
-    while (low < high) {
-        const std::size_t mid = low + ((high - low + 1U) / 2U);
-        if (payloadForCapacity(types, mid) <= payloadBytes) {
-            low = mid;
-        } else {
-            high = mid - 1U;
-        }
-    }
-
-    return low;
-}
-
-[[nodiscard]] ArchetypeLayout BuildLayout(std::span<const NativeComponentType> types, std::size_t payloadBytes) {
-    ArchetypeLayout layout;
-    layout.bytesPerEntity = 0;
-    for (const NativeComponentType& type : types) {
-        layout.bytesPerEntity += type.size;
-        if (UsesHotChunkPayload(type.storageClass)) {
-            layout.hotBytesPerEntity += type.size;
-        } else {
-            layout.nonHotBytesPerEntity += type.size;
-        }
-    }
-    if (types.empty()) {
-        layout.capacity = std::max<std::size_t>(payloadBytes / sizeof(Entity), 1U);
-        layout.hotOnlyCapacity = layout.capacity;
-        return layout;
-    }
-
-    const std::size_t hotCapacityBaseline = layout.hotBytesPerEntity == 0U ? sizeof(Entity) : layout.hotBytesPerEntity;
-    const std::size_t fullCapacity = FindPayloadCapacity(types, payloadBytes, layout.bytesPerEntity, PayloadBytesForCapacity);
-    layout.hotOnlyCapacity = FindPayloadCapacity(types, payloadBytes, hotCapacityBaseline, HotPayloadBytesForCapacity);
-    if (layout.hotOnlyCapacity == 0) {
-        throw std::invalid_argument("Native ECS chunk payload is too small for archetype hot storage");
-    }
-    layout.capacity = layout.hotOnlyCapacity;
-    layout.capacityLostToNonHotStorage = layout.hotOnlyCapacity > fullCapacity ? layout.hotOnlyCapacity - fullCapacity : 0U;
-    std::size_t hotPayloadOffset = 0;
-    std::size_t sidePayloadOffset = 0;
-    std::size_t hotOffset = 0;
-    std::size_t nonHotPayloadBytes = 0;
-    for (const NativeComponentType& type : types) {
-        if (UsesHotChunkPayload(type.storageClass)) {
-            hotPayloadOffset = AlignUp(hotPayloadOffset, type.alignment);
-            layout.columns.push_back(ComponentLayout{ .type = type, .offset = hotPayloadOffset, .primaryPayload = true });
-            const std::size_t columnPayloadBytes = type.size * layout.capacity;
-            hotPayloadOffset += columnPayloadBytes;
-            hotOffset = AlignUp(hotOffset, type.alignment);
-            hotOffset += type.size * layout.hotOnlyCapacity;
-        } else {
-            sidePayloadOffset = AlignUp(sidePayloadOffset, type.alignment);
-            layout.columns.push_back(ComponentLayout{ .type = type, .offset = sidePayloadOffset, .primaryPayload = false });
-            const std::size_t columnPayloadBytes = type.size * layout.capacity;
-            sidePayloadOffset += columnPayloadBytes;
-            nonHotPayloadBytes += columnPayloadBytes;
-        }
-    }
-    layout.usedPayloadBytes = hotPayloadOffset;
-    layout.hotOnlyUsedPayloadBytes = layout.hotBytesPerEntity == 0U ? layout.hotOnlyCapacity * sizeof(Entity) : hotOffset;
-    layout.nonHotUsedPayloadBytes = nonHotPayloadBytes;
-    layout.sidePayloadBytes = sidePayloadOffset;
-    return layout;
 }
 
 class NativeChunkPool {
@@ -586,7 +458,7 @@ public:
         : pool_(&pool)
         , types_(std::move(types))
         , signature_(std::move(signature))
-        , layout_(BuildLayout(types_, pool.PayloadBytes())) {}
+        , layout_(BuildNativeArchetypeLayout(types_, pool.PayloadBytes())) {}
 
     ArchetypeTable(const ArchetypeTable&) = delete;
     ArchetypeTable& operator=(const ArchetypeTable&) = delete;
@@ -1631,7 +1503,7 @@ private:
     std::vector<NativeComponentType> types;
     types.reserve(components.size());
     for (const NativeComponentValue& component : components) {
-        ValidateComponentType(component.type);
+        ValidateNativeComponentType(component.type);
         types.push_back(component.type);
     }
     std::sort(types.begin(), types.end(), [](const NativeComponentType& lhs, const NativeComponentType& rhs) {
@@ -1650,7 +1522,7 @@ private:
     std::vector<NativeComponentType> types;
     types.reserve(components.size());
     for (const NativeBulkComponentColumn& component : components) {
-        ValidateComponentType(component.type);
+        ValidateNativeComponentType(component.type);
         if (component.data == nullptr) {
             throw std::invalid_argument("Native ECS bulk component column is missing data");
         }
@@ -3806,13 +3678,13 @@ NativeEcsMaintenanceStats NativeArchetypeStorage::MaintainChunks(NativeEcsMainte
 
 NativeArchetypeCapacityReport EstimateNativeArchetypeCapacity(std::span<const NativeComponentType> componentTypes, std::size_t chunkPayloadBytes) {
     for (const NativeComponentType& type : componentTypes) {
-        ValidateComponentType(type);
+        ValidateNativeComponentType(type);
     }
     if (!IsValidCustomChunkPayloadBytes(chunkPayloadBytes)) {
         throw std::invalid_argument("Native ECS chunk payload size must be a supported power-of-two value");
     }
 
-    const ArchetypeLayout layout = BuildLayout(componentTypes, chunkPayloadBytes);
+    const ArchetypeLayout layout = BuildNativeArchetypeLayout(componentTypes, chunkPayloadBytes);
     return NativeArchetypeCapacityReport{
         .chunkPayloadBytes = chunkPayloadBytes,
         .entitiesPerChunk = layout.capacity,
