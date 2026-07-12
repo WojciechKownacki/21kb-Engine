@@ -1,0 +1,20 @@
+[package]
+name = "kb-editor-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kb-editor-host"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+tauri = { version = "=2.11.5", features = ["unstable"] }
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }

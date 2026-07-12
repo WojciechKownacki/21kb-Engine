@@ -1,0 +1,25 @@
+.dock-workspace { min-width: 0; min-height: 0; width: 100%; height: 100%; }
+.dock-split { display: flex; min-width: 0; min-height: 0; width: 100%; height: 100%; }
+.dock-split--horizontal { flex-direction: row; }
+.dock-split--vertical { flex-direction: column; }
+.dock-split__first, .dock-split__second { min-width: 0; min-height: 0; overflow: hidden; }
+.dock-split--horizontal > .dock-split__first { flex: var(--dock-first-ratio) 1 0; }
+.dock-split--horizontal > .dock-split__second { flex: calc(1 - var(--dock-first-ratio)) 1 0; }
+.dock-split--vertical > .dock-split__first { flex: var(--dock-first-ratio) 1 0; }
+.dock-split--vertical > .dock-split__second { flex: calc(1 - var(--dock-first-ratio)) 1 0; }
+.dock-tabs { position: relative; min-width: 0; min-height: 0; width: 100%; height: 100%; }
+.dock-tabs > div[draggable="true"] { width: 100%; height: 100%; }
+.dock-drop-preview { position: absolute; z-index: 10; pointer-events: none; border: 1px solid rgb(120 168 255 / 86%); border-radius: 6px; background: rgb(120 168 255 / 18%); box-shadow: 0 0 0 1px rgb(120 168 255 / 18%), 0 8px 28px rgb(0 0 0 / 18%); }
+.dock-drop-preview--tab { top: 35px; right: 8px; left: 8px; height: 3px; border: 0; border-radius: 3px; background: var(--color-play); box-shadow: 0 0 10px rgb(84 216 139 / 60%); }
+.dock-drop-preview--left { top: 4px; bottom: 4px; left: 4px; width: calc(var(--dock-preview-fraction) * 100% - 8px); }
+.dock-drop-preview--right { top: 4px; right: 4px; bottom: 4px; width: calc(var(--dock-preview-fraction) * 100% - 8px); }
+.dock-drop-preview--top { top: 4px; right: 4px; left: 4px; height: calc(var(--dock-preview-fraction) * 100% - 8px); }
+.dock-drop-preview--bottom { right: 4px; bottom: 4px; left: 4px; height: calc(var(--dock-preview-fraction) * 100% - 8px); }
+.dock-drop-preview--root { z-index: 20; border-color: rgb(84 216 139 / 82%); background: rgb(84 216 139 / 15%); }
+@media (max-width: 720px) {
+  .dock-workspace { min-height: 940px; }
+  .dock-split { gap: 6px; }
+  .dock-split--horizontal, .dock-split--vertical { flex-direction: column; }
+  .dock-split > .resize-handle { display: none; }
+  .dock-split__first, .dock-split__second { flex: 1 0 220px !important; }
+}
