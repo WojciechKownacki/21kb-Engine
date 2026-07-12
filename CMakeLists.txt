@@ -13,7 +13,16 @@ option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" $
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
+option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph cooker" ${KB_BUILD_EDITOR})
+set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
+
+if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME AND DEFINED ENV{VULKAN_SDK})
+    set(_kb_vulkan_sdk_dxcompiler "$ENV{VULKAN_SDK}/Bin/dxcompiler.dll")
+    if(EXISTS "${_kb_vulkan_sdk_dxcompiler}")
+        set(KB_DXCOMPILER_RUNTIME "${_kb_vulkan_sdk_dxcompiler}" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking" FORCE)
+    endif()
+endif()
 
 function(kb_add_bgfx_subdirectory)
     if(MSVC)
@@ -179,8 +188,15 @@ if(KB_BUILD_RENDERER)
 
     set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(BGFX_BUILD_TOOLS ${KB_GENERATE_RENDERER_SHADERS} CACHE BOOL "" FORCE)
-    set(BGFX_BUILD_TOOLS_SHADER ${KB_GENERATE_RENDERER_SHADERS} CACHE BOOL "" FORCE)
+    # Authored Material Graphs are compiled by the editor at runtime. That is
+    # independent of generating staged renderer shaders, so editor builds keep
+    # shaderc available even when they consume prebuilt renderer shaders.
+    set(_kb_build_bgfx_shaderc OFF)
+    if(KB_GENERATE_RENDERER_SHADERS OR KB_BUILD_GRAPH_SHADERC)
+        set(_kb_build_bgfx_shaderc ON)
+    endif()
+    set(BGFX_BUILD_TOOLS ${_kb_build_bgfx_shaderc} CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS_SHADER ${_kb_build_bgfx_shaderc} CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TOOLS_BIN2C OFF CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TOOLS_GEOMETRY OFF CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TOOLS_TEXTURE OFF CACHE BOOL "" FORCE)

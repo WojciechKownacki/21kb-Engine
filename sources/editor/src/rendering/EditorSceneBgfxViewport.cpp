@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <ranges>
 #include <string>
 #include <span>
 #include <vector>
@@ -248,7 +249,7 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         return;
     }
 
-    hostSurfaceStore_.MarkHostNotPresented(parent);
+    TrackPaintHost(parent);
     for (const HostSurfaceLayout& layout : layouts) {
         const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
         if (RectWidth(layoutBounds) == 0U || RectHeight(layoutBounds) == 0U) {
@@ -322,6 +323,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     }
 
     paintParent_ = nullptr;
+    paintHosts_.clear();
     contextWindow_ = nullptr;
     backendSettings_ = nullptr;
     rendererBackendGeneration_ = 0;
@@ -340,11 +342,11 @@ void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
 
 void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
+    paintHosts_.clear();
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     failureDetail_.clear();
-    sessionStore_.MarkHostNotPresented(parent);
-    hostSurfaceStore_.MarkHostNotPresented(parent);
+    TrackPaintHost(parent);
 }
 
 void EditorSceneBgfxViewport::EndPaintLayout() {
@@ -352,10 +354,13 @@ void EditorSceneBgfxViewport::EndPaintLayout() {
         FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");
     }
 
-    hostSurfaceStore_.HideUnpresentedForHost(paintParent_);
+    for (const HWND host : paintHosts_) {
+        hostSurfaceStore_.HideUnpresentedForHost(host);
+    }
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     paintParent_ = nullptr;
+    paintHosts_.clear();
 }
 
 void EditorSceneBgfxViewport::Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme) {
@@ -825,6 +830,15 @@ void EditorSceneBgfxViewport::SetFailureDetail(std::string detail) {
     if (!detail.empty()) {
         failureDetail_ = std::move(detail);
     }
+}
+
+void EditorSceneBgfxViewport::TrackPaintHost(HWND parent) noexcept {
+    if (parent == nullptr || std::ranges::find(paintHosts_, parent) != paintHosts_.end()) {
+        return;
+    }
+    paintHosts_.push_back(parent);
+    sessionStore_.MarkHostNotPresented(parent);
+    hostSurfaceStore_.MarkHostNotPresented(parent);
 }
 
 bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
