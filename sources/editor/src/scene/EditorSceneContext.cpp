@@ -2030,7 +2030,14 @@ bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path>
 }
 
 bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder) {
-    const kb::assets::AssetImportResult report = EditorSceneAssetBrowserCommands::ImportFilesWithReport(*scene_, assetBrowser_, sourceFiles, destinationVirtualFolder);
+    return ImportAssetFiles(sourceFiles, destinationVirtualFolder, {});
+}
+
+bool EditorSceneContext::ImportAssetFiles(
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
+    const kb::assets::AssetImportResult report = EditorSceneAssetBrowserCommands::ImportFilesWithReport(*scene_, assetBrowser_, sourceFiles, destinationVirtualFolder, options);
     LogAssetImportReport(console_, report, destinationVirtualFolder);
     if (report.ImportedCount() == 0U) {
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset import failed."));

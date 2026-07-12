@@ -97,7 +97,11 @@ namespace {
         return LoadGltfPayload(request, *imported);
     }
     if (sourceExtension == ".fbx") {
-        return RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ imported->payload.data(), imported->payload.size() });
+        return RenderMeshAssetBuilder::LoadFbx(
+            std::span<const std::byte>{ imported->payload.data(), imported->payload.size() },
+            RenderMeshFbxImportDesc{
+                .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+            });
     }
     return std::nullopt;
 }

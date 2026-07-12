@@ -143,7 +143,8 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     const std::filesystem::path& sourcePath,
     AssetImportCategory category,
     std::uint64_t sourceSize,
-    std::uint64_t sourceHash) {
+    std::uint64_t sourceHash,
+    std::uint16_t importOptions) {
     const std::filesystem::path tempPath = outputPath.string() + ".tmp";
     bool wrote = false;
     {
@@ -154,7 +155,7 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
         output.write(AssetMagic.data(), static_cast<std::streamsize>(AssetMagic.size()));
         WriteU32(output, ImportFormatVersion);
         WriteU16(output, static_cast<std::uint16_t>(category));
-        WriteU16(output, 0U);
+        WriteU16(output, importOptions);
         WriteU64(output, sourceSize);
         WriteU64(output, sourceHash);
         wrote = WriteString(output, sourcePath.filename().string())
@@ -228,6 +229,7 @@ struct ImportedAssetHeader {
     AssetImportCategory category = AssetImportCategory::Unknown;
     std::uint64_t sourceSize = 0U;
     std::uint64_t sourceHash = 0U;
+    std::uint16_t importOptions = 0U;
     std::string sourceName;
     std::string sourceExtension;
 };
@@ -257,6 +259,7 @@ struct ImportedAssetHeader {
     }
 
     header.category = static_cast<AssetImportCategory>(category);
+    header.importOptions = flags;
     return header;
 }
 
@@ -269,7 +272,8 @@ struct ImportedAssetHeader {
     const std::filesystem::path& destinationVirtualFolder,
     const std::filesystem::path& sourcePath,
     AssetImportCategory category,
-    std::uint64_t sourceHash) {
+    std::uint64_t sourceHash,
+    std::uint16_t importOptions) {
     for (const AssetMetadata& metadata : manager.Registry().All()) {
         if (metadata.type != RuntimeAssetType(category) ||
             metadata.importCategory != ToString(category) ||
@@ -282,6 +286,7 @@ struct ImportedAssetHeader {
         if (header.has_value() &&
             header->category == category &&
             header->sourceHash == sourceHash &&
+            header->importOptions == importOptions &&
             header->sourceName == sourcePath.filename().string() &&
             header->sourceExtension == sourcePath.extension().string()) {
             return &metadata;
@@ -294,7 +299,8 @@ struct ImportedAssetHeader {
     AssetManager& manager,
     const std::filesystem::path& sourcePath,
     const std::filesystem::path& destinationFolder,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const AssetImportOptions& options) {
     AssetImportItemResult result;
     result.sourcePath = sourcePath;
     result.category = AssetImportCatalog::ClassifyExtension(sourcePath.extension());
@@ -336,7 +342,8 @@ struct ImportedAssetHeader {
         return result;
     }
 
-    if (const AssetMetadata* reusable = FindReusableImportedAsset(manager, destinationVirtualFolder, sourcePath, result.category, result.sourceHash);
+    const std::uint16_t importOptions = AssetImportOptionFlags(options);
+    if (const AssetMetadata* reusable = FindReusableImportedAsset(manager, destinationVirtualFolder, sourcePath, result.category, result.sourceHash, importOptions);
         reusable != nullptr) {
         result.id = reusable->id;
         result.assetPhysicalPath = reusable->physicalPath;
@@ -358,7 +365,7 @@ struct ImportedAssetHeader {
     const std::string runtimeType{ RuntimeAssetType(result.category) };
     result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + runtimeType);
 
-    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash)) {
+    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions)) {
         result.error = "Imported asset container could not be written.";
         result.status = AssetImportItemStatus::Failed;
         return result;
@@ -391,7 +398,8 @@ struct ImportedAssetHeader {
 AssetImportResult AssetImportService::ImportFiles(
     AssetManager& manager,
     std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const AssetImportOptions& options) {
     AssetImportResult result;
     result.items.reserve(sourceFiles.size());
 
@@ -409,7 +417,7 @@ AssetImportResult AssetImportService::ImportFiles(
     }
 
     for (const std::filesystem::path& sourceFile : sourceFiles) {
-        result.items.push_back(ImportOne(manager, sourceFile, *destinationFolder, destinationVirtualFolder));
+        result.items.push_back(ImportOne(manager, sourceFile, *destinationFolder, destinationVirtualFolder, options));
     }
     return result;
 }

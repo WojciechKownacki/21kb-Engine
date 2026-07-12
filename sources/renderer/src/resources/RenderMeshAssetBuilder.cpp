@@ -47,13 +47,11 @@ std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadGltf(const std::f
 }
 
 std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc) {
-    static_cast<void>(desc);
-    return RenderMeshFbxImporter::Load(path);
+    return RenderMeshFbxImporter::Load(path, desc);
 }
 
 std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc) {
-    static_cast<void>(desc);
-    return RenderMeshFbxImporter::Load(data);
+    return RenderMeshFbxImporter::Load(data, desc);
 }
 
 } // namespace kb::render

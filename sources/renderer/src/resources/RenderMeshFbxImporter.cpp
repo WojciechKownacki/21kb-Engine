@@ -34,9 +34,18 @@ struct Bounds3 {
     Vec3 max{};
 };
 
+enum class FbxMaterialMapping : std::uint8_t {
+    None = 0,
+    AllSame,
+    ByPolygon,
+};
+
 struct FbxGeometryData {
     std::vector<double> vertices;
     std::vector<std::int32_t> polygonVertexIndices;
+    std::vector<std::int32_t> materialIndices;
+    std::vector<std::string> materialNames;
+    FbxMaterialMapping materialMapping = FbxMaterialMapping::None;
 };
 
 class FbxReader {
@@ -179,6 +188,19 @@ template <typename T>
     return !values.empty();
 }
 
+[[nodiscard]] bool ReadStringProperty(const FbxReader& reader, std::size_t& offset, std::string& value) {
+    std::uint32_t length = 0U;
+    if (!reader.Read(offset, length) || length > reader.Size() - offset) {
+        return false;
+    }
+    std::span<const std::byte> bytes;
+    if (!reader.ReadBytes(offset, length, bytes)) {
+        return false;
+    }
+    value.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return true;
+}
+
 [[nodiscard]] bool SkipPropertyPayload(const FbxReader& reader, std::size_t& offset, char type) {
     switch (type) {
     case 'Y':
@@ -221,17 +243,59 @@ template <typename T>
     }
 }
 
-[[nodiscard]] bool ReadTargetArrayProperty(const FbxReader& reader, std::size_t& offset, char type, std::string_view nodeName, FbxGeometryData& geometry) {
+[[nodiscard]] bool ReadTargetProperty(
+    const FbxReader& reader,
+    std::size_t& offset,
+    char type,
+    std::string_view nodeName,
+    bool inMaterialLayer,
+    FbxGeometryData& geometry,
+    std::vector<std::string>& stringProperties) {
     if (nodeName == "Vertices" && type == 'd') {
         return ReadDoubleArrayProperty(reader, offset, geometry.vertices);
     }
     if (nodeName == "PolygonVertexIndex" && type == 'i') {
         return ReadIntArrayProperty(reader, offset, geometry.polygonVertexIndices);
     }
+    if (nodeName == "Materials" && inMaterialLayer && type == 'i') {
+        return ReadIntArrayProperty(reader, offset, geometry.materialIndices);
+    }
+    if (type == 'S') {
+        std::string value;
+        if (!ReadStringProperty(reader, offset, value)) {
+            return false;
+        }
+        stringProperties.push_back(std::move(value));
+        return true;
+    }
     return SkipPropertyPayload(reader, offset, type);
 }
 
-[[nodiscard]] bool ParseNode(const FbxReader& reader, std::size_t& offset, bool wideNodes, FbxGeometryData& geometry) {
+[[nodiscard]] std::string MaterialNameFromFbxObjectName(std::string value) {
+    constexpr std::string_view prefix = "Material::";
+    if (value.starts_with(prefix)) {
+        value.erase(0U, prefix.size());
+    }
+    return value.empty() ? std::string{ "Material" } : value;
+}
+
+void CaptureMaterialLayerMapping(const std::string& nodeName, const std::vector<std::string>& stringProperties, FbxGeometryData& geometry) {
+    if (stringProperties.empty() || nodeName != "MappingInformationType") {
+        return;
+    }
+    if (stringProperties.front() == "AllSame") {
+        geometry.materialMapping = FbxMaterialMapping::AllSame;
+    } else if (stringProperties.front() == "ByPolygon") {
+        geometry.materialMapping = FbxMaterialMapping::ByPolygon;
+    }
+}
+
+[[nodiscard]] bool ParseNode(
+    const FbxReader& reader,
+    std::size_t& offset,
+    bool wideNodes,
+    FbxGeometryData& geometry,
+    bool inMaterialLayer = false) {
     bool ok = true;
     const std::uint64_t endOffset = ReadRecordValue32Or64(reader, offset, wideNodes, ok);
     const std::uint64_t propertyCount = ReadRecordValue32Or64(reader, offset, wideNodes, ok);
@@ -254,16 +318,26 @@ template <typename T>
     }
     const std::string nodeName{ reinterpret_cast<const char*>(nameBytes.data()), nameBytes.size() };
 
+    std::vector<std::string> stringProperties;
+    stringProperties.reserve(static_cast<std::size_t>(std::min<std::uint64_t>(propertyCount, 4U)));
     for (std::uint64_t propertyIndex = 0; propertyIndex < propertyCount; ++propertyIndex) {
         std::uint8_t type = 0;
-        if (!reader.ReadU8(offset, type) || !ReadTargetArrayProperty(reader, offset, static_cast<char>(type), nodeName, geometry)) {
+        if (!reader.ReadU8(offset, type) ||
+            !ReadTargetProperty(reader, offset, static_cast<char>(type), nodeName, inMaterialLayer, geometry, stringProperties)) {
             return false;
         }
     }
 
+    if (nodeName == "Material" && !stringProperties.empty()) {
+        geometry.materialNames.push_back(MaterialNameFromFbxObjectName(stringProperties.front()));
+    }
+    if (inMaterialLayer) {
+        CaptureMaterialLayerMapping(nodeName, stringProperties, geometry);
+    }
+
     while (offset < endOffset) {
         const std::size_t before = offset;
-        if (!ParseNode(reader, offset, wideNodes, geometry)) {
+        if (!ParseNode(reader, offset, wideNodes, geometry, inMaterialLayer || nodeName == "LayerElementMaterial")) {
             return false;
         }
         if (offset == before) {
@@ -291,9 +365,6 @@ template <typename T>
         const std::size_t before = offset;
         if (!ParseNode(reader, offset, wideNodes, geometry)) {
             return false;
-        }
-        if (geometry.vertices.size() >= 3U && !geometry.polygonVertexIndices.empty()) {
-            return true;
         }
         if (offset == before) {
             break;
@@ -414,15 +485,47 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
     asset.indices32.push_back(base + 2U);
 }
 
-[[nodiscard]] std::optional<RenderMeshAssetData> BuildMesh(const FbxGeometryData& geometry) {
+[[nodiscard]] std::uint32_t MaterialSlotForPolygon(const FbxGeometryData& geometry, std::uint32_t polygonIndex, std::uint32_t slotCount, bool& valid) noexcept {
+    valid = true;
+    if (geometry.materialIndices.empty() || geometry.materialMapping == FbxMaterialMapping::None) {
+        return 0U;
+    }
+
+    std::size_t materialIndex = 0U;
+    if (geometry.materialMapping == FbxMaterialMapping::ByPolygon) {
+        materialIndex = polygonIndex;
+    }
+    if (materialIndex >= geometry.materialIndices.size()) {
+        valid = false;
+        return 0U;
+    }
+    const std::int32_t slot = geometry.materialIndices[materialIndex];
+    if (slot < 0 || static_cast<std::uint32_t>(slot) >= slotCount) {
+        valid = false;
+        return 0U;
+    }
+    return static_cast<std::uint32_t>(slot);
+}
+
+[[nodiscard]] std::optional<RenderMeshAssetData> BuildMesh(const FbxGeometryData& geometry, const RenderMeshFbxImportDesc& desc) {
     if (geometry.vertices.size() % 3U != 0U || geometry.polygonVertexIndices.empty()) {
         return std::nullopt;
     }
     const std::uint32_t controlPointCount = static_cast<std::uint32_t>(geometry.vertices.size() / 3U);
 
-    RenderMeshAssetData asset;
+    std::uint32_t slotCount = 1U;
+    if (desc.importMaterialSlots) {
+        slotCount = std::max<std::uint32_t>(1U, static_cast<std::uint32_t>(geometry.materialNames.size()));
+        for (const std::int32_t materialIndex : geometry.materialIndices) {
+            if (materialIndex >= 0) {
+                slotCount = std::max(slotCount, static_cast<std::uint32_t>(materialIndex) + 1U);
+            }
+        }
+    }
+    std::vector<std::vector<std::array<Vec3, 3U>>> trianglesBySlot(slotCount);
     const Bounds3 bounds = ComputeControlPointBounds(geometry.vertices);
     std::vector<std::uint32_t> polygon;
+    std::uint32_t polygonIndex = 0U;
     for (std::int32_t rawIndex : geometry.polygonVertexIndices) {
         const bool endsPolygon = rawIndex < 0;
         const std::int32_t decoded = endsPolygon ? -rawIndex - 1 : rawIndex;
@@ -434,31 +537,57 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
             continue;
         }
 
+        bool materialMappingValid = !desc.importMaterialSlots;
+        const std::uint32_t materialSlot = desc.importMaterialSlots
+            ? MaterialSlotForPolygon(geometry, polygonIndex, slotCount, materialMappingValid)
+            : 0U;
+        if (!materialMappingValid) {
+            return std::nullopt;
+        }
         if (polygon.size() >= 3U) {
             const Vec3 first = ControlPoint(geometry.vertices, polygon[0]);
             for (std::size_t index = 1U; index + 1U < polygon.size(); ++index) {
-                AppendTriangle(
-                    asset,
-                    bounds,
+                trianglesBySlot[materialSlot].push_back({
                     first,
                     ControlPoint(geometry.vertices, polygon[index]),
-                    ControlPoint(geometry.vertices, polygon[index + 1U]));
+                    ControlPoint(geometry.vertices, polygon[index + 1U]),
+                });
             }
         }
         polygon.clear();
+        ++polygonIndex;
     }
 
-    if (asset.vertices.empty() || asset.indices32.empty()) {
+    RenderMeshAssetData asset;
+    asset.materialSlots.resize(slotCount);
+    asset.materialNames.reserve(slotCount);
+    for (std::uint32_t slotIndex = 0U; slotIndex < slotCount; ++slotIndex) {
+        if (desc.importMaterialSlots && slotIndex < geometry.materialNames.size() && !geometry.materialNames[slotIndex].empty()) {
+            asset.materialNames.push_back(geometry.materialNames[slotIndex]);
+        } else if (slotCount == 1U && geometry.materialNames.empty()) {
+            asset.materialNames.push_back("Default");
+        } else {
+            asset.materialNames.push_back("Material " + std::to_string(slotIndex + 1U));
+        }
+    }
+    for (std::uint32_t slotIndex = 0U; slotIndex < slotCount; ++slotIndex) {
+        const std::uint32_t sectionStart = static_cast<std::uint32_t>(asset.indices32.size());
+        for (const std::array<Vec3, 3U>& triangle : trianglesBySlot[slotIndex]) {
+            AppendTriangle(asset, bounds, triangle[0], triangle[1], triangle[2]);
+        }
+        const std::uint32_t sectionIndexCount = static_cast<std::uint32_t>(asset.indices32.size()) - sectionStart;
+        if (sectionIndexCount != 0U) {
+            asset.sections.push_back(RenderMeshSectionDesc{
+                .indexStart = sectionStart,
+                .indexCount = sectionIndexCount,
+                .materialSlot = slotIndex,
+            });
+        }
+    }
+
+    if (asset.vertices.empty() || asset.indices32.empty() || asset.sections.empty()) {
         return std::nullopt;
     }
-
-    asset.materialSlots.push_back(RenderMaterialSlotDesc{});
-    asset.materialNames.push_back("Default");
-    asset.sections.push_back(RenderMeshSectionDesc{
-        .indexStart = 0U,
-        .indexCount = static_cast<std::uint32_t>(asset.indices32.size()),
-        .materialSlot = 0U,
-    });
 
     if (!RenderMeshAssetFinalizer::Finalize(asset)) {
         return std::nullopt;
@@ -468,7 +597,7 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
 
 } // namespace
 
-std::optional<RenderMeshAssetData> RenderMeshFbxImporter::Load(const std::filesystem::path& path) {
+std::optional<RenderMeshAssetData> RenderMeshFbxImporter::Load(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc) {
     std::ifstream input{ path, std::ios::binary };
     if (!input.is_open()) {
         return std::nullopt;
@@ -478,15 +607,15 @@ std::optional<RenderMeshAssetData> RenderMeshFbxImporter::Load(const std::filesy
     std::ranges::transform(bytes, data.begin(), [](char value) {
         return static_cast<std::byte>(static_cast<unsigned char>(value));
     });
-    return Load(std::span<const std::byte>{ data.data(), data.size() });
+    return Load(std::span<const std::byte>{ data.data(), data.size() }, desc);
 }
 
-std::optional<RenderMeshAssetData> RenderMeshFbxImporter::Load(std::span<const std::byte> data) {
+std::optional<RenderMeshAssetData> RenderMeshFbxImporter::Load(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc) {
     FbxGeometryData geometry;
     if (!ExtractGeometry(data, geometry)) {
         return std::nullopt;
     }
-    return BuildMesh(geometry);
+    return BuildMesh(geometry, desc);
 }
 
 } // namespace kb::render

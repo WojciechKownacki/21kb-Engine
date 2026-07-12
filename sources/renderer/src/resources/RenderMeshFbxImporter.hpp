@@ -13,8 +13,8 @@ class RenderMeshFbxImporter {
 public:
     RenderMeshFbxImporter() = delete;
 
-    [[nodiscard]] static std::optional<RenderMeshAssetData> Load(const std::filesystem::path& path);
-    [[nodiscard]] static std::optional<RenderMeshAssetData> Load(std::span<const std::byte> data);
+    [[nodiscard]] static std::optional<RenderMeshAssetData> Load(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc = {});
+    [[nodiscard]] static std::optional<RenderMeshAssetData> Load(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc = {});
 };
 
 } // namespace kb::render
