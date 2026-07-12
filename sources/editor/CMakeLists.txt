@@ -534,6 +534,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
+    src/private/scene/EditorSceneDocumentAssetLoaders.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
@@ -647,6 +648,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/MaterialEditorPanelLayout.cpp
     src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
     src/rendering/material_graph/MaterialGraphCanvas.cpp
     src/inspection/InspectorInputInteraction.cpp
@@ -732,6 +734,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp

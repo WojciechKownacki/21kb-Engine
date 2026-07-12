@@ -285,6 +285,7 @@ add_library(kb_engine STATIC
     src/ecs/HierarchyRelationService.cpp
     src/ecs/HierarchyChildrenCollector.cpp
     src/ecs/MutableComponentBorrowLocks.cpp
+    src/ecs/NativeArchetypeLayout.cpp
     src/ecs/NativeArchetypeStorage.cpp
     src/ecs/QueryFilter.cpp
     src/ecs/QueryState.cpp
@@ -860,6 +861,7 @@ add_library(kb_engine STATIC
     src/visual/VisualGraphTypes.cpp
     src/visual/VisualGraphValidator.cpp
     src/private/ecs/ComponentRegistry.hpp
+    src/private/ecs/NativeArchetypeLayout.hpp
     src/private/ecs/component/ComponentStorageIteration.hpp
     src/private/ecs/component/ComponentStorageMutation.hpp
     src/private/ecs/component/ComponentStoragePairIteration.hpp

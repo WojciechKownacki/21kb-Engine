@@ -158,6 +158,15 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialFunctionAssetLoader.cpp
     src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
+    src/resources/RenderMaterialGraphCompiler.cpp
+    src/resources/RenderMaterialGraphPinLayout.cpp
+    src/resources/RenderMaterialGraphNodeCatalog.cpp
+    src/resources/RenderMaterialGraphNodeParser.cpp
+    src/resources/RenderMaterialGraphEnumStrings.cpp
+    src/resources/RenderMaterialGraphRuntimeState.cpp
+    src/resources/RenderMaterialGraphArtifactCache.cpp
+    src/resources/RenderMaterialGraphPinTypes.cpp
+    src/resources/RenderMaterialGraphPinIds.cpp
     src/resources/RenderMaterialParameterCollection.cpp
     src/resources/RenderMaterialGraphProgramBindingBuilder.cpp
     src/resources/RenderMaterialGraphShaderArtifact.cpp
@@ -202,6 +211,8 @@ add_library(kb_renderer STATIC
     src/resources/RenderTextureResourceBuilder.cpp
     src/resources/RenderTextureResourceBuilder.hpp
     src/runtime/RuntimeFrameResourceReferences.cpp
+    src/runtime/RuntimeMaterialGraphDependencyLoader.cpp
+    src/runtime/RuntimeMaterialGraphDependencyLoader.hpp
     src/runtime/RuntimeMaterialResolver.cpp
     src/runtime/RuntimeMaterialResourceEnsurer.cpp
     src/runtime/RuntimeMaterialResourceEnsurer.hpp
