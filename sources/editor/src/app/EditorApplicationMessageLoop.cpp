@@ -258,17 +258,11 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return presented;
 }
 
-[[nodiscard]] bool PresentMainHost(EditorApplicationState& state, bool refreshToolbar) {
+[[nodiscard]] bool QueueMainHost(EditorApplicationState& state, bool refreshToolbar, bool& scenePresented) {
     if (state.window == nullptr || IsWindowVisible(state.window) == 0) {
         return false;
     }
 
-    // Keep the scene viewport renderer pointed at the project graph shader cache and consume any
-    // graph cooks that finished since the last paint so authored programs swap in live (MAT-31/33).
-    state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
-    static_cast<void>(state.sceneContext.PumpMaterialGraphCookResults());
-
-    bool scenePresented = false;
     const DockLayout layout = BuildMainLayout(state);
     const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> hostLayouts =
         EditorHostSurfaceLayoutResolver::ResolveMainWindow(
@@ -276,7 +270,6 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             state.dockModel,
             state.metrics,
             state.sceneContext);
-    state.sceneViewport.BeginPaintLayout(state.window);
     state.sceneViewport.SyncHostSurfaceLayouts(
         state.window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{hostLayouts.data(), hostLayouts.size()});
@@ -306,17 +299,10 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         state.floatingWindows,
         state.metrics);
     const bool previewPresented = PresentMaterialPreview(state, state.window, inspector, materialEditor);
-    state.sceneViewport.EndPaintLayout();
-    if (scenePresented || previewPresented) {
-        state.sceneViewport.ClearPresentRequest();
-    }
-    if (scenePresented) {
-        state.sceneContext.AcknowledgeSceneRenderSubmitted();
-    }
     return scenePresented || previewPresented;
 }
 
-[[nodiscard]] bool PresentFloatingHosts(EditorApplicationState& state, bool refreshToolbar) {
+[[nodiscard]] bool QueueFloatingHosts(EditorApplicationState& state, bool refreshToolbar, bool& scenePresented) {
     bool presented = false;
     const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
     for (HWND window : queries.Windows()) {
@@ -324,14 +310,21 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             continue;
         }
 
-        bool scenePresented = false;
-        state.sceneViewport.BeginPaintLayout(window);
+        // Register every visible native host in the current shared bgfx frame.
+        // A host without an active viewport must still retire its old child surface.
+        state.sceneViewport.SyncHostSurfaceLayouts(window, {});
         const DockPanel* panel = state.dockModel.Queries().FindPanel(queries.PanelId(window));
         if (panel != nullptr && panel->kind == DockPanelKind::Scene) {
-            RECT content{};
-            GetClientRect(window, &content);
-            content.top += state.metrics.floatingChromeHeight;
-            scenePresented = PresentScenePanel(state, window, *panel, content, refreshToolbar);
+            const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Scene,
+                window,
+                state.window,
+                state.dockModel,
+                state.floatingWindows,
+                state.metrics);
+            if (content.has_value()) {
+                scenePresented = PresentScenePanel(state, window, *panel, *content, refreshToolbar) || scenePresented;
+            }
         }
 
         const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
@@ -349,13 +342,6 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             state.floatingWindows,
             state.metrics);
         const bool previewPresented = PresentMaterialPreview(state, window, inspector, materialEditor);
-        state.sceneViewport.EndPaintLayout();
-        if (scenePresented || previewPresented) {
-            state.sceneViewport.ClearPresentRequest();
-        }
-        if (scenePresented) {
-            state.sceneContext.AcknowledgeSceneRenderSubmitted();
-        }
         presented = scenePresented || previewPresented || presented;
     }
     return presented;
@@ -363,8 +349,19 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
-    const bool mainPresented = PresentMainHost(state, refreshToolbar);
-    const bool floatingPresented = PresentFloatingHosts(state, refreshToolbar);
+    state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
+    static_cast<void>(state.sceneContext.PumpMaterialGraphCookResults());
+    bool scenePresented = false;
+    state.sceneViewport.BeginPaintLayout(state.window);
+    const bool mainPresented = QueueMainHost(state, refreshToolbar, scenePresented);
+    const bool floatingPresented = QueueFloatingHosts(state, refreshToolbar, scenePresented);
+    state.sceneViewport.EndPaintLayout();
+    if (mainPresented || floatingPresented) {
+        state.sceneViewport.ClearPresentRequest();
+    }
+    if (scenePresented) {
+        state.sceneContext.AcknowledgeSceneRenderSubmitted();
+    }
     return mainPresented || floatingPresented;
 }
 
