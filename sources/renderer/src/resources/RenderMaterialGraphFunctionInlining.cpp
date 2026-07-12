@@ -151,6 +151,8 @@ struct FunctionSignature {
     return signature;
 }
 
+} // namespace
+
 RenderMaterialGraphCustomCode BuildRenderMaterialFunctionCallCustomCode(const RenderMaterialGraphDocument& functionGraph) {
     const FunctionSignature signature = BuildMaterialFunctionSignature(functionGraph);
     RenderMaterialGraphCustomCode customCode{};
@@ -859,8 +861,6 @@ void AddLayerStackParameterConstants(
     }
     return changed;
 }
-
-} // namespace
 
 } // namespace
 

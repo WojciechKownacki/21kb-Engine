@@ -7,6 +7,7 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include <filesystem>
+#include <optional>
 
 namespace kb::editor {
 
@@ -25,8 +26,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         return false;
     case EditorAssetContextCommand::Import: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
-        const std::vector<std::filesystem::path> files = EditorAssetImportDialog::Open(GetActiveWindow());
-        return files.empty() ? true : sceneContext.ImportAssetFiles(files, destinationFolder);
+        const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow());
+        return !selection.has_value() || selection->files.empty()
+            ? true
+            : sceneContext.ImportAssetFiles(selection->files, destinationFolder, selection->options);
     }
     case EditorAssetContextCommand::NewFolder:
         if (targetKind == EditorAssetContextTargetKind::Folder) {

@@ -942,6 +942,7 @@ if(BUILD_TESTING)
         tests/EditorTestSupport.hpp
         tests/ScriptEditorTests.cpp
         tests/SvgPathTests.cpp
+        src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
         src/rendering/script_editor/LuaSyntaxHighlighter.cpp

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/assets/AssetImportTypes.hpp"
+
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -248,6 +250,7 @@ public:
     [[nodiscard]] bool CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder, const kb::assets::AssetImportOptions& options);
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);

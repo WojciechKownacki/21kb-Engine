@@ -53,6 +53,12 @@ function(kb_add_bgfx_subdirectory)
                 target_compile_options(${_kb_bgfx_exception_target} PRIVATE /EHsc /FS)
             endif()
         endforeach()
+        # Tint is third-party Dawn code built as part of bgfx. MSVC 14.44 emits
+        # C4715 for exhaustive internal switch lambdas that terminate on every
+        # unmatched branch; suppress only this upstream diagnostic on its target.
+        if(TARGET tint)
+            target_compile_options(tint PRIVATE /wd4715)
+        endif()
         if(TARGET glsl-optimizer)
             target_compile_options(glsl-optimizer PRIVATE /FS)
         endif()

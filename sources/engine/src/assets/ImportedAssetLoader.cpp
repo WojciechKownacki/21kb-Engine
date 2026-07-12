@@ -106,10 +106,10 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset header is invalid." };
     }
 
-    static_cast<void>(flags);
     imported.category = static_cast<AssetImportCategory>(category);
     imported.sourceSize = sourceSize;
     imported.sourceHash = sourceHash;
+    imported.importOptions = flags;
     std::vector<char> payload{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
     imported.payload.resize(payload.size());
     std::ranges::transform(payload, imported.payload.begin(), [](char value) {
