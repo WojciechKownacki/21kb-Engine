@@ -1,5 +1,0 @@
-#include "engine/ecs/world/WorldPrivateComponentApi.inl"
-#include "engine/ecs/world/WorldPrivateQueryApi.inl"
-#include "engine/ecs/world/WorldPrivateEventApi.inl"
-#include "engine/ecs/world/WorldPrivateTypeApi.inl"
-#include "engine/ecs/world/WorldPrivateLifecycleApi.inl"

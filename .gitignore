@@ -1,94 +1,35 @@
-# =========================
-# Build directories
-# =========================
+# Build output
 /build/
 /out/
-/bin/
-/lib/
-/dist/
-
-# =========================
-# CMake / Ninja / Make artifacts
-# =========================
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CTestTestfile.cmake
-compile_commands.json
-install_manifest.txt
-_deps/
-.ninja_deps
-.ninja_log
-build.ninja
-rules.ninja
-Makefile
-cmake-build-*/
-CMakeUserPresets.json
-
-# =========================
-# Compiler / linker artifacts
-# =========================
-*.o
+/cmake-build-*/
 *.obj
-*.lo
-*.la
-*.a
-*.lib
-*.so
-*.so.*
-*.dylib
-*.dll
+*.o
 *.exe
-*.out
-*.app
 *.pdb
 *.ilk
-*.exp
-*.idb
-*.dSYM/
+*.lib
+*.dll
 
-# =========================
-# Generated dependency / temp files
-# =========================
-/Project/
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake.stamp
+
+# IDE / tooling
+/.vs/
+/.vscode/
+/.idea/
+/.claude/
+
+# Local private tooling and scratch
+/.local-private/
 /temp/
-/others/
-*.d
-*.gcno
-*.gcda
-*.profraw
-*.profdata
-*.tmp
-*.temp
+/tmp/
+/Saved/
 
-# =========================
-# IDE / editor
-# =========================
-.vscode/
-.idea/
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-*.VC.db
-*.VC.opendb
-
-# =========================
-# OS junk
-# =========================
-.DS_Store
-Thumbs.db
-
-# =========================
 # Logs
-# =========================
 *.log
 
-# =========================
-# Local benchmark outputs
-# =========================
-/Saved/Benchmarks/
-
-# Keep vendored dependencies complete even if they contain files that look like
-# build artifacts for this repository.
-!/third_party/**
+# Working notes, not versioned
+/others/
