@@ -364,21 +364,23 @@ bool EditorSceneAssetBrowserCommands::ImportFiles(
     kb::scene::Scene& scene,
     EditorAssetBrowserState& assetBrowser,
     std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
-    return ImportFilesWithReport(scene, assetBrowser, sourceFiles, destinationVirtualFolder).ImportedCount() > 0U;
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
+    return ImportFilesWithReport(scene, assetBrowser, sourceFiles, destinationVirtualFolder, options).ImportedCount() > 0U;
 }
 
 kb::assets::AssetImportResult EditorSceneAssetBrowserCommands::ImportFilesWithReport(
     kb::scene::Scene& scene,
     EditorAssetBrowserState& assetBrowser,
     std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
     if (sourceFiles.empty()) {
         return {};
     }
 
     kb::assets::AssetManager& manager = AssetManager(scene);
-    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder);
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder, options);
     if (imported.ImportedCount() == 0U) {
         return imported;
     }

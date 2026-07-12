@@ -45,12 +45,14 @@ public:
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,
         std::span<const std::filesystem::path> sourceFiles,
-        const std::filesystem::path& destinationVirtualFolder);
+        const std::filesystem::path& destinationVirtualFolder,
+        const kb::assets::AssetImportOptions& options = {});
     [[nodiscard]] static kb::assets::AssetImportResult ImportFilesWithReport(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,
         std::span<const std::filesystem::path> sourceFiles,
-        const std::filesystem::path& destinationVirtualFolder);
+        const std::filesystem::path& destinationVirtualFolder,
+        const kb::assets::AssetImportOptions& options = {});
 };
 
 } // namespace kb::editor

@@ -35,6 +35,20 @@ enum class AssetImportItemStatus : std::uint8_t {
     Failed,
 };
 
+struct AssetMeshImportOptions {
+    bool importMaterialSlots = true;
+};
+
+struct AssetImportOptions {
+    AssetMeshImportOptions mesh{};
+};
+
+inline constexpr std::uint16_t kAssetImportOptionMeshDisableMaterialSlots = 1U << 0U;
+
+[[nodiscard]] constexpr std::uint16_t AssetImportOptionFlags(const AssetImportOptions& options) noexcept {
+    return options.mesh.importMaterialSlots ? 0U : kAssetImportOptionMeshDisableMaterialSlots;
+}
+
 struct AssetImportItemResult {
     std::filesystem::path sourcePath;
     std::filesystem::path assetPhysicalPath;

@@ -15,6 +15,7 @@ struct ImportedAsset {
     std::string sourceExtension;
     std::uint64_t sourceSize = 0;
     std::uint64_t sourceHash = 0;
+    std::uint16_t importOptions = 0;
     std::vector<std::byte> payload;
 };
 

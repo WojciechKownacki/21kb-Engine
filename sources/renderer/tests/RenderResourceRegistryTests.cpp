@@ -23,6 +23,8 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -405,6 +407,153 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->desc.gpuDriven.lodCount == asset->lods.size(), "OBJ importer did not expose LODs through RenderMeshDesc");
     Require(asset->materialSlots[asset->sections[0].materialSlot].defaultMaterialAssetId == 101U, "OBJ importer did not bind first material slot");
     Require(asset->materialSlots[asset->sections[1].materialSlot].defaultMaterialAssetId == 102U, "OBJ importer did not bind second material slot");
+}
+
+void AppendFbxU32(std::vector<std::byte>& output, std::uint32_t value) {
+    for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+        output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+    }
+}
+
+void AppendFbxU64(std::vector<std::byte>& output, std::uint64_t value) {
+    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
+        output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+    }
+}
+
+void PatchFbxU32(std::vector<std::byte>& output, std::size_t offset, std::uint32_t value) {
+    for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+        output[offset + (shift / 8U)] = static_cast<std::byte>((value >> shift) & 0xFFU);
+    }
+}
+
+void AppendFbxStringProperty(std::vector<std::byte>& output, std::string_view value) {
+    output.push_back(std::byte{ 'S' });
+    AppendFbxU32(output, static_cast<std::uint32_t>(value.size()));
+    for (const char character : value) {
+        output.push_back(static_cast<std::byte>(character));
+    }
+}
+
+void AppendFbxInt64Property(std::vector<std::byte>& output, std::uint64_t value) {
+    output.push_back(std::byte{ 'L' });
+    AppendFbxU64(output, value);
+}
+
+template <typename T>
+void AppendFbxArrayProperty(std::vector<std::byte>& output, char type, std::span<const T> values) {
+    output.push_back(static_cast<std::byte>(type));
+    AppendFbxU32(output, static_cast<std::uint32_t>(values.size()));
+    AppendFbxU32(output, 0U);
+    AppendFbxU32(output, static_cast<std::uint32_t>(values.size_bytes()));
+    const auto* bytes = reinterpret_cast<const std::byte*>(values.data());
+    output.insert(output.end(), bytes, bytes + static_cast<std::ptrdiff_t>(values.size_bytes()));
+}
+
+struct FbxFixtureNode {
+    std::string name;
+    std::vector<std::byte> properties;
+    std::uint32_t propertyCount = 0U;
+    std::vector<FbxFixtureNode> children;
+};
+
+void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& node) {
+    const std::size_t nodeOffset = output.size();
+    output.resize(output.size() + 13U);
+    output.insert(output.end(), reinterpret_cast<const std::byte*>(node.name.data()), reinterpret_cast<const std::byte*>(node.name.data()) + static_cast<std::ptrdiff_t>(node.name.size()));
+    output.insert(output.end(), node.properties.begin(), node.properties.end());
+    for (const FbxFixtureNode& child : node.children) {
+        AppendFbxFixtureNode(output, child);
+    }
+    output.insert(output.end(), 13U, std::byte{});
+    PatchFbxU32(output, nodeOffset, static_cast<std::uint32_t>(output.size()));
+    PatchFbxU32(output, nodeOffset + 4U, node.propertyCount);
+    PatchFbxU32(output, nodeOffset + 8U, static_cast<std::uint32_t>(node.properties.size()));
+    output[nodeOffset + 12U] = static_cast<std::byte>(node.name.size());
+}
+
+[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture() {
+    std::vector<std::byte> geometryProperties;
+    AppendFbxInt64Property(geometryProperties, 1U);
+    AppendFbxStringProperty(geometryProperties, "Geometry::TwoMaterialQuad");
+    AppendFbxStringProperty(geometryProperties, "Mesh");
+
+    const std::array<double, 12U> vertices{
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 1.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    std::vector<std::byte> verticesProperties;
+    AppendFbxArrayProperty(verticesProperties, 'd', std::span<const double>{ vertices });
+    const std::array<std::int32_t, 6U> polygonIndices{ 0, 1, -3, 0, 2, -4 };
+    std::vector<std::byte> polygonProperties;
+    AppendFbxArrayProperty(polygonProperties, 'i', std::span<const std::int32_t>{ polygonIndices });
+    const std::array<std::int32_t, 2U> materialIndices{ 0, 1 };
+    std::vector<std::byte> materialIndexProperties;
+    AppendFbxArrayProperty(materialIndexProperties, 'i', std::span<const std::int32_t>{ materialIndices });
+    std::vector<std::byte> byPolygonProperties;
+    AppendFbxStringProperty(byPolygonProperties, "ByPolygon");
+
+    std::vector<std::byte> firstMaterialProperties;
+    AppendFbxInt64Property(firstMaterialProperties, 10U);
+    AppendFbxStringProperty(firstMaterialProperties, "Material::Body");
+    AppendFbxStringProperty(firstMaterialProperties, "");
+    std::vector<std::byte> secondMaterialProperties;
+    AppendFbxInt64Property(secondMaterialProperties, 11U);
+    AppendFbxStringProperty(secondMaterialProperties, "Material::Trim");
+    AppendFbxStringProperty(secondMaterialProperties, "");
+
+    FbxFixtureNode objects{
+        .name = "Objects",
+        .children = {
+            FbxFixtureNode{
+                .name = "Geometry",
+                .properties = std::move(geometryProperties),
+                .propertyCount = 3U,
+                .children = {
+                    FbxFixtureNode{ .name = "Vertices", .properties = std::move(verticesProperties), .propertyCount = 1U },
+                    FbxFixtureNode{ .name = "PolygonVertexIndex", .properties = std::move(polygonProperties), .propertyCount = 1U },
+                    FbxFixtureNode{
+                        .name = "LayerElementMaterial",
+                        .children = {
+                            FbxFixtureNode{ .name = "MappingInformationType", .properties = std::move(byPolygonProperties), .propertyCount = 1U },
+                            FbxFixtureNode{ .name = "Materials", .properties = std::move(materialIndexProperties), .propertyCount = 1U },
+                        },
+                    },
+                },
+            },
+            FbxFixtureNode{ .name = "Material", .properties = std::move(firstMaterialProperties), .propertyCount = 3U },
+            FbxFixtureNode{ .name = "Material", .properties = std::move(secondMaterialProperties), .propertyCount = 3U },
+        },
+    };
+
+    std::vector<std::byte> output;
+    constexpr std::array<std::byte, 23U> magic{
+        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
+        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
+        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
+    };
+    output.insert(output.end(), magic.begin(), magic.end());
+    AppendFbxU32(output, 7400U);
+    AppendFbxFixtureNode(output, objects);
+    output.insert(output.end(), 13U, std::byte{});
+    return output;
+}
+
+void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
+    const std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ fixture });
+
+    Require(asset.has_value(), "FBX importer failed to load the multi-material fixture");
+    Require(asset->materialSlots.size() == 2U, "FBX importer did not preserve both material slots");
+    Require(asset->materialNames.size() == 2U && asset->materialNames[0] == "Body" && asset->materialNames[1] == "Trim",
+        "FBX importer did not preserve material object names");
+    Require(asset->sections.size() == 2U, "FBX importer did not create one section per used material slot");
+    Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U,
+        "FBX importer lost polygon-to-material-slot assignments");
+    Require(asset->sections[0].indexCount == 3U && asset->sections[1].indexCount == 3U,
+        "FBX importer created incorrect material section index ranges");
 }
 
 void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
@@ -2579,6 +2728,7 @@ void RunRenderResourceRegistryTests() {
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
     RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
+    RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
