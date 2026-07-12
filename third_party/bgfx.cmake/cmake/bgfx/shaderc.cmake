@@ -53,7 +53,11 @@ if(UNIX
 	)
 	set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/linux/libdxcompiler.so)
 elseif(WIN32)
-	set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/windows/dxcompiler.dll)
+	if(KB_DXCOMPILER_RUNTIME)
+		set(DXCOMPILER_RUNTIME ${KB_DXCOMPILER_RUNTIME})
+	else()
+		set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/windows/dxcompiler.dll)
+	endif()
 endif()
 
 if(BGFX_AMALGAMATED)
@@ -84,7 +88,7 @@ endif()
 
 # DXIL compiler will be dynamically loaded at runtime - no need
 # to link, just install the needed binaries alongside shaderc.exe
-if(DXCOMPILER_RUNTIME)
+if(DXCOMPILER_RUNTIME AND EXISTS "${DXCOMPILER_RUNTIME}")
 	add_custom_command(
 		TARGET shaderc POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXCOMPILER_RUNTIME} $<TARGET_FILE_DIR:shaderc>
@@ -92,4 +96,6 @@ if(DXCOMPILER_RUNTIME)
 	if(BGFX_INSTALL)
 		install(FILES ${DXCOMPILER_RUNTIME} DESTINATION "${CMAKE_INSTALL_BINDIR}")
 	endif()
+elseif(DXCOMPILER_RUNTIME)
+	message(WARNING "bgfx shaderc DXIL runtime is unavailable at '${DXCOMPILER_RUNTIME}'; shaderc will remain available for non-DXIL profiles.")
 endif()
