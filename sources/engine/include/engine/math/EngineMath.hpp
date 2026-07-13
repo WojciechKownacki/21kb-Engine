@@ -18,6 +18,99 @@ namespace kb::math {
 // sanctioned Native/Lua/Visual Graph marshalling convention for these
 // types rather than adding a composite pin type.
 
+inline constexpr float kPi = 3.14159265358979323846F;
+
+// LIB-044: Radians and Degrees are deliberately distinct types, not a bare
+// float with a suffix in its variable name (the pattern this replaces —
+// verticalFovDegrees, yawDegrees_, DegreesToRadians(float degrees) — is
+// scattered across 6+ independently-reimplemented conversion helpers in
+// sources/renderer and sources/editor, none type-checked against each
+// other; a caller passing radians where degrees were expected fails
+// silently). Construction from a bare float is `explicit` on purpose: it
+// forces every call site to name its unit (`Degrees{45.0F}`, not an
+// implicit `45.0F`), and there is intentionally no implicit conversion
+// between Radians and Degrees — converting requires calling ToRadians/
+// ToDegrees explicitly, so "which unit is this" is never silent.
+class Radians final {
+public:
+    Radians() = default;
+    explicit constexpr Radians(float value) noexcept
+        : value_(value) {}
+
+    [[nodiscard]] constexpr float Value() const noexcept { return value_; }
+
+private:
+    float value_ = 0.0F;
+};
+
+class Degrees final {
+public:
+    Degrees() = default;
+    explicit constexpr Degrees(float value) noexcept
+        : value_(value) {}
+
+    [[nodiscard]] constexpr float Value() const noexcept { return value_; }
+
+private:
+    float value_ = 0.0F;
+};
+
+[[nodiscard]] constexpr Radians ToRadians(Degrees value) noexcept {
+    return Radians{ value.Value() * kPi / 180.0F };
+}
+
+[[nodiscard]] constexpr Degrees ToDegrees(Radians value) noexcept {
+    return Degrees{ value.Value() * 180.0F / kPi };
+}
+
+[[nodiscard]] constexpr Radians operator+(Radians lhs, Radians rhs) noexcept {
+    return Radians{ lhs.Value() + rhs.Value() };
+}
+
+[[nodiscard]] constexpr Radians operator-(Radians lhs, Radians rhs) noexcept {
+    return Radians{ lhs.Value() - rhs.Value() };
+}
+
+[[nodiscard]] constexpr Radians operator*(Radians lhs, float scalar) noexcept {
+    return Radians{ lhs.Value() * scalar };
+}
+
+[[nodiscard]] constexpr bool operator==(Radians lhs, Radians rhs) noexcept {
+    return lhs.Value() == rhs.Value();
+}
+
+[[nodiscard]] constexpr bool operator!=(Radians lhs, Radians rhs) noexcept {
+    return !(lhs == rhs);
+}
+
+[[nodiscard]] constexpr bool operator<(Radians lhs, Radians rhs) noexcept {
+    return lhs.Value() < rhs.Value();
+}
+
+[[nodiscard]] constexpr Degrees operator+(Degrees lhs, Degrees rhs) noexcept {
+    return Degrees{ lhs.Value() + rhs.Value() };
+}
+
+[[nodiscard]] constexpr Degrees operator-(Degrees lhs, Degrees rhs) noexcept {
+    return Degrees{ lhs.Value() - rhs.Value() };
+}
+
+[[nodiscard]] constexpr Degrees operator*(Degrees lhs, float scalar) noexcept {
+    return Degrees{ lhs.Value() * scalar };
+}
+
+[[nodiscard]] constexpr bool operator==(Degrees lhs, Degrees rhs) noexcept {
+    return lhs.Value() == rhs.Value();
+}
+
+[[nodiscard]] constexpr bool operator!=(Degrees lhs, Degrees rhs) noexcept {
+    return !(lhs == rhs);
+}
+
+[[nodiscard]] constexpr bool operator<(Degrees lhs, Degrees rhs) noexcept {
+    return lhs.Value() < rhs.Value();
+}
+
 struct Vec2 {
     float x = 0.0F;
     float y = 0.0F;

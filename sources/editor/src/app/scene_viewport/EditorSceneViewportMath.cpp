@@ -1,17 +1,13 @@
 #include "app/scene_viewport/EditorSceneViewportTypes.hpp"
 
 #if defined(_WIN32)
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <algorithm>
 #include <cmath>
 
 namespace kb::editor {
-namespace {
-
-constexpr float kPi = 3.14159265358979323846F;
-
-} // namespace
 
 bool EditorSceneViewportMath::Contains(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -25,8 +21,10 @@ float EditorSceneViewportMath::RectHeight(const RECT& rect) noexcept {
     return static_cast<float>(std::max<LONG>(1, rect.bottom - rect.top));
 }
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant.
 float EditorSceneViewportMath::DegreesToRadians(float degrees) noexcept {
-    return degrees * kPi / 180.0F;
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 kb::scene::Vec3 EditorSceneViewportMath::Add(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
