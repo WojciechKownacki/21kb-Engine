@@ -22,6 +22,7 @@
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
+#include "engine/library/EngineLibraryTextEncoding.hpp"
 #include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
 #include "engine/scene/Scene.hpp"
@@ -1067,6 +1068,72 @@ void RunParsingTest() {
     kb::tests::Require(!kb::library::TryParseDate("2023-02-29", date), "TryParseDate must reject February 29th in a non-leap year");
 }
 
+// LIB-064: IsValidUtf8 must accept every well-formed encoding length (1
+// through 4 bytes) and reject the specific malformed byte patterns real
+// UTF-8 decoders are expected to catch: overlong encodings, truncated
+// sequences, stray continuation bytes, encoded UTF-16 surrogate halves,
+// and codepoints beyond U+10FFFF.
+void RunUtf8ValidationTest() {
+    kb::tests::Require(kb::library::IsValidUtf8(""), "IsValidUtf8 must accept an empty string");
+    kb::tests::Require(kb::library::IsValidUtf8("Hello, world!"), "IsValidUtf8 must accept plain ASCII");
+
+    const std::string twoByte{ static_cast<char>(0xC3), static_cast<char>(0xA9) }; // U+00E9 'e' with acute accent
+    kb::tests::Require(kb::library::IsValidUtf8(twoByte), "IsValidUtf8 must accept a well-formed 2-byte sequence");
+
+    const std::string threeByte{ static_cast<char>(0xE2), static_cast<char>(0x82), static_cast<char>(0xAC) }; // U+20AC euro sign
+    kb::tests::Require(kb::library::IsValidUtf8(threeByte), "IsValidUtf8 must accept a well-formed 3-byte sequence");
+
+    const std::string fourByte{ static_cast<char>(0xF0), static_cast<char>(0x9F), static_cast<char>(0x98), static_cast<char>(0x80) }; // U+1F600 grinning face
+    kb::tests::Require(kb::library::IsValidUtf8(fourByte), "IsValidUtf8 must accept a well-formed 4-byte sequence");
+
+    const std::string maxCodepoint{ static_cast<char>(0xF4), static_cast<char>(0x8F), static_cast<char>(0xBF), static_cast<char>(0xBF) }; // U+10FFFF, the top of the Unicode range
+    kb::tests::Require(kb::library::IsValidUtf8(maxCodepoint), "IsValidUtf8 must accept the maximum valid Unicode codepoint U+10FFFF");
+
+    const std::string overlongNul{ static_cast<char>(0xC0), static_cast<char>(0x80) }; // overlong 2-byte encoding of NUL
+    kb::tests::Require(!kb::library::IsValidUtf8(overlongNul), "IsValidUtf8 must reject an overlong encoding (0xC0 0x80 for NUL, which must be 1-byte ASCII)");
+
+    const std::string truncated{ static_cast<char>(0xC3) }; // 2-byte lead with no continuation byte
+    kb::tests::Require(!kb::library::IsValidUtf8(truncated), "IsValidUtf8 must reject a truncated multi-byte sequence");
+
+    const std::string strayContinuation{ static_cast<char>(0x80) };
+    kb::tests::Require(!kb::library::IsValidUtf8(strayContinuation), "IsValidUtf8 must reject a stray continuation byte with no lead byte");
+
+    const std::string surrogateHalf{ static_cast<char>(0xED), static_cast<char>(0xA0), static_cast<char>(0x80) }; // encoded U+D800, a UTF-16 surrogate half
+    kb::tests::Require(!kb::library::IsValidUtf8(surrogateHalf), "IsValidUtf8 must reject an encoded UTF-16 surrogate half, which well-formed UTF-8 must never represent");
+
+    const std::string beyondMaxCodepoint{ static_cast<char>(0xF4), static_cast<char>(0x90), static_cast<char>(0x80), static_cast<char>(0x80) }; // U+110000, one past the Unicode range
+    kb::tests::Require(!kb::library::IsValidUtf8(beyondMaxCodepoint), "IsValidUtf8 must reject a codepoint beyond U+10FFFF");
+
+    const std::string invalidLeadByte{ static_cast<char>(0xF5) };
+    kb::tests::Require(!kb::library::IsValidUtf8(invalidLeadByte), "IsValidUtf8 must reject a lead byte (0xF5) that can never begin a valid UTF-8 sequence");
+
+    // Real end-to-end enforcement: a malformed String argument must be
+    // rejected by ScriptFunctionRegistry::Call itself (LIB-064's actual
+    // "platform boundary" wiring), not just by the standalone validator.
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "UTF-8 boundary enforcement host setup failed");
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{
+                               .name = "Tests.EchoUtf8Text",
+                               .inputs = { kb::script::ScriptFunctionPin{ .name = "text", .type = kb::script::ScriptValueType::String } },
+                           },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "UTF-8 boundary enforcement did not register Tests.EchoUtf8Text");
+
+    const std::string malformedArgument{ static_cast<char>(0xC0), static_cast<char>(0x80) };
+    const std::array malformedArguments{ kb::script::ScriptFunctionArgument{ .name = "text", .value = kb::script::ScriptValue{ malformedArgument } } };
+    const kb::script::ScriptFunctionCallResult malformedResult = host.Functions().Call("Tests.EchoUtf8Text", malformedArguments, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!malformedResult.Succeeded(), "ScriptFunctionRegistry::Call must reject a String argument that is not valid UTF-8");
+
+    const std::array validArguments{ kb::script::ScriptFunctionArgument{ .name = "text", .value = kb::script::ScriptValue{ std::string{ "valid text" } } } };
+    const kb::script::ScriptFunctionCallResult validResult = host.Functions().Call("Tests.EchoUtf8Text", validArguments, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(validResult.Succeeded(), "ScriptFunctionRegistry::Call must still accept a well-formed UTF-8 String argument");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1607,6 +1674,7 @@ void RunEngineLibraryTests() {
     RunCollectionsDeterministicIterationTest();
     RunTextFormatBufferTest();
     RunParsingTest();
+    RunUtf8ValidationTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
