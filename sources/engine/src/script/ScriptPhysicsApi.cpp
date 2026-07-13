@@ -1,5 +1,6 @@
 #include "engine/script/ScriptPhysicsApi.hpp"
 
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -22,51 +23,16 @@
 namespace kb::script {
 namespace {
 
-struct Vec3 {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-};
-
-[[nodiscard]] Vec3 ToVec3(kb::scene::Vec3 value) noexcept {
-    return Vec3{ value.x, value.y, value.z };
-}
-
-[[nodiscard]] Vec3 operator+(Vec3 lhs, Vec3 rhs) noexcept {
-    return Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
-}
-
-[[nodiscard]] Vec3 operator-(Vec3 lhs, Vec3 rhs) noexcept {
-    return Vec3{ lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z };
-}
-
-[[nodiscard]] Vec3 operator*(Vec3 lhs, float rhs) noexcept {
-    return Vec3{ lhs.x * rhs, lhs.y * rhs, lhs.z * rhs };
-}
-
-[[nodiscard]] float Dot(Vec3 lhs, Vec3 rhs) noexcept {
-    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
-}
-
-[[nodiscard]] float Length(Vec3 value) noexcept {
-    return std::sqrt(Dot(value, value));
-}
-
-[[nodiscard]] Vec3 Normalize(Vec3 value) noexcept {
-    const float length = Length(value);
-    if (length <= 0.000001F) {
-        return {};
-    }
-    return value * (1.0F / length);
-}
-
-[[nodiscard]] Vec3 Abs(Vec3 value) noexcept {
-    return Vec3{ std::abs(value.x), std::abs(value.y), std::abs(value.z) };
-}
-
-[[nodiscard]] Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
-    return Vec3{ std::max(lhs.x, rhs.x), std::max(lhs.y, rhs.y), std::max(lhs.z, rhs.z) };
-}
+// LIB-042: kb::math::Vec3 replaces this file's former private duplicate
+// Vec3 (the exact "parallel set of vectors" the plan's section-5 header
+// warns against) — kb::scene::Vec3 is itself now an alias to the same
+// kb::math::Vec3, so no conversion is needed at the scene boundary either.
+using kb::math::Vec3;
+using kb::math::Abs;
+using kb::math::Dot;
+using kb::math::Length;
+using kb::math::Max;
+using kb::math::Normalize;
 
 const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) {
     for (const ScriptFunctionArgument& argument : arguments) {
@@ -169,8 +135,8 @@ struct RaycastHit {
     const kb::scene::TransformComponent& transform,
     float& distance,
     Vec3& normal) noexcept {
-    const Vec3 scale = Max(Abs(ToVec3(transform.worldScale)), Vec3{ 0.0001F, 0.0001F, 0.0001F });
-    const Vec3 center = ToVec3(transform.worldPosition) + Vec3{ collider.center.x * scale.x, collider.center.y * scale.y, collider.center.z * scale.z };
+    const Vec3 scale = Max(Abs(transform.worldScale), Vec3{ 0.0001F, 0.0001F, 0.0001F });
+    const Vec3 center = transform.worldPosition + Vec3{ collider.center.x * scale.x, collider.center.y * scale.y, collider.center.z * scale.z };
     switch (collider.shape) {
     case kb::scene::ColliderShape::Sphere: {
         const float radius = collider.radius * std::max({ scale.x, scale.y, scale.z });
