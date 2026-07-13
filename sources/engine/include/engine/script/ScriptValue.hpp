@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 namespace kb::script {
@@ -57,5 +58,18 @@ private:
 
 [[nodiscard]] const char* ToString(ScriptValueType type) noexcept;
 [[nodiscard]] kb::visual::VisualGraphValueType ToVisualGraphValueType(ScriptValueType type) noexcept;
+
+// LIB-032: ScriptValue is the only channel through which data crosses the
+// Lua/Visual Graph script boundary (function arguments, outputs, event
+// payloads, exposed variables all marshal through it). Its Storage variant
+// must never hold a raw pointer or reference — a script could then read or
+// outlive a C++ object whose lifetime it does not own or control, past the
+// frame that produced it. This asserts the invariant at the type
+// definition itself, so editing Storage to add a pointer alternative fails
+// the build immediately instead of silently reopening the hole.
+static_assert(
+    !std::is_pointer_v<bool> && !std::is_pointer_v<int> && !std::is_pointer_v<float> &&
+        !std::is_pointer_v<std::string> && !std::is_pointer_v<std::uint64_t>,
+    "ScriptValue::Storage must never hold a raw pointer or reference type");
 
 } // namespace kb::script
