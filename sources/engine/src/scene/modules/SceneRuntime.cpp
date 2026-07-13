@@ -63,6 +63,18 @@ std::span<const SceneEntity> SceneRuntimeQueries::MeshRendererRenderProxyUpdateE
     return SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(scene_);
 }
 
+std::uint64_t SceneRuntimeQueries::FrameIndex() const noexcept {
+    return SceneRuntimeService::FrameIndex(scene_);
+}
+
+std::uint64_t SceneRuntimeQueries::FixedStepIndex() const noexcept {
+    return SceneRuntimeService::FixedStepIndex(scene_);
+}
+
+bool SceneRuntimeQueries::IsPlaying() const noexcept {
+    return SceneRuntimeService::IsPlaying(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -148,6 +160,22 @@ bool SceneRuntime::ShouldQuit() const noexcept {
 
 kb::ecs::World& SceneRuntime::EcsWorld() noexcept {
     return SceneRuntimeService::EcsWorld(scene_);
+}
+
+std::uint64_t SceneRuntime::FrameIndex() const noexcept {
+    return SceneRuntimeService::FrameIndex(scene_);
+}
+
+std::uint64_t SceneRuntime::FixedStepIndex() const noexcept {
+    return SceneRuntimeService::FixedStepIndex(scene_);
+}
+
+bool SceneRuntime::IsPlaying() const noexcept {
+    return SceneRuntimeService::IsPlaying(scene_);
+}
+
+void SceneRuntime::SetPlaying(bool playing) noexcept {
+    SceneRuntimeService::SetPlaying(scene_, playing);
 }
 
 } // namespace kb::scene

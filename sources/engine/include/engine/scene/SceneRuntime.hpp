@@ -96,6 +96,13 @@ public:
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
     [[nodiscard]] std::span<const SceneEntity> MeshRendererRenderProxyUpdateEntities() const noexcept;
+    // LIB-065: FrameIndex/FixedStepIndex are monotonic (never reset,
+    // unlike LastFixedStepCount above); IsPlaying defaults to true and is
+    // only ever false when something (e.g. an editor) explicitly calls
+    // SceneRuntime::SetPlaying(false).
+    [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
+    [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    [[nodiscard]] bool IsPlaying() const noexcept;
 
 private:
     const Scene& scene_;
@@ -126,6 +133,10 @@ public:
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;
     [[nodiscard]] kb::ecs::World& EcsWorld() noexcept;
+    [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
+    [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    [[nodiscard]] bool IsPlaying() const noexcept;
+    void SetPlaying(bool playing) noexcept;
 
 private:
     Scene& scene_;
