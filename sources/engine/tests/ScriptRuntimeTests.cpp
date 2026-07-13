@@ -2358,6 +2358,160 @@ void RunScriptMathApiTest() {
     kb::tests::Require(!easedOutOfRange.Succeeded() && !easedOutOfRange.errors.empty(), "Math.Ease with an out-of-range easing ordinal must report a real error, not cast into undefined enum territory");
 }
 
+// LIB-056: Math.Clamp is a single ScriptFunctionRegistry-registered
+// function — calling it through Native/Lua/Visual Graph is calling the
+// SAME kb::math::Clamp underneath every time (ScriptMathApi.cpp's
+// callback), so this is a parity check on the marshalling paths
+// (ScriptExecutionContext::CallFunction, Lua's CallFunction global,
+// VisualGraph's CallNative binding), not on Clamp's own math — that's
+// already covered natively by EngineMathTests.cpp. Reuses exactly the
+// three-backend harness RunScriptFunctionRegistryCrossBackendTest (LIB-011)
+// already established (Native/Lua/VisualGraph BehaviourComponents driving
+// one ScriptRuntime::ExecuteLifecycle Tick), just with Math.Clamp's three
+// Float inputs (value/min/max) instead of Inventory.AddItem's single Int.
+void RunMathFunctionCrossBackendParityTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Math cross-backend parity host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Math.Clamp") != nullptr, "Math.Clamp must already be registered (LIB-045) before this parity test runs");
+
+    constexpr kb::assets::AssetId kNativeAsset{ 5020U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5021U };
+    constexpr kb::assets::AssetId kVisualAsset{ 5022U };
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Math Caller" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Math Caller" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visual Math Caller" });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .executionOrder = 10,
+    });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kVisualAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+        .executionOrder = 20,
+    });
+
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+                           const std::vector<kb::script::ScriptFunctionArgument> arguments{
+                               kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 15.0F } },
+                               kb::script::ScriptFunctionArgument{ .name = "min", .value = kb::script::ScriptValue{ 0.0F } },
+                               kb::script::ScriptFunctionArgument{ .name = "max", .value = kb::script::ScriptValue{ 10.0F } },
+                           };
+                           const kb::script::ScriptFunctionCallResult result = context.CallFunction("Math.Clamp", arguments);
+                           kb::tests::Require(result.Succeeded(), "Native Math.Clamp call failed");
+                           const std::optional<kb::script::ScriptValue> value = result.Output("result");
+                           kb::tests::Require(value.has_value(), "Native Math.Clamp call did not return a result");
+                           kb::tests::Require(context.SetSharedValue("nativeClampResult", *value), "Native Math.Clamp call could not store shared result");
+                       }),
+        "Native Math caller did not register");
+
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local result = CallFunction("Math.Clamp", { value = 15.0, min = 0.0, max = 10.0 })
+    SetShared("luaClampResult", result)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Lua Math caller did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "VisualMathCaller";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "MathClampInputs" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "GraphClampResultKey" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Math.Clamp" },
+        kb::visual::VisualGraphNode{ .id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "result", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "value", .toNode = 4U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "min", .toNode = 4U, .toPin = "min", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "max", .toNode = 4U, .toPin = "max", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "result", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Visual Math caller graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kVisualAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "MathClampInputs",
+                           .outputs = {
+                               kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+                               kb::visual::VisualGraphPinSignature{ .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+                               kb::visual::VisualGraphPinSignature{ .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+                           },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ 15.0F });
+                               context.Store(instruction.sourceNodeId, "min", kb::visual::VisualGraphRuntimeValue{ 0.0F });
+                               context.Store(instruction.sourceNodeId, "max", kb::visual::VisualGraphRuntimeValue{ 10.0F });
+                           },
+                       }),
+        "Visual Math clamp-inputs binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "GraphClampResultKey",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "graphClampResult" } });
+                           },
+                       }),
+        "Visual Math clamp-result-key binding did not register");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Math cross-backend parity runtime produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> nativeResult = host.SharedState().Get("nativeClampResult");
+    const std::optional<kb::script::ScriptValue> luaResult = host.SharedState().Get("luaClampResult");
+    const std::optional<kb::script::ScriptValue> graphResult = host.SharedState().Get("graphClampResult");
+    kb::tests::Require(nativeResult.has_value(), "Native backend did not store a Math.Clamp result");
+    kb::tests::Require(luaResult.has_value(), "Lua backend did not store a Math.Clamp result");
+    kb::tests::Require(graphResult.has_value(), "Visual Graph backend did not store a Math.Clamp result");
+
+    // The actual parity check: kb::math::Clamp(15, 0, 10) == 10 exactly
+    // (no floating-point accumulation in a single Clamp call), and all
+    // three backends must agree with each other AND with the expected
+    // value, within float tolerance.
+    constexpr float kExpected = 10.0F;
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), kExpected), "Native Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), kExpected), "Lua Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(graphResult->AsFloat(), kExpected), "Visual Graph Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), luaResult->AsFloat()), "Native and Lua Math.Clamp results must match within float tolerance");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.Clamp results must match within float tolerance");
+}
+
 void RunScriptInputApiTest() {
     using namespace kb::input;
 
@@ -3583,6 +3737,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptMathApiTest();
+    RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
