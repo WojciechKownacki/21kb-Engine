@@ -2352,6 +2352,67 @@ void RunWorldActiveStateTest() {
     kb::tests::Require(deadEntitySet.Succeeded() && !deadEntitySet.Output("set")->AsBool(), "World.SetActive must report set=false (not throw) when targeting a destroyed entity");
 }
 
+// LIB-069: World.FindAllByTag — own fresh Scene/host, same reasoning as
+// the LIB-067/068 tests above.
+void RunWorldFindAllByTagTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.FindAllByTag test host setup failed");
+
+    const kb::scene::SceneEntity enemyA = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyA" });
+    const kb::scene::SceneEntity neutral = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Neutral" });
+    const kb::scene::SceneEntity enemyB = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyB" });
+    const kb::scene::SceneEntity enemyC = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyC" });
+    kb::scene::TagsComponent enemyTags;
+    kb::scene::SetTagsText(enemyTags, "Enemy");
+    scene.Components().Tags().Set(enemyA, enemyTags);
+    scene.Components().Tags().Set(enemyB, enemyTags);
+    scene.Components().Tags().Set(enemyC, enemyTags);
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    std::vector<kb::scene::SceneEntity> foundInOrder;
+    int skip = 0;
+    // The whole point under test: repeatedly calling with an increasing
+    // "skip" must enumerate every tagged entity exactly once and then
+    // terminate (an invalid entity), never loop forever and never miss or
+    // duplicate a match.
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+            kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ skip } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.FindAllByTag", args, context);
+        kb::tests::Require(result.Succeeded(), "World.FindAllByTag direct call failed");
+        const kb::scene::SceneEntity found{ result.Output("entity")->AsUInt64() };
+        if (!found.IsValid()) {
+            break;
+        }
+        foundInOrder.push_back(found);
+        ++skip;
+    }
+    kb::tests::Require(foundInOrder.size() == 3U, "World.FindAllByTag must enumerate exactly the three tagged entities, no more, no less");
+    kb::tests::Require(
+        std::find(foundInOrder.begin(), foundInOrder.end(), enemyA) != foundInOrder.end() && std::find(foundInOrder.begin(), foundInOrder.end(), enemyB) != foundInOrder.end() &&
+            std::find(foundInOrder.begin(), foundInOrder.end(), enemyC) != foundInOrder.end(),
+        "World.FindAllByTag must find all three differently-tagged entities across repeated calls, not just the first");
+    kb::tests::Require(std::find(foundInOrder.begin(), foundInOrder.end(), neutral) == foundInOrder.end(), "World.FindAllByTag must never return an entity that does not have the requested tag");
+
+    const std::vector<kb::script::ScriptFunctionArgument> noMatchArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "NoSuchTag" } } },
+    };
+    const kb::script::ScriptFunctionCallResult noMatchResult = host.Functions().Call("World.FindAllByTag", noMatchArgs, context);
+    kb::tests::Require(noMatchResult.Succeeded() && !kb::scene::SceneEntity{ noMatchResult.Output("entity")->AsUInt64() }.IsValid(),
+        "World.FindAllByTag must return an invalid entity (not error) when nothing matches, even at skip=0");
+
+    const std::vector<kb::script::ScriptFunctionArgument> pastEndArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+        kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 3 } },
+    };
+    const kb::script::ScriptFunctionCallResult pastEndResult = host.Functions().Call("World.FindAllByTag", pastEndArgs, context);
+    kb::tests::Require(pastEndResult.Succeeded() && !kb::scene::SceneEntity{ pastEndResult.Output("entity")->AsUInt64() }.IsValid(),
+        "World.FindAllByTag(skip past the last match) must return an invalid entity, not error or wrap around");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4052,6 +4113,7 @@ void RunScriptRuntimeTests() {
     RunScriptWorldTimePhysicsApiTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
+    RunWorldFindAllByTagTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
