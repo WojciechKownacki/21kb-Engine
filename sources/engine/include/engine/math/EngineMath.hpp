@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <utility>
 
 namespace kb::math {
 
@@ -572,5 +575,82 @@ struct DampResult {
 [[nodiscard]] float Noise3D(float x, float y, float z, std::uint32_t seed) noexcept;
 [[nodiscard]] float Noise2D(float x, float y, std::uint32_t seed) noexcept;
 [[nodiscard]] float Noise1D(float x, std::uint32_t seed) noexcept;
+
+// LIB-051: a counter-based pseudo-random stream — {seed, counter} is the
+// ENTIRE state, deliberately transparent rather than an opaque handle, so
+// "snapshot the state" (the plan's own requirement) is exact and free: a
+// snapshot is just a copy of this value type, and restoring it is just
+// assigning it back. There is no mutable generator object to advance in
+// place; every Next* function takes a RandomStream BY VALUE and returns
+// the advanced stream alongside the result (the same {value, newState}
+// pattern Damp already established for LIB-032's "no references across
+// the script boundary" rule) — the caller re-threads the returned stream
+// into its next call, the same way Damp's caller re-threads `velocity`.
+struct RandomStream {
+    std::uint32_t seed = 0U;
+    std::uint32_t counter = 0U;
+};
+
+[[nodiscard]] constexpr RandomStream MakeRandomStream(std::uint32_t seed) noexcept {
+    return RandomStream{ seed, 0U };
+}
+
+struct RandomStreamUInt32Result {
+    std::uint32_t value = 0U;
+    RandomStream stream;
+};
+
+// The raw building block every other Next* function is built on: hashes
+// the stream's counter (using the same kb::math::Hash32 LIB-050's
+// Random01/Noise already use — one scrambling source, not a second
+// independently-tuned one) and advances the counter by one.
+[[nodiscard]] constexpr RandomStreamUInt32Result NextUInt32(RandomStream stream) noexcept {
+    const std::uint32_t value = Hash32(static_cast<std::int32_t>(stream.counter), stream.seed);
+    return RandomStreamUInt32Result{ value, RandomStream{ stream.seed, stream.counter + 1U } };
+}
+
+struct RandomStreamFloatResult {
+    float value = 0.0F;
+    RandomStream stream;
+};
+
+// A value in [0, 1).
+[[nodiscard]] RandomStreamFloatResult NextFloat01(RandomStream stream) noexcept;
+
+struct RandomStreamRangeResult {
+    float value = 0.0F;
+    RandomStream stream;
+};
+
+// A value in [min, max).
+[[nodiscard]] RandomStreamRangeResult NextRange(RandomStream stream, float min, float max) noexcept;
+
+struct RandomStreamIntRangeResult {
+    std::int32_t value = 0;
+    RandomStream stream;
+};
+
+// An integer in [min, max) (max <= min is a degenerate, zero-width range:
+// returns min unchanged, but the stream still advances, so a caller
+// looping over several ranges — some possibly degenerate — gets the same
+// sequence for the following calls regardless of which ranges happened to
+// be empty).
+[[nodiscard]] RandomStreamIntRangeResult NextIntRange(RandomStream stream, std::int32_t min, std::int32_t max) noexcept;
+
+// Fisher-Yates shuffle, in place. Native-only (a template over an
+// arbitrary C++ type, `std::span` never crosses the script boundary) —
+// LIB-051's "shuffle" requirement is met here for native callers; a
+// script-facing Math.Shuffle needs a script-visible collection type
+// (Array<T>, LIB-058, not implemented yet) to shuffle, so that surface is
+// intentionally deferred rather than faked with a 0-or-1-element stand-in.
+template <typename T>
+[[nodiscard]] RandomStream Shuffle(std::span<T> items, RandomStream stream) noexcept {
+    for (std::size_t i = items.size(); i > 1U; --i) {
+        const RandomStreamIntRangeResult picked = NextIntRange(stream, 0, static_cast<std::int32_t>(i));
+        stream = picked.stream;
+        std::swap(items[i - 1U], items[static_cast<std::size_t>(picked.value)]);
+    }
+    return stream;
+}
 
 } // namespace kb::math

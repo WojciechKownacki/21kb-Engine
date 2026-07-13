@@ -397,6 +397,80 @@ void RunNoiseAndRandomTest() {
     kb::tests::Require(kb::math::Noise2D(0.37F, 0.61F, 42U) == kb::math::Noise3D(0.37F, 0.61F, 0.0F, 42U), "Noise2D must exactly match Noise3D with the unused axis pinned to 0");
 }
 
+// LIB-051: RandomStream's whole point is that its state IS a plain value
+// (not an opaque handle to hidden generator state) — the primary property
+// to prove is that a COPY of a stream is a genuine snapshot: advancing
+// the original must not affect what the copy produces next.
+void RunRandomStreamTest() {
+    const kb::math::RandomStream seeded = kb::math::MakeRandomStream(42U);
+    kb::tests::Require(seeded.seed == 42U && seeded.counter == 0U, "MakeRandomStream must start at counter 0 with the given seed");
+
+    const kb::math::RandomStreamUInt32Result first = kb::math::NextUInt32(seeded);
+    const kb::math::RandomStreamUInt32Result firstAgain = kb::math::NextUInt32(seeded);
+    kb::tests::Require(first.value == firstAgain.value, "NextUInt32 must be deterministic: calling it twice on the SAME (unmodified) stream must return the same value");
+    kb::tests::Require(first.stream.counter == seeded.counter + 1U, "NextUInt32 must advance the counter by exactly one");
+
+    // The defining snapshot property: a copy of the stream, taken BEFORE
+    // advancing the original, must reproduce the exact same next value —
+    // proving the state is a real value, not a reference to shared
+    // mutable generator state.
+    const kb::math::RandomStream snapshot = seeded;
+    kb::math::RandomStream advancingOriginal = seeded;
+    advancingOriginal = kb::math::NextUInt32(advancingOriginal).stream;
+    advancingOriginal = kb::math::NextUInt32(advancingOriginal).stream;
+    kb::tests::Require(advancingOriginal.counter == seeded.counter + 2U, "Advancing a stream twice must move its counter forward by two");
+    const kb::math::RandomStreamUInt32Result fromSnapshot = kb::math::NextUInt32(snapshot);
+    kb::tests::Require(fromSnapshot.value == first.value, "A snapshot taken before advancing must reproduce the same next value the original stream would have produced at that point, unaffected by the original being advanced afterward");
+
+    // Two consecutive draws from a threaded stream must (in practice)
+    // differ — this is what "the stream actually advances" looks like
+    // from the caller's perspective.
+    const kb::math::RandomStreamUInt32Result second = kb::math::NextUInt32(first.stream);
+    kb::tests::Require(second.value != first.value, "Consecutive draws from a properly threaded stream must (in practice) differ");
+
+    const kb::math::RandomStreamFloatResult unitFloat = kb::math::NextFloat01(seeded);
+    kb::tests::Require(unitFloat.value >= 0.0F && unitFloat.value < 1.0F, "NextFloat01 must stay within [0, 1)");
+
+    const kb::math::RandomStreamRangeResult ranged = kb::math::NextRange(seeded, 10.0F, 20.0F);
+    kb::tests::Require(ranged.value >= 10.0F && ranged.value < 20.0F, "NextRange must stay within [min, max)");
+
+    kb::math::RandomStream intStream = seeded;
+    bool sawValueBelow5 = false;
+    bool sawOutOfRange = false;
+    for (int i = 0; i < 50; ++i) {
+        const kb::math::RandomStreamIntRangeResult picked = kb::math::NextIntRange(intStream, 0, 5);
+        intStream = picked.stream;
+        if (picked.value < 5) {
+            sawValueBelow5 = true;
+        }
+        if (picked.value < 0 || picked.value >= 5) {
+            sawOutOfRange = true;
+        }
+    }
+    kb::tests::Require(sawValueBelow5 && !sawOutOfRange, "NextIntRange must stay within [min, max) across many draws");
+
+    const kb::math::RandomStreamIntRangeResult degenerate = kb::math::NextIntRange(seeded, 5, 5);
+    kb::tests::Require(degenerate.value == 5, "NextIntRange with a zero-width range must return min rather than dividing by zero");
+    kb::tests::Require(degenerate.stream.counter == seeded.counter + 1U, "NextIntRange must still advance the stream even for a degenerate range, so later draws stay in sync");
+
+    // Fisher-Yates: the result must be a permutation of the input (same
+    // multiset of elements) and must be deterministic for the same
+    // starting stream.
+    int itemsA[5]{ 1, 2, 3, 4, 5 };
+    int itemsB[5]{ 1, 2, 3, 4, 5 };
+    const kb::math::RandomStream streamAfterShuffleA = kb::math::Shuffle(std::span<int>{ itemsA }, seeded);
+    const kb::math::RandomStream streamAfterShuffleB = kb::math::Shuffle(std::span<int>{ itemsB }, seeded);
+    for (int i = 0; i < 5; ++i) {
+        kb::tests::Require(itemsA[i] == itemsB[i], "Shuffle must be deterministic: the same starting stream must produce the same permutation");
+    }
+    kb::tests::Require(streamAfterShuffleA.counter == streamAfterShuffleB.counter, "Shuffle must advance the stream deterministically too");
+    int sum = 0;
+    for (int i = 0; i < 5; ++i) {
+        sum += itemsA[i];
+    }
+    kb::tests::Require(sum == 15, "Shuffle must be a permutation: the shuffled elements must sum to the same total as the input (1+2+3+4+5)");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -411,6 +485,7 @@ void RunEngineMathTests() {
     RunVec3DistanceProjectReflectRefractTest();
     RunRotationFunctionsTest();
     RunNoiseAndRandomTest();
+    RunRandomStreamTest();
 }
 
 } // namespace kb::tests

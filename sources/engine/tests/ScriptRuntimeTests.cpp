@@ -2057,6 +2057,7 @@ void RunScriptMathApiTest() {
              "Math.Dot", "Math.Cross", "Math.Length", "Math.Normalize", "Math.Distance", "Math.Project", "Math.Reflect", "Math.Refract",
              "Math.Angle", "Math.SignedAngle", "Math.Slerp", "Math.LookRotation", "Math.FromToRotation", "Math.RotateTowards",
              "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
+             "Math.RandomSeed", "Math.RandomNextUInt32", "Math.RandomNextFloat01", "Math.RandomRange", "Math.RandomRangeInt",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2302,6 +2303,36 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(noised.Succeeded() && noised.Output("result").has_value() && noised.Output("result")->AsFloat() == 0.0F, "Math.Noise3D direct call at an integer lattice point must be exactly zero");
+
+    // LIB-051: RandomStream's state (streamSeed/streamCounter, both
+    // UInt32) must round-trip through Math.RandomSeed and then thread
+    // correctly through Math.RandomRangeInt — proving the {value,
+    // advancedStream} pattern actually works end to end through the
+    // script boundary, not just natively.
+    const kb::script::ScriptFunctionCallResult seeded = host.Functions().Call(
+        "Math.RandomSeed",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 123U } } },
+        },
+        context);
+    kb::tests::Require(
+        seeded.Succeeded() && seeded.Output("streamSeed").has_value() && seeded.Output("streamCounter").has_value() &&
+            seeded.Output("streamSeed")->AsUInt32() == 123U && seeded.Output("streamCounter")->AsUInt32() == 0U,
+        "Math.RandomSeed must return a stream with the given seed and counter 0");
+
+    const kb::script::ScriptFunctionCallResult rangedInt = host.Functions().Call(
+        "Math.RandomRangeInt",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "streamSeed", .value = *seeded.Output("streamSeed") },
+            { .name = "streamCounter", .value = *seeded.Output("streamCounter") },
+            { .name = "min", .value = kb::script::ScriptValue{ 0 } },
+            { .name = "max", .value = kb::script::ScriptValue{ 10 } },
+        },
+        context);
+    kb::tests::Require(
+        rangedInt.Succeeded() && rangedInt.Output("value").has_value() && rangedInt.Output("value")->AsInt() >= 0 && rangedInt.Output("value")->AsInt() < 10 &&
+            rangedInt.Output("streamCounter").has_value() && rangedInt.Output("streamCounter")->AsUInt32() == 1U,
+        "Math.RandomRangeInt direct call must return a value in [0,10) and advance streamCounter by exactly one");
 }
 
 void RunScriptInputApiTest() {
