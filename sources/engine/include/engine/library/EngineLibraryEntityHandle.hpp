@@ -1,11 +1,13 @@
 #pragma once
 
+#include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
 #include <compare>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace kb::library {
@@ -53,6 +55,14 @@ public:
     // folded into the message so the failure names the call that used the
     // handle (e.g. "Transform.SetWorldPose").
     void Validate(const kb::scene::Scene& scene, std::string_view operation) const;
+
+    // LIB-035: the non-throwing counterpart of Validate() for callers that
+    // report failures through ScriptError/Result<T> instead of exceptions.
+    // Returns std::nullopt when the handle is valid; otherwise a ScriptError
+    // with code == LibraryErrorCode::InvalidHandle (every EntityHandle
+    // failure mode — structurally invalid, wrong scene, stale — is a kind
+    // of invalid handle) and the same message text Validate() would throw.
+    [[nodiscard]] std::optional<ScriptError> CheckError(const kb::scene::Scene& scene, std::string_view operation) const;
 
 private:
     kb::scene::SceneEntity entity_{};
