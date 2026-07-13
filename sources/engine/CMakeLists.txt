@@ -213,6 +213,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryModule.hpp
     include/engine/library/EngineLibraryModuleDesc.hpp
     include/engine/library/EngineLibraryModuleValidation.hpp
+    include/engine/library/EngineLibraryOwnership.hpp
     include/engine/library/EngineLibraryPropertyDesc.hpp
     include/engine/library/EngineLibraryTypeDesc.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
@@ -645,6 +646,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryManifestComparison.cpp
     src/library/EngineLibraryModule.cpp
     src/library/EngineLibraryModuleValidation.cpp
+    src/library/EngineLibraryOwnership.cpp
     src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp

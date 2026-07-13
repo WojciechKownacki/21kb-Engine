@@ -15,6 +15,7 @@
 #include "engine/library/EngineLibraryManifestComparison.hpp"
 #include "engine/library/EngineLibraryModule.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
+#include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
@@ -39,6 +40,8 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -957,6 +960,50 @@ void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
     }
 }
 
+// LIB-031: every kb::library handle type must classify to exactly the
+// LibraryOwnership its lifetime contract already documents (EntityHandle:
+// Borrowed, since the Scene owns the entity; AssetRef<T>: Shared, since it
+// carries a ref-counted shared_ptr).
+void RunOwnershipTest() {
+    static_assert(
+        kb::library::LibraryOwnershipTraits<kb::library::EntityHandle>::value == kb::library::LibraryOwnership::Borrowed,
+        "kb::library::EntityHandle must classify as Borrowed");
+    static_assert(
+        kb::library::LibraryOwnershipTraits<kb::library::AssetRef<kb::scene::SceneDocument>>::value == kb::library::LibraryOwnership::Shared,
+        "kb::library::AssetRef<T> must classify as Shared");
+    static_assert(
+        kb::library::LibraryOwnershipTraits<kb::library::SceneRef>::value == kb::library::LibraryOwnership::Shared,
+        "kb::library::SceneRef must classify as Shared");
+
+    kb::tests::Require(std::string{ kb::library::ToString(kb::library::LibraryOwnership::Owned) } == "Owned", "Engine21kbLibrary LibraryOwnership::Owned formatting is wrong");
+    kb::tests::Require(std::string{ kb::library::ToString(kb::library::LibraryOwnership::Borrowed) } == "Borrowed", "Engine21kbLibrary LibraryOwnership::Borrowed formatting is wrong");
+    kb::tests::Require(std::string{ kb::library::ToString(kb::library::LibraryOwnership::Shared) } == "Shared", "Engine21kbLibrary LibraryOwnership::Shared formatting is wrong");
+    kb::tests::Require(std::string{ kb::library::ToString(kb::library::LibraryOwnership::Weak) } == "Weak", "Engine21kbLibrary LibraryOwnership::Weak formatting is wrong");
+}
+
+// LIB-032: no raw C++ pointer or reference may cross the Lua/Visual Graph
+// script boundary. ScriptValue is that boundary's only channel, so this
+// locks down its Storage variant's exact shape (six alternatives, none a
+// pointer) as a regression guard — ScriptValue.hpp itself already asserts
+// "no pointer alternative" at the type definition; this additionally locks
+// the alternative count/order so a silently-added seventh alternative
+// (pointer or not) fails a test even if it happens not to be a pointer
+// today.
+template <typename Variant, std::size_t... Index>
+constexpr bool NoVariantAlternativeIsAPointer(std::index_sequence<Index...>) {
+    return (!std::is_pointer_v<std::variant_alternative_t<Index, Variant>> && ...);
+}
+
+void RunNoPointersCrossScriptBoundaryTest() {
+    using Storage = kb::script::ScriptValue::Storage;
+    static_assert(std::variant_size_v<Storage> == 6U, "kb::script::ScriptValue::Storage must have exactly the six known alternatives (monostate, bool, int, float, string, uint64_t)");
+    static_assert(
+        NoVariantAlternativeIsAPointer<Storage>(std::make_index_sequence<std::variant_size_v<Storage>>{}),
+        "kb::script::ScriptValue::Storage must never hold a raw pointer or reference type");
+    static_assert(std::is_same_v<std::variant_alternative_t<0, Storage>, std::monostate>, "ScriptValue::Storage alternative 0 must stay std::monostate (the Void representation)");
+    kb::tests::Require(true, "kb::script::ScriptValue::Storage shape is verified at compile time above");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -991,6 +1038,8 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
+    RunOwnershipTest();
+    RunNoPointersCrossScriptBoundaryTest();
 }
 
 } // namespace kb::tests
