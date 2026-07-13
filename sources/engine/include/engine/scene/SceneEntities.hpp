@@ -22,6 +22,8 @@ public:
     [[nodiscard]] bool IsAlive(SceneEntity entity) const noexcept;
     [[nodiscard]] std::string Name(SceneObject object) const;
     [[nodiscard]] std::string Name(SceneEntity entity) const;
+    [[nodiscard]] bool IsActive(SceneObject object) const noexcept;
+    [[nodiscard]] bool IsActive(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t Count() const;
 
 private:
@@ -54,6 +56,10 @@ public:
     [[nodiscard]] std::string Name(SceneEntity entity) const;
     void SetName(SceneObject object, std::string_view name);
     void SetName(SceneEntity entity, std::string_view name);
+    [[nodiscard]] bool IsActive(SceneObject object) const noexcept;
+    [[nodiscard]] bool IsActive(SceneEntity entity) const noexcept;
+    void SetActive(SceneObject object, bool active) noexcept;
+    void SetActive(SceneEntity entity, bool active) noexcept;
     [[nodiscard]] std::size_t Count() const;
 
 private:
