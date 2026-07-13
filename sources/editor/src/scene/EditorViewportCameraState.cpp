@@ -17,7 +17,6 @@ using kb::math::Cross;
 using kb::math::Length;
 using kb::math::Normalize;
 
-constexpr float kPi = 3.14159265358979323846F;
 constexpr float kLookSensitivity = 0.12F;
 constexpr float kLeftDollyScale = 0.045F;
 constexpr float kPanScale = 0.018F;
@@ -30,8 +29,10 @@ constexpr float kMinOrbitDistance = 0.15F;
 constexpr float kMinSpeed = 0.05F;
 constexpr float kMaxSpeed = 200.0F;
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant.
 [[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return degrees * kPi / 180.0F;
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 [[nodiscard]] kb::scene::Vec3 Sub(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
