@@ -5,6 +5,7 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include "engine/ecs/SystemSchedulerTrace.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -55,8 +56,10 @@ struct SceneViewportRenderProfileDesc {
     return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
 }
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant.
 [[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return degrees * 3.14159265358979323846F / 180.0F;
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 [[nodiscard]] float GizmoScreenSpaceScale(

@@ -2,6 +2,8 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <bx/math.h>
 
 #include <algorithm>
@@ -15,8 +17,12 @@ namespace {
     return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
 }
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant (this file
+// used to hardcode pi/180 itself, one of 6+ copies of the same formula
+// scattered across sources/renderer and sources/editor).
 [[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return degrees * 0.017453292519943295769F;
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 struct Basis {
