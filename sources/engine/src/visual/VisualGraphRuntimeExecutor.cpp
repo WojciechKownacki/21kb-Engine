@@ -128,6 +128,51 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
 
         if (instruction->opcode == VisualGraphIrOpcode::EmitEvent) {
             context.EmitEvent(instruction->symbol, CollectEventArguments(*instruction, context), CollectEventTarget(*instruction, context));
+        } else if (instruction->opcode == VisualGraphIrOpcode::CallNative) {
+            const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
+            if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
+            } else if (binding == nullptr) {
+                AddRuntimeError(result, instruction->sourceNodeId, "visual graph runtime missing binding for node " + std::to_string(instruction->sourceNodeId) + " " + instruction->symbol);
+            } else {
+                AppendErrors(result, ValidateBindingSignature(*instruction, *binding));
+                if (result.Succeeded()) {
+                    // LIB-061: a call is judged to have failed when it added
+                    // AT LEAST ONE new runtime error (context.RuntimeErrors()
+                    // is a persistent, ever-growing log — only the slice
+                    // added during THIS callback counts, never the whole
+                    // list, since a later node reached after a HANDLED
+                    // failure must not re-report an earlier node's already-
+                    // recorded errors as its own). The verdict is stashed as
+                    // a "failed" pin value so a later revisit of this node
+                    // (e.g. reached via two different execution paths) can
+                    // re-derive the same branch decision without
+                    // re-invoking the callback, mirroring how Branch re-reads
+                    // its "condition" data pin on every visit.
+                    //
+                    // The failure is ALWAYS recorded as a runtime error —
+                    // whether or not a "failed" handler is wired — matching
+                    // this codebase's existing diagnostic model, where a
+                    // real failure is never silently downgraded (ScriptDiagnostic
+                    // carries no severity; any diagnostic means the overall
+                    // Tick reports Succeeded() == false). What a wired
+                    // "failed" handler changes is NOT whether the failure is
+                    // reported, but whether the graph gets a chance to react
+                    // to it (log more context, apply a fallback, notify
+                    // another system) before that report happens, instead of
+                    // execution simply halting at the point of failure.
+                    const std::size_t errorCountBefore = context.RuntimeErrors().size();
+                    binding->callback(context, *instruction);
+                    const bool callFailed = context.RuntimeErrors().size() > errorCountBefore;
+                    context.Store(instruction->sourceNodeId, "failed", VisualGraphRuntimeValue{ callFailed });
+                    if (callFailed) {
+                        for (std::size_t i = errorCountBefore; i < context.RuntimeErrors().size(); ++i) {
+                            AddRuntimeError(result, instruction->sourceNodeId, context.RuntimeErrors()[i]);
+                        }
+                    } else {
+                        AppendErrors(result, ValidateProducedOutputs(*instruction, *binding, context));
+                    }
+                }
+            }
         } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence) {
             const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
             if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
@@ -146,8 +191,20 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         }
 
         if (!result.Succeeded()) {
-            executing.erase(nodeId);
-            return result;
+            // LIB-061: a CallNative call that failed but has a wired
+            // "failed" exec output is still allowed to continue — the
+            // failure was already recorded above (Succeeded() stays false
+            // for the overall Tick either way), but the graph gets to run
+            // its handler instead of execution halting right here. Every
+            // other failure reason (missing binding, signature mismatch, an
+            // UNWIRED CallNative failure, any other opcode's error) keeps
+            // the historical hard-abort.
+            const bool isHandledCallNativeFailure = instruction->opcode == VisualGraphIrOpcode::CallNative && instruction->falseNodeId != 0U &&
+                context.ReadBool(instruction->sourceNodeId, "failed");
+            if (!isHandledCallNativeFailure) {
+                executing.erase(nodeId);
+                return result;
+            }
         }
         evaluatedNodes.insert(nodeId);
     }
@@ -159,6 +216,19 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         const bool conditionValue = condition == instruction->inputs.end() ? false : context.ReadBool(condition->sourceNodeId, condition->sourcePin);
         executing.erase(nodeId);
         return ExecuteNode(instructions, conditionValue ? instruction->trueNodeId : instruction->falseNodeId, context, executing, evaluatedNodes, true);
+    }
+
+    // LIB-061: only reached when the call above either succeeded, or failed
+    // but had a wired "failed" handler (an unwired failure already returned
+    // early above, matching the pre-LIB-061 default). Unlike Branch just
+    // above, `result` here can already be non-empty (a handled failure's
+    // recorded error) — it must be MERGED with, not discarded in favor of,
+    // the recursive call's result.
+    if (instruction->opcode == VisualGraphIrOpcode::CallNative && followExecution) {
+        const bool callFailed = context.ReadBool(instruction->sourceNodeId, "failed");
+        executing.erase(nodeId);
+        AppendErrors(result, ExecuteNode(instructions, callFailed ? instruction->falseNodeId : instruction->trueNodeId, context, executing, evaluatedNodes, true));
+        return result;
     }
 
     const std::uint32_t nextNodeId = instruction->nextNodeId;

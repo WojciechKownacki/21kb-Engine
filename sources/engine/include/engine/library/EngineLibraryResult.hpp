@@ -14,6 +14,29 @@ namespace kb::library {
 // engine settles on one error shape per subsystem (ScriptFunctionCallResult,
 // ScriptBackendExecutionResult, EngineLibraryModuleResult) rather than a
 // generic, error-type-parameterized Result/Expected.
+//
+// LIB-061 ("expose Option<T>/Result<T,E> in languages that support them"):
+// for native C++ — the one language in this engine with real sum-type
+// support — this Result<T> (T-or-ScriptError) already IS that Result<T,E>,
+// and std::optional<T> (used pervasively: ScriptSharedState::Get,
+// EntityHandle::CheckError, etc.) already IS that Option<T>. Neither Lua
+// nor Visual Graph can express a generic templated sum type across the
+// script boundary — ScriptValue is a fixed, purely scalar tagged union
+// (LIB-032/LIB-041) — so "expose them" for those two means an idiomatic
+// per-language ADAPTER instead of the same generic type:
+//   - Lua: `value, err = CallFunction(...)` — nil plus an error string on
+//     failure, the real value (or a table, for 2+ outputs) on success.
+//     Already implemented (PucLuaFunctionApi.cpp::LuaCallFunction) and
+//     exercised end-to-end from real Lua script text by
+//     RunLuaCallFunctionResultAdapterTest (ScriptRuntimeTests.cpp).
+//   - Visual Graph: a "failed" exec output pin on CallNative nodes,
+//     alongside the pre-existing "then" (success) pin — mirroring the
+//     Branch node's "true"/"false" pair (VisualGraphNodeDefinitionRegistry.cpp,
+//     VisualGraphCompiler.cpp, VisualGraphRuntimeExecutor::ExecuteNode).
+//     A wired "failed" handler lets the graph react to a failed call
+//     instead of the whole Tick halting at the point of failure; an
+//     unwired one preserves the pre-LIB-061 fail-loud default. Tested by
+//     RunVisualGraphCallNativeFailureBranchTest (ScriptRuntimeTests.cpp).
 template <typename T>
 class Result final {
 public:
