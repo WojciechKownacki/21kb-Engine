@@ -1,6 +1,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 
 #include <cstdint>
+#include <exception>
 #include <ranges>
 #include <set>
 #include <utility>
@@ -25,7 +26,7 @@ std::optional<ScriptValue> ScriptFunctionCallResult::Output(std::string_view nam
 }
 
 bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
-    if (function.signature.name.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
+    if (locked_ || function.signature.name.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
         return false;
     }
     if (!HasValidPins(function.signature.inputs) || !HasValidPins(function.signature.outputs)) {
@@ -66,13 +67,40 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
         return ScriptFunctionCallResult{ .errors = std::move(errors) };
     }
 
-    ScriptFunctionCallResult result = iter->callback(context, normalized);
+    // A registered callback (Native directly, or kb::library helpers like
+    // EntityHandle::Validate() called from within one) can throw. This is
+    // the single choke point every caller goes through — Native dispatch,
+    // Lua's CallFunction, and the future Visual Graph CallNative node — so
+    // catching here turns a thrown exception into an error result instead
+    // of letting it unwind across the Lua C boundary, where PUC-Lua's
+    // longjmp-based lua_pcall cannot catch a C++ exception (this engine's
+    // Lua core is compiled as C, not C++) and the process would terminate.
+    ScriptFunctionCallResult result;
+    try {
+        result = iter->callback(context, normalized);
+    } catch (const std::exception& exception) {
+        return ScriptFunctionCallResult{
+            .errors = { "script function '" + std::string{ name } + "' threw an exception: " + exception.what() },
+        };
+    } catch (...) {
+        return ScriptFunctionCallResult{
+            .errors = { "script function '" + std::string{ name } + "' threw a non-standard exception" },
+        };
+    }
     if (!result.Succeeded()) {
         return result;
     }
 
     ValidateOutputs(iter->signature, result, result.errors);
     return result;
+}
+
+void ScriptFunctionRegistry::Lock() noexcept {
+    locked_ = true;
+}
+
+bool ScriptFunctionRegistry::IsLocked() const noexcept {
+    return locked_;
 }
 
 bool ScriptFunctionRegistry::HasValidPins(const std::vector<ScriptFunctionPin>& pins) {

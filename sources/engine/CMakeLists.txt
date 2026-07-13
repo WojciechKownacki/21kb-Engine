@@ -129,6 +129,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMode.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
+    include/engine/scene/BehaviourExecutionOrder.hpp
     include/engine/scene/TagsComponent.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
@@ -195,6 +196,23 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptValue.hpp
     include/engine/script/ScriptWorldApi.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
+    include/engine/library/EngineLibrary.hpp
+    include/engine/library/EngineLibraryAssetRef.hpp
+    include/engine/library/EngineLibraryCommandApplication.hpp
+    include/engine/library/EngineLibraryContext.hpp
+    include/engine/library/EngineLibraryEntityHandle.hpp
+    include/engine/library/EngineLibraryError.hpp
+    include/engine/library/EngineLibraryResult.hpp
+    include/engine/library/EngineLibraryExecutionOrder.hpp
+    include/engine/library/EngineLibraryFunctionDesc.hpp
+    include/engine/library/EngineLibraryLifecycle.hpp
+    include/engine/library/EngineLibraryManifest.hpp
+    include/engine/library/EngineLibraryManifestComparison.hpp
+    include/engine/library/EngineLibraryModule.hpp
+    include/engine/library/EngineLibraryModuleDesc.hpp
+    include/engine/library/EngineLibraryModuleValidation.hpp
+    include/engine/library/EngineLibraryPropertyDesc.hpp
+    include/engine/library/EngineLibraryTypeDesc.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
     include/engine/visual/VisualGraphBehaviourInstanceRegistry.hpp
@@ -615,6 +633,15 @@ add_library(kb_engine STATIC
     src/script/ScriptValue.cpp
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
+    src/library/EngineLibrary.cpp
+    src/library/EngineLibraryEntityHandle.cpp
+    src/library/EngineLibraryError.cpp
+    src/library/EngineLibraryLifecycle.cpp
+    src/library/EngineLibraryManifest.cpp
+    src/library/EngineLibraryManifestComparison.cpp
+    src/library/EngineLibraryModule.cpp
+    src/library/EngineLibraryModuleValidation.cpp
+    src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp
     src/private/script/lua/api/PucLuaModuleApi.hpp
@@ -1035,6 +1062,7 @@ if(BUILD_TESTING)
         tests/VisualGraphTests.cpp
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
+        tests/EngineLibraryTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

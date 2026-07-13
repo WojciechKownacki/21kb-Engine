@@ -12,6 +12,7 @@ wdrożenia zadania z planu będą zaimplementowane produkcyjnie, zweryfikowane i
 oznaczone jako ukończone. Nie kończ sesji dlatego, że etap jest duży, build jest
 długi albo napotkałeś błąd; diagnozuj i naprawiaj. Jeżeli środowisko wymusza
 przerwę, wznowisz pracę od zapisanego stanu bez utraty kryteriów jakości.
+Mas znie zadawać pytań, tylko sam podejmować krytyczne decyzje dla dobra projektu i najwyzszej rynkowej jakości. Jezlei znajdziesz rozwiązanie prost ei szybkie lub trudne i długie ale to trudne da lepszą jakosć i wyższy standard - wybierz długie i trudniejsze.
 
 ## Rezultat produktu
 
