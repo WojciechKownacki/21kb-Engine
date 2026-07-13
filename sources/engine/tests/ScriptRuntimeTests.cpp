@@ -4395,6 +4395,81 @@ void RunScriptSceneComponentApiTest() {
     kb::tests::Require(!badTickGroup.succeeded, "Script component API accepted invalid Behaviour.tickGroup");
 }
 
+// LIB-077: exhaustive, name-driven coverage that the generated-accessor
+// FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
+// KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
+// KB_LIGHT_KIND-generated read/write function pairs, replacing the old
+// offsetof+reinterpret_cast path) round-trips every field correctly and
+// rejects a mismatched ScriptValueType — not just the handful of fields
+// RunScriptSceneComponentApiTest already covered. Walks
+// ComponentProperties() for all 6 registered components (37 fields total)
+// rather than hand-picking a few, so a future field added to any
+// component's property-desc table is automatically covered here too.
+void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Coverage" });
+    scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
+    scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::size_t fieldsChecked = 0U;
+    for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
+        kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), componentName),
+            "Script component API generated accessor coverage test fixture is missing a component");
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : kb::script::ScriptSceneComponentApi::ComponentProperties(componentName)) {
+            ++fieldsChecked;
+            const std::string fieldLabel = std::string{ componentName } + "." + std::string{ property.name };
+
+            // A String value never matches Bool/Int/Float — must be
+            // rejected for every field, regardless of the field's own
+            // type, proving the generated write accessor actually checks
+            // ScriptValue::Type() before touching the real field.
+            const kb::script::ScriptSceneComponentMutationResult mismatched = kb::script::ScriptSceneComponentApi::SetProperty(
+                scene, object.Entity(), componentName, property.name, kb::script::ScriptValue{ std::string{ "wrong type" } });
+            kb::tests::Require(!mismatched.succeeded, ("Script component API accepted a mismatched value type for " + fieldLabel).c_str());
+
+            if (!property.writable) {
+                continue;
+            }
+
+            kb::script::ScriptValue validValue;
+            switch (property.type) {
+            case kb::script::ScriptValueType::Bool:
+                validValue = kb::script::ScriptValue{ true };
+                break;
+            case kb::script::ScriptValueType::Int:
+                // 2 is a safe value for every Int-typed field here,
+                // including enum-backed ones with a range check
+                // (BehaviourTickGroup::Physics == 2, well within
+                // [Input=0, Presentation=5]).
+                validValue = kb::script::ScriptValue{ 2 };
+                break;
+            case kb::script::ScriptValueType::Float:
+                validValue = kb::script::ScriptValue{ 2.5F };
+                break;
+            default:
+                kb::tests::Require(false, "Script component API generated accessor coverage test found a property type it does not know how to exercise");
+                break;
+            }
+
+            const kb::script::ScriptSceneComponentMutationResult set = kb::script::ScriptSceneComponentApi::SetProperty(scene, object.Entity(), componentName, property.name, validValue);
+            kb::tests::Require(set.succeeded, ("Script component API rejected a correctly-typed value for " + fieldLabel).c_str());
+
+            const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
+            kb::tests::Require(get.succeeded, ("Script component API could not read back " + fieldLabel).c_str());
+            if (property.type == kb::script::ScriptValueType::Float) {
+                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), 2.5F), ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::Int) {
+                kb::tests::Require(get.value.AsInt() == 2, ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::Bool) {
+                kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
+            }
+        }
+    }
+    kb::tests::Require(fieldsChecked == 37U, "Script component API generated accessor coverage test did not exercise the expected total field count (37) across all 6 components");
+}
+
 void RunVisualGraphSceneComponentBindingTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "VisualSceneComponentBinding";
@@ -4589,6 +4664,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
     RunScriptSceneComponentApiTest();
+    RunScriptSceneComponentGeneratedAccessorCoverageTest();
     RunVisualGraphSceneComponentBindingTest();
 }
 
