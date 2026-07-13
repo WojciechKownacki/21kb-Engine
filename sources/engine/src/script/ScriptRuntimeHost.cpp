@@ -1,19 +1,14 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include "engine/library/EngineLibraryModule.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
-#include "engine/script/ScriptAudioApi.hpp"
-#include "engine/script/ScriptInputApi.hpp"
-#include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
-#include "engine/script/ScriptTimeApi.hpp"
-#include "engine/script/ScriptTransformApi.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
 #include "engine/script/ScriptSharedVisualGraphBindings.hpp"
-#include "engine/script/ScriptWorldApi.hpp"
 
 #include <memory>
 #include <utility>
@@ -309,26 +304,14 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
         AddDiagnostic("VisualGraph script backend could not be registered");
     }
 
-    // Expose the runtime input API. RegisterFunction mirrors each function into
-    // the Lua function table and a Visual Graph CallNative node, so this single
-    // call covers all three scripting backends.
-    if (!ScriptInputApi::Register(*this)) {
-        AddDiagnostic("input script API could not be fully registered");
-    }
-    if (!ScriptAudioApi::Register(*this)) {
-        AddDiagnostic("audio script API could not be fully registered");
-    }
-    if (!ScriptWorldApi::Register(*this)) {
-        AddDiagnostic("world script API could not be fully registered");
-    }
-    if (!ScriptTimeApi::Register(*this)) {
-        AddDiagnostic("time script API could not be fully registered");
-    }
-    if (!ScriptPhysicsApi::Register(*this)) {
-        AddDiagnostic("physics script API could not be fully registered");
-    }
-    if (!ScriptTransformApi::Register(*this)) {
-        AddDiagnostic("transform script API could not be fully registered");
+    // Engine21kbLibrary (namespace kb::library) is the single entry point for
+    // the domain API surface (Input, Audio, World, Time, Physics, Transform,
+    // ...). Install() registers each module in turn; every RegisterFunction
+    // call it makes mirrors into the Lua function table and a Visual Graph
+    // CallNative node, so this one call covers all three scripting backends.
+    const kb::library::EngineLibraryModuleResult libraryResult = kb::library::EngineLibraryModule::Install(*this);
+    for (const std::string& diagnostic : libraryResult.diagnostics) {
+        AddDiagnostic(diagnostic);
     }
 }
 
