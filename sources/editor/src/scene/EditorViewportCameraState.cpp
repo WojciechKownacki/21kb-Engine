@@ -8,11 +8,12 @@
 namespace kb::editor {
 namespace {
 
-// LIB-042: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
-// TransformComponent.hpp), which already provides Length/Normalize —
+// LIB-042/LIB-043: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
+// TransformComponent.hpp), which already provides Length/Normalize/Cross —
 // this file's own copies used to be a second definition and would now be
-// an ambiguous overload via ADL against kb::math's. Sub/Mul/Cross have no
+// an ambiguous overload via ADL against kb::math's. Sub/Mul have no
 // kb::math equivalent yet, so they stay local.
+using kb::math::Cross;
 using kb::math::Length;
 using kb::math::Normalize;
 
@@ -39,14 +40,6 @@ constexpr float kMaxSpeed = 200.0F;
 
 [[nodiscard]] kb::scene::Vec3 Mul(kb::scene::Vec3 value, float scale) noexcept {
     return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
-}
-
-[[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
-    return kb::scene::Vec3{
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x,
-    };
 }
 
 [[nodiscard]] float DirectionSign(bool positive, bool negative) noexcept {

@@ -1,4 +1,5 @@
 #include "engine/ecs/SystemScheduler.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
@@ -35,14 +36,10 @@ void SynchronizeTransformHierarchy(SceneState& state) {
     };
 }
 
-[[nodiscard]] Quat Normalize(Quat value) noexcept {
-    const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
-    if (length <= 0.0F) {
-        return Quat{};
-    }
-    const float inverse = 1.0F / length;
-    return Quat{ value.x * inverse, value.y * inverse, value.z * inverse, value.w * inverse };
-}
+// LIB-043: kb::scene::Quat is an alias to kb::math::Quat (TransformComponent.hpp),
+// which already provides Normalize — this file's own copy would now be an
+// ambiguous overload via ADL against kb::math's.
+using kb::math::Normalize;
 
 [[nodiscard]] Quat Lerp(Quat from, Quat to, float alpha) noexcept {
     const float dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
