@@ -2058,6 +2058,7 @@ void RunScriptMathApiTest() {
              "Math.Angle", "Math.SignedAngle", "Math.Slerp", "Math.LookRotation", "Math.FromToRotation", "Math.RotateTowards",
              "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
              "Math.RandomSeed", "Math.RandomNextUInt32", "Math.RandomNextFloat01", "Math.RandomRange", "Math.RandomRangeInt",
+             "Math.Ease",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2333,6 +2334,28 @@ void RunScriptMathApiTest() {
         rangedInt.Succeeded() && rangedInt.Output("value").has_value() && rangedInt.Output("value")->AsInt() >= 0 && rangedInt.Output("value")->AsInt() < 10 &&
             rangedInt.Output("streamCounter").has_value() && rangedInt.Output("streamCounter")->AsUInt32() == 1U,
         "Math.RandomRangeInt direct call must return a value in [0,10) and advance streamCounter by exactly one");
+
+    // LIB-052: Easing is exposed as an Int ordinal (no dedicated enum
+    // ScriptValueType), with an out-of-range ordinal rejected as a real
+    // domain error (same pattern as LIB-047's Asin/Acos) rather than an
+    // unchecked cast into undefined enum territory.
+    const kb::script::ScriptFunctionCallResult eased = host.Functions().Call(
+        "Math.Ease",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "easing", .value = kb::script::ScriptValue{ static_cast<int>(kb::math::Easing::InQuad) } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.5F } },
+        },
+        context);
+    kb::tests::Require(eased.Succeeded() && eased.Output("result").has_value() && kb::tests::NearlyEqual(eased.Output("result")->AsFloat(), 0.25F), "Math.Ease direct call with InQuad at t=0.5 must return 0.25");
+
+    const kb::script::ScriptFunctionCallResult easedOutOfRange = host.Functions().Call(
+        "Math.Ease",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "easing", .value = kb::script::ScriptValue{ 9999 } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.5F } },
+        },
+        context);
+    kb::tests::Require(!easedOutOfRange.Succeeded() && !easedOutOfRange.errors.empty(), "Math.Ease with an out-of-range easing ordinal must report a real error, not cast into undefined enum territory");
 }
 
 void RunScriptInputApiTest() {

@@ -435,6 +435,23 @@ ScriptFunctionCallResult RandomRangeIntFn(const ScriptFunctionCallContext&, std:
     return ValueAndStreamResult(ScriptValue{ result.value }, result.stream);
 }
 
+// LIB-052: Easing is exposed to scripts as its ordinal (Int), the same
+// pattern ScriptSceneComponentApi already uses for enum-typed component
+// fields (CameraProjection, LightKind, ...) — there is no dedicated enum
+// ScriptValueType. Since Evaluate()'s switch has no default case (every
+// enumerator is handled explicitly, so adding a new Easing value is a
+// compile error everywhere it isn't), an out-of-range ordinal cast to
+// Easing would be undefined behavior; this validates the ordinal against
+// the real enum range and reports a domain error instead (LIB-047's
+// pattern for Asin/Acos), rather than casting an unchecked int.
+ScriptFunctionCallResult Ease(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const int easingOrdinal = IntArg(arguments, "easing");
+    if (easingOrdinal < 0 || easingOrdinal > static_cast<int>(kb::math::Easing::InOutBounce)) {
+        return DomainError("Math.Ease", "easing must be a valid Easing ordinal");
+    }
+    return FloatResult("result", kb::math::Evaluate(static_cast<kb::math::Easing>(easingOrdinal), FloatArg(arguments, "t")));
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -719,6 +736,13 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         ConcatPins(RandomStreamPins(), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "min", ScriptValueType::Int, true }, ScriptFunctionPin{ "max", ScriptValueType::Int, true } }),
         ValueAndStreamOutputPins(ScriptValueType::Int),
         &RandomRangeIntFn) && ok;
+    ok = RegisterFunction(host, "Math.Ease",
+        {
+            ScriptFunctionPin{ "easing", ScriptValueType::Int, true },
+            ScriptFunctionPin{ "t", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Ease) && ok;
     return ok;
 }
 
