@@ -88,12 +88,78 @@ void RunVec3MathTest() {
     kb::tests::Require(maxOf.x == 3.0F && maxOf.y == 5.0F && maxOf.z == -1.0F, "Vec3 Max must take the component-wise maximum");
 }
 
+// LIB-043: Cross, Quat composition/rotation, and Mat3/Mat4 must be
+// arithmetically correct against known values.
+void RunQuatAndMatrixMathTest() {
+    using kb::math::Mat3;
+    using kb::math::Mat4;
+    using kb::math::Quat;
+    using kb::math::Vec3;
+    using kb::math::Vec4;
+
+    const Vec3 cross = kb::math::Cross(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F });
+    kb::tests::Require(cross.x == 0.0F && cross.y == 0.0F && cross.z == 1.0F, "Cross({1,0,0},{0,1,0}) must be {0,0,1}");
+
+    const Quat identity{};
+    const Quat someRotation{ 0.1F, 0.2F, 0.3F, 0.9F };
+    const Quat identityLeft = identity * someRotation;
+    const Quat identityRight = someRotation * identity;
+    kb::tests::Require(
+        identityLeft.x == someRotation.x && identityLeft.y == someRotation.y && identityLeft.z == someRotation.z && identityLeft.w == someRotation.w,
+        "identity * q must equal q (Quat operator* left identity)");
+    kb::tests::Require(
+        identityRight.x == someRotation.x && identityRight.y == someRotation.y && identityRight.z == someRotation.z && identityRight.w == someRotation.w,
+        "q * identity must equal q (Quat operator* right identity)");
+
+    // 90-degree rotation around +Z, applied to +X — a known, convention-pinning value
+    // (this exact result is what LIB-043's documented left-handed/Y-up convention,
+    // and the exact Multiply/Rotate formulas already used by
+    // EcsRenderTransformResolver::Compose before this consolidation, produce).
+    const float halfAngle = 3.14159265358979323846F / 4.0F; // 45 degrees in radians
+    const Quat rotateZ90{ 0.0F, 0.0F, std::sin(halfAngle), std::cos(halfAngle) };
+    const Vec3 rotated = kb::math::Rotate(rotateZ90, Vec3{ 1.0F, 0.0F, 0.0F });
+    kb::tests::Require(std::abs(rotated.x) < 0.0001F && std::abs(rotated.y - 1.0F) < 0.0001F && std::abs(rotated.z) < 0.0001F, "Rotating +X by a 90-degree +Z quaternion must yield +Y");
+    kb::tests::Require(std::abs(kb::math::Length(rotated) - 1.0F) < 0.0001F, "Rotate must preserve vector length for a unit quaternion");
+
+    const Quat unnormalized{ 2.0F, 0.0F, 0.0F, 0.0F };
+    const Quat normalizedQuat = kb::math::Normalize(unnormalized);
+    kb::tests::Require(std::abs(normalizedQuat.x - 1.0F) < 0.0001F && normalizedQuat.y == 0.0F, "Quat Normalize must scale to unit length");
+    const Quat zeroQuat = kb::math::Normalize(Quat{ 0.0F, 0.0F, 0.0F, 0.0F });
+    kb::tests::Require(zeroQuat.x == 0.0F && zeroQuat.y == 0.0F && zeroQuat.z == 0.0F && zeroQuat.w == 1.0F, "Quat Normalize of a zero-length quaternion must return identity, not divide by zero");
+
+    const Mat3 identityMat3{};
+    kb::tests::Require(
+        identityMat3.columns[0].x == 1.0F && identityMat3.columns[1].y == 1.0F && identityMat3.columns[2].z == 1.0F,
+        "Mat3 default must be the identity matrix");
+
+    const Mat4 identityMat4{};
+    const Vec4 point{ 3.0F, 4.0F, 5.0F, 1.0F };
+    const Vec4 transformedByIdentity = identityMat4 * point;
+    kb::tests::Require(
+        transformedByIdentity.x == point.x && transformedByIdentity.y == point.y && transformedByIdentity.z == point.z && transformedByIdentity.w == point.w,
+        "Mat4 identity * point must return the point unchanged");
+
+    const Mat4 translated = kb::math::FromTRS(Vec3{ 5.0F, 0.0F, 0.0F }, Quat{}, Vec3{ 1.0F, 1.0F, 1.0F });
+    const Vec4 origin = translated * Vec4{ 0.0F, 0.0F, 0.0F, 1.0F };
+    kb::tests::Require(origin.x == 5.0F && origin.y == 0.0F && origin.z == 0.0F, "FromTRS with identity rotation/scale must place the origin at the given translation");
+
+    const Mat4 scaled = kb::math::FromTRS(Vec3{}, Quat{}, Vec3{ 2.0F, 3.0F, 4.0F });
+    const Vec4 scaledPoint = scaled * Vec4{ 1.0F, 1.0F, 1.0F, 1.0F };
+    kb::tests::Require(scaledPoint.x == 2.0F && scaledPoint.y == 3.0F && scaledPoint.z == 4.0F, "FromTRS scale must scale each axis independently");
+
+    const Mat4 composed = identityMat4 * translated;
+    kb::tests::Require(
+        composed.columns[3].x == translated.columns[3].x && composed.columns[3].y == translated.columns[3].y,
+        "Mat4 identity * M must equal M (Mat4 operator* identity)");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
     RunSceneAliasIdentityTest();
     RunDefaultValueConventionsTest();
     RunVec3MathTest();
+    RunQuatAndMatrixMathTest();
 }
 
 } // namespace kb::tests
