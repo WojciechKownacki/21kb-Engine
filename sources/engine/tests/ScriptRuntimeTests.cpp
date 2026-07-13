@@ -1340,10 +1340,13 @@ void RunNativeScriptBackendExceptionSafetyTest() {
     kb::tests::Require(result.executedBehaviours == 1U, "Native exception safety must not count the throwing behaviour as executed");
     kb::tests::Require(survivorTicks == 1, "Native exception safety must still dispatch the behaviour after the one that threw");
     bool sawExceptionMessage = false;
+    bool sawLifecyclePhase = false;
     for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
         sawExceptionMessage = sawExceptionMessage || diagnostic.message.find("native boom") != std::string::npos;
+        sawLifecyclePhase = sawLifecyclePhase || (diagnostic.lifecyclePhase.has_value() && *diagnostic.lifecyclePhase == kb::script::ScriptLifecycleEvent::Tick);
     }
     kb::tests::Require(sawExceptionMessage, "Native exception safety did not surface the exception's message in the diagnostics");
+    kb::tests::Require(sawLifecyclePhase, "Native exception safety diagnostic must carry the lifecycle phase it failed in (LIB-036)");
 }
 
 // LIB-021: once the world has dispatched its first lifecycle phase, further
