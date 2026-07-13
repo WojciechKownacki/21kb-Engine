@@ -2,6 +2,7 @@
 
 #include "engine/library/EngineLibrary.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/library/EngineLibraryArrayView.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
@@ -25,6 +26,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
@@ -680,6 +682,52 @@ void RunEntityHandleTest() {
 // LIB-009: AssetRef<T>/SceneRef must be the real kb::assets::AssetHandle<T>
 // (no parallel cache/refcount model), and the identifier behind it must be a
 // deterministic hash of the asset's logical path — not the OS physical path.
+// LIB-057: ArrayView<T> is std::span<const T>, not a new type — the test
+// proves the two properties that make that a real, checkable contract
+// rather than just an assertion in a comment: (1) it is genuinely
+// immutable BY CONSTRUCTION (ArrayView<T>'s element access always yields
+// `const T&`, even when constructed from a mutable container — checked at
+// compile time, not just documented), and (2) it is a drop-in view over
+// data an existing runtime query already returns (kb::scene::
+// SceneHierarchyAccess::RootEntities(), a std::vector<SceneEntity> —
+// LIB-057's own "dla danych zwracanych przez runtime"), with no
+// conversion/copy step needed.
+void RunArrayViewTest() {
+    static_assert(std::is_same_v<kb::library::ArrayView<int>, std::span<const int>>, "kb::library::ArrayView<T> must alias std::span<const T>, not duplicate it");
+    static_assert(
+        std::is_same_v<decltype(std::declval<kb::library::ArrayView<int>>()[0]), const int&>,
+        "ArrayView<T>::operator[] must yield const T&, even for a non-const T — immutability is enforced by the alias itself, not by caller discipline");
+
+    // Construction from an owned, MUTABLE std::vector<T> must still yield
+    // an immutable view — the source container's mutability doesn't leak
+    // through ArrayView.
+    std::vector<int> mutableNumbers{ 1, 2, 3 };
+    const kb::library::ArrayView<int> numbersView = mutableNumbers;
+    kb::tests::Require(numbersView.size() == 3U, "ArrayView constructed from a std::vector must report the vector's size");
+    kb::tests::Require(numbersView[0] == 1 && numbersView[1] == 2 && numbersView[2] == 3, "ArrayView constructed from a std::vector must see its elements in order");
+    int sum = 0;
+    for (const int value : numbersView) {
+        sum += value;
+    }
+    kb::tests::Require(sum == 6, "ArrayView must support range-based for iteration");
+
+    // A real runtime query result (kb::scene::SceneHierarchyAccess), used
+    // directly as an ArrayView without any adapter/copy step.
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject rootA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ArrayViewRootA" });
+    const kb::scene::SceneObject rootB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ArrayViewRootB" });
+    const std::vector<kb::scene::SceneEntity> roots = kb::scene::SceneHierarchyAccess{ scene }.RootEntities();
+    const kb::library::ArrayView<kb::scene::SceneEntity> rootsView = roots;
+    kb::tests::Require(rootsView.size() == roots.size(), "ArrayView over a runtime query result must report the same size as the original vector");
+    bool sawRootA = false;
+    bool sawRootB = false;
+    for (const kb::scene::SceneEntity& entity : rootsView) {
+        sawRootA = sawRootA || entity == rootA.Entity();
+        sawRootB = sawRootB || entity == rootB.Entity();
+    }
+    kb::tests::Require(sawRootA && sawRootB, "ArrayView over SceneHierarchyAccess::RootEntities() must see the same entities the runtime query actually returned");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1212,6 +1260,7 @@ void RunEngineLibraryTests() {
     RunLibraryContextTest();
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunEntityHandleTest();
+    RunArrayViewTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
