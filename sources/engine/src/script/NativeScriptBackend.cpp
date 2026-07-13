@@ -23,6 +23,7 @@ void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::
             .entity = context.Self(),
             .assetId = assetId,
             .backend = context.Backend(),
+            .lifecyclePhase = context.Lifecycle(),
             .message = std::string{ "native script callback threw an exception: " } + exception.what(),
         });
     } catch (...) {
@@ -30,6 +31,7 @@ void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::
             .entity = context.Self(),
             .assetId = assetId,
             .backend = context.Backend(),
+            .lifecyclePhase = context.Lifecycle(),
             .message = "native script callback threw a non-standard exception",
         });
     }
