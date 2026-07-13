@@ -11,6 +11,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -186,6 +187,52 @@ ScriptFunctionCallResult Name(const ScriptFunctionCallContext& context, std::spa
     };
 }
 
+// LIB-065: the current scene's runtime instance id — an opaque identifier
+// (like Hash), not an arithmetic quantity, and NOT the same kind of thing
+// as kb::library::SceneRef (an on-disk SceneDocument asset handle); this
+// is the currently-executing, in-memory world.
+ScriptFunctionCallResult Current(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "world", ScriptValue{ context.scene->Id(), ScriptValueType::Hash } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult IsPlaying(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("playing", context.scene->Runtime().IsPlaying());
+}
+
+// LIB-065: monotonic since scene creation (kb::scene::SceneRuntime::
+// FrameIndex/FixedStepIndex never reset, unlike LastFixedStepCount).
+ScriptFunctionCallResult FrameIndex(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "frame", ScriptValue{ static_cast<std::int64_t>(context.scene->Runtime().FrameIndex()) } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "step", ScriptValue{ static_cast<std::int64_t>(context.scene->Runtime().FixedStepIndex()) } } },
+        .errors = {},
+    };
+}
+
 ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -352,6 +399,22 @@ bool RegisterFunction(
 
 bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
+    ok = RegisterFunction(host, "World.Current",
+        {},
+        { ScriptFunctionPin{ "world", ScriptValueType::Hash, true } },
+        &Current) && ok;
+    ok = RegisterFunction(host, "World.IsPlaying",
+        {},
+        { ScriptFunctionPin{ "playing", ScriptValueType::Bool, true } },
+        &IsPlaying) && ok;
+    ok = RegisterFunction(host, "World.FrameIndex",
+        {},
+        { ScriptFunctionPin{ "frame", ScriptValueType::Int64, true } },
+        &FrameIndex) && ok;
+    ok = RegisterFunction(host, "World.FixedStepIndex",
+        {},
+        { ScriptFunctionPin{ "step", ScriptValueType::Int64, true } },
+        &FixedStepIndex) && ok;
     ok = RegisterFunction(host, "World.FindByName",
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
