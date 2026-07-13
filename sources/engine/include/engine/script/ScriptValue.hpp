@@ -38,6 +38,18 @@ public:
     [[nodiscard]] std::uint64_t AsUInt64(std::uint64_t fallback = 0U) const noexcept;
     [[nodiscard]] kb::visual::VisualGraphRuntimeValue ToVisualGraphValue() const;
 
+    // Structural equality: same declared ScriptValueType and same stored
+    // value. Two values built from the same underlying storage alternative
+    // but different declared types (e.g. an Entity and a Component both
+    // wrapping the raw id 5) compare unequal, since they mean different
+    // things even though std::variant's payload matches.
+    [[nodiscard]] bool operator==(const ScriptValue& other) const noexcept {
+        return type_ == other.type_ && value_ == other.value_;
+    }
+    [[nodiscard]] bool operator!=(const ScriptValue& other) const noexcept {
+        return !(*this == other);
+    }
+
 private:
     Storage value_{};
     ScriptValueType type_ = ScriptValueType::Void;

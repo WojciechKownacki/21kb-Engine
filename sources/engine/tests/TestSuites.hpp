@@ -13,5 +13,6 @@ void RunScriptApiCatalogTests();
 void RunVisualGraphTests();
 void RunInputTests();
 void RunEngineModuleTests();
+void RunEngineLibraryTests();
 
 } // namespace kb::tests

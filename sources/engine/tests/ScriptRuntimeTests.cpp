@@ -41,9 +41,11 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -759,6 +761,61 @@ void RunCrossBackendEventDispatchTest() {
     kb::tests::Require(fakeLua.receivedArgumentCount == 1U, "Cross-backend event dispatch did not preserve payload");
 }
 
+// LIB-012: a queued/pending event command (the `pending` vector inside
+// ScriptRuntime::DrainEvents) targeting an entity that gets destroyed
+// before that event's dispatch turn must be cancelled — never delivered to
+// a dangling/stale entity, and never a crash or diagnostic-of-doom.
+// DispatchEvent re-collects the live behaviour set fresh on every dispatch
+// turn (ScriptRuntime.cpp: DispatchSceneBehaviours), so a target destroyed
+// earlier in the same frame is simply absent from that later snapshot;
+// this test proves the resulting silent drop is the actual, safe behavior.
+void RunPendingCommandCancelledByDestroyTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kSenderAsset{ 5601U };
+    constexpr kb::assets::AssetId kTargetAsset{ 5602U };
+
+    const kb::scene::SceneObject senderObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PendingCommandSender" });
+    const kb::scene::SceneObject targetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PendingCommandTarget" });
+    scene.Components().Behaviours().Set(senderObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kSenderAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(targetObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kTargetAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 1,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    const kb::scene::SceneEntity target = targetObject.Entity();
+    kb::tests::Require(
+        native->RegisterLifecycle(kSenderAsset, kb::script::ScriptLifecycleEvent::Tick, [target](kb::script::ScriptExecutionContext& context) {
+            context.EmitTo(target, "PendingCommand", {});
+            context.GetScene().Entities().Destroy(target);
+        }),
+        "Pending command cancellation sender registration failed");
+
+    int deliveries = 0;
+    kb::tests::Require(
+        native->RegisterEvent(kTargetAsset, "PendingCommand", [&deliveries](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+            ++deliveries;
+        }),
+        "Pending command cancellation target registration failed");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Pending command cancellation backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycleAndDispatchEvents(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Pending command cancellation produced diagnostics");
+    kb::tests::Require(!scene.Entities().IsAlive(target), "Pending command cancellation test fixture must have destroyed the target");
+    kb::tests::Require(deliveries == 0, "A pending command targeting an entity destroyed before its dispatch turn must be cancelled, not delivered");
+}
+
 void RunTargetedEventDispatchTest() {
     kb::scene::Scene scene;
     constexpr kb::assets::AssetId kNativeAsset{4101U};
@@ -1189,6 +1246,462 @@ end
         sawFunctionError = sawFunctionError || diagnostic.message.find("inventory failure") != std::string::npos;
     }
     kb::tests::Require(sawFunctionError, "Visual script function call did not surface the registry error diagnostic");
+}
+
+// LIB-010: a registered callback throwing a C++ exception must become a
+// ScriptFunctionCallResult error, not propagate. This is the single choke
+// point every caller (Native direct call, Lua's CallFunction, the future
+// Visual Graph CallNative node) goes through, so this also protects the Lua
+// boundary, where an uncaught C++ exception crossing PUC-Lua's C-compiled,
+// longjmp-based lua_pcall is undefined behaviour.
+void RunScriptFunctionRegistryExceptionSafetyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script function exception safety host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Throws" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
+                               throw std::runtime_error("boom");
+                           },
+                       }),
+        "Script function exception safety did not register Tests.Throws");
+
+    int survivorCalls = 0;
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Survivor" },
+                           .callback = [&survivorCalls](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               ++survivorCalls;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "Script function exception safety did not register Tests.Survivor");
+
+    const kb::script::ScriptFunctionCallResult throwingResult = host.Functions().Call("Tests.Throws", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!throwingResult.Succeeded(), "Script function registry did not report a thrown exception as a failed call");
+    bool sawExceptionMessage = false;
+    for (const std::string& error : throwingResult.errors) {
+        sawExceptionMessage = sawExceptionMessage || error.find("boom") != std::string::npos;
+    }
+    kb::tests::Require(sawExceptionMessage, "Script function registry did not surface the exception's message in the call result");
+
+    // The registry itself must stay usable after a callback throws: no
+    // corrupted state, no crash, the next call succeeds normally.
+    const kb::script::ScriptFunctionCallResult survivorResult = host.Functions().Call("Tests.Survivor", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(survivorResult.Succeeded() && survivorCalls == 1, "Script function registry did not remain usable after a callback threw");
+}
+
+// LIB-010: a native lifecycle/event callback throwing must not abort the
+// rest of that phase's behaviour dispatch loop (ScriptRuntime::
+// DispatchSceneBehaviours) — one misbehaving behaviour reports a diagnostic
+// instead of preventing every later-dispatched behaviour in the same phase
+// from running at all.
+void RunNativeScriptBackendExceptionSafetyTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kThrowingAsset{ 5101U };
+    constexpr kb::assets::AssetId kSurvivorAsset{ 5102U };
+
+    const kb::scene::SceneObject throwingObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ExceptionSafetyThrows" });
+    scene.Components().Behaviours().Set(throwingObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kThrowingAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    const kb::scene::SceneObject survivorObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ExceptionSafetySurvivor" });
+    scene.Components().Behaviours().Set(survivorObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kSurvivorAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 1,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    kb::tests::Require(
+        native->RegisterLifecycle(kThrowingAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext&) -> void {
+            throw std::runtime_error("native boom");
+        }),
+        "Native exception safety did not register the throwing behaviour");
+    int survivorTicks = 0;
+    kb::tests::Require(
+        native->RegisterLifecycle(kSurvivorAsset, kb::script::ScriptLifecycleEvent::Tick, [&survivorTicks](kb::script::ScriptExecutionContext&) {
+            ++survivorTicks;
+        }),
+        "Native exception safety did not register the survivor behaviour");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Native exception safety backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(!result.Succeeded(), "Native exception safety did not report a diagnostic for the throwing behaviour");
+    kb::tests::Require(result.visitedBehaviours == 2U, "Native exception safety did not visit both behaviours");
+    kb::tests::Require(result.executedBehaviours == 1U, "Native exception safety must not count the throwing behaviour as executed");
+    kb::tests::Require(survivorTicks == 1, "Native exception safety must still dispatch the behaviour after the one that threw");
+    bool sawExceptionMessage = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+        sawExceptionMessage = sawExceptionMessage || diagnostic.message.find("native boom") != std::string::npos;
+    }
+    kb::tests::Require(sawExceptionMessage, "Native exception safety did not surface the exception's message in the diagnostics");
+}
+
+// LIB-021: once the world has dispatched its first lifecycle phase, further
+// Register() calls on that ScriptFunctionRegistry must be rejected — a
+// function registered after the world starts running could be visible to
+// some already-running dispatch paths (Lua sugar tables, compiled Visual
+// Graph bindings, both generated/snapshotted at setup time) but not others.
+// LIB-030: a function name that was never registered (not exposed) must
+// never be callable — ScriptFunctionRegistry::Call, the single choke point
+// every frontend (Native direct call, Lua's CallFunction, the Visual Graph
+// CallNative node) funnels through, must reject it by name with a clear
+// diagnostic instead of silently succeeding or falling through.
+void RunUnexposedFunctionCannotBeCalledTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Unexposed function test host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Tests.NeverRegistered") == nullptr, "Unexposed function test fixture must not already have this name registered");
+
+    const kb::script::ScriptFunctionCallResult result = host.Functions().Call("Tests.NeverRegistered", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!result.Succeeded(), "An unexposed function name must not be callable");
+    kb::tests::Require(!result.executed, "An unexposed function name must not report executed=true");
+    bool sawNotRegisteredMessage = false;
+    for (const std::string& error : result.errors) {
+        sawNotRegisteredMessage = sawNotRegisteredMessage || error.find("is not registered") != std::string::npos;
+    }
+    kb::tests::Require(sawNotRegisteredMessage, "Unexposed function call must report a clear 'not registered' diagnostic, not a silent failure");
+}
+
+void RunScriptFunctionRegistryLocksAfterFirstDispatchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Registry lock test host setup failed");
+    kb::tests::Require(!host.Functions().IsLocked(), "Script function registry must not be locked before any dispatch");
+
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.BeforeStart" },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                return kb::script::ScriptFunctionCallResult{ .executed = true };
+            },
+        }),
+        "Registry lock test could not register before dispatch");
+
+    static_cast<void>(host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F));
+    kb::tests::Require(host.Functions().IsLocked(), "Script function registry must lock after the first lifecycle dispatch");
+
+    const bool registeredAfterStart = host.RegisterFunction(kb::script::ScriptFunctionDesc{
+        .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AfterStart" },
+        .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+            return kb::script::ScriptFunctionCallResult{ .executed = true };
+        },
+    });
+    kb::tests::Require(!registeredAfterStart, "Script function registry must reject registration after the world has started");
+    kb::tests::Require(host.Functions().FindSignature("Tests.AfterStart") == nullptr, "Script function registry must not have added the rejected function");
+
+    const kb::script::ScriptFunctionCallResult stillWorks = host.Functions().Call("Tests.BeforeStart", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(stillWorks.Succeeded(), "Script function registry must keep serving functions registered before the lock");
+}
+
+// LIB-011: the full 10-event lifecycle order (Created, Activated, Ready,
+// FixedTick, Tick, LateTick, BeforeRender, AfterRender, Deactivated,
+// Destroyed) must hold for a Native behaviour end to end, not just the
+// fragments other tests already cover. Created/Activated/Ready/
+// FixedTick/Tick/LateTick/BeforeRender/AfterRender all happen within the
+// first ExecuteFrame call; Deactivated/Destroyed only appear once the
+// behaviour is removed and a second ExecuteFrame runs (see
+// ScriptRuntimeSceneSystem::SyncBehaviourLifecycles).
+void RunNativeFullLifecycleOrderTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 5201U };
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    std::vector<std::string> order;
+    const auto record = [&order](std::string name) {
+        return [&order, name = std::move(name)](kb::script::ScriptExecutionContext&) {
+            order.push_back(name);
+        };
+    };
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Created, record("Created")), "Full lifecycle order Created registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Activated, record("Activated")), "Full lifecycle order Activated registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Ready, record("Ready")), "Full lifecycle order Ready registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::FixedTick, record("FixedTick")), "Full lifecycle order FixedTick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Tick, record("Tick")), "Full lifecycle order Tick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::LateTick, record("LateTick")), "Full lifecycle order LateTick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::BeforeRender, record("BeforeRender")), "Full lifecycle order BeforeRender registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::AfterRender, record("AfterRender")), "Full lifecycle order AfterRender registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Deactivated, record("Deactivated")), "Full lifecycle order Deactivated registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Destroyed, record("Destroyed")), "Full lifecycle order Destroyed registration failed");
+
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Full lifecycle order backend registration failed");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleNative" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order first frame produced diagnostics");
+
+    const std::vector<std::string> expectedFirstFrame{
+        "Created", "Activated", "Ready", "FixedTick", "Tick", "LateTick", "BeforeRender", "AfterRender",
+    };
+    kb::tests::Require(order == expectedFirstFrame, "Full lifecycle order did not dispatch Created..AfterRender in the documented order");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order second frame produced diagnostics");
+
+    const std::vector<std::string> expectedFull{
+        "Created", "Activated", "Ready", "FixedTick", "Tick", "LateTick", "BeforeRender", "AfterRender", "Deactivated", "Destroyed",
+    };
+    kb::tests::Require(order == expectedFull, "Full lifecycle order did not append Deactivated then Destroyed once the behaviour was removed");
+}
+
+// LIB-011: same guarantee as RunNativeFullLifecycleOrderTest, for a Lua
+// behaviour. Uses SetShared/GetShared to build a cumulative order string
+// rather than Emit(), because emitting an event literally named "Created"/
+// "Tick"/... would be redispatched (ScriptRuntime::DrainEvents) to any
+// handler function of that same name — including the lifecycle function
+// itself — which is not what this test wants to exercise.
+void RunPucLuaFullLifecycleOrderTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 5301U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local function record(name)
+    SetShared("lifecycleOrder", (GetShared("lifecycleOrder") or "") .. name .. ";")
+end
+function Created(self, dt) record("Created") end
+function Activated(self, dt) record("Activated") end
+function Ready(self, dt) record("Ready") end
+function FixedTick(self, dt) record("FixedTick") end
+function Tick(self, dt) record("Tick") end
+function LateTick(self, dt) record("LateTick") end
+function BeforeRender(self, dt) record("BeforeRender") end
+function AfterRender(self, dt) record("AfterRender") end
+function Deactivated(self, dt) record("Deactivated") end
+function Destroyed(self, dt) record("Destroyed") end
+)",
+        "FullLifecycle.lua");
+    kb::tests::Require(loaded.succeeded, "Full lifecycle order Lua script did not load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Full lifecycle order Lua backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleLua" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order Lua first frame produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> afterFirstFrame = runtime.SharedState().Get("lifecycleOrder");
+    kb::tests::Require(
+        afterFirstFrame.has_value() && afterFirstFrame->AsString() == "Created;Activated;Ready;FixedTick;Tick;LateTick;BeforeRender;AfterRender;",
+        "Full lifecycle order Lua did not dispatch Created..AfterRender in the documented order");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order Lua second frame produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> afterSecondFrame = runtime.SharedState().Get("lifecycleOrder");
+    kb::tests::Require(
+        afterSecondFrame.has_value() &&
+            afterSecondFrame->AsString() == "Created;Activated;Ready;FixedTick;Tick;LateTick;BeforeRender;AfterRender;Deactivated;Destroyed;",
+        "Full lifecycle order Lua did not append Deactivated then Destroyed once the behaviour was removed");
+}
+
+// LIB-011: same guarantee as the Native/Lua variants, for a Visual Graph
+// behaviour: one graph with an Event+EmitEvent pair per lifecycle phase,
+// each EmitEvent using a symbol that names no real event/function anywhere
+// (so ScriptRuntime::DrainEvents redispatching it is a harmless no-op).
+void RunVisualGraphFullLifecycleOrderTest() {
+    struct PhaseNode {
+        kb::visual::VisualGraphLifecycleEvent lifecycle;
+        const char* emitName;
+    };
+    const std::array<PhaseNode, 10> phases{ {
+        { kb::visual::VisualGraphLifecycleEvent::Created, "GraphCreated" },
+        { kb::visual::VisualGraphLifecycleEvent::Activated, "GraphActivated" },
+        { kb::visual::VisualGraphLifecycleEvent::Ready, "GraphReady" },
+        { kb::visual::VisualGraphLifecycleEvent::FixedTick, "GraphFixedTick" },
+        { kb::visual::VisualGraphLifecycleEvent::Tick, "GraphTick" },
+        { kb::visual::VisualGraphLifecycleEvent::LateTick, "GraphLateTick" },
+        { kb::visual::VisualGraphLifecycleEvent::BeforeRender, "GraphBeforeRender" },
+        { kb::visual::VisualGraphLifecycleEvent::AfterRender, "GraphAfterRender" },
+        { kb::visual::VisualGraphLifecycleEvent::Deactivated, "GraphDeactivated" },
+        { kb::visual::VisualGraphLifecycleEvent::Destroyed, "GraphDestroyed" },
+    } };
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "FullLifecycleGraph";
+    std::uint32_t nextId = 1U;
+    for (const PhaseNode& phase : phases) {
+        const std::uint32_t eventNodeId = nextId++;
+        const std::uint32_t emitNodeId = nextId++;
+        graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = eventNodeId, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = phase.lifecycle });
+        graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = emitNodeId, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = phase.emitName });
+        graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = eventNodeId, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+        graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = emitNodeId, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+        graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = eventNodeId, .fromPin = "then", .toNode = emitNodeId, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    }
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Full lifecycle order graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5401U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kGraphAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)),
+        "Full lifecycle order graph backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleGraph" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    std::vector<std::string> order;
+
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order graph first frame produced diagnostics");
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        order.push_back(event.name);
+    }
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order graph second frame produced diagnostics");
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        order.push_back(event.name);
+    }
+
+    const std::vector<std::string> expected{
+        "GraphCreated", "GraphActivated", "GraphReady", "GraphFixedTick", "GraphTick", "GraphLateTick", "GraphBeforeRender", "GraphAfterRender",
+        "GraphDeactivated", "GraphDestroyed",
+    };
+    kb::tests::Require(order == expected, "Full lifecycle order graph did not dispatch every phase in the documented order");
+}
+
+// LIB-011 (parity): the guaranteed execution order (BehaviourExecutionOrderLess:
+// TickGroup, then executionOrder, then entity id) must hold ACROSS backends,
+// not just within one. Three behaviours — Native, Lua, Visual Graph — are
+// created in a different order than their expected dispatch order and given
+// distinct executionOrder values; only a real cross-backend sort could
+// produce the expected sequence.
+void RunCrossBackendLifecycleOrderParityTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kNativeAsset{ 5501U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5502U };
+    constexpr kb::assets::AssetId kGraphAsset{ 5503U };
+
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityGraph" });
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityNative" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityLua" });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+        .executionOrder = 20,
+    });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .executionOrder = 10,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::tests::Require(
+        native->RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+            context.Emit("OrderMark", { kb::script::ScriptEventArgument{ .name = "who", .value = kb::script::ScriptValue{ std::string{ "Native" } } } });
+        }),
+        "Cross-backend lifecycle order parity Native registration failed");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(luaRuntime.LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    Emit("OrderMark", { who = "Lua" })
+end
+)",
+                            "Parity.lua")
+                            .succeeded,
+        "Cross-backend lifecycle order parity Lua script did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ParityGraph";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "GraphOrderMark" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Cross-backend lifecycle order parity graph did not compile");
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Cross-backend lifecycle order parity native backend registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Cross-backend lifecycle order parity Lua backend registration failed");
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)),
+        "Cross-backend lifecycle order parity graph backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycleAndDispatchEvents(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Cross-backend lifecycle order parity produced diagnostics");
+
+    std::vector<std::string> who;
+    for (const kb::script::ScriptEvent& event : result.emittedEvents) {
+        if (event.name == "OrderMark") {
+            for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                if (argument.name == "who") {
+                    who.push_back(argument.value.AsString());
+                }
+            }
+        } else if (event.name == "GraphOrderMark") {
+            who.emplace_back("Graph");
+        }
+    }
+    const std::vector<std::string> expected{ "Native", "Lua", "Graph" };
+    kb::tests::Require(who == expected, "Cross-backend lifecycle dispatch must respect BehaviourExecutionOrderLess regardless of backend");
 }
 
 void RunScriptAudioApiTest() {
@@ -2700,9 +3213,18 @@ void RunScriptRuntimeTests() {
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();
+    RunPendingCommandCancelledByDestroyTest();
     RunTargetedEventDispatchTest();
     RunCrossBackendSharedStateTest();
     RunScriptFunctionRegistryCrossBackendTest();
+    RunScriptFunctionRegistryExceptionSafetyTest();
+    RunNativeScriptBackendExceptionSafetyTest();
+    RunUnexposedFunctionCannotBeCalledTest();
+    RunScriptFunctionRegistryLocksAfterFirstDispatchTest();
+    RunNativeFullLifecycleOrderTest();
+    RunPucLuaFullLifecycleOrderTest();
+    RunVisualGraphFullLifecycleOrderTest();
+    RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptInputApiTest();

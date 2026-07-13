@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 
+#include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -106,6 +107,7 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
         { "kb.lua", kb::script::ScriptApiExport::ToLuaStubs(built.catalog) },
         { "script_api.md", kb::script::ScriptApiExport::ToMarkdown(built.catalog) },
         { "script_api.json", kb::script::ScriptApiExport::ToJson(built.catalog) },
+        { "manifest.json", kb::library::ToJson(kb::library::BuildApiManifest(built.catalog)) },
     };
     for (const auto& [name, content] : files) {
         const std::filesystem::path path = outputRoot / name;
@@ -144,6 +146,18 @@ int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io) {
     for (const std::filesystem::path& path : written.skippedFiles) {
         io.out << "kept " << path.generic_string() << " (already exists)\n";
     }
+
+    // LIB-023: pair the manifest with a hash of the exact catalog it was
+    // generated from, so a later build can detect whether the API surface
+    // changed without diffing the full JSON/Markdown text.
+    const std::filesystem::path manifestPath = std::filesystem::path{ *project } / ".kb" / "api" / "manifest.json";
+    std::string manifestError;
+    if (!WriteTextFile(manifestPath, kb::library::ToJson(kb::library::BuildApiManifest(built.catalog)), manifestError)) {
+        io.err << "error: " << manifestError << '\n';
+        return 1;
+    }
+    io.out << "wrote " << manifestPath.generic_string() << '\n';
+
     io.out << "project is ready for AI coding agents; see AGENTS.md\n";
     return 0;
 }

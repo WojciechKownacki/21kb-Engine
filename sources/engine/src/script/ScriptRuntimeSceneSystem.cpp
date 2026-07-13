@@ -1,5 +1,6 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
+#include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -172,28 +173,54 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
         tracked.behaviour = current.behaviour;
     }
 
-    std::vector<BehaviourLifecycleKey> removed;
+    // lifecycleRecords_ is an unordered_map: collect the departing records
+    // first and dispatch Deactivated/Destroyed in the guaranteed execution
+    // order instead of unordered_map's iteration order, which is not part of
+    // the ordering contract behaviours may rely on. MakeKey() is pure, so
+    // the key for erase can be recomputed after sorting instead of carrying
+    // a parallel key alongside each record.
+    std::vector<BehaviourLifecycleRecord> removed;
     for (const auto& [key, tracked] : lifecycleRecords_) {
         if (seen.contains(key)) {
             continue;
         }
-        if (tracked.active) {
-            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Deactivated, deltaSeconds);
-        }
-        if (tracked.created) {
-            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Destroyed, deltaSeconds);
-        }
-        removed.push_back(key);
+        removed.push_back(tracked);
     }
-    for (const BehaviourLifecycleKey& key : removed) {
-        static_cast<void>(lifecycleRecords_.erase(key));
+    DispatchDeactivateAndDestroyInOrder(scene, removed, deltaSeconds);
+    for (const BehaviourLifecycleRecord& tracked : removed) {
+        static_cast<void>(lifecycleRecords_.erase(MakeKey(tracked.entity, tracked.behaviour)));
     }
 }
 
 void ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds) {
     SyncBehaviourLifecycles(scene, deltaSeconds);
+
+    std::vector<BehaviourLifecycleRecord> remaining;
+    remaining.reserve(lifecycleRecords_.size());
     for (const auto& [key, tracked] : lifecycleRecords_) {
         (void)key;
+        remaining.push_back(tracked);
+    }
+    DispatchDeactivateAndDestroyInOrder(scene, remaining, deltaSeconds);
+    lifecycleRecords_.clear();
+}
+
+// Shared by SyncBehaviourLifecycles (departing records) and
+// ShutdownTrackedBehaviours (all tracked records): sorts in the guaranteed
+// execution order (see kb::scene::BehaviourExecutionOrderLess), then
+// dispatches Deactivated to every still-active record and Destroyed to
+// every still-created one. Kept as the single place that pairs "sort in
+// execution order" with "tear down a batch of records", so the two callers
+// cannot drift back into unordered dispatch the way they did before this
+// was extracted.
+void ScriptRuntimeSceneSystem::DispatchDeactivateAndDestroyInOrder(
+    kb::scene::Scene& scene,
+    std::vector<BehaviourLifecycleRecord>& records,
+    float deltaSeconds) {
+    std::ranges::sort(records, [](const BehaviourLifecycleRecord& lhs, const BehaviourLifecycleRecord& rhs) {
+        return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
+    });
+    for (const BehaviourLifecycleRecord& tracked : records) {
         if (tracked.active) {
             ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Deactivated, deltaSeconds);
         }
@@ -201,7 +228,6 @@ void ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours(kb::scene::Scene& scene
             ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Destroyed, deltaSeconds);
         }
     }
-    lifecycleRecords_.clear();
 }
 
 void ScriptRuntimeSceneSystem::ExecuteBehaviourPhase(
@@ -230,15 +256,7 @@ std::vector<ScriptRuntimeSceneSystem::BehaviourLifecycleRecord> ScriptRuntimeSce
         });
     }
     std::ranges::sort(records, [](const BehaviourLifecycleRecord& lhs, const BehaviourLifecycleRecord& rhs) {
-        const auto lhsGroup = static_cast<std::uint8_t>(lhs.behaviour.tickGroup);
-        const auto rhsGroup = static_cast<std::uint8_t>(rhs.behaviour.tickGroup);
-        if (lhsGroup != rhsGroup) {
-            return lhsGroup < rhsGroup;
-        }
-        if (lhs.behaviour.executionOrder != rhs.behaviour.executionOrder) {
-            return lhs.behaviour.executionOrder < rhs.behaviour.executionOrder;
-        }
-        return lhs.entity.Id() < rhs.entity.Id();
+        return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
     });
     return records;
 }
