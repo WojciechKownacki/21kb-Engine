@@ -38,6 +38,51 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? fallback : value->AsUInt32(fallback);
 }
 
+[[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback = 0) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
+// LIB-051: RandomStream's state ({seed, counter}, both UInt32) decomposes
+// into two named pins — streamSeed/streamCounter — the same convention as
+// Vec3/Quat's <prefix>X/Y/Z/W, just with descriptive names instead of a
+// prefix since a Random* function only ever takes one stream.
+[[nodiscard]] kb::math::RandomStream RandomStreamArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
+    return kb::math::RandomStream{ UInt32Arg(arguments, "streamSeed"), UInt32Arg(arguments, "streamCounter") };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> RandomStreamPins() {
+    return {
+        ScriptFunctionPin{ "streamSeed", ScriptValueType::UInt32, true },
+        ScriptFunctionPin{ "streamCounter", ScriptValueType::UInt32, true },
+    };
+}
+
+// Every RandomStream-consuming function returns BOTH its result AND the
+// advanced stream (never mutates the input stream — LIB-032 forbids
+// references across the script boundary, so the caller must explicitly
+// re-thread streamSeed/streamCounter into its next call, exactly like
+// Damp's caller re-threads velocity).
+[[nodiscard]] ScriptFunctionCallResult ValueAndStreamResult(ScriptValue value, kb::math::RandomStream stream) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "value", std::move(value) },
+            ScriptFunctionArgument{ "streamSeed", ScriptValue{ stream.seed } },
+            ScriptFunctionArgument{ "streamCounter", ScriptValue{ stream.counter } },
+        },
+        .errors = {},
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> ValueAndStreamOutputPins(ScriptValueType valueType) {
+    return {
+        ScriptFunctionPin{ "value", valueType, true },
+        ScriptFunctionPin{ "streamSeed", ScriptValueType::UInt32, true },
+        ScriptFunctionPin{ "streamCounter", ScriptValueType::UInt32, true },
+    };
+}
+
 [[nodiscard]] ScriptFunctionCallResult FloatResult(std::string_view pin, float value) {
     return ScriptFunctionCallResult{
         .executed = true,
@@ -358,6 +403,38 @@ ScriptFunctionCallResult NoiseFn3D(const ScriptFunctionCallContext&, std::span<c
     return FloatResult("result", kb::math::Noise3D(FloatArg(arguments, "x"), FloatArg(arguments, "y"), FloatArg(arguments, "z"), UInt32Arg(arguments, "seed")));
 }
 
+ScriptFunctionCallResult RandomSeedFn(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RandomStream stream = kb::math::MakeRandomStream(UInt32Arg(arguments, "seed"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "streamSeed", ScriptValue{ stream.seed } },
+            ScriptFunctionArgument{ "streamCounter", ScriptValue{ stream.counter } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult RandomNextUInt32Fn(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RandomStreamUInt32Result result = kb::math::NextUInt32(RandomStreamArg(arguments));
+    return ValueAndStreamResult(ScriptValue{ result.value }, result.stream);
+}
+
+ScriptFunctionCallResult RandomNextFloat01Fn(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RandomStreamFloatResult result = kb::math::NextFloat01(RandomStreamArg(arguments));
+    return ValueAndStreamResult(ScriptValue{ result.value }, result.stream);
+}
+
+ScriptFunctionCallResult RandomRangeFn(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RandomStreamRangeResult result = kb::math::NextRange(RandomStreamArg(arguments), FloatArg(arguments, "min"), FloatArg(arguments, "max"));
+    return ValueAndStreamResult(ScriptValue{ result.value }, result.stream);
+}
+
+ScriptFunctionCallResult RandomRangeIntFn(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RandomStreamIntRangeResult result = kb::math::NextIntRange(RandomStreamArg(arguments), IntArg(arguments, "min"), IntArg(arguments, "max"));
+    return ValueAndStreamResult(ScriptValue{ result.value }, result.stream);
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -622,6 +699,26 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
         &NoiseFn3D) && ok;
+    ok = RegisterFunction(host, "Math.RandomSeed",
+        { ScriptFunctionPin{ "seed", ScriptValueType::UInt32, true } },
+        RandomStreamPins(),
+        &RandomSeedFn) && ok;
+    ok = RegisterFunction(host, "Math.RandomNextUInt32",
+        RandomStreamPins(),
+        ValueAndStreamOutputPins(ScriptValueType::UInt32),
+        &RandomNextUInt32Fn) && ok;
+    ok = RegisterFunction(host, "Math.RandomNextFloat01",
+        RandomStreamPins(),
+        ValueAndStreamOutputPins(ScriptValueType::Float),
+        &RandomNextFloat01Fn) && ok;
+    ok = RegisterFunction(host, "Math.RandomRange",
+        ConcatPins(RandomStreamPins(), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "min", ScriptValueType::Float, true }, ScriptFunctionPin{ "max", ScriptValueType::Float, true } }),
+        ValueAndStreamOutputPins(ScriptValueType::Float),
+        &RandomRangeFn) && ok;
+    ok = RegisterFunction(host, "Math.RandomRangeInt",
+        ConcatPins(RandomStreamPins(), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "min", ScriptValueType::Int, true }, ScriptFunctionPin{ "max", ScriptValueType::Int, true } }),
+        ValueAndStreamOutputPins(ScriptValueType::Int),
+        &RandomRangeIntFn) && ok;
     return ok;
 }
 

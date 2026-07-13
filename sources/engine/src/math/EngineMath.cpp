@@ -345,4 +345,23 @@ float Noise1D(float x, std::uint32_t seed) noexcept {
     return Noise3D(x, 0.0F, 0.0F, seed);
 }
 
+RandomStreamFloatResult NextFloat01(RandomStream stream) noexcept {
+    const RandomStreamUInt32Result raw = NextUInt32(stream);
+    return RandomStreamFloatResult{ static_cast<float>(raw.value) / static_cast<float>(std::numeric_limits<std::uint32_t>::max()), raw.stream };
+}
+
+RandomStreamRangeResult NextRange(RandomStream stream, float min, float max) noexcept {
+    const RandomStreamFloatResult unit = NextFloat01(stream);
+    return RandomStreamRangeResult{ Lerp(min, max, unit.value), unit.stream };
+}
+
+RandomStreamIntRangeResult NextIntRange(RandomStream stream, std::int32_t min, std::int32_t max) noexcept {
+    if (max <= min) {
+        return RandomStreamIntRangeResult{ min, NextUInt32(stream).stream };
+    }
+    const RandomStreamUInt32Result raw = NextUInt32(stream);
+    const std::uint32_t span = static_cast<std::uint32_t>(max - min);
+    return RandomStreamIntRangeResult{ min + static_cast<std::int32_t>(raw.value % span), raw.stream };
+}
+
 } // namespace kb::math
