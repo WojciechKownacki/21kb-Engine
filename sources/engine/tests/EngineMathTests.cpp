@@ -311,6 +311,52 @@ void RunVec3DistanceProjectReflectRefractTest() {
     kb::tests::Require(refractedTIR.x == 0.0F && refractedTIR.y == 0.0F && refractedTIR.z == 0.0F, "Refract must return the zero vector on total internal reflection, not NaN");
 }
 
+// LIB-049: Angle/SignedAngle/Slerp/LookRotation/FromToRotation/
+// RotateTowards. LookRotation/FromToRotation are verified by applying the
+// resulting rotation with the already-verified Rotate() (LIB-043) and
+// checking it lands on the expected vector, rather than pinning exact
+// quaternion components — a more robust proof that composes with
+// existing, already-tested machinery instead of duplicating it.
+void RunRotationFunctionsTest() {
+    using kb::math::Quat;
+    using kb::math::Vec3;
+
+    kb::tests::Require(std::abs(kb::math::Angle(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }).Value() - kb::math::kPi / 2.0F) < 0.0001F, "Angle between perpendicular vectors must be pi/2");
+    kb::tests::Require(kb::math::Angle(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F }).Value() < 0.0001F, "Angle between identical vectors must be 0");
+    kb::tests::Require(std::abs(kb::math::Angle(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ -1.0F, 0.0F, 0.0F }).Value() - kb::math::kPi) < 0.0001F, "Angle between opposite vectors must be pi");
+
+    kb::tests::Require(kb::math::SignedAngle(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F }).Value() > 0.0F, "SignedAngle(+X,+Y,+Z axis) must be positive");
+    kb::tests::Require(kb::math::SignedAngle(Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F }).Value() < 0.0F, "SignedAngle(+Y,+X,+Z axis) must be negative (opposite of the +X-to-+Y case)");
+
+    const Quat identity{};
+    const Quat rotated90Y = kb::math::LookRotation(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F });
+    kb::tests::Require(kb::math::Slerp(identity, rotated90Y, 0.0F).x == identity.x && kb::math::Slerp(identity, rotated90Y, 0.0F).w == identity.w, "Slerp at t=0 must return the start rotation");
+    const Quat slerpedFull = kb::math::Slerp(identity, rotated90Y, 1.0F);
+    kb::tests::Require(std::abs(slerpedFull.x - rotated90Y.x) < 0.0001F && std::abs(slerpedFull.w - rotated90Y.w) < 0.0001F, "Slerp at t=1 must return the end rotation");
+    const Quat slerpedIdentical = kb::math::Slerp(rotated90Y, rotated90Y, 0.5F);
+    kb::tests::Require(std::abs(slerpedIdentical.w - rotated90Y.w) < 0.0001F, "Slerp between identical rotations must not divide by a near-zero sin(omega)");
+
+    // LookRotation(+Z, +Y) must be the identity (this file's forward
+    // convention is local +Z, matching Ray's default direction).
+    kb::tests::Require(std::abs(identity.x) < 0.0001F && std::abs(identity.y) < 0.0001F && std::abs(identity.z) < 0.0001F && std::abs(identity.w - 1.0F) < 0.0001F, "Quat default (used as the LookRotation(+Z,+Y) baseline) must be identity");
+    const Quat lookAtZ = kb::math::LookRotation(Vec3{ 0.0F, 0.0F, 1.0F }, Vec3{ 0.0F, 1.0F, 0.0F });
+    kb::tests::Require(std::abs(lookAtZ.x) < 0.0001F && std::abs(lookAtZ.y) < 0.0001F && std::abs(lookAtZ.z) < 0.0001F && std::abs(lookAtZ.w - 1.0F) < 0.0001F, "LookRotation(+Z, +Y) must be the identity rotation");
+    // LookRotation(+X, +Y) applied to local forward (+Z) must point at +X.
+    const Vec3 lookedAtX = kb::math::Rotate(rotated90Y, Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(std::abs(lookedAtX.x - 1.0F) < 0.0001F && std::abs(lookedAtX.y) < 0.0001F && std::abs(lookedAtX.z) < 0.0001F, "LookRotation(+X, +Y) must rotate local forward (+Z) to point at +X");
+
+    kb::tests::Require(std::abs(kb::math::FromToRotation(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F }).w - 1.0F) < 0.0001F, "FromToRotation between identical directions must be the identity");
+    const Vec3 rotatedByFromTo = kb::math::Rotate(kb::math::FromToRotation(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }), Vec3{ 1.0F, 0.0F, 0.0F });
+    kb::tests::Require(std::abs(rotatedByFromTo.x) < 0.0001F && std::abs(rotatedByFromTo.y - 1.0F) < 0.0001F, "FromToRotation(+X,+Y) applied to +X must land on +Y");
+    const Vec3 rotatedByFromToOpposite = kb::math::Rotate(kb::math::FromToRotation(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ -1.0F, 0.0F, 0.0F }), Vec3{ 1.0F, 0.0F, 0.0F });
+    kb::tests::Require(std::abs(rotatedByFromToOpposite.x - (-1.0F)) < 0.0001F, "FromToRotation between exactly opposite directions must still produce a valid 180-degree rotation, not NaN");
+
+    const Quat reachedTarget = kb::math::RotateTowards(identity, rotated90Y, kb::math::Radians{ 10.0F });
+    kb::tests::Require(std::abs(reachedTarget.w - rotated90Y.w) < 0.0001F, "RotateTowards must snap to the target when maxDelta exceeds the angle between the two rotations");
+    const Quat partialStep = kb::math::RotateTowards(identity, rotated90Y, kb::math::Radians{ 0.1F });
+    kb::tests::Require(std::abs(partialStep.w - rotated90Y.w) > 0.0001F, "RotateTowards must not overshoot to the target when maxDelta is smaller than the angle between the two rotations");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -323,6 +369,7 @@ void RunEngineMathTests() {
     RunScalarMathFunctions2Test();
     RunTrigFunctionsTest();
     RunVec3DistanceProjectReflectRefractTest();
+    RunRotationFunctionsTest();
 }
 
 } // namespace kb::tests
