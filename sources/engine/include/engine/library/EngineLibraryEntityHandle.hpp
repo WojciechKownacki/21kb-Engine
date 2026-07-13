@@ -2,6 +2,7 @@
 
 #include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
+#include "engine/library/EngineLibraryResult.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
@@ -63,6 +64,58 @@ public:
     // failure mode — structurally invalid, wrong scene, stale — is a kind
     // of invalid handle) and the same message text Validate() would throw.
     [[nodiscard]] std::optional<ScriptError> CheckError(const kb::scene::Scene& scene, std::string_view operation) const;
+
+    // LIB-075: Entity.Has<T>/TryGet<T>/GetRequired<T>/Add<T>/Remove<T> —
+    // ONLY for the closed, hand-maintained set of component types
+    // registered for scripts (see EngineLibraryScriptComponentAccess.hpp's
+    // ScriptComponentAccess<T> specializations: Transform, Visibility,
+    // Camera, Light, MeshRenderer, Behaviour — the exact same six names
+    // ScriptSceneComponentApi.cpp's kComponentNames already gates Lua/
+    // Visual Graph property access behind). Instantiating any of these
+    // for an unregistered Component fails to compile (static_assert in
+    // the primary ScriptComponentAccess template), not a runtime check —
+    // this is native C++ template code, unreachable from Lua/Visual Graph.
+    // Declared here (no component-type headers needed to declare a
+    // template), DEFINED in EngineLibraryScriptComponentAccess.hpp — a
+    // caller must include that header too to actually instantiate one of
+    // these for a real component type, keeping this lightweight header's
+    // own dependents from pulling in every component type's header.
+    //
+    // A dead/wrong-scene handle never crashes: Has()/TryGet() return
+    // false/nullptr, Add()/Remove() return false — same "never crash on a
+    // stale handle" contract every other kb::scene status query already
+    // follows. GetRequired() is the one exception, matching its name: it
+    // returns a failed Result (not a crash) naming why.
+    template <typename Component>
+    [[nodiscard]] bool Has(const kb::scene::Scene& scene) const noexcept;
+    template <typename Component>
+    [[nodiscard]] const Component* TryGet(const kb::scene::Scene& scene) const noexcept;
+    template <typename Component>
+    [[nodiscard]] Component* TryGet(kb::scene::Scene& scene) const noexcept;
+    // Returns a copy (not a reference) on success — mirrors
+    // kb::scene::SceneTransforms::Get()'s existing "TryGet returns a
+    // pointer, Get returns a copy" split; a Result<T> cannot hold a
+    // reference anyway (LIB-032's ScriptValue-adjacent value-type-only
+    // convention).
+    template <typename Component>
+    [[nodiscard]] Result<Component> GetRequired(const kb::scene::Scene& scene) const;
+    // Ensures the entity has Component with this value (Set semantics,
+    // not "fails if already present") — the natural meaning of "Add" for
+    // a component that may already implicitly exist (Transform/
+    // Visibility are on every entity from creation and can never be
+    // removed; Add<TransformComponent>/Add<VisibilityComponent> still
+    // succeed, they just overwrite). Returns false only for a dead/wrong-
+    // scene handle.
+    template <typename Component>
+    bool Add(kb::scene::Scene& scene, const Component& value) const;
+    // False (not a crash) both for a dead/wrong-scene handle AND for a
+    // mandatory component that cannot be removed (Transform, Visibility —
+    // see ScriptComponentAccess<T>::Remove's per-type comment) — the
+    // caller cannot distinguish the two from the return value alone,
+    // matching every other kb::scene status query's flat bool contract in
+    // this class.
+    template <typename Component>
+    [[nodiscard]] bool Remove(kb::scene::Scene& scene) const noexcept;
 
 private:
     kb::scene::SceneEntity entity_{};
