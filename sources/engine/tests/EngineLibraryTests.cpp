@@ -919,6 +919,62 @@ void RunCollectionsNonAllocTest() {
     kb::tests::Require(stackStorage[1] == 2, "StackNonAlloc must write directly into the caller-provided storage, not a hidden internal copy");
 }
 
+// LIB-060: proves the formal iteration-order guarantee documented in
+// EngineLibraryCollections.hpp — current members appear in the order they
+// were most recently inserted, remove-in-place never reorders survivors,
+// and a removed-then-re-inserted member reappears at the end rather than
+// its old position. Checked for both Set<T> and Map<K,V>, and both the
+// allocating and NonAlloc variants (independent implementations, so a
+// bug in one would not be caught by testing only the other).
+void RunCollectionsDeterministicIterationTest() {
+    kb::library::Set<int> set{ 4U };
+    kb::tests::Require(set.Insert(1) && set.Insert(2) && set.Insert(3), "Set::Insert must succeed for three new elements under capacity");
+    std::vector<int> orderAfterInsert(set.begin(), set.end());
+    kb::tests::Require((orderAfterInsert == std::vector<int>{ 1, 2, 3 }), "Set iteration order must equal insertion order");
+    kb::tests::Require(set.Remove(2), "Set::Remove must remove the requested element");
+    std::vector<int> orderAfterRemove(set.begin(), set.end());
+    kb::tests::Require((orderAfterRemove == std::vector<int>{ 1, 3 }), "Set::Remove must preserve the relative order of the surviving elements");
+    kb::tests::Require(set.Insert(2), "Set::Insert of a previously-removed value must succeed as a genuinely new insertion");
+    std::vector<int> orderAfterReinsert(set.begin(), set.end());
+    kb::tests::Require((orderAfterReinsert == std::vector<int>{ 1, 3, 2 }), "Set must place a removed-then-re-inserted element at the end, not restore its old position");
+
+    kb::library::Map<int, int> map{ 4U };
+    kb::tests::Require(map.Set(1, 10) && map.Set(2, 20) && map.Set(3, 30), "Map::Set must succeed for three new keys under capacity");
+    kb::tests::Require(map.Set(2, 200), "Map::Set on an existing key must succeed as an update");
+    std::vector<int> keysAfterUpdate;
+    for (const auto& entry : map) {
+        keysAfterUpdate.push_back(entry.key);
+    }
+    kb::tests::Require((keysAfterUpdate == std::vector<int>{ 1, 2, 3 }), "Map::Set updating an existing key must not move it in iteration order");
+    kb::tests::Require(map.Remove(1), "Map::Remove must remove the requested key");
+    std::vector<int> keysAfterRemove;
+    for (const auto& entry : map) {
+        keysAfterRemove.push_back(entry.key);
+    }
+    kb::tests::Require((keysAfterRemove == std::vector<int>{ 2, 3 }), "Map::Remove must preserve the relative order of the surviving keys");
+    kb::tests::Require(map.Set(1, 999), "Map::Set of a previously-removed key must succeed as a genuinely new insertion");
+    std::vector<int> keysAfterReinsert;
+    for (const auto& entry : map) {
+        keysAfterReinsert.push_back(entry.key);
+    }
+    kb::tests::Require((keysAfterReinsert == std::vector<int>{ 2, 3, 1 }), "Map must place a removed-then-re-inserted key at the end, not restore its old position");
+
+    std::array<int, 4> setStorage{};
+    kb::library::SetNonAlloc<int> setNonAlloc{ setStorage };
+    kb::tests::Require(setNonAlloc.Insert(1) && setNonAlloc.Insert(2) && setNonAlloc.Insert(3) && setNonAlloc.Remove(2) && setNonAlloc.Insert(2), "SetNonAlloc insert/remove/re-insert sequence must succeed identically to Set<T>");
+    std::vector<int> nonAllocOrder(setNonAlloc.begin(), setNonAlloc.end());
+    kb::tests::Require((nonAllocOrder == std::vector<int>{ 1, 3, 2 }), "SetNonAlloc must obey the same deterministic-iteration guarantee as the allocating Set<T>");
+
+    std::array<kb::library::MapEntry<int, int>, 4> mapStorage{};
+    kb::library::MapNonAlloc<int, int> mapNonAlloc{ mapStorage };
+    kb::tests::Require(mapNonAlloc.Set(1, 10) && mapNonAlloc.Set(2, 20) && mapNonAlloc.Set(3, 30) && mapNonAlloc.Remove(1) && mapNonAlloc.Set(1, 999), "MapNonAlloc insert/remove/re-insert sequence must succeed identically to Map<K,V>");
+    std::vector<int> nonAllocKeys;
+    for (const auto& entry : mapNonAlloc) {
+        nonAllocKeys.push_back(entry.key);
+    }
+    kb::tests::Require((nonAllocKeys == std::vector<int>{ 2, 3, 1 }), "MapNonAlloc must obey the same deterministic-iteration guarantee as the allocating Map<K,V>");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1456,6 +1512,7 @@ void RunEngineLibraryTests() {
     RunCollectionsScriptValueTest();
     RunCollectionsAllocationCostTest();
     RunCollectionsNonAllocTest();
+    RunCollectionsDeterministicIterationTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
