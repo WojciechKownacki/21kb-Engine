@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/library/EngineLibraryModule.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -43,6 +44,11 @@ public:
 
     [[nodiscard]] bool Succeeded() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept;
+    // LIB-028: the kb::library startup report (one entry per catalog
+    // module: installed/disabled, version, reason) produced by the real
+    // EngineLibraryModule::Install() call this host made while
+    // constructing — not recomputed/guessed, the actual outcome.
+    [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
     [[nodiscard]] bool InstallSceneSystem();
     [[nodiscard]] kb::visual::VisualGraphNodeCatalog CreateVisualGraphNodeCatalog() const;
@@ -82,6 +88,7 @@ private:
     std::shared_ptr<ScriptRuntimeHostState> state_;
     bool sceneSystemInstalled_ = false;
     std::vector<std::string> diagnostics_;
+    std::vector<kb::library::EngineLibraryModuleReportEntry> libraryStartupReport_;
 };
 
 } // namespace kb::script

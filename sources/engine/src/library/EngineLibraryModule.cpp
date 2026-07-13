@@ -101,23 +101,77 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
     if (!validation.succeeded) {
         result.succeeded = false;
         result.diagnostics = validation.errors;
+        // LIB-028: the startup report still names every module the catalog
+        // was going to attempt — all "not installed", with the shared
+        // validation failure as the reason — rather than being left empty
+        // just because nothing individually failed to Register().
+        result.report.reserve(modules.size());
+        for (const LibraryModuleDesc& module : modules) {
+            result.report.push_back(EngineLibraryModuleReportEntry{
+                .name = module.name,
+                .version = module.version,
+                .ownerRuntime = module.ownerRuntime,
+                .capability = module.capability,
+                .installed = false,
+                .reason = "module catalog failed validation",
+            });
+        }
         return result;
     }
 
     // RegisterFunction (called by each module below) mirrors every function
     // into the Lua function table and a Visual Graph CallNative node, so one
     // Register() call per module covers Native, Lua and Visual Graph.
+    result.report.reserve(modules.size());
     for (const LibraryModuleDesc& module : modules) {
+        EngineLibraryModuleReportEntry entry{
+            .name = module.name,
+            .version = module.version,
+            .ownerRuntime = module.ownerRuntime,
+            .capability = module.capability,
+        };
         if (!module.capability) {
+            entry.installed = false;
+            entry.reason = module.disabledReason.empty() ? "capability unavailable in this build" : module.disabledReason;
+            result.report.push_back(std::move(entry));
             continue;
         }
         if (module.Register == nullptr || !module.Register(host)) {
+            entry.installed = false;
+            entry.reason = "script API could not be fully registered";
             result.succeeded = false;
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
+        } else {
+            entry.installed = true;
         }
+        result.report.push_back(std::move(entry));
     }
 
     return result;
+}
+
+std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry>& report) {
+    std::string text = "kb::library startup report (" + std::to_string(report.size()) + " module" + (report.size() == 1U ? "" : "s") + "):\n";
+    for (const EngineLibraryModuleReportEntry& entry : report) {
+        text += "  ";
+        text += entry.installed ? "[installed] " : "[disabled]  ";
+        text += entry.name;
+        text += " v";
+        text += std::to_string(entry.version.major);
+        text += '.';
+        text += std::to_string(entry.version.minor);
+        text += '.';
+        text += std::to_string(entry.version.patch);
+        text += " (";
+        text += entry.ownerRuntime;
+        text += ')';
+        if (!entry.installed) {
+            text += " — ";
+            text += entry.reason;
+        }
+        text += '\n';
+    }
+    return text;
 }
 
 } // namespace kb::library

@@ -12,14 +12,41 @@ class ScriptRuntimeHost;
 
 namespace kb::library {
 
+// LIB-028: one line of the startup report — what InstallModules() actually
+// did with a single catalog entry, not just whether the whole install
+// succeeded. `installed` is true only when capability was true AND
+// Register() actually succeeded; `reason` is populated whenever installed
+// is false (capability was false — see LibraryModuleDesc::disabledReason
+// — the catalog itself failed validation, or Register() failed).
+struct EngineLibraryModuleReportEntry {
+    std::string name;
+    LibraryModuleVersion version;
+    std::string ownerRuntime;
+    bool capability = true;
+    bool installed = false;
+    std::string reason;
+};
+
 // Outcome of installing the Engine21kbLibrary domain modules onto a
 // ScriptRuntimeHost. `diagnostics` names exactly the modules that failed to
 // register fully; a module can fail partially (some functions registered,
-// some rejected as a name collision) without failing the others.
+// some rejected as a name collision) without failing the others. `report`
+// (LIB-028) has one entry per catalog module, in catalog order, regardless
+// of outcome — the actual "available modules, disabled capability,
+// versions, reason" startup report the task asks for; `diagnostics` above
+// is the older failure-only subset of the same information.
 struct EngineLibraryModuleResult {
     bool succeeded = true;
     std::vector<std::string> diagnostics;
+    std::vector<EngineLibraryModuleReportEntry> report;
 };
+
+// Renders `report` as a stable, human-readable multi-line summary (one
+// line per module: name, version, installed or disabled-with-reason) —
+// this is the actual printable/loggable "startup report", not just
+// structured data nothing ever turns into text. Deterministic given the
+// same report (report order is preserved verbatim, no re-sorting).
+[[nodiscard]] std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry>& report);
 
 // Single registration entry point for the Engine21kbLibrary public surface
 // (namespace kb::library; see EngineLibrary.hpp for the contract and version

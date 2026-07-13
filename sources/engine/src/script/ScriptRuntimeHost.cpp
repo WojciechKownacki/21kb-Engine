@@ -112,6 +112,10 @@ const std::vector<std::string>& ScriptRuntimeHost::Diagnostics() const noexcept 
     return diagnostics_;
 }
 
+const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {
+    return libraryStartupReport_;
+}
+
 bool ScriptRuntimeHost::InstallSceneSystem() {
     if (sceneSystemInstalled_) {
         return true;
@@ -313,6 +317,7 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     for (const std::string& diagnostic : libraryResult.diagnostics) {
         AddDiagnostic(diagnostic);
     }
+    libraryStartupReport_ = libraryResult.report;
 }
 
 void ScriptRuntimeHost::AddDiagnostic(std::string message) {
