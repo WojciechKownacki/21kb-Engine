@@ -9,6 +9,7 @@
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
+#include "engine/library/EngineLibraryScriptComponentAccess.hpp"
 #include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/library/EngineLibraryFunctionId.hpp"
@@ -743,6 +744,73 @@ void RunEntityHandleTest() {
     const kb::scene::SceneObject recycledSlotCandidate = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EntityHandleRecycled" });
     kb::tests::Require(!handle.IsAlive(scene), "Engine21kbLibrary EntityHandle for a destroyed entity must stay not-alive even after a new entity is created");
     kb::tests::Require(scene.Entities().IsAlive(recycledSlotCandidate.Entity()), "Engine21kbLibrary test setup requires the newly created entity to be alive");
+}
+
+// LIB-075: EntityHandle::Has<T>/TryGet<T>/GetRequired<T>/Add<T>/Remove<T> —
+// only for the closed set of six component types registered for scripts
+// (ScriptComponentAccess<T> specializations), covering both an OPTIONAL
+// component (Camera — has a real Remove) and a MANDATORY one (Transform —
+// present from creation, Remove always reports false), plus the
+// dead/wrong-scene handle contract (false/nullptr/failed Result, never a
+// crash).
+void RunEntityHandleScriptComponentAccessTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ScriptComponentAccessSubject" });
+    const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+
+    // Optional component (Camera): absent by default.
+    kb::tests::Require(!handle.Has<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Has<CameraComponent> must be false before the component is ever added");
+    kb::tests::Require(handle.TryGet<kb::scene::CameraComponent>(scene) == nullptr, "Engine21kbLibrary EntityHandle::TryGet<CameraComponent> must return nullptr before the component is ever added");
+    const kb::library::Result<kb::scene::CameraComponent> missingCamera = handle.GetRequired<kb::scene::CameraComponent>(scene);
+    kb::tests::Require(!missingCamera.Succeeded() && missingCamera.Error().code == kb::library::LibraryErrorCode::InvalidArgument,
+        "Engine21kbLibrary EntityHandle::GetRequired<CameraComponent> must fail with InvalidArgument when the component is absent");
+    kb::tests::Require(!handle.Remove<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<CameraComponent> must report false when there was nothing to remove");
+
+    kb::scene::CameraComponent camera{};
+    camera.verticalFovDegrees = 75.0F;
+    kb::tests::Require(handle.Add<kb::scene::CameraComponent>(scene, camera), "Engine21kbLibrary EntityHandle::Add<CameraComponent> must succeed for a live handle");
+    kb::tests::Require(handle.Has<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Has<CameraComponent> must be true immediately after Add<CameraComponent>");
+    const kb::scene::CameraComponent* cameraPointer = handle.TryGet<kb::scene::CameraComponent>(scene);
+    kb::tests::Require(cameraPointer != nullptr && kb::tests::NearlyEqual(cameraPointer->verticalFovDegrees, 75.0F),
+        "Engine21kbLibrary EntityHandle::TryGet<CameraComponent> must return the real, just-added component data");
+    const kb::library::Result<kb::scene::CameraComponent> gotCamera = handle.GetRequired<kb::scene::CameraComponent>(scene);
+    kb::tests::Require(gotCamera.Succeeded() && kb::tests::NearlyEqual(gotCamera.Value().verticalFovDegrees, 75.0F),
+        "Engine21kbLibrary EntityHandle::GetRequired<CameraComponent> must succeed and return a correct copy once the component exists");
+
+    // `scene` is non-const here, so this call resolves to the MUTABLE
+    // TryGet<T> overload — proving it returns a pointer into the real live
+    // component (writable through it), not merely a const view.
+    kb::scene::CameraComponent* mutableCameraPointer = handle.TryGet<kb::scene::CameraComponent>(scene);
+    kb::tests::Require(mutableCameraPointer != nullptr, "Engine21kbLibrary EntityHandle::TryGet<CameraComponent> (mutable overload) must return a real pointer once the component exists");
+    mutableCameraPointer->verticalFovDegrees = 90.0F;
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Cameras().TryGet(object.Entity())->verticalFovDegrees, 90.0F),
+        "Engine21kbLibrary EntityHandle::TryGet<CameraComponent> (mutable overload) must return a pointer into the REAL live component, not a copy");
+
+    kb::tests::Require(handle.Remove<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<CameraComponent> must report true when the component was actually present");
+    kb::tests::Require(!handle.Has<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Has<CameraComponent> must be false immediately after Remove<CameraComponent>");
+
+    // Mandatory component (Transform): present from entity creation, and
+    // Remove is honestly rejected rather than silently no-op'd or crashing
+    // against a facade method that does not exist.
+    kb::tests::Require(handle.Has<kb::scene::TransformComponent>(scene), "Engine21kbLibrary EntityHandle::Has<TransformComponent> must be true — every entity has one from creation");
+    kb::tests::Require(handle.TryGet<kb::scene::TransformComponent>(scene) != nullptr, "Engine21kbLibrary EntityHandle::TryGet<TransformComponent> must never be null for a live entity");
+    kb::scene::TransformComponent transformOverride{};
+    transformOverride.localPosition = kb::scene::Vec3{ 3.0F, 4.0F, 5.0F };
+    kb::tests::Require(handle.Add<kb::scene::TransformComponent>(scene, transformOverride), "Engine21kbLibrary EntityHandle::Add<TransformComponent> must succeed (overwrite semantics) even though Transform is mandatory");
+    kb::tests::Require(kb::tests::NearlyEqual(handle.TryGet<kb::scene::TransformComponent>(scene)->localPosition.x, 3.0F),
+        "Engine21kbLibrary EntityHandle::Add<TransformComponent> must actually overwrite the live component's data");
+    kb::tests::Require(!handle.Remove<kb::scene::TransformComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<TransformComponent> must report false — Transform can never be removed from an entity in this engine");
+    kb::tests::Require(handle.Has<kb::scene::TransformComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<TransformComponent>'s false result must mean nothing was actually removed");
+
+    // Dead/wrong-scene handle: every operation reports failure, never
+    // crashes — same contract as IsAlive()/Validate() above.
+    scene.Entities().Destroy(object);
+    const kb::library::EntityHandle deadHandle = handle;
+    kb::tests::Require(!deadHandle.Has<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Has<T> on a destroyed entity must report false, not throw");
+    kb::tests::Require(deadHandle.TryGet<kb::scene::CameraComponent>(scene) == nullptr, "Engine21kbLibrary EntityHandle::TryGet<T> on a destroyed entity must return nullptr, not throw");
+    kb::tests::Require(!deadHandle.GetRequired<kb::scene::CameraComponent>(scene).Succeeded(), "Engine21kbLibrary EntityHandle::GetRequired<T> on a destroyed entity must return a failed Result, not throw");
+    kb::tests::Require(!deadHandle.Add<kb::scene::CameraComponent>(scene, kb::scene::CameraComponent{}), "Engine21kbLibrary EntityHandle::Add<T> on a destroyed entity must report false, not throw");
+    kb::tests::Require(!deadHandle.Remove<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<T> on a destroyed entity must report false, not throw");
 }
 
 // LIB-009: AssetRef<T>/SceneRef must be the real kb::assets::AssetHandle<T>
@@ -1728,6 +1796,7 @@ void RunEngineLibraryTests() {
     RunLibraryContextTest();
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunEntityHandleTest();
+    RunEntityHandleScriptComponentAccessTest();
     RunArrayViewTest();
     RunCollectionsScalarTest();
     RunCollectionsScriptValueTest();
