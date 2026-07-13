@@ -7,6 +7,7 @@
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <span>
@@ -103,6 +104,14 @@ private:
 
     std::vector<ScriptFunctionDesc> functions_;
     bool locked_ = false;
+    // LIB-038: reentrancy guard. A callback that (directly, or through a
+    // chain of other functions) calls back into Call() on the same
+    // registry increments this; past kMaxCallDepth (defined in the .cpp),
+    // Call() rejects the call with a diagnostic instead of recursing until
+    // the stack overflows. mutable because Call() is logically const (it
+    // does not mutate the registered function set) but must track depth
+    // across the possibly-reentrant call it makes into a callback.
+    mutable std::size_t callDepth_ = 0;
 };
 
 } // namespace kb::script

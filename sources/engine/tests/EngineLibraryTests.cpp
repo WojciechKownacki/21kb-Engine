@@ -10,6 +10,7 @@
 #include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/library/EngineLibraryFunctionId.hpp"
+#include "engine/library/EngineLibraryInputLimits.hpp"
 #include "engine/library/EngineLibraryLifecycle.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
@@ -33,6 +34,7 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -1043,6 +1045,42 @@ void RunErrorCodeTest() {
     kb::tests::Require(staleError.has_value() && staleError->code == kb::library::LibraryErrorCode::InvalidHandle, "Engine21kbLibrary EntityHandle::CheckError must report InvalidHandle for a stale handle");
 }
 
+// LIB-037: kb::library::kDefaultLibraryInputLimits.maxStringLength must
+// match the limit kb::script::ScriptFunctionRegistry actually enforces
+// (verified behaviorally, since the enforced constant is private to
+// ScriptFunctionRegistry.cpp), and maxGraphRecursionDepth must match
+// ScriptRuntimeDispatchOptions' already-enforced default.
+void RunInputLimitsTest() {
+    kb::tests::Require(
+        kb::library::kDefaultLibraryInputLimits.maxGraphRecursionDepth == kb::script::ScriptRuntimeDispatchOptions{}.maxEventDepth,
+        "Engine21kbLibrary maxGraphRecursionDepth must match ScriptRuntimeDispatchOptions::maxEventDepth's default");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary input limits test host setup failed");
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{
+                .name = "Tests.TakesString",
+                .inputs = { kb::script::ScriptFunctionPin{ .name = "text", .type = kb::script::ScriptValueType::String } },
+            },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                return kb::script::ScriptFunctionCallResult{ .executed = true };
+            },
+        }),
+        "Engine21kbLibrary input limits test could not register Tests.TakesString");
+
+    const std::string atLimit(kb::library::kDefaultLibraryInputLimits.maxStringLength, 'a');
+    const std::array atLimitArguments{ kb::script::ScriptFunctionArgument{ .name = "text", .value = kb::script::ScriptValue{ atLimit } } };
+    const kb::script::ScriptFunctionCallResult atLimitResult = host.Functions().Call("Tests.TakesString", atLimitArguments, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(atLimitResult.Succeeded(), "Engine21kbLibrary a string exactly at the documented limit must be accepted");
+
+    const std::string overLimit(kb::library::kDefaultLibraryInputLimits.maxStringLength + 1U, 'a');
+    const std::array overLimitArguments{ kb::script::ScriptFunctionArgument{ .name = "text", .value = kb::script::ScriptValue{ overLimit } } };
+    const kb::script::ScriptFunctionCallResult overLimitResult = host.Functions().Call("Tests.TakesString", overLimitArguments, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!overLimitResult.Succeeded(), "Engine21kbLibrary a string exceeding the documented limit must be rejected by ScriptFunctionRegistry");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1080,6 +1118,7 @@ void RunEngineLibraryTests() {
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
     RunErrorCodeTest();
+    RunInputLimitsTest();
 }
 
 } // namespace kb::tests

@@ -9,6 +9,42 @@
 namespace kb::script {
 namespace {
 
+// LIB-037: a unified input limit shared by every script function call
+// (Native, Lua, Visual Graph all funnel through ValidateInputs). Rejecting
+// an oversized String argument here — rather than letting it flow into a
+// callback that might log it, store it, or forward it to another
+// system — keeps one enforcement point instead of every callback needing
+// its own bound. kb::library::LibraryInputLimits::maxStringLength documents
+// this same value for callers that want to check it before calling.
+constexpr std::size_t kMaxScriptStringArgumentLength = 65536U;
+
+// LIB-038: reentrancy guard. A callback that (directly, or through a chain
+// of other functions calling each other) calls back into
+// ScriptFunctionRegistry::Call on the same registry increments
+// callDepth_; past this many nested calls, Call() rejects the call with a
+// diagnostic instead of recursing until the stack overflows. 64 comfortably
+// covers legitimate call chains (a handful of gameplay functions calling
+// each other) while catching runaway recursion long before the stack is at
+// risk.
+constexpr std::size_t kMaxCallDepth = 64U;
+
+// RAII so callDepth_ is decremented on every exit path (the normal return
+// and the two catch blocks below all exit through this destructor), not
+// duplicated at each return statement.
+class CallDepthGuard final {
+public:
+    explicit CallDepthGuard(std::size_t& depth) noexcept
+        : depth_(depth) {
+        ++depth_;
+    }
+    ~CallDepthGuard() noexcept { --depth_; }
+    CallDepthGuard(const CallDepthGuard&) = delete;
+    CallDepthGuard& operator=(const CallDepthGuard&) = delete;
+
+private:
+    std::size_t& depth_;
+};
+
 [[nodiscard]] std::string TypeMismatchMessage(std::string_view functionName, std::string_view pinName, ScriptValueType actual, ScriptValueType expected) {
     return "script function '" + std::string{functionName} + "' pin '" + std::string{pinName} + "' is " + ToString(actual) + " but expects " + ToString(expected);
 }
@@ -67,6 +103,19 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
         return ScriptFunctionCallResult{ .errors = std::move(errors) };
     }
 
+    // LIB-038: a callback can itself call back into Call() on this same
+    // registry (directly, or through a chain of other functions calling
+    // each other) — reject before invoking once the depth limit is
+    // reached, rather than recursing until the native stack overflows,
+    // which would crash the process instead of returning a diagnostic.
+    if (callDepth_ >= kMaxCallDepth) {
+        return ScriptFunctionCallResult{
+            .errors = {
+                "script function '" + std::string{ name } + "' exceeded the maximum call depth (" +
+                std::to_string(kMaxCallDepth) + "); this usually means a reentrant or mutually recursive call chain" },
+        };
+    }
+
     // A registered callback (Native directly, or kb::library helpers like
     // EntityHandle::Validate() called from within one) can throw. This is
     // the single choke point every caller goes through — Native dispatch,
@@ -77,6 +126,7 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
     // Lua core is compiled as C, not C++) and the process would terminate.
     ScriptFunctionCallResult result;
     try {
+        const CallDepthGuard depthGuard{ callDepth_ };
         result = iter->callback(context, normalized);
     } catch (const std::exception& exception) {
         return ScriptFunctionCallResult{
@@ -187,6 +237,12 @@ void ScriptFunctionRegistry::ValidateInputs(
         }
         if (!IsCompatible(argument->value, input.type)) {
             errors.push_back(TypeMismatchMessage(signature.name, input.name, argument->value.Type(), input.type));
+            continue;
+        }
+        if (argument->value.Type() == ScriptValueType::String && argument->value.AsString().size() > kMaxScriptStringArgumentLength) {
+            errors.push_back(
+                "script function '" + signature.name + "' input '" + input.name + "' exceeds the maximum string length (" +
+                std::to_string(kMaxScriptStringArgumentLength) + " bytes)");
             continue;
         }
         normalized.push_back(CoerceArgument(*argument, input.type));
