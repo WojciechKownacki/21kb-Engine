@@ -112,6 +112,22 @@ public:
     // default-empty case, so a scene with no deactivated entities pays no
     // per-entity storage cost.
     std::unordered_set<SceneEntity::IdType> inactiveEntities;
+    // LIB-071: content loaded via Scene.Load (additive or not). Each
+    // record names ONE loaded document's own root entity so it can later
+    // be selectively Scene.Unload'ed without touching content loaded from
+    // a different document. `id` is assigned by SceneLoadedContentService,
+    // never reused within a scene's lifetime (nextLoadedSceneId only ever
+    // increments), so a stale handle from an already-unloaded record can
+    // never collide with a later one.
+    struct LoadedSceneRecord {
+        std::uint64_t id = 0U;
+        std::string name;
+        std::string path;
+        SceneEntity root{};
+    };
+    std::vector<LoadedSceneRecord> loadedScenes;
+    std::uint64_t nextLoadedSceneId = 1U;
+    std::uint64_t activeLoadedSceneId = 0U;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
