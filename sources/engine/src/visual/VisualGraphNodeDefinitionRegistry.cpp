@@ -72,7 +72,12 @@ VisualGraphNodeDefinitionRegistry VisualGraphNodeDefinitionRegistry::CreateDefau
         .kind = VisualGraphNodeKind::CallNative,
         .displayName = "Call Native",
         .requiresSymbol = true,
-        .pins = {Input("exec"), Output("then")},
+        // LIB-061: "then" is the success path (unchanged name, for
+        // backward compatibility with existing graphs) and "failed" is a
+        // new, optional failure path — mirroring Branch's "true"/"false"
+        // pair. Leaving "failed" unwired preserves the historical
+        // fail-loud default (see VisualGraphRuntimeExecutor::ExecuteNode).
+        .pins = {Input("exec"), Output("then"), Output("failed")},
     }));
     static_cast<void>(registry.Register(VisualGraphNodeDefinition{
         .kind = VisualGraphNodeKind::EmitEvent,

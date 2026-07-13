@@ -38,6 +38,24 @@ void AddCompileError(VisualGraphCompileResult& result, std::uint32_t nodeId, std
     return VisualGraphIrOpcode::Sequence;
 }
 
+// LIB-061: Branch and CallNative are the only node kinds whose execution
+// forks into two possible successors instead of a single linear "next".
+// Branch forks on "true"/"false" (condition); CallNative forks on
+// "then"/"failed" (success/failure of the underlying function call) —
+// "then" keeps its pre-LIB-061 name so existing graphs' success-path
+// wiring is unaffected, "failed" is new and optional.
+[[nodiscard]] bool HasExecutionBranches(VisualGraphNodeKind kind) noexcept {
+    return kind == VisualGraphNodeKind::Branch || kind == VisualGraphNodeKind::CallNative;
+}
+
+[[nodiscard]] std::string_view SuccessPinFor(VisualGraphNodeKind kind) noexcept {
+    return kind == VisualGraphNodeKind::Branch ? "true" : "then";
+}
+
+[[nodiscard]] std::string_view FailurePinFor(VisualGraphNodeKind kind) noexcept {
+    return kind == VisualGraphNodeKind::Branch ? "false" : "failed";
+}
+
 [[nodiscard]] std::uint32_t FirstOutgoingNode(const VisualGraphAsset& graph, std::uint32_t nodeId, std::string_view fromPin = "then") noexcept {
     const auto iter = std::ranges::find_if(graph.edges, [nodeId, fromPin](const VisualGraphEdge& edge) {
         return edge.kind == VisualGraphEdgeKind::Execution && edge.fromNode == nodeId && (edge.fromPin.empty() || edge.fromPin == fromPin);
@@ -111,8 +129,8 @@ void EmitInstructionWithDataDependencies(
             .inputs = BuildInstructionInputs(graph, node.id),
             .outputs = BuildInstructionOutputs(graph, node.id),
             .nextNodeId = FirstOutgoingNode(graph, node.id),
-            .trueNodeId = node.kind == VisualGraphNodeKind::Branch ? FirstOutgoingNode(graph, node.id, "true") : 0U,
-            .falseNodeId = node.kind == VisualGraphNodeKind::Branch ? FirstOutgoingNode(graph, node.id, "false") : 0U,
+            .trueNodeId = HasExecutionBranches(node.kind) ? FirstOutgoingNode(graph, node.id, SuccessPinFor(node.kind)) : 0U,
+            .falseNodeId = HasExecutionBranches(node.kind) ? FirstOutgoingNode(graph, node.id, FailurePinFor(node.kind)) : 0U,
         });
     }
 
@@ -155,8 +173,8 @@ void CompileEntryFunction(const VisualGraphAsset& graph, const VisualGraphNode& 
         }
 
         const std::uint32_t nextNodeId = FirstOutgoingNode(graph, node->id);
-        const std::uint32_t trueNodeId = node->kind == VisualGraphNodeKind::Branch ? FirstOutgoingNode(graph, node->id, "true") : 0U;
-        const std::uint32_t falseNodeId = node->kind == VisualGraphNodeKind::Branch ? FirstOutgoingNode(graph, node->id, "false") : 0U;
+        const std::uint32_t trueNodeId = HasExecutionBranches(node->kind) ? FirstOutgoingNode(graph, node->id, SuccessPinFor(node->kind)) : 0U;
+        const std::uint32_t falseNodeId = HasExecutionBranches(node->kind) ? FirstOutgoingNode(graph, node->id, FailurePinFor(node->kind)) : 0U;
         EmitInstructionWithDataDependencies(graph, *node, function, emitted, emitting, result);
 
         if (falseNodeId != 0U) {
