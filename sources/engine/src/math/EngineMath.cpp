@@ -224,6 +224,9 @@ float Frac(float value) noexcept {
 }
 
 float Mod(float value, float divisor) noexcept {
+    if (divisor == 0.0F) {
+        return value;
+    }
     return value - divisor * std::floor(value / divisor);
 }
 
