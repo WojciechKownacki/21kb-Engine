@@ -51,6 +51,18 @@ const char* ToString(VisualGraphValueType type) noexcept {
         return "Entity";
     case VisualGraphValueType::Component:
         return "Component";
+    case VisualGraphValueType::Int64:
+        return "Int64";
+    case VisualGraphValueType::UInt32:
+        return "UInt32";
+    case VisualGraphValueType::Double:
+        return "Double";
+    case VisualGraphValueType::Name:
+        return "Name";
+    case VisualGraphValueType::Guid:
+        return "Guid";
+    case VisualGraphValueType::Hash:
+        return "Hash";
     }
     return "Void";
 }
@@ -136,6 +148,12 @@ bool TryParseVisualGraphValueType(std::string_view text, VisualGraphValueType& o
         std::pair<std::string_view, VisualGraphValueType>{"String", VisualGraphValueType::String},
         std::pair<std::string_view, VisualGraphValueType>{"Entity", VisualGraphValueType::Entity},
         std::pair<std::string_view, VisualGraphValueType>{"Component", VisualGraphValueType::Component},
+        std::pair<std::string_view, VisualGraphValueType>{"Int64", VisualGraphValueType::Int64},
+        std::pair<std::string_view, VisualGraphValueType>{"UInt32", VisualGraphValueType::UInt32},
+        std::pair<std::string_view, VisualGraphValueType>{"Double", VisualGraphValueType::Double},
+        std::pair<std::string_view, VisualGraphValueType>{"Name", VisualGraphValueType::Name},
+        std::pair<std::string_view, VisualGraphValueType>{"Guid", VisualGraphValueType::Guid},
+        std::pair<std::string_view, VisualGraphValueType>{"Hash", VisualGraphValueType::Hash},
     };
     return ParseNamedValue(text, values, output);
 }

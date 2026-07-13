@@ -84,6 +84,30 @@ namespace {
         output = ScriptValueType::Component;
         return true;
     }
+    if (value == "Int64" || value == "int64") {
+        output = ScriptValueType::Int64;
+        return true;
+    }
+    if (value == "UInt32" || value == "uint32") {
+        output = ScriptValueType::UInt32;
+        return true;
+    }
+    if (value == "Double" || value == "double") {
+        output = ScriptValueType::Double;
+        return true;
+    }
+    if (value == "Name" || value == "name") {
+        output = ScriptValueType::Name;
+        return true;
+    }
+    if (value == "Guid" || value == "guid") {
+        output = ScriptValueType::Guid;
+        return true;
+    }
+    if (value == "Hash" || value == "hash") {
+        output = ScriptValueType::Hash;
+        return true;
+    }
     return false;
 }
 
@@ -92,6 +116,17 @@ namespace {
     char* end = nullptr;
     errno = 0;
     const float parsedValue = std::strtof(text.c_str(), &end);
+    if (errno != 0 || end != text.c_str() + text.size()) {
+        return std::nullopt;
+    }
+    return parsedValue;
+}
+
+[[nodiscard]] std::optional<double> TryParseDouble(std::string_view value) {
+    const std::string text{ value };
+    char* end = nullptr;
+    errno = 0;
+    const double parsedValue = std::strtod(text.c_str(), &end);
     if (errno != 0 || end != text.c_str() + text.size()) {
         return std::nullopt;
     }
@@ -141,6 +176,36 @@ namespace {
         const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
         return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Component } } : std::nullopt;
     }
+    case ScriptValueType::Hash:
+    {
+        std::uint64_t parsedValue = 0U;
+        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
+        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue, ScriptValueType::Hash } } : std::nullopt;
+    }
+    case ScriptValueType::UInt32:
+    {
+        std::uint32_t parsedValue = 0U;
+        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
+        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
+    }
+    case ScriptValueType::Int64:
+    {
+        std::int64_t parsedValue = 0;
+        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
+        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
+    }
+    case ScriptValueType::Double:
+    {
+        const std::optional<double> parsedValue = TryParseDouble(value);
+        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
+    }
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
+            (value.size() >= 2U && value.front() == '\'' && value.back() == '\'')) {
+            return ScriptValue{ std::string{ value.substr(1U, value.size() - 2U) }, type };
+        }
+        return ScriptValue{ std::string{ value }, type };
     case ScriptValueType::Void:
         break;
     }
@@ -161,6 +226,18 @@ namespace {
         return ScriptValue{ 0U, ScriptValueType::Entity };
     case ScriptValueType::Component:
         return ScriptValue{ 0U, ScriptValueType::Component };
+    case ScriptValueType::Hash:
+        return ScriptValue{ 0U, ScriptValueType::Hash };
+    case ScriptValueType::UInt32:
+        return ScriptValue{ std::uint32_t{ 0U } };
+    case ScriptValueType::Int64:
+        return ScriptValue{ std::int64_t{ 0 } };
+    case ScriptValueType::Double:
+        return ScriptValue{ 0.0 };
+    case ScriptValueType::Name:
+        return ScriptValue{ std::string{}, ScriptValueType::Name };
+    case ScriptValueType::Guid:
+        return ScriptValue{ std::string{}, ScriptValueType::Guid };
     case ScriptValueType::Void:
         break;
     }

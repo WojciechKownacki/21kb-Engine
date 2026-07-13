@@ -15,6 +15,16 @@ enum class VisualGraphValueType : std::uint8_t {
     String,
     Entity,
     Component,
+    // LIB-041: appended after Component (not inserted between existing
+    // values) so the numeric value of every pre-existing enumerator stays
+    // stable for anything that persists it by integer (e.g.
+    // kb::library::DescribeType's array index).
+    Int64,
+    UInt32,
+    Double,
+    Name,
+    Guid,
+    Hash,
 };
 
 enum class VisualGraphLifecycleEvent : std::uint8_t {

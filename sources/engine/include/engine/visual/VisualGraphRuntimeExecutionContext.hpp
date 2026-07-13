@@ -33,7 +33,12 @@ public:
     [[nodiscard]] bool ReadBool(std::uint32_t nodeId, std::string_view pin, bool fallback = false) const;
     [[nodiscard]] int ReadInt(std::uint32_t nodeId, std::string_view pin, int fallback = 0) const;
     [[nodiscard]] float ReadFloat(std::uint32_t nodeId, std::string_view pin, float fallback = 0.0F) const;
+    [[nodiscard]] double ReadDouble(std::uint32_t nodeId, std::string_view pin, double fallback = 0.0) const;
+    [[nodiscard]] std::int64_t ReadInt64(std::uint32_t nodeId, std::string_view pin, std::int64_t fallback = 0) const;
     [[nodiscard]] std::string ReadString(std::uint32_t nodeId, std::string_view pin) const;
+    // LIB-041: UInt32/Hash (via ReadUInt64) and Name/Guid (via ReadString)
+    // reuse these existing typed reads — see VisualGraphRuntimeValue's
+    // Storage comment for why they don't need dedicated alternatives.
     [[nodiscard]] std::uint64_t ReadUInt64(std::uint32_t nodeId, std::string_view pin, std::uint64_t fallback = 0U) const;
 
     void EmitEvent(std::string eventName);

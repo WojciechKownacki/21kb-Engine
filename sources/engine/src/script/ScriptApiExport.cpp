@@ -23,6 +23,18 @@ namespace {
         return "integer";
     case ScriptValueType::Component:
         return "integer";
+    case ScriptValueType::Int64:
+        return "integer";
+    case ScriptValueType::UInt32:
+        return "integer";
+    case ScriptValueType::Hash:
+        return "integer";
+    case ScriptValueType::Double:
+        return "number";
+    case ScriptValueType::Name:
+        return "string";
+    case ScriptValueType::Guid:
+        return "string";
     case ScriptValueType::Void:
         break;
     }

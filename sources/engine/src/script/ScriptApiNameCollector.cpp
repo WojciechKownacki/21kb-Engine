@@ -182,6 +182,18 @@ const std::array kLuaCallPatterns{
         return ScriptValueType::Entity;
     case kb::visual::VisualGraphValueType::Component:
         return ScriptValueType::Component;
+    case kb::visual::VisualGraphValueType::Int64:
+        return ScriptValueType::Int64;
+    case kb::visual::VisualGraphValueType::UInt32:
+        return ScriptValueType::UInt32;
+    case kb::visual::VisualGraphValueType::Double:
+        return ScriptValueType::Double;
+    case kb::visual::VisualGraphValueType::Name:
+        return ScriptValueType::Name;
+    case kb::visual::VisualGraphValueType::Guid:
+        return ScriptValueType::Guid;
+    case kb::visual::VisualGraphValueType::Hash:
+        return ScriptValueType::Hash;
     case kb::visual::VisualGraphValueType::Void:
         break;
     }

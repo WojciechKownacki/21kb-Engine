@@ -18,23 +18,63 @@ enum class ScriptValueType : std::uint8_t {
     String,
     Entity,
     Component,
+    // LIB-041: appended after Component (not inserted between existing
+    // values) so the numeric value of every pre-existing enumerator stays
+    // stable for anything that persists it by integer (e.g.
+    // kb::library::DescribeType's array index). `Int` already satisfies
+    // the plan's "Int32" (a native `int` is 32-bit on every platform this
+    // engine targets) — no separate Int32 enumerator was added to avoid a
+    // pure-rename churn across every existing `Int` call site.
+    Int64,
+    UInt32,
+    Double,
+    Name,
+    Guid,
+    Hash,
 };
 
 class ScriptValue final {
 public:
-    using Storage = std::variant<std::monostate, bool, int, float, std::string, std::uint64_t>;
+    // LIB-041: UInt32/Hash reuse the std::uint64_t alternative (tagged by
+    // `type_`, same pattern already used for Entity/Component) and
+    // Name/Guid reuse the std::string alternative (tagged by `type_`) —
+    // only Int64 and Double need genuinely new alternatives.
+    using Storage = std::variant<std::monostate, bool, int, float, std::string, std::uint64_t, std::int64_t, double>;
 
     ScriptValue() = default;
     explicit ScriptValue(bool value);
     explicit ScriptValue(int value);
     explicit ScriptValue(float value);
+    explicit ScriptValue(double value);
+    explicit ScriptValue(std::int64_t value);
+    // Dedicated (not the generic uint64_t+type ctor below) so a UInt32
+    // ScriptValue can never be constructed out of 32-bit range: the
+    // narrower std::uint32_t parameter makes an out-of-range value
+    // impossible to pass in the first place, rather than needing a
+    // validation branch with a silent-clamp-or-reject decision.
+    explicit ScriptValue(std::uint32_t value);
     explicit ScriptValue(std::string value);
+    // Name and Guid are both "a string used as an opaque identifier" at
+    // the LIB-041 value-type level (format validation for Guid and any
+    // future interning for Name are separate, later concerns — see
+    // LIB-063 and the Engine21kbLibrary.md note next to this ctor's .cpp
+    // definition). An unrecognized `type` here falls back to String,
+    // mirroring the existing uint64_t+type ctor's fallback-to-Void
+    // pattern for its own restricted type set.
+    ScriptValue(std::string value, ScriptValueType type);
     ScriptValue(std::uint64_t value, ScriptValueType type);
 
     [[nodiscard]] ScriptValueType Type() const noexcept;
     [[nodiscard]] bool AsBool(bool fallback = false) const noexcept;
     [[nodiscard]] int AsInt(int fallback = 0) const noexcept;
     [[nodiscard]] float AsFloat(float fallback = 0.0F) const noexcept;
+    [[nodiscard]] double AsDouble(double fallback = 0.0) const noexcept;
+    [[nodiscard]] std::int64_t AsInt64(std::int64_t fallback = 0) const noexcept;
+    // UInt32 is stored in the same std::uint64_t alternative as
+    // Entity/Component/Hash; only ever constructed via the dedicated
+    // std::uint32_t ctor above, so the narrowing cast back is always
+    // lossless for a value actually tagged UInt32.
+    [[nodiscard]] std::uint32_t AsUInt32(std::uint32_t fallback = 0U) const noexcept;
     [[nodiscard]] const std::string& AsString() const noexcept;
     [[nodiscard]] std::uint64_t AsUInt64(std::uint64_t fallback = 0U) const noexcept;
     [[nodiscard]] kb::visual::VisualGraphRuntimeValue ToVisualGraphValue() const;
@@ -69,7 +109,8 @@ private:
 // the build immediately instead of silently reopening the hole.
 static_assert(
     !std::is_pointer_v<bool> && !std::is_pointer_v<int> && !std::is_pointer_v<float> &&
-        !std::is_pointer_v<std::string> && !std::is_pointer_v<std::uint64_t>,
+        !std::is_pointer_v<std::string> && !std::is_pointer_v<std::uint64_t> &&
+        !std::is_pointer_v<std::int64_t> && !std::is_pointer_v<double>,
     "ScriptValue::Storage must never hold a raw pointer or reference type");
 
 } // namespace kb::script
