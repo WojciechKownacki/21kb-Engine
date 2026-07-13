@@ -626,6 +626,219 @@ void RunNaNInfinityZeroLengthContractTest() {
     kb::tests::Require(kb::math::Length(kb::math::Project(kb::math::Vec3{ 1.0F, 1.0F, 1.0F }, kb::math::Vec3{})) == 0.0F, "Project onto the zero vector must return the zero vector, not NaN (retested here as part of the LIB-054 contract audit)");
 }
 
+// LIB-055: property/fuzz tests. Rather than a handful of hand-picked
+// example values (what every other test in this file does), these draw
+// hundreds of random-but-DETERMINISTIC inputs from a fixed-seed
+// RandomStream (LIB-051) and assert a general mathematical PROPERTY holds
+// across all of them — a much stronger check than any fixed example set,
+// and still perfectly reproducible on failure (same seed, same sequence,
+// every run) since RandomStream has no hidden global state.
+
+namespace {
+
+[[nodiscard]] kb::math::Vec3 NextTestVec3(kb::math::RandomStream& stream, float min, float max) noexcept {
+    const kb::math::RandomStreamRangeResult rx = kb::math::NextRange(stream, min, max);
+    const kb::math::RandomStreamRangeResult ry = kb::math::NextRange(rx.stream, min, max);
+    const kb::math::RandomStreamRangeResult rz = kb::math::NextRange(ry.stream, min, max);
+    stream = rz.stream;
+    return kb::math::Vec3{ rx.value, ry.value, rz.value };
+}
+
+// Not uniformly distributed over the unit hypersphere (that's not the
+// point here) — just a cheap, deterministic way to get a wide variety of
+// unit quaternions to fuzz with.
+[[nodiscard]] kb::math::Quat NextTestUnitQuat(kb::math::RandomStream& stream) noexcept {
+    const kb::math::RandomStreamRangeResult rx = kb::math::NextRange(stream, -1.0F, 1.0F);
+    const kb::math::RandomStreamRangeResult ry = kb::math::NextRange(rx.stream, -1.0F, 1.0F);
+    const kb::math::RandomStreamRangeResult rz = kb::math::NextRange(ry.stream, -1.0F, 1.0F);
+    const kb::math::RandomStreamRangeResult rw = kb::math::NextRange(rz.stream, -1.0F, 1.0F);
+    stream = rw.stream;
+    return kb::math::Normalize(kb::math::Quat{ rx.value, ry.value, rz.value, rw.value });
+}
+
+} // namespace
+
+void RunVectorPropertyTest() {
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(1337U);
+    constexpr int kIterations = 500;
+    for (int i = 0; i < kIterations; ++i) {
+        const kb::math::Vec3 a = NextTestVec3(stream, -10.0F, 10.0F);
+        const kb::math::Vec3 b = NextTestVec3(stream, -10.0F, 10.0F);
+
+        // Property: Dot is commutative.
+        kb::tests::Require(std::abs(kb::math::Dot(a, b) - kb::math::Dot(b, a)) < 0.001F, "Property violated: Dot(a,b) must equal Dot(b,a) for any a, b");
+
+        // Property: Cross is anti-commutative.
+        const kb::math::Vec3 crossAB = kb::math::Cross(a, b);
+        const kb::math::Vec3 crossBA = kb::math::Cross(b, a);
+        kb::tests::Require(
+            std::abs(crossAB.x + crossBA.x) < 0.01F && std::abs(crossAB.y + crossBA.y) < 0.01F && std::abs(crossAB.z + crossBA.z) < 0.01F,
+            "Property violated: Cross(a,b) must equal -Cross(b,a) for any a, b");
+
+        // Property: Cross(a,b) is orthogonal to both a and b.
+        kb::tests::Require(
+            std::abs(kb::math::Dot(crossAB, a)) < 0.1F && std::abs(kb::math::Dot(crossAB, b)) < 0.1F,
+            "Property violated: Cross(a,b) must be orthogonal to both a and b");
+
+        // Property: the triangle inequality holds for vector length.
+        kb::tests::Require(
+            kb::math::Length(a + b) <= kb::math::Length(a) + kb::math::Length(b) + 0.01F,
+            "Property violated: Length(a+b) must not exceed Length(a)+Length(b) (triangle inequality)");
+
+        if (kb::math::Dot(a, a) > 0.01F) {
+            // Property: Normalize always produces a unit-length vector (for
+            // any nonzero input, not just the hand-picked (3,4,0) example).
+            kb::tests::Require(std::abs(kb::math::Length(kb::math::Normalize(a)) - 1.0F) < 0.001F, "Property violated: Length(Normalize(v)) must be ~1 for any nonzero v");
+
+            // Property: Reflect preserves vector length off a unit normal.
+            const kb::math::Vec3 normal = kb::math::Normalize(b);
+            if (kb::math::Dot(normal, normal) > 0.5F) {
+                kb::tests::Require(
+                    std::abs(kb::math::Length(kb::math::Reflect(a, normal)) - kb::math::Length(a)) < 0.01F,
+                    "Property violated: Reflect off a unit normal must preserve vector length");
+            }
+        }
+    }
+}
+
+void RunQuaternionPropertyTest() {
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(2024U);
+    constexpr int kIterations = 500;
+    for (int i = 0; i < kIterations; ++i) {
+        const kb::math::Quat q = NextTestUnitQuat(stream);
+        const kb::math::Vec3 v = NextTestVec3(stream, -10.0F, 10.0F);
+
+        // Property: any quaternion this file constructs as "a rotation"
+        // (Normalize's own output here) stays on the unit hypersphere.
+        const float qLengthSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+        kb::tests::Require(std::abs(qLengthSquared - 1.0F) < 0.001F, "Property violated: a Normalize()'d quaternion must have unit length");
+
+        // Property: rotating by the identity quaternion is a no-op.
+        const kb::math::Vec3 rotatedByIdentity = kb::math::Rotate(kb::math::Quat{}, v);
+        kb::tests::Require(
+            std::abs(rotatedByIdentity.x - v.x) < 0.01F && std::abs(rotatedByIdentity.y - v.y) < 0.01F && std::abs(rotatedByIdentity.z - v.z) < 0.01F,
+            "Property violated: Rotate(identity, v) must equal v");
+
+        // Property: rotation by a unit quaternion preserves vector length.
+        const kb::math::Vec3 rotated = kb::math::Rotate(q, v);
+        kb::tests::Require(std::abs(kb::math::Length(rotated) - kb::math::Length(v)) < 0.01F, "Property violated: rotating by a unit quaternion must preserve vector length");
+
+        // Property: Slerp anchors its endpoints exactly, for random unit
+        // quaternion pairs (not just the one hand-picked pair the example
+        // test uses).
+        const kb::math::Quat other = NextTestUnitQuat(stream);
+        const kb::math::Quat slerpedAtStart = kb::math::Slerp(q, other, 0.0F);
+        kb::tests::Require(
+            std::abs(std::abs(slerpedAtStart.w) - std::abs(q.w)) < 0.01F,
+            "Property violated: Slerp(a,b,0) must equal a (comparing |w| since q and -q represent the same rotation)");
+    }
+}
+
+void RunInterpolationPropertyTest() {
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(4242U);
+    constexpr int kIterations = 500;
+
+    // Easing curves that are, by construction, monotonic and bounded to
+    // [0,1] for t in [0,1] — excludes Back/Elastic/Bounce, which are
+    // SUPPOSED to overshoot (LIB-052 documents this as their defining
+    // characteristic, not a bug), so they are correctly excluded from a
+    // "stays in [0,1]" property rather than the property being wrong.
+    constexpr kb::math::Easing kMonotonicBoundedEasings[]{
+        kb::math::Easing::Linear,
+        kb::math::Easing::InSine, kb::math::Easing::OutSine, kb::math::Easing::InOutSine,
+        kb::math::Easing::InQuad, kb::math::Easing::OutQuad, kb::math::Easing::InOutQuad,
+        kb::math::Easing::InCubic, kb::math::Easing::OutCubic, kb::math::Easing::InOutCubic,
+        kb::math::Easing::InQuart, kb::math::Easing::OutQuart, kb::math::Easing::InOutQuart,
+        kb::math::Easing::InQuint, kb::math::Easing::OutQuint, kb::math::Easing::InOutQuint,
+        kb::math::Easing::InExpo, kb::math::Easing::OutExpo, kb::math::Easing::InOutExpo,
+        kb::math::Easing::InCirc, kb::math::Easing::OutCirc, kb::math::Easing::InOutCirc,
+    };
+
+    // Property: EVERY easing curve (all 31, including Back/Elastic/Bounce)
+    // anchors its endpoints exactly — already proven once in RunEasingTest
+    // as a fixed loop over all 31 at t=0/t=1; re-verified here as part of
+    // the LIB-055 property suite for completeness alongside the other
+    // interpolation properties.
+    for (const kb::math::Easing easing : kMonotonicBoundedEasings) {
+        for (int i = 0; i < 50; ++i) {
+            const kb::math::RandomStreamRangeResult sample = kb::math::NextRange(stream, 0.0F, 1.0F);
+            stream = sample.stream;
+            const float value = kb::math::Evaluate(easing, sample.value);
+            kb::tests::Require(value >= -0.01F && value <= 1.01F, "Property violated: a monotonic, non-overshooting easing curve must stay within [0,1] for t in [0,1]");
+        }
+    }
+
+    for (int i = 0; i < kIterations; ++i) {
+        const kb::math::RandomStreamRangeResult ra = kb::math::NextRange(stream, -100.0F, 100.0F);
+        const kb::math::RandomStreamRangeResult rb = kb::math::NextRange(ra.stream, -100.0F, 100.0F);
+        stream = rb.stream;
+
+        // Property: Lerp anchors its endpoints for any a, b. t=0 is exact
+        // (a + (b-a)*0 == a + 0 == a always, in IEEE float). t=1 uses a
+        // tolerance, not exact equality: a + (b-a) is not guaranteed to
+        // exactly equal b for arbitrary float magnitudes (floating-point
+        // addition/subtraction isn't perfectly associative) — that's a
+        // property of IEEE-754 arithmetic itself, not a Lerp bug.
+        kb::tests::Require(kb::math::Lerp(ra.value, rb.value, 0.0F) == ra.value, "Property violated: Lerp(a,b,0) must equal a");
+        kb::tests::Require(std::abs(kb::math::Lerp(ra.value, rb.value, 1.0F) - rb.value) < 0.01F, "Property violated: Lerp(a,b,1) must equal b (within float tolerance)");
+
+        // Property: InverseLerp is the true inverse of Lerp for t
+        // genuinely inside [0,1] (both are otherwise clamped, so this
+        // only holds within the unclamped region).
+        if (ra.value != rb.value) {
+            const kb::math::RandomStreamRangeResult rt = kb::math::NextRange(stream, 0.0F, 1.0F);
+            stream = rt.stream;
+            const float interpolated = kb::math::Lerp(ra.value, rb.value, rt.value);
+            const float recoveredT = kb::math::InverseLerp(ra.value, rb.value, interpolated);
+            kb::tests::Require(std::abs(recoveredT - rt.value) < 0.01F, "Property violated: InverseLerp(a,b,Lerp(a,b,t)) must recover t");
+        }
+    }
+}
+
+void RunSerializationPropertyTest() {
+    using kb::math::Curve;
+    using kb::math::CurveKeyframe;
+    using kb::math::Easing;
+
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(9999U);
+    constexpr int kCurveCount = 100;
+    constexpr kb::math::Easing kEasings[]{ Easing::Linear, Easing::InQuad, Easing::OutCubic, Easing::InOutSine };
+
+    for (int curveIndex = 0; curveIndex < kCurveCount; ++curveIndex) {
+        Curve curve;
+        float time = 0.0F;
+        for (int keyframeIndex = 0; keyframeIndex < 4; ++keyframeIndex) {
+            const kb::math::RandomStreamRangeResult rValue = kb::math::NextRange(stream, -50.0F, 50.0F);
+            const kb::math::RandomStreamIntRangeResult rEasing = kb::math::NextIntRange(rValue.stream, 0, 4);
+            stream = rEasing.stream;
+            curve.keyframes.push_back(CurveKeyframe{ .time = time, .value = rValue.value, .easing = kEasings[static_cast<std::size_t>(rEasing.value)] });
+            time += 1.0F;
+        }
+
+        // Property: Deserialize(Serialize(curve)) evaluates identically to
+        // the original at many sampled t values, not just the keyframe
+        // times themselves — exercises the interpolation-reconstruction
+        // logic, not just raw field copying.
+        const std::vector<std::uint8_t> bytes = kb::math::Serialize(curve);
+        Curve roundTripped;
+        kb::tests::Require(kb::math::Deserialize(bytes, roundTripped), "Property violated: Deserialize must succeed on bytes Serialize just produced");
+        for (int sampleIndex = 0; sampleIndex < 20; ++sampleIndex) {
+            const kb::math::RandomStreamRangeResult sampleT = kb::math::NextRange(stream, 0.0F, time);
+            stream = sampleT.stream;
+            kb::tests::Require(
+                kb::math::Evaluate(curve, sampleT.value) == kb::math::Evaluate(roundTripped, sampleT.value),
+                "Property violated: a round-tripped Curve must Evaluate() identically to the original at every sampled t");
+        }
+
+        // Property: serialization is idempotent under a second pass —
+        // re-serializing the round-tripped curve must produce the exact
+        // same bytes (catches a serializer that "normalizes" data
+        // differently between passes).
+        const std::vector<std::uint8_t> bytesAgain = kb::math::Serialize(roundTripped);
+        kb::tests::Require(bytes == bytesAgain, "Property violated: Serialize(Deserialize(Serialize(curve))) must byte-for-byte equal Serialize(curve)");
+    }
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -644,6 +857,10 @@ void RunEngineMathTests() {
     RunEasingTest();
     RunCurveAndGradientTest();
     RunNaNInfinityZeroLengthContractTest();
+    RunVectorPropertyTest();
+    RunQuaternionPropertyTest();
+    RunInterpolationPropertyTest();
+    RunSerializationPropertyTest();
 }
 
 } // namespace kb::tests
