@@ -255,6 +255,42 @@ void RunSceneRuntimeFixedStepTest() {
     kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().FixedInterpolationAlpha(), 0.0F), "Runtime should drop excess fixed time after max-step safety triggers");
 }
 
+// LIB-065: FrameIndex/FixedStepIndex are monotonic across the scene's
+// whole lifetime (never reset per frame, unlike LastFixedStepCount) —
+// reuses the exact fixture from RunSceneRuntimeFixedStepTest so the
+// expected cumulative fixed-step counts are directly comparable.
+void RunSceneRuntimeFrameAndPlayStateTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Runtime().IsPlaying(), "A scene must report IsPlaying() == true by default");
+    scene.Runtime().SetPlaying(false);
+    kb::tests::Require(!scene.Runtime().IsPlaying(), "SetPlaying(false) must be reflected by IsPlaying()");
+    scene.Runtime().SetPlaying(true);
+    kb::tests::Require(scene.Runtime().IsPlaying(), "SetPlaying(true) must be reflected by IsPlaying()");
+
+    kb::tests::Require(scene.Runtime().FrameIndex() == 0U, "A freshly constructed scene must report FrameIndex() == 0 before any Update()");
+    kb::tests::Require(scene.Runtime().FixedStepIndex() == 0U, "A freshly constructed scene must report FixedStepIndex() == 0 before any Update()");
+
+    scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+        .fixedDeltaSeconds = 0.02F,
+        .maxFrameDeltaSeconds = 0.25F,
+        .maxFixedStepsPerFrame = 4U,
+    });
+    SceneSystemCounters counters;
+    scene.Runtime().AddSceneSystem(std::make_unique<CountingFixedSceneSystem>(counters));
+
+    static_cast<void>(scene.Runtime().Update(0.01F));
+    kb::tests::Require(scene.Runtime().FrameIndex() == 1U, "FrameIndex must increment by exactly one per Update() call");
+    kb::tests::Require(scene.Runtime().FixedStepIndex() == 0U, "FixedStepIndex must not advance before the accumulator reaches one fixed step");
+
+    static_cast<void>(scene.Runtime().Update(0.03F));
+    kb::tests::Require(scene.Runtime().FrameIndex() == 2U, "FrameIndex must keep incrementing across successive Update() calls");
+    kb::tests::Require(scene.Runtime().FixedStepIndex() == 2U, "FixedStepIndex must accumulate the 2 fixed steps this frame consumed, on top of the previous 0");
+
+    static_cast<void>(scene.Runtime().Update(1.0F));
+    kb::tests::Require(scene.Runtime().FrameIndex() == 3U, "FrameIndex must reach 3 after a third Update() call");
+    kb::tests::Require(scene.Runtime().FixedStepIndex() == 6U, "FixedStepIndex must accumulate the 4 capped fixed steps on top of the previous 2, never resetting like LastFixedStepCount does");
+}
+
 void RunSceneRuntimeFixedInterpolationTest() {
     kb::scene::Scene scene;
     scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
@@ -710,6 +746,7 @@ void RunSceneBulkCreateObjectsTest() {
 void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
     RunSceneRuntimeFixedStepTest();
+    RunSceneRuntimeFrameAndPlayStateTest();
     RunSceneRuntimeFixedInterpolationTest();
     RunSceneRuntimeTransformHotPathReportTest();
     RunSceneRuntimeRootTransformFastPathCorrectnessTest();

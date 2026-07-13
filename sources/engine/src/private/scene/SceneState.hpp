@@ -86,6 +86,16 @@ public:
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
+    // LIB-065: monotonic counters, never reset (unlike lastFixedStepCount,
+    // which is a per-frame count reset at the top of every Update()).
+    // frameIndex counts Update() calls; fixedStepIndex counts individual
+    // fixed-step substeps across the scene's whole lifetime.
+    std::uint64_t frameIndex = 0U;
+    std::uint64_t fixedStepIndex = 0U;
+    // LIB-065: true by default (a standalone/headless run has no "edit
+    // mode" to distinguish from) — an editor sets this false while the
+    // scene is being edited rather than simulated, via SetPlaying.
+    bool isPlaying = true;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
