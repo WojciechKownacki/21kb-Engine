@@ -138,6 +138,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Time.Delta",
         "Physics.Raycast",
         "Transform.GetPosition",
+        "Math.Clamp",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -157,18 +158,20 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 6U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 7U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
 // have exactly the six domain modules in ScriptRuntimeHost::
-// RegisterDefaultBackends()'s historical order, each with a real Register
-// function, a non-empty owner label, and capability=true (every backend in
-// this catalog is actually compiled into this build).
+// RegisterDefaultBackends()'s historical order (plus Math, appended by
+// LIB-045 — Math has no ScriptRuntimeHost-era history since it's new),
+// each with a real Register function, a non-empty owner label, and
+// capability=true (every backend in this catalog is actually compiled
+// into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Physics", "Transform" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly six domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Physics", "Transform", "Math" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly seven domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");

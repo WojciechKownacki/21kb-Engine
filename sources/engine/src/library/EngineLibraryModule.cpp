@@ -3,6 +3,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptTimeApi.hpp"
@@ -21,10 +22,15 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
     // kb::scene::SceneEntities; Time reads the per-dispatch delta already
     // carried on ScriptExecutionContext; Physics.Raycast today walks
     // kb::scene::SceneTransforms directly (no physics-engine query yet —
-    // see LIB-123..134); Transform reads/writes kb::scene::SceneTransforms.
-    // None of the six depend on each other at the registration level, so
-    // dependencies is empty for all of them; capability is unconditionally
-    // true because every module's Register() is compiled into this build.
+    // see LIB-123..134); Transform reads/writes kb::scene::SceneTransforms;
+    // Math (LIB-045) has no backing runtime subsystem at all — every
+    // Math.* function is a pure computation over its own arguments (see
+    // kb::math::Clamp/Lerp/... in EngineMath.hpp), so ownerRuntime names
+    // that fact explicitly rather than pointing at a scene/runtime type
+    // that isn't actually involved. None of the seven depend on each
+    // other at the registration level, so dependencies is empty for all
+    // of them; capability is unconditionally true because every module's
+    // Register() is compiled into this build.
     static const std::vector<LibraryModuleDesc> kCatalog{
         LibraryModuleDesc{
             .name = "Input",
@@ -70,6 +76,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Transform",
             .ownerRuntime = "kb::scene::SceneTransforms",
             .Register = &kb::script::ScriptTransformApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Math",
+            .ownerRuntime = "kb::math (stateless — pure functions, no backing runtime subsystem)",
+            .Register = &kb::script::ScriptMathApi::Register,
         },
     };
     return kCatalog;

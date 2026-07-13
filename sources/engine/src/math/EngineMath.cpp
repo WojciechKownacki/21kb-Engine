@@ -37,4 +37,34 @@ Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept {
     } };
 }
 
+DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept {
+    // Guard against smoothTime <= 0 the same way Unity's Mathf.SmoothDamp
+    // does: rather than dividing by zero, clamp to a tiny positive value so
+    // the result still converges (extremely fast) instead of producing NaN.
+    const float safeSmoothTime = smoothTime > 0.0001F ? smoothTime : 0.0001F;
+    const float omega = 2.0F / safeSmoothTime;
+    const float x = omega * deltaTime;
+    const float exponent = 1.0F / (1.0F + x + 0.48F * x * x + 0.235F * x * x * x);
+
+    float change = current - target;
+    const float originalTarget = target;
+    const float maxChange = maxSpeed * safeSmoothTime;
+    change = Clamp(change, -maxChange, maxChange);
+    target = current - change;
+
+    const float temp = (velocity + omega * change) * deltaTime;
+    float newVelocity = (velocity - omega * temp) * exponent;
+    float output = target + (change + temp) * exponent;
+
+    // Prevent overshooting the target: if we started below the target and
+    // the unclamped result would land above it (or vice versa), snap to
+    // the target instead.
+    if ((originalTarget - current > 0.0F) == (output > originalTarget)) {
+        output = originalTarget;
+        newVelocity = (output - originalTarget) / (deltaTime > 0.0F ? deltaTime : 1.0F);
+    }
+
+    return DampResult{ .value = output, .velocity = newVelocity };
+}
+
 } // namespace kb::math

@@ -2039,6 +2039,90 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
+// LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
+// must be real, callable script functions (not just native kb::math
+// helpers) — reachable through ScriptFunctionRegistry::Call, the single
+// choke point every Native/Lua/Visual Graph caller funnels through, with
+// known-value correctness, not just "registered".
+void RunScriptMathApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script math API host did not initialize");
+    for (const char* name : { "Math.Clamp", "Math.Lerp", "Math.InverseLerp", "Math.Remap", "Math.SmoothStep", "Math.MoveTowards", "Math.Damp" }) {
+        const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
+    }
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const kb::script::ScriptFunctionCallResult clamped = host.Functions().Call(
+        "Math.Clamp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 15.0F } },
+            { .name = "min", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "max", .value = kb::script::ScriptValue{ 10.0F } },
+        },
+        context);
+    kb::tests::Require(clamped.Succeeded() && clamped.Output("result").has_value() && kb::tests::NearlyEqual(clamped.Output("result")->AsFloat(), 10.0F), "Math.Clamp direct call did not clamp above the max");
+
+    const kb::script::ScriptFunctionCallResult lerped = host.Functions().Call(
+        "Math.Lerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.25F } },
+        },
+        context);
+    kb::tests::Require(lerped.Succeeded() && lerped.Output("result").has_value() && kb::tests::NearlyEqual(lerped.Output("result")->AsFloat(), 2.5F), "Math.Lerp direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult inverseLerped = host.Functions().Call(
+        "Math.InverseLerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "value", .value = kb::script::ScriptValue{ 2.5F } },
+        },
+        context);
+    kb::tests::Require(inverseLerped.Succeeded() && inverseLerped.Output("t").has_value() && kb::tests::NearlyEqual(inverseLerped.Output("t")->AsFloat(), 0.25F), "Math.InverseLerp direct call returned the wrong t");
+
+    const kb::script::ScriptFunctionCallResult remapped = host.Functions().Call(
+        "Math.Remap",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "inMin", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "inMax", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "outMin", .value = kb::script::ScriptValue{ 100.0F } },
+            { .name = "outMax", .value = kb::script::ScriptValue{ 200.0F } },
+        },
+        context);
+    kb::tests::Require(remapped.Succeeded() && remapped.Output("result").has_value() && kb::tests::NearlyEqual(remapped.Output("result")->AsFloat(), 150.0F), "Math.Remap direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult movedTowards = host.Functions().Call(
+        "Math.MoveTowards",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "current", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "target", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "maxDelta", .value = kb::script::ScriptValue{ 3.0F } },
+        },
+        context);
+    kb::tests::Require(movedTowards.Succeeded() && movedTowards.Output("result").has_value() && kb::tests::NearlyEqual(movedTowards.Output("result")->AsFloat(), 3.0F), "Math.MoveTowards direct call did not move by maxDelta");
+
+    const kb::script::ScriptFunctionCallResult damped = host.Functions().Call(
+        "Math.Damp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "current", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "target", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "velocity", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "smoothTime", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "deltaTime", .value = kb::script::ScriptValue{ 0.1F } },
+        },
+        context);
+    kb::tests::Require(
+        damped.Succeeded() && damped.Output("value").has_value() && damped.Output("velocity").has_value() &&
+            damped.Output("value")->AsFloat() > 0.0F && damped.Output("value")->AsFloat() < 10.0F,
+        "Math.Damp direct call did not move current toward target without overshooting");
+}
+
 void RunScriptInputApiTest() {
     using namespace kb::input;
 
@@ -3263,6 +3347,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptMathApiTest();
     RunScriptInputApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
