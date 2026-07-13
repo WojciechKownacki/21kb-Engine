@@ -2056,6 +2056,7 @@ void RunScriptMathApiTest() {
              "Math.Sin", "Math.Cos", "Math.Tan", "Math.Asin", "Math.Acos", "Math.Atan", "Math.Atan2",
              "Math.Dot", "Math.Cross", "Math.Length", "Math.Normalize", "Math.Distance", "Math.Project", "Math.Reflect", "Math.Refract",
              "Math.Angle", "Math.SignedAngle", "Math.Slerp", "Math.LookRotation", "Math.FromToRotation", "Math.RotateTowards",
+             "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2277,6 +2278,30 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(slerpedAtStart.Succeeded() && slerpedAtStart.Output("w").has_value() && kb::tests::NearlyEqual(slerpedAtStart.Output("w")->AsFloat(), 1.0F), "Math.Slerp direct call at t=0 must return the start rotation");
+
+    // LIB-050: seed/index are UInt32 (LIB-041), not Int — a ScriptValue
+    // constructed from a bare int literal would be rejected by pin
+    // validation as a type mismatch, proving the pin type is actually
+    // enforced, not just documented.
+    const kb::script::ScriptFunctionCallResult randomed = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 42U } } },
+            { .name = "index", .value = kb::script::ScriptValue{ std::uint32_t{ 7U } } },
+        },
+        context);
+    kb::tests::Require(randomed.Succeeded() && randomed.Output("result").has_value() && randomed.Output("result")->AsFloat() >= 0.0F && randomed.Output("result")->AsFloat() <= 1.0F, "Math.Random01 direct call must return a value in [0,1]");
+
+    const kb::script::ScriptFunctionCallResult noised = host.Functions().Call(
+        "Math.Noise3D",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "x", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "y", .value = kb::script::ScriptValue{ -2.0F } },
+            { .name = "z", .value = kb::script::ScriptValue{ 9.0F } },
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 42U } } },
+        },
+        context);
+    kb::tests::Require(noised.Succeeded() && noised.Output("result").has_value() && noised.Output("result")->AsFloat() == 0.0F, "Math.Noise3D direct call at an integer lattice point must be exactly zero");
 }
 
 void RunScriptInputApiTest() {

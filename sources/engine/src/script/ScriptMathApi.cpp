@@ -4,6 +4,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <span>
@@ -27,6 +28,14 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
 [[nodiscard]] float FloatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, float fallback = 0.0F) noexcept {
     const ScriptValue* value = FindArg(arguments, name);
     return value == nullptr ? fallback : value->AsFloat(fallback);
+}
+
+// LIB-050: seed/index are UInt32 (LIB-041), not Float — a seed is an
+// opaque identifier, not a continuous quantity that Lerp/Clamp/etc would
+// ever operate on.
+[[nodiscard]] std::uint32_t UInt32Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, std::uint32_t fallback = 0U) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsUInt32(fallback);
 }
 
 [[nodiscard]] ScriptFunctionCallResult FloatResult(std::string_view pin, float value) {
@@ -333,6 +342,22 @@ ScriptFunctionCallResult QuatRotateTowards(const ScriptFunctionCallContext&, std
     return QuatResult(kb::math::RotateTowards(QuatArg(arguments, "from"), QuatArg(arguments, "to"), kb::math::Radians{ FloatArg(arguments, "maxDelta") }));
 }
 
+ScriptFunctionCallResult Random01(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Random01(UInt32Arg(arguments, "seed"), UInt32Arg(arguments, "index")));
+}
+
+ScriptFunctionCallResult NoiseFn1D(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Noise1D(FloatArg(arguments, "x"), UInt32Arg(arguments, "seed")));
+}
+
+ScriptFunctionCallResult NoiseFn2D(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Noise2D(FloatArg(arguments, "x"), FloatArg(arguments, "y"), UInt32Arg(arguments, "seed")));
+}
+
+ScriptFunctionCallResult NoiseFn3D(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Noise3D(FloatArg(arguments, "x"), FloatArg(arguments, "y"), FloatArg(arguments, "z"), UInt32Arg(arguments, "seed")));
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -566,6 +591,37 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         ConcatPins(ConcatPins(QuatPins("from"), QuatPins("to")), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "maxDelta", ScriptValueType::Float, true } }),
         QuatOutputPins(),
         &QuatRotateTowards) && ok;
+    ok = RegisterFunction(host, "Math.Random01",
+        {
+            ScriptFunctionPin{ "seed", ScriptValueType::UInt32, true },
+            ScriptFunctionPin{ "index", ScriptValueType::UInt32, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Random01) && ok;
+    ok = RegisterFunction(host, "Math.Noise1D",
+        {
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "seed", ScriptValueType::UInt32, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &NoiseFn1D) && ok;
+    ok = RegisterFunction(host, "Math.Noise2D",
+        {
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "seed", ScriptValueType::UInt32, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &NoiseFn2D) && ok;
+    ok = RegisterFunction(host, "Math.Noise3D",
+        {
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "seed", ScriptValueType::UInt32, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &NoiseFn3D) && ok;
     return ok;
 }
 
