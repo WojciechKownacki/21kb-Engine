@@ -590,6 +590,42 @@ void RunCurveAndGradientTest() {
     kb::tests::Require(!kb::math::Deserialize(curveBytes, crossParsed), "Curve bytes must not be misinterpreted as a valid Gradient");
 }
 
+// LIB-054: NaN/infinity/zero-length contract audit — proves the
+// documented behavior at each declaration is what the code actually
+// does, for both halves of the contract: honest NaN propagation by
+// default, and the specific functions that instead return a defined,
+// non-NaN value for a structurally-degenerate input.
+void RunNaNInfinityZeroLengthContractTest() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+
+    // Default contract: NaN/Infinity flows through untouched.
+    kb::tests::Require(std::isnan(kb::math::Clamp(nan, 0.0F, 1.0F)), "Clamp must propagate a NaN value, not silently substitute a default");
+    kb::tests::Require(std::isnan(kb::math::Lerp(nan, 1.0F, 0.5F)), "Lerp must propagate a NaN endpoint");
+    kb::tests::Require(std::isnan(kb::math::Floor(nan)), "Floor must propagate NaN");
+    kb::tests::Require(std::isinf(kb::math::Clamp(infinity, 0.0F, 1.0F)) == false && kb::math::Clamp(infinity, 0.0F, 1.0F) == 1.0F, "Clamp must clamp +infinity to max, not propagate it (infinity is an ordered, comparable value unlike NaN)");
+
+    // Exceptions to the default: these return a real, defined, non-NaN
+    // value instead of propagating NaN or dividing by zero.
+    kb::tests::Require(std::isnan(kb::math::Sign(nan)), "Sign must propagate NaN (this is a fix — a naive implementation would silently return 0 for NaN, since both > and < comparisons are false)");
+    kb::tests::Require(kb::math::Sign(0.0F) == 0.0F && kb::math::Sign(5.0F) == 1.0F && kb::math::Sign(-5.0F) == -1.0F, "Sign must still behave normally for real numbers after the NaN-propagation fix");
+
+    kb::tests::Require(std::isnan(kb::math::MoveTowards(0.0F, nan, 1.0F)), "MoveTowards must propagate a NaN target (this is a fix — a naive implementation would silently return current+maxDelta for NaN, since the overshoot/direction comparisons are all false)");
+    kb::tests::Require(kb::math::MoveTowards(0.0F, 10.0F, 3.0F) == 3.0F, "MoveTowards must still behave normally for real numbers after the NaN-propagation fix");
+
+    kb::tests::Require(kb::math::Mod(7.0F, 0.0F) == 7.0F, "Mod with divisor=0 must return value unchanged (no wrap is possible), not NaN from a 0*infinity computation");
+    kb::tests::Require(std::abs(kb::math::Mod(-1.0F, 4.0F) - 3.0F) < 0.0001F, "Mod must still be floor-based for a normal divisor after the guard");
+
+    // Zero-length / structurally-degenerate inputs return a defined value.
+    kb::tests::Require(kb::math::Length(kb::math::Normalize(kb::math::Vec3{})) == 0.0F, "Normalize of the zero vector must return the zero vector, not NaN (retested here as part of the LIB-054 contract audit)");
+    const kb::math::Quat normalizedZeroQuat = kb::math::Normalize(kb::math::Quat{ 0.0F, 0.0F, 0.0F, 0.0F });
+    kb::tests::Require(normalizedZeroQuat.w == 1.0F && normalizedZeroQuat.x == 0.0F, "Normalize of the zero quaternion must return the identity rotation, not NaN");
+    kb::tests::Require(
+        std::abs(kb::math::Angle(kb::math::Vec3{}, kb::math::Vec3{ 1.0F, 0.0F, 0.0F }).Value() - kb::math::kPi / 2.0F) < 0.0001F,
+        "Angle with a zero-length vector must return a defined value (pi/2, inherited from Normalize's zero-vector guard), not NaN");
+    kb::tests::Require(kb::math::Length(kb::math::Project(kb::math::Vec3{ 1.0F, 1.0F, 1.0F }, kb::math::Vec3{})) == 0.0F, "Project onto the zero vector must return the zero vector, not NaN (retested here as part of the LIB-054 contract audit)");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -607,6 +643,7 @@ void RunEngineMathTests() {
     RunRandomStreamTest();
     RunEasingTest();
     RunCurveAndGradientTest();
+    RunNaNInfinityZeroLengthContractTest();
 }
 
 } // namespace kb::tests
