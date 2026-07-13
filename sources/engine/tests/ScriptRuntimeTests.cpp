@@ -1406,6 +1406,38 @@ void RunScriptFunctionRegistryLocksAfterFirstDispatchTest() {
     kb::tests::Require(stillWorks.Succeeded(), "Script function registry must keep serving functions registered before the lock");
 }
 
+// LIB-038: a callback that calls back into ScriptFunctionRegistry::Call on
+// the same registry (directly here; the same guard also covers a chain of
+// distinct functions calling each other) must be rejected once the call
+// depth limit is reached, with a clear diagnostic, instead of recursing
+// until the native call stack overflows and crashes the process.
+void RunScriptFunctionRegistryReentrancyGuardTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Reentrancy guard test host setup failed");
+
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Recurse" },
+            .callback = [&host](const kb::script::ScriptFunctionCallContext& context, std::span<const kb::script::ScriptFunctionArgument>) {
+                return host.Functions().Call("Tests.Recurse", {}, context);
+            },
+        }),
+        "Reentrancy guard test could not register a self-recursive function");
+
+    const kb::script::ScriptFunctionCallResult result = host.Functions().Call("Tests.Recurse", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!result.Succeeded(), "A reentrant call chain past the depth limit must fail instead of overflowing the stack");
+    bool sawDepthMessage = false;
+    for (const std::string& error : result.errors) {
+        sawDepthMessage = sawDepthMessage || error.find("maximum call depth") != std::string::npos;
+    }
+    kb::tests::Require(sawDepthMessage, "Reentrancy guard must report a clear 'maximum call depth' diagnostic, not a silent or generic failure");
+
+    const kb::script::ScriptFunctionCallResult unrelatedStillWorks = host.Functions().Call("Tests.Recurse", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!unrelatedStillWorks.Succeeded(), "Depth guard must reject the same recursive chain deterministically on a later call");
+    kb::tests::Require(host.Functions().FindSignature("Tests.Recurse") != nullptr, "The registry itself must remain intact and queryable after a rejected reentrant call chain");
+}
+
 // LIB-011: the full 10-event lifecycle order (Created, Activated, Ready,
 // FixedTick, Tick, LateTick, BeforeRender, AfterRender, Deactivated,
 // Destroyed) must hold for a Native behaviour end to end, not just the
@@ -3224,6 +3256,7 @@ void RunScriptRuntimeTests() {
     RunNativeScriptBackendExceptionSafetyTest();
     RunUnexposedFunctionCannotBeCalledTest();
     RunScriptFunctionRegistryLocksAfterFirstDispatchTest();
+    RunScriptFunctionRegistryReentrancyGuardTest();
     RunNativeFullLifecycleOrderTest();
     RunPucLuaFullLifecycleOrderTest();
     RunVisualGraphFullLifecycleOrderTest();
