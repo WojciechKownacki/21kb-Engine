@@ -13,8 +13,10 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2352,6 +2354,517 @@ void RunWorldActiveStateTest() {
     kb::tests::Require(deadEntitySet.Succeeded() && !deadEntitySet.Output("set")->AsBool(), "World.SetActive must report set=false (not throw) when targeting a destroyed entity");
 }
 
+// LIB-069: World.FindAllByTag — own fresh Scene/host, same reasoning as
+// the LIB-067/068 tests above.
+void RunWorldFindAllByTagTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.FindAllByTag test host setup failed");
+
+    const kb::scene::SceneEntity enemyA = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyA" });
+    const kb::scene::SceneEntity neutral = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Neutral" });
+    const kb::scene::SceneEntity enemyB = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyB" });
+    const kb::scene::SceneEntity enemyC = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "EnemyC" });
+    kb::scene::TagsComponent enemyTags;
+    kb::scene::SetTagsText(enemyTags, "Enemy");
+    scene.Components().Tags().Set(enemyA, enemyTags);
+    scene.Components().Tags().Set(enemyB, enemyTags);
+    scene.Components().Tags().Set(enemyC, enemyTags);
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    std::vector<kb::scene::SceneEntity> foundInOrder;
+    int skip = 0;
+    // The whole point under test: repeatedly calling with an increasing
+    // "skip" must enumerate every tagged entity exactly once and then
+    // terminate (an invalid entity), never loop forever and never miss or
+    // duplicate a match.
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+            kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ skip } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.FindAllByTag", args, context);
+        kb::tests::Require(result.Succeeded(), "World.FindAllByTag direct call failed");
+        const kb::scene::SceneEntity found{ result.Output("entity")->AsUInt64() };
+        if (!found.IsValid()) {
+            break;
+        }
+        foundInOrder.push_back(found);
+        ++skip;
+    }
+    kb::tests::Require(foundInOrder.size() == 3U, "World.FindAllByTag must enumerate exactly the three tagged entities, no more, no less");
+    kb::tests::Require(
+        std::find(foundInOrder.begin(), foundInOrder.end(), enemyA) != foundInOrder.end() && std::find(foundInOrder.begin(), foundInOrder.end(), enemyB) != foundInOrder.end() &&
+            std::find(foundInOrder.begin(), foundInOrder.end(), enemyC) != foundInOrder.end(),
+        "World.FindAllByTag must find all three differently-tagged entities across repeated calls, not just the first");
+    kb::tests::Require(std::find(foundInOrder.begin(), foundInOrder.end(), neutral) == foundInOrder.end(), "World.FindAllByTag must never return an entity that does not have the requested tag");
+
+    const std::vector<kb::script::ScriptFunctionArgument> noMatchArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "NoSuchTag" } } },
+    };
+    const kb::script::ScriptFunctionCallResult noMatchResult = host.Functions().Call("World.FindAllByTag", noMatchArgs, context);
+    kb::tests::Require(noMatchResult.Succeeded() && !kb::scene::SceneEntity{ noMatchResult.Output("entity")->AsUInt64() }.IsValid(),
+        "World.FindAllByTag must return an invalid entity (not error) when nothing matches, even at skip=0");
+
+    const std::vector<kb::script::ScriptFunctionArgument> pastEndArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+        kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 3 } },
+    };
+    const kb::script::ScriptFunctionCallResult pastEndResult = host.Functions().Call("World.FindAllByTag", pastEndArgs, context);
+    kb::tests::Require(pastEndResult.Succeeded() && !kb::scene::SceneEntity{ pastEndResult.Output("entity")->AsUInt64() }.IsValid(),
+        "World.FindAllByTag(skip past the last match) must return an invalid entity, not error or wrap around");
+}
+
+// LIB-070: World.SetProperty<Type> — data overrides on an ARBITRARY
+// entity (not the calling behaviour's own Self, which is all the
+// pre-existing Self.SetProperty sugar could target). Own fresh Scene/host,
+// same reasoning as the LIB-067/068/069 tests above.
+void RunWorldSetPropertyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetProperty test host setup failed");
+
+    const kb::scene::SceneObject cameraObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Camera" });
+    scene.Components().Cameras().Set(cameraObject.Entity(), kb::scene::CameraComponent{});
+    const kb::scene::SceneObject behaviourObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Behaviour" });
+    scene.Components().Behaviours().Set(behaviourObject.Entity(), kb::scene::BehaviourComponent{ .enabled = true });
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // A property setter is only meaningfully proven by first observing
+    // the property's default, then observing it changed — not merely
+    // that the call reported success.
+    const float defaultFov = scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees;
+    const std::vector<kb::script::ScriptFunctionArgument> setFovArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ cameraObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Camera" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "verticalFovDegrees" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 90.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setFovResult = host.Functions().Call("World.SetPropertyFloat", setFovArgs, context);
+    kb::tests::Require(setFovResult.Succeeded() && setFovResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for a real, writable property");
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees, defaultFov)
+            && kb::tests::NearlyEqual(scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees, 90.0F),
+        "World.SetPropertyFloat must actually change the target entity's live component data, on an entity that is NOT the caller's own Self");
+
+    const std::vector<kb::script::ScriptFunctionArgument> disableArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ behaviourObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Behaviour" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "enabled" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult disableResult = host.Functions().Call("World.SetPropertyBool", disableArgs, context);
+    kb::tests::Require(disableResult.Succeeded() && disableResult.Output("set")->AsBool(), "World.SetPropertyBool must report set=true for a real, writable property");
+    kb::tests::Require(!scene.Components().Behaviours().TryGet(behaviourObject.Entity())->enabled, "World.SetPropertyBool must actually change the target entity's live component data");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownComponentArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ cameraObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "NoSuchComponent" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "value" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownComponentResult = host.Functions().Call("World.SetPropertyFloat", unknownComponentArgs, context);
+    kb::tests::Require(unknownComponentResult.Succeeded() && !unknownComponentResult.Output("set")->AsBool(),
+        "World.SetPropertyFloat targeting an unknown component must report set=false, not error or crash");
+
+    const kb::scene::SceneEntity destroyed = scene.Entities().CreateEntity();
+    scene.Entities().Destroy(destroyed);
+    const std::vector<kb::script::ScriptFunctionArgument> deadEntityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Camera" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "verticalFovDegrees" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 45.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadEntityResult = host.Functions().Call("World.SetPropertyFloat", deadEntityArgs, context);
+    kb::tests::Require(deadEntityResult.Succeeded() && !deadEntityResult.Output("set")->AsBool(), "World.SetPropertyFloat targeting a destroyed entity must report set=false, not throw");
+}
+
+// LIB-070 ("ownership control"): proves that destroying the entity handle
+// World.InstantiatePrefab/World.Spawn(prefab=...) returns really does
+// relinquish the WHOLE instantiated hierarchy, not just the root — the
+// caller that owns the returned handle owns (and can fully release) the
+// entire prefab instance via the ordinary World.Destroy, with no separate
+// "destroy the whole instance" API needed. Verified against a REAL
+// multi-object prefab (root + child), not the single-object fixture used
+// elsewhere in this file.
+void RunWorldInstantiatePrefabOwnershipTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "PrefabOwnershipProject";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "ParentChildPrefab.kbprefab";
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Root" });
+        const kb::scene::SceneObject prefabChild = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = prefabRoot });
+        static_cast<void>(prefabChild);
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "ParentChildPrefab");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Prefab ownership test fixture was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab ownership test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab ownership test prefab was not discovered");
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Prefab ownership test host setup failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> instantiateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/ParentChildPrefab.kbprefab" } } },
+    };
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const kb::script::ScriptFunctionCallResult instantiated = host.Functions().Call("World.InstantiatePrefab", instantiateArgs, context);
+    kb::tests::Require(instantiated.Succeeded(), "World.InstantiatePrefab direct call failed");
+    kb::tests::Require(instantiated.Output("count")->AsInt() == 2, "World.InstantiatePrefab must report both the root and its child in count");
+    const kb::scene::SceneEntity root{ instantiated.Output("entity")->AsUInt64() };
+    kb::tests::Require(root.IsValid() && scene.Entities().IsAlive(root), "World.InstantiatePrefab must return a live root entity");
+    const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(root);
+    kb::tests::Require(children.size() == 1U && scene.Entities().IsAlive(children.front()), "The instantiated prefab's child must be alive and parented under the returned root");
+    const kb::scene::SceneEntity child = children.front();
+
+    const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ root.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult destroyResult = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(destroyResult.Succeeded() && destroyResult.Output("destroyed")->AsBool(), "World.Destroy on the instantiated prefab's root must succeed");
+    kb::tests::Require(!scene.Entities().IsAlive(root), "World.Destroy must have destroyed the prefab instance's root");
+    kb::tests::Require(!scene.Entities().IsAlive(child),
+        "World.Destroy on the prefab instance's root must cascade to destroy its child too — the caller that owns the returned handle owns the WHOLE instantiated hierarchy, not just the root");
+}
+
+// LIB-071: Scene.Load/Unload/SetActive/GetActive/Find/LoadProgress — proves
+// additive loading genuinely preserves prior content (not merely
+// non-destructive in name), selective Unload only removes its own record's
+// entities, non-additive Load still replaces the whole scene (matching
+// SceneDocumentService::LoadIntoScene's pre-existing ClearSceneRoots
+// behaviour), and Progress honestly reports 1.0/0.0 rather than a
+// fabricated in-between value. Own fresh Scene/host — same isolated-scene
+// pattern as the LIB-067/068/069/070 tests above.
+void RunSceneLoadedContentApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneAFile = TestRoot() / "SceneLoadedContentProject" / "SceneA.21kbscene";
+    const std::filesystem::path sceneBFile = TestRoot() / "SceneLoadedContentProject" / "SceneB.21kbscene";
+    {
+        kb::scene::Scene sourceA;
+        static_cast<void>(sourceA.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RootA" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceA, sceneAFile, "SceneA"), "Scene.Load test fixture SceneA was not saved");
+    }
+    {
+        kb::scene::Scene sourceB;
+        static_cast<void>(sourceB.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RootB" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceB, sceneBFile, "SceneB"), "Scene.Load test fixture SceneB was not saved");
+    }
+
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "PreexistingRoot" }));
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene.Load test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneAFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadAResult = host.Functions().Call("Scene.Load", loadAArgs, context);
+    kb::tests::Require(loadAResult.Succeeded(), "Scene.Load (non-additive) direct call failed");
+    const std::uint64_t idA = loadAResult.Output("id")->AsUInt64();
+    kb::tests::Require(idA != 0U, "Scene.Load must return a nonzero id for a successful load");
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "RootA",
+            "Scene.Load(additive=false) must replace the scene's entire prior content with the newly loaded document");
+    }
+
+    const kb::script::ScriptFunctionCallResult getActiveAfterA = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterA.Succeeded() && getActiveAfterA.Output("id")->AsUInt64() == idA, "Scene.GetActive must report the just-loaded scene as active");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SceneA" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findAResult = host.Functions().Call("Scene.Find", findAArgs, context);
+    kb::tests::Require(findAResult.Succeeded() && findAResult.Output("id")->AsUInt64() == idA, "Scene.Find must resolve the loaded document's own name back to its id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneBFile.string() } },
+        kb::script::ScriptFunctionArgument{ .name = "additive", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult loadBResult = host.Functions().Call("Scene.Load", loadBArgs, context);
+    kb::tests::Require(loadBResult.Succeeded(), "Scene.Load (additive) direct call failed");
+    const std::uint64_t idB = loadBResult.Output("id")->AsUInt64();
+    kb::tests::Require(idB != 0U && idB != idA, "Scene.Load(additive=true) must return a distinct nonzero id from the earlier load");
+
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 2U, "Scene.Load(additive=true) must instantiate alongside SceneA's content, not replace it");
+        const bool hasRootA = std::any_of(roots.begin(), roots.end(), [&scene](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "RootA"; });
+        const bool hasRootB = std::any_of(roots.begin(), roots.end(), [&scene](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "RootB"; });
+        kb::tests::Require(hasRootA && hasRootB, "Scene.Load(additive=true) must leave SceneA's root alive alongside the newly loaded SceneB's root");
+    }
+
+    const kb::script::ScriptFunctionCallResult getActiveAfterB = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterB.Succeeded() && getActiveAfterB.Output("id")->AsUInt64() == idA,
+        "Scene.GetActive must remain SceneA's id after an additive load onto an already-active scene — additive Load only sets the active id when nothing was active yet");
+
+    const std::vector<kb::script::ScriptFunctionArgument> progressBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idB, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult progressBResult = host.Functions().Call("Scene.LoadProgress", progressBArgs, context);
+    kb::tests::Require(progressBResult.Succeeded() && kb::tests::NearlyEqual(progressBResult.Output("progress")->AsFloat(), 1.0F), "Scene.LoadProgress must report 1.0 for a currently-loaded id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> progressUnknownArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult progressUnknownResult = host.Functions().Call("Scene.LoadProgress", progressUnknownArgs, context);
+    kb::tests::Require(progressUnknownResult.Succeeded() && kb::tests::NearlyEqual(progressUnknownResult.Output("progress")->AsFloat(), 0.0F), "Scene.LoadProgress must report 0.0 for an unknown id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setActiveBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idB, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult setActiveBResult = host.Functions().Call("Scene.SetActive", setActiveBArgs, context);
+    kb::tests::Require(setActiveBResult.Succeeded() && setActiveBResult.Output("set")->AsBool(), "Scene.SetActive must succeed for a currently-loaded id");
+    const kb::script::ScriptFunctionCallResult getActiveAfterSet = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterSet.Succeeded() && getActiveAfterSet.Output("id")->AsUInt64() == idB, "Scene.GetActive must reflect SetActive's new selection");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idA, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadAResult = host.Functions().Call("Scene.Unload", unloadAArgs, context);
+    kb::tests::Require(unloadAResult.Succeeded() && unloadAResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for a currently-loaded id");
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "RootB",
+            "Scene.Unload(idA) must destroy only SceneA's root, leaving SceneB's content untouched");
+    }
+
+    const kb::script::ScriptFunctionCallResult progressAfterUnloadResult = host.Functions().Call("Scene.LoadProgress", unloadAArgs, context);
+    kb::tests::Require(progressAfterUnloadResult.Succeeded() && kb::tests::NearlyEqual(progressAfterUnloadResult.Output("progress")->AsFloat(), 0.0F),
+        "Scene.LoadProgress must report 0.0 for an id that was just Unloaded");
+
+    const kb::script::ScriptFunctionCallResult doubleUnloadResult = host.Functions().Call("Scene.Unload", unloadAArgs, context);
+    kb::tests::Require(doubleUnloadResult.Succeeded() && !doubleUnloadResult.Output("unloaded")->AsBool(),
+        "Scene.Unload on an already-unloaded id must report unloaded=false, not error or crash");
+
+    const std::vector<kb::script::ScriptFunctionArgument> missingPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "SceneLoadedContentProject" / "NoSuchScene.21kbscene").string() } },
+    };
+    const kb::script::ScriptFunctionCallResult missingPathResult = host.Functions().Call("Scene.Load", missingPathArgs, context);
+    kb::tests::Require(!missingPathResult.Succeeded(), "Scene.Load must fail (not fabricate an id) for a nonexistent path");
+}
+
+// LIB-072: World.IsPersistent/SetPersistent basic contract — mirrors
+// RunWorldActiveStateTest's shape (LIB-068): default false, SetPersistent
+// does NOT itself destroy/move the entity, state reflects immediately,
+// dead entity reports false/set=false rather than throwing.
+void RunWorldPersistentStateTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetPersistent test host setup failed");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Candidate" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> isPersistentArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult defaultResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(defaultResult.Succeeded() && !defaultResult.Output("persistent")->AsBool(), "World.IsPersistent must default to false for a freshly created entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setTrueArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult setTrueResult = host.Functions().Call("World.SetPersistent", setTrueArgs, context);
+    kb::tests::Require(setTrueResult.Succeeded() && setTrueResult.Output("set")->AsBool(), "World.SetPersistent must report set=true for a live entity");
+    kb::tests::Require(scene.Entities().IsAlive(entity), "World.SetPersistent must not itself destroy or otherwise remove the entity");
+    const kb::script::ScriptFunctionCallResult afterSetResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(afterSetResult.Succeeded() && afterSetResult.Output("persistent")->AsBool(), "World.IsPersistent must reflect an immediately preceding SetPersistent(true)");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setFalseArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult setFalseResult = host.Functions().Call("World.SetPersistent", setFalseArgs, context);
+    kb::tests::Require(setFalseResult.Succeeded() && setFalseResult.Output("set")->AsBool(), "World.SetPersistent(false) must report set=true for a live entity");
+    const kb::script::ScriptFunctionCallResult afterClearResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(afterClearResult.Succeeded() && !afterClearResult.Output("persistent")->AsBool(), "World.IsPersistent must reflect a following SetPersistent(false)");
+
+    const kb::scene::SceneEntity destroyed = scene.Entities().CreateEntity();
+    scene.Entities().Destroy(destroyed);
+    const std::vector<kb::script::ScriptFunctionArgument> deadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult deadIsPersistentResult = host.Functions().Call("World.IsPersistent", deadArgs, context);
+    kb::tests::Require(deadIsPersistentResult.Succeeded() && !deadIsPersistentResult.Output("persistent")->AsBool(), "World.IsPersistent on a destroyed entity must report false, not throw");
+    const std::vector<kb::script::ScriptFunctionArgument> deadSetArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult deadSetResult = host.Functions().Call("World.SetPersistent", deadSetArgs, context);
+    kb::tests::Require(deadSetResult.Succeeded() && !deadSetResult.Output("set")->AsBool(), "World.SetPersistent on a destroyed entity must report set=false, not throw");
+}
+
+// LIB-072: the real, end-to-end proof — a persistent ROOT entity (with a
+// child, proving the WHOLE hierarchy survives via cascade, not just the
+// root itself) genuinely survives a non-additive Scene.Load, while a
+// non-persistent root in the same scene is destroyed exactly as before
+// LIB-072. Also proves the LIB-071/LIB-072 interaction fix: the freshly
+// loaded document's own root is still correctly tracked by
+// SceneLoadedContentService (Scene.Find resolves to a record whose root is
+// the NEW entity, not the surviving persistent one) even though
+// RootEntities() now returns both after the load.
+void RunScenePersistentEntitySurvivesLoadTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "ScenePersistenceProject" / "GameplayScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "GameplayRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "GameplayScene"), "Scene persistence test fixture GameplayScene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject persistentRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Bootstrap" });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "BootstrapChild", .parent = persistentRoot }));
+    const kb::scene::SceneEntity transientRoot = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "OldLevelContent" });
+    scene.Entities().SetPersistent(persistentRoot.Entity(), true);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene persistence test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Load (non-additive, over a persistent entity) direct call failed");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    kb::tests::Require(loadedId != 0U, "Scene.Load must still return a nonzero id when a persistent entity is present");
+
+    kb::tests::Require(scene.Entities().IsAlive(persistentRoot.Entity()), "A persistent root entity must survive a non-additive Scene.Load");
+    const std::vector<kb::scene::SceneEntity> survivingChildren = scene.Hierarchy().ChildEntities(persistentRoot.Entity());
+    kb::tests::Require(survivingChildren.size() == 1U && scene.Entities().IsAlive(survivingChildren.front()) && scene.Entities().Name(survivingChildren.front()) == "BootstrapChild",
+        "A persistent root's WHOLE hierarchy must survive (cascade), not just the root entity itself");
+    kb::tests::Require(!scene.Entities().IsAlive(transientRoot), "A non-persistent root must still be destroyed by a non-additive Scene.Load, exactly as before LIB-072");
+
+    const std::vector<kb::scene::SceneEntity> rootsAfterLoad = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsAfterLoad.size() == 2U, "After the load, exactly the persistent survivor and the newly loaded document's root must remain as roots");
+    const bool hasPersistentRoot = std::any_of(rootsAfterLoad.begin(), rootsAfterLoad.end(), [&](kb::scene::SceneEntity e) { return e == persistentRoot.Entity(); });
+    const bool hasGameplayRoot = std::any_of(rootsAfterLoad.begin(), rootsAfterLoad.end(), [&scene](kb::scene::SceneEntity e) { return scene.Entities().Name(e) == "GameplayRoot"; });
+    kb::tests::Require(hasPersistentRoot && hasGameplayRoot, "Roots after load must be exactly the persistent survivor plus the newly loaded document's root");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "GameplayScene" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findResult = host.Functions().Call("Scene.Find", findArgs, context);
+    kb::tests::Require(findResult.Succeeded() && findResult.Output("id")->AsUInt64() == loadedId, "Scene.Find must resolve the newly loaded document's own name back to its id even with a persistent survivor also present as a root");
+
+    // The stronger proof: SceneLoadedContentService's record must have
+    // tracked the CORRECT new root (GameplayRoot), not misidentified the
+    // persistent survivor as "the newly loaded content" — Unload(loadedId)
+    // must destroy ONLY GameplayRoot, leaving the persistent hierarchy
+    // completely untouched.
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for the newly loaded document's id");
+    kb::tests::Require(scene.Entities().IsAlive(persistentRoot.Entity()) && scene.Entities().IsAlive(survivingChildren.front()),
+        "Scene.Unload(loadedId) must NOT touch the persistent survivor or its child — proof that SceneLoadedContentService correctly identified GameplayRoot, not the persistent entity, as the tracked root");
+    const std::vector<kb::scene::SceneEntity> rootsAfterUnload = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsAfterUnload.size() == 1U && rootsAfterUnload.front() == persistentRoot.Entity(), "After Scene.Unload(loadedId), only the persistent root must remain");
+}
+
+// LIB-073: proves SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/
+// SceneUnloaded genuinely reach a REAL running behaviour through the full
+// production path — Scene.Load/Unload (called through
+// ScriptFunctionRegistry, exactly as a script would) queue notifications
+// via SceneLoadedContentService, which ScriptRuntimeSceneSystem::
+// ExecuteFrame drains and turns into a real ScriptEvent broadcast on the
+// NEXT scene.Runtime().Update() — not just "DispatchEvent was called
+// directly" in isolation, and not synchronously inside the Scene.Load/
+// Unload call itself (proven by asserting the received list is still
+// empty immediately after each call, before the next Update()).
+void RunSceneLifecycleEventsReachBehaviourTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "SceneLifecycleEventsProject" / "LifecycleScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "LifecycleRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "LifecycleScene"), "Scene lifecycle events test fixture was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene lifecycle events test host setup failed");
+
+    struct ReceivedRecord {
+        std::string name;
+        std::uint64_t sceneId = 0U;
+        std::string sceneName;
+    };
+    std::vector<ReceivedRecord> received;
+    constexpr kb::assets::AssetId kListenerAsset{ 9101U };
+    kb::script::NativeScriptBackend& nativeBackend = host.NativeBackend();
+    for (const char* eventName : { "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded" }) {
+        kb::tests::Require(
+            nativeBackend.RegisterEvent(kListenerAsset, eventName, [&received](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                std::uint64_t sceneId = 0U;
+                std::string sceneName;
+                for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                    if (argument.name == "sceneId") {
+                        sceneId = argument.value.AsUInt64();
+                    } else if (argument.name == "sceneName") {
+                        sceneName = argument.value.AsString();
+                    }
+                }
+                received.push_back(ReceivedRecord{ .name = event.name, .sceneId = sceneId, .sceneName = sceneName });
+            }),
+            (std::string{ "Scene lifecycle events test event registration failed for " } + eventName).c_str());
+    }
+    // A listener that survives Scene.Load's ClearSceneRoots must itself be
+    // persistent (LIB-072) — exactly the real-world shape this event exists
+    // to serve (a bootstrap/manager entity reacting to gameplay scene
+    // changes). A non-persistent listener would be destroyed by the very
+    // same non-additive Scene.Load call it's supposed to be notified about.
+    const kb::scene::SceneObject listener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Listener" });
+    scene.Components().Behaviours().Set(listener.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kListenerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Entities().SetPersistent(listener.Entity(), true);
+
+    kb::tests::Require(host.InstallSceneSystem(), "Scene lifecycle events test scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.empty(), "No scene lifecycle events must fire before any Scene.Load/Unload/SetActive call");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Load direct call failed in lifecycle events test");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    kb::tests::Require(loadedId != 0U, "Scene.Load must succeed in lifecycle events test");
+    kb::tests::Require(received.empty(), "Scene lifecycle events must not fire synchronously inside Scene.Load itself — only once drained on the next frame");
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.size() == 3U, "Scene.Load (non-additive, becomes active) must dispatch exactly SceneLoading, SceneLoaded, SceneActivated");
+    kb::tests::Require(received[0].name == "SceneLoading" && received[1].name == "SceneLoaded" && received[2].name == "SceneActivated",
+        "Scene.Load's events must dispatch in SceneLoading -> SceneLoaded -> SceneActivated order");
+    for (const ReceivedRecord& record : received) {
+        kb::tests::Require(record.sceneId == loadedId && record.sceneName == "LifecycleScene", "Every Scene.Load lifecycle event must carry the correct sceneId/sceneName payload");
+    }
+    received.clear();
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload direct call failed in lifecycle events test");
+    kb::tests::Require(received.empty(), "Scene lifecycle events must not fire synchronously inside Scene.Unload itself");
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.size() == 2U && received[0].name == "SceneUnloading" && received[1].name == "SceneUnloaded",
+        "Scene.Unload must dispatch exactly SceneUnloading then SceneUnloaded, in order");
+    kb::tests::Require(received[0].sceneId == loadedId && received[1].sceneId == loadedId, "Scene.Unload's events must carry the unloaded scene's id");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4052,6 +4565,13 @@ void RunScriptRuntimeTests() {
     RunScriptWorldTimePhysicsApiTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
+    RunWorldFindAllByTagTest();
+    RunWorldSetPropertyTest();
+    RunWorldInstantiatePrefabOwnershipTest();
+    RunSceneLoadedContentApiTest();
+    RunWorldPersistentStateTest();
+    RunScenePersistentEntitySurvivesLoadTest();
+    RunSceneLifecycleEventsReachBehaviourTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();

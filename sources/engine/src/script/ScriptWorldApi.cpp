@@ -15,6 +15,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -57,6 +58,11 @@ ScriptFunctionCallResult NoScene() {
 [[nodiscard]] float FloatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, float fallback = 0.0F) noexcept {
     const ScriptValue* value = FindArg(arguments, name);
     return value == nullptr ? fallback : value->AsFloat(fallback);
+}
+
+[[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback = 0) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsInt(fallback);
 }
 
 [[nodiscard]] bool HasArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
@@ -173,6 +179,12 @@ void FindByNameVisitor(kb::scene::SceneEntity entity, const kb::scene::Transform
     }
 }
 
+// LIB-069 (documented cost): O(n) in the scene's entity count — a linear
+// scan over every entity via Transforms().ForEach, early-exiting the
+// instant a match is found (best case O(1) for the first entity created,
+// worst case O(n) when the match is last or absent). No name index
+// exists; a scene with many entities calling this every frame should
+// cache the returned handle instead of re-searching.
 ScriptFunctionCallResult FindByName(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -215,6 +227,32 @@ ScriptFunctionCallResult SetActive(const ScriptFunctionCallContext& context, std
     if (alive) {
         const ScriptValue* activeValue = FindArg(arguments, "active");
         context.scene->Entities().SetActive(entity, activeValue == nullptr || activeValue->AsBool(true));
+    }
+    return BoolResult("set", alive);
+}
+
+// LIB-072: the persistent/gameplay scene boundary — an entity marked
+// persistent survives a non-additive Scene.Load (SceneDocumentService::
+// ClearSceneRoots skips persistent roots and, by cascade, their whole
+// hierarchy). Only meaningful on ROOT entities — see
+// kb::scene::SceneState::persistentEntities' comment for why marking a
+// non-root child persistent has no protective effect on its own.
+ScriptFunctionCallResult IsPersistent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("persistent", context.scene->Entities().IsPersistent(EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult SetPersistent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const bool alive = entity.IsValid() && context.scene->Entities().IsAlive(entity);
+    if (alive) {
+        const ScriptValue* persistentValue = FindArg(arguments, "persistent");
+        context.scene->Entities().SetPersistent(entity, persistentValue == nullptr || persistentValue->AsBool(true));
     }
     return BoolResult("set", alive);
 }
@@ -448,6 +486,9 @@ void FindByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformC
     }
 }
 
+// LIB-069 (documented cost): same O(n) linear scan as FindByName above —
+// no tag index exists, every entity's TagsComponent is checked in turn
+// until the first match, early-exiting there.
 ScriptFunctionCallResult FindByTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -462,6 +503,69 @@ ScriptFunctionCallResult FindByTag(const ScriptFunctionCallContext& context, std
     return EntityResult("entity", findContext.found);
 }
 
+struct FindAllByTagContext {
+    kb::scene::Scene* scene = nullptr;
+    std::string_view tag;
+    int skip = 0;
+    int matchIndex = 0;
+    kb::scene::SceneEntity found{};
+};
+
+void FindAllByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, void* rawContext) {
+    auto* context = static_cast<FindAllByTagContext*>(rawContext);
+    if (context == nullptr || context->scene == nullptr || context->found.IsValid()) {
+        return;
+    }
+    const kb::scene::TagsComponent* tags = context->scene->Components().Tags().TryGet(entity);
+    if (tags == nullptr || !HasTagValue(kb::scene::TagsText(*tags), context->tag)) {
+        return;
+    }
+    if (context->matchIndex == context->skip) {
+        context->found = entity;
+        return;
+    }
+    ++context->matchIndex;
+}
+
+// LIB-069: FindAllByTag has no dedicated collection type crossing the
+// script boundary (kb::script::ScriptValue is purely scalar; a real
+// collection-handle bridge is a separate, larger, still-undecided
+// architectural piece — see others/_temp.md's LIB-058 note). Instead it's
+// an index-based iterator: call repeatedly with an increasing `skip`
+// (0, 1, 2, ...) — same "entity" output/invalid-entity-means-not-found
+// convention FindByName/FindByTag above already use — until the returned
+// entity is invalid, meaning no (skip+1)-th match exists. This mirrors
+// the pattern already established by RandomStream's {value, newState}
+// idiom (LIB-051): the caller explicitly threads state (here, the skip
+// count) across calls rather than the engine holding an iterator alive
+// only on its own side of the boundary.
+//
+// Documented cost: EACH call is an independent O(n) linear scan from the
+// start of the scene (Transforms().ForEach), early-exiting once it
+// reaches the (skip+1)-th match — so retrieving all m matches out of n
+// entities costs O(n*m) in total, not O(n). This is a real, honest
+// trade-off against building the collection-crossing-boundary
+// infrastructure FindAllByTag would need to do better (a single O(n)
+// scan producing a script-visible list) — acceptable for the occasional
+// "find every enemy" query this API targets, not for a hot per-frame path
+// over a scene with many thousands of tagged entities.
+ScriptFunctionCallResult FindAllByTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::string tag = Trim(StringArg(arguments, "tag"));
+    const int skip = IntArg(arguments, "skip", 0);
+    FindAllByTagContext findContext{
+        .scene = context.scene,
+        .tag = tag,
+        .skip = skip < 0 ? 0 : skip,
+        .matchIndex = 0,
+        .found = {},
+    };
+    context.scene->Transforms().ForEach(&FindAllByTagVisitor, &findContext);
+    return EntityResult("entity", findContext.found);
+}
+
 ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -473,6 +577,73 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
     }
     const bool parented = context.scene->Hierarchy().SetParent(entity, parent);
     return BoolResult("parented", parented);
+}
+
+// LIB-070 ("data overrides"): researched before implementing — the ONLY
+// existing generic property setter reachable from script (Self.SetProperty,
+// PucLuaSelfApi.cpp) is hand-wired Lua-only sugar hardcoded to the calling
+// behaviour's own Self entity, not through ScriptFunctionRegistry, and
+// cannot target an arbitrary entity (like a freshly instantiated prefab's
+// root, which is never the caller's own Self). kb::scene::ScenePrefabs::
+// Instantiate() itself has no override-value parameter, and the separate
+// ScenePrefabOverride* system is editor authoring-time divergence
+// tracking (diff a live instance against its source prefab template for
+// revert support) — it takes no VALUE to apply, only a property PATH, so
+// it cannot inject an override either. kb::script::ScriptSceneComponentApi
+// ::SetProperty IS already fully generic (any entity, not just Self) at
+// the C++ level — the gap is purely that no script-callable wrapper
+// exposes it for an explicit entity. World.SetPropertyBool/Int/Float/
+// String/Entity below close that gap, through the same ScriptFunctionRegistry
+// path every other World.* function uses (Native+Lua+Visual Graph
+// uniformly, unlike Self.SetProperty's Lua-only wiring).
+//
+// Overrides are therefore applied by COMPOSITION, not as a single atomic
+// InstantiatePrefab call: World.InstantiatePrefab(...) to get the entity,
+// then World.SetPropertyFloat(entity, "Camera", "verticalFovDegrees", ...)
+// per override. A single call taking an override LIST would need a
+// collection value crossing the script boundary — the same architecture
+// LIB-058 deferred (kb::script::ScriptValue is purely scalar) — not
+// invented here either.
+[[nodiscard]] std::string ComponentArg(std::span<const ScriptFunctionArgument> arguments) {
+    return StringArg(arguments, "component");
+}
+
+[[nodiscard]] std::string PropertyArg(std::span<const ScriptFunctionArgument> arguments) {
+    return StringArg(arguments, "property");
+}
+
+template <typename ValueGetter>
+ScriptFunctionCallResult SetEntityProperty(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, ValueGetter&& valueGetter) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return BoolResult("set", false);
+    }
+    const ScriptSceneComponentMutationResult result =
+        ScriptSceneComponentApi::SetProperty(*context.scene, entity, ComponentArg(arguments), PropertyArg(arguments), valueGetter());
+    return BoolResult("set", result.succeeded);
+}
+
+ScriptFunctionCallResult SetPropertyBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ FindArg(arguments, "value") != nullptr && FindArg(arguments, "value")->AsBool(false) }; });
+}
+
+ScriptFunctionCallResult SetPropertyInt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ IntArg(arguments, "value", 0) }; });
+}
+
+ScriptFunctionCallResult SetPropertyFloat(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ FloatArg(arguments, "value", 0.0F) }; });
+}
+
+ScriptFunctionCallResult SetPropertyString(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ StringArg(arguments, "value") }; });
+}
+
+ScriptFunctionCallResult SetPropertyEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ EntityArg(arguments, "value").Id(), ScriptValueType::Entity }; });
 }
 
 ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -554,6 +725,14 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "active", ScriptValueType::Bool, false } },
         { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
         &SetActive) && ok;
+    ok = RegisterFunction(host, "World.IsPersistent",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "persistent", ScriptValueType::Bool, true } },
+        &IsPersistent) && ok;
+    ok = RegisterFunction(host, "World.SetPersistent",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "persistent", ScriptValueType::Bool, false } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPersistent) && ok;
     ok = RegisterFunction(host, "World.Name",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
@@ -589,6 +768,10 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &FindByTag) && ok;
+    ok = RegisterFunction(host, "World.FindAllByTag",
+        { ScriptFunctionPin{ "tag", ScriptValueType::String, true }, ScriptFunctionPin{ "skip", ScriptValueType::Int, false } },
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        &FindAllByTag) && ok;
     ok = RegisterFunction(host, "World.SetParent",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "parent", ScriptValueType::Entity, false } },
         { ScriptFunctionPin{ "parented", ScriptValueType::Bool, true } },
@@ -602,6 +785,37 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
         &InstantiatePrefab) && ok;
+    // LIB-070: data-override family — set a property on ANY entity (unlike
+    // the pre-existing Self.SetProperty Lua sugar, hardcoded to the
+    // calling behaviour's own entity), reachable from Native/Lua/Visual
+    // Graph alike since these go through the standard ScriptFunctionRegistry
+    // path, not Self.SetProperty's separate hand-wired VisualGraph
+    // SetProperty-node-kind machinery.
+    ok = RegisterFunction(host, "World.SetPropertyBool",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Bool, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyBool) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyInt",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Int, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyInt) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyFloat",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyFloat) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyString",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyString) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyEntity",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyEntity) && ok;
     return ok;
 }
 

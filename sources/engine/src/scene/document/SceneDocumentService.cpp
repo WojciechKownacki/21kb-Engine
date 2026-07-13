@@ -15,9 +15,17 @@
 namespace kb::scene {
 namespace {
 
+// LIB-072: the persistent/gameplay boundary — a root marked persistent
+// (World.SetPersistent) survives a non-additive Scene.Load along with its
+// whole hierarchy (Destroy cascades to children, so skipping the root
+// alone preserves the entire subtree). See SceneState::persistentEntities'
+// comment for why this check is root-only.
 void ClearSceneRoots(Scene& scene) noexcept {
     const std::vector<SceneEntity> roots = scene.Hierarchy().RootEntities();
     for (const SceneEntity root : roots) {
+        if (scene.Entities().IsPersistent(root)) {
+            continue;
+        }
         scene.Entities().Destroy(root);
     }
 }
@@ -67,6 +75,18 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
 bool SceneDocumentService::LoadFileIntoScene(Scene& scene, const std::filesystem::path& path) {
     SceneDocumentLoadResult loaded = Load(path);
     return loaded.succeeded && LoadIntoScene(scene, loaded.document);
+}
+
+SceneDocumentAdditiveLoadResult SceneDocumentService::LoadIntoSceneAdditive(Scene& scene, const SceneDocument& document) {
+    if (document.worldPrefab.Empty()) {
+        return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+    }
+    const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);
+    if (instance.Empty()) {
+        return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+    }
+    scene.Runtime().SynchronizeTransforms();
+    return SceneDocumentAdditiveLoadResult{ .succeeded = true, .root = instance.ObjectAt(0).Entity() };
 }
 
 } // namespace kb::scene

@@ -28,6 +28,14 @@ bool SceneEntityQueries::IsActive(SceneEntity entity) const noexcept {
     return SceneEntityService::IsActive(scene_, entity);
 }
 
+bool SceneEntityQueries::IsPersistent(SceneObject object) const noexcept {
+    return SceneEntityService::IsPersistent(scene_, object);
+}
+
+bool SceneEntityQueries::IsPersistent(SceneEntity entity) const noexcept {
+    return SceneEntityService::IsPersistent(scene_, entity);
+}
+
 std::size_t SceneEntityQueries::Count() const {
     return SceneEntityService::Count(scene_);
 }
@@ -58,6 +66,22 @@ void SceneEntities::SetActive(SceneObject object, bool active) noexcept {
 
 void SceneEntities::SetActive(SceneEntity entity, bool active) noexcept {
     SceneEntityService::SetActive(scene_, entity, active);
+}
+
+bool SceneEntities::IsPersistent(SceneObject object) const noexcept {
+    return SceneEntityService::IsPersistent(scene_, object);
+}
+
+bool SceneEntities::IsPersistent(SceneEntity entity) const noexcept {
+    return SceneEntityService::IsPersistent(scene_, entity);
+}
+
+void SceneEntities::SetPersistent(SceneObject object, bool persistent) noexcept {
+    SceneEntityService::SetPersistent(scene_, object, persistent);
+}
+
+void SceneEntities::SetPersistent(SceneEntity entity, bool persistent) noexcept {
+    SceneEntityService::SetPersistent(scene_, entity, persistent);
 }
 
 std::size_t SceneEntities::Count() const {

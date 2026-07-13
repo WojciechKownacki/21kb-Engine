@@ -5,10 +5,12 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -116,12 +118,106 @@ void RunSeededStructuralStressTest() {
     }
 }
 
+// LIB-074: Deterministic-order iteration is required to be safe to collect
+// into a plain (unsynchronized) vector without a data race — QueryState.cpp
+// forces serial execution whenever iterationOrder==Deterministic
+// (IsDeterministicExecution gates the parallel path off), the same
+// established idiom EcsQueryTests.cpp's CollectMovingSnapshot already
+// relies on. Collects entity ids in VISITATION order (deliberately not
+// sorted afterward, unlike CollectMovingSnapshot) — the whole point here is
+// proving the order itself repeats, not just that the same set of ids
+// comes back.
+std::vector<std::uint64_t> CollectDeterministicEntityOrder(kb::ecs::Query<EcsPosition>& query) {
+    std::vector<std::uint64_t> order;
+    query.ForEachBatchKernel(kb::ecs::QueryExecutionSettings{
+                                 .iterationOrder = kb::ecs::QueryIterationOrder::Deterministic,
+                             },
+                             [&order](const kb::ecs::QueryBatch<EcsPosition>& batch) {
+                                 for (std::size_t index = 0; index < batch.Count(); ++index) {
+                                     order.push_back(batch.EntityAt(index).Id());
+                                 }
+                             });
+    return order;
+}
+
+// LIB-074: 10k-entity create/destroy churn — proves no handle leak (a
+// destroyed entity never reports alive again; NativeStorageStats().
+// liveEntities exactly tracks the real surviving population at every
+// checkpoint, including back to 0 after a full churn cycle; no packed
+// entity id, which encodes a generation bumped on every destroy
+// (NativeArchetypeStorage.cpp's PackEntity/EntityGeneration), is EVER
+// reissued across the whole run even after heavy index-slot reuse) and no
+// unstable ordering (Query<>'s Deterministic iteration order over the same
+// surviving population is byte-for-byte identical across two consecutive
+// passes — StorageOrder is explicitly allowed to vary after a swap-remove
+// churn, Deterministic is not, per QueryIterationOrder's own contract).
+void RunEntityCreateDestroy10kStabilityTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 16,
+    });
+    std::mt19937_64 random{ kEcsStressSeed ^ 0xE10CDE57ULL };
+    std::unordered_set<std::uint64_t> everIssuedIds;
+    everIssuedIds.reserve(40'000);
+
+    constexpr std::size_t kEntityCount = 10'000U;
+    constexpr int kChurnCycles = 3;
+
+    for (int cycle = 0; cycle < kChurnCycles; ++cycle) {
+        std::vector<kb::ecs::Entity> entities;
+        entities.reserve(kEntityCount);
+        for (std::size_t index = 0; index < kEntityCount; ++index) {
+            const kb::ecs::Entity entity = world.CreateEntity();
+            world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 0.0F });
+            RequireStress(everIssuedIds.insert(entity.Id()).second,
+                "ECS 10k create/destroy stability test issued the same packed entity id twice — a leaked/reused handle that was never given a fresh generation");
+            entities.push_back(entity);
+        }
+        RequireStress(world.NativeStorageStats().liveEntities == kEntityCount,
+            "ECS 10k create/destroy stability test's live count did not match the number of entities just created");
+
+        // Destroy order deliberately does NOT match creation order — a
+        // real game churns entities in whatever order gameplay logic
+        // decides, not FIFO. Half survive, so the ordering check below has
+        // a real, non-trivial population to iterate, not a vacuous empty
+        // query.
+        std::shuffle(entities.begin(), entities.end(), random);
+        const std::size_t destroyCount = entities.size() / 2U;
+        for (std::size_t index = 0; index < destroyCount; ++index) {
+            world.DestroyEntity(entities[index]);
+        }
+        const std::vector<kb::ecs::Entity> survivors(entities.begin() + static_cast<std::ptrdiff_t>(destroyCount), entities.end());
+
+        for (std::size_t index = 0; index < destroyCount; ++index) {
+            RequireStress(!world.IsAlive(entities[index]), "ECS 10k create/destroy stability test left a destroyed entity reporting alive (handle leak)");
+        }
+        for (const kb::ecs::Entity alive : survivors) {
+            RequireStress(world.IsAlive(alive), "ECS 10k create/destroy stability test lost track of a surviving entity it never destroyed");
+        }
+        RequireStress(world.NativeStorageStats().liveEntities == survivors.size(),
+            "ECS 10k create/destroy stability test's live count diverged from the real surviving population after a partial destroy churn");
+
+        kb::ecs::Query<EcsPosition> survivorQuery = world.CreateQuery<EcsPosition>();
+        const std::vector<std::uint64_t> firstOrder = CollectDeterministicEntityOrder(survivorQuery);
+        const std::vector<std::uint64_t> secondOrder = CollectDeterministicEntityOrder(survivorQuery);
+        RequireStress(firstOrder.size() == survivors.size(), "ECS 10k create/destroy stability test's Deterministic query did not visit exactly the surviving population");
+        RequireStress(firstOrder == secondOrder,
+            "ECS 10k create/destroy stability test's Deterministic query iteration order was NOT stable across two consecutive passes over the same surviving population");
+
+        for (const kb::ecs::Entity alive : survivors) {
+            world.DestroyEntity(alive);
+        }
+        RequireStress(world.NativeStorageStats().liveEntities == 0U,
+            "ECS 10k create/destroy stability test did not return to zero live entities after a full churn cycle (handle/storage leak)");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsSeededStressTests() {
     RunSeededStructuralStressTest();
+    RunEntityCreateDestroy10kStabilityTest();
 }
 
 } // namespace kb::tests

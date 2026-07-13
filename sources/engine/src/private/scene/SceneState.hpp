@@ -112,6 +112,49 @@ public:
     // default-empty case, so a scene with no deactivated entities pays no
     // per-entity storage cost.
     std::unordered_set<SceneEntity::IdType> inactiveEntities;
+    // LIB-072: the persistent/gameplay boundary — a ROOT entity present here
+    // survives ClearSceneRoots (SceneDocumentService::LoadIntoScene's
+    // non-additive-Scene.Load wipe), along with its whole hierarchy (Destroy
+    // cascades to children, so skipping a persistent root preserves its
+    // entire subtree without needing separate per-child tracking). Same
+    // "presence means non-default" flat-set shape as inactiveEntities.
+    // Marking a NON-root entity persistent has no protective effect on its
+    // own — ClearSceneRoots only ever evaluates roots, so a persistent
+    // child still cascade-destroys if its non-persistent parent's root is
+    // cleared (mirrors Unity's DontDestroyOnLoad, which likewise only
+    // affects root-level GameObjects); this is an intentional, documented
+    // scope limit, not an oversight.
+    std::unordered_set<SceneEntity::IdType> persistentEntities;
+    // LIB-071: content loaded via Scene.Load (additive or not). Each
+    // record names ONE loaded document's own root entity so it can later
+    // be selectively Scene.Unload'ed without touching content loaded from
+    // a different document. `id` is assigned by SceneLoadedContentService,
+    // never reused within a scene's lifetime (nextLoadedSceneId only ever
+    // increments), so a stale handle from an already-unloaded record can
+    // never collide with a later one.
+    struct LoadedSceneRecord {
+        std::uint64_t id = 0U;
+        std::string name;
+        std::string path;
+        SceneEntity root{};
+    };
+    std::vector<LoadedSceneRecord> loadedScenes;
+    std::uint64_t nextLoadedSceneId = 1U;
+    std::uint64_t activeLoadedSceneId = 0U;
+    // LIB-073: scene lifecycle notifications (SceneLoading/SceneLoaded/
+    // SceneActivated/SceneUnloading/SceneUnloaded) queued by
+    // SceneLoadedContentService — an "unambiguous command deferred to a
+    // queue" (Engine21kbLibrary.md's own invariant #3), not a second
+    // source of truth: kb::scene never interprets these itself. Drained
+    // once per frame by kb::script::ScriptRuntimeSceneSystem via the
+    // public SceneLoadedContent::DrainPendingLifecycleEvents() facade and
+    // turned into real ScriptEvent broadcasts.
+    struct PendingSceneLifecycleEvent {
+        std::string name;
+        std::uint64_t sceneId = 0U;
+        std::string sceneName;
+    };
+    std::vector<PendingSceneLifecycleEvent> pendingSceneLifecycleEvents;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
