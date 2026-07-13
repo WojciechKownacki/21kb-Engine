@@ -207,6 +207,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryExecutionOrder.hpp
     include/engine/library/EngineLibraryFunctionDesc.hpp
     include/engine/library/EngineLibraryFunctionId.hpp
+    include/engine/library/EngineLibraryInputLimits.hpp
     include/engine/library/EngineLibraryLifecycle.hpp
     include/engine/library/EngineLibraryManifest.hpp
     include/engine/library/EngineLibraryManifestComparison.hpp
