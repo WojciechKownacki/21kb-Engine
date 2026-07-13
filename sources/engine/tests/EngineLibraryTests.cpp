@@ -310,6 +310,8 @@ void RunTypeDescTest() {
     const ScriptValueType kAllTypes[]{
         ScriptValueType::Void, ScriptValueType::Bool, ScriptValueType::Int, ScriptValueType::Float,
         ScriptValueType::String, ScriptValueType::Entity, ScriptValueType::Component,
+        ScriptValueType::Int64, ScriptValueType::UInt32, ScriptValueType::Double,
+        ScriptValueType::Name, ScriptValueType::Guid, ScriptValueType::Hash,
     };
     for (const ScriptValueType type : kAllTypes) {
         const kb::library::LibraryTypeDesc& desc = kb::library::DescribeType(type);
@@ -990,12 +992,12 @@ void RunOwnershipTest() {
 
 // LIB-032: no raw C++ pointer or reference may cross the Lua/Visual Graph
 // script boundary. ScriptValue is that boundary's only channel, so this
-// locks down its Storage variant's exact shape (six alternatives, none a
-// pointer) as a regression guard — ScriptValue.hpp itself already asserts
-// "no pointer alternative" at the type definition; this additionally locks
-// the alternative count/order so a silently-added seventh alternative
-// (pointer or not) fails a test even if it happens not to be a pointer
-// today.
+// locks down its Storage variant's exact shape (eight alternatives, none a
+// pointer — LIB-041 appended std::int64_t and double to the original six)
+// as a regression guard — ScriptValue.hpp itself already asserts "no
+// pointer alternative" at the type definition; this additionally locks the
+// alternative count/order so a silently-added ninth alternative (pointer or
+// not) fails a test even if it happens not to be a pointer today.
 template <typename Variant, std::size_t... Index>
 constexpr bool NoVariantAlternativeIsAPointer(std::index_sequence<Index...>) {
     return (!std::is_pointer_v<std::variant_alternative_t<Index, Variant>> && ...);
@@ -1003,7 +1005,7 @@ constexpr bool NoVariantAlternativeIsAPointer(std::index_sequence<Index...>) {
 
 void RunNoPointersCrossScriptBoundaryTest() {
     using Storage = kb::script::ScriptValue::Storage;
-    static_assert(std::variant_size_v<Storage> == 6U, "kb::script::ScriptValue::Storage must have exactly the six known alternatives (monostate, bool, int, float, string, uint64_t)");
+    static_assert(std::variant_size_v<Storage> == 8U, "kb::script::ScriptValue::Storage must have exactly the eight known alternatives (monostate, bool, int, float, string, uint64_t, int64_t, double)");
     static_assert(
         NoVariantAlternativeIsAPointer<Storage>(std::make_index_sequence<std::variant_size_v<Storage>>{}),
         "kb::script::ScriptValue::Storage must never hold a raw pointer or reference type");
@@ -1085,6 +1087,105 @@ void RunInputLimitsTest() {
 
 namespace kb::tests {
 
+// LIB-041: Int64/UInt32/Double/Name/Guid/Hash must round-trip correctly
+// through ScriptValue construction/accessors, the Visual Graph runtime
+// value bridge (ToVisualGraphValue), and an actual function call through
+// ScriptFunctionRegistry::Call — proving they are real, usable script pin
+// types, not just enum labels with no working storage/marshalling path.
+void RunExpandedValueTypesTest() {
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+
+    // Construction + accessor round-trip for each new type.
+    const ScriptValue int64Value{ std::int64_t{ -9000000000LL } };
+    kb::tests::Require(int64Value.Type() == ScriptValueType::Int64, "Int64 ScriptValue must report ScriptValueType::Int64");
+    kb::tests::Require(int64Value.AsInt64() == -9000000000LL, "Int64 ScriptValue must round-trip its exact value through AsInt64");
+
+    const ScriptValue uint32Value{ std::uint32_t{ 4000000000U } };
+    kb::tests::Require(uint32Value.Type() == ScriptValueType::UInt32, "UInt32 ScriptValue must report ScriptValueType::UInt32");
+    kb::tests::Require(uint32Value.AsUInt32() == 4000000000U, "UInt32 ScriptValue must round-trip a value beyond int32 range through AsUInt32");
+
+    const ScriptValue doubleValue{ 1.0e300 };
+    kb::tests::Require(doubleValue.Type() == ScriptValueType::Double, "Double ScriptValue must report ScriptValueType::Double");
+    kb::tests::Require(doubleValue.AsDouble() == 1.0e300, "Double ScriptValue must round-trip a magnitude a float cannot represent");
+
+    const ScriptValue nameValue{ std::string{ "PlayerTag" }, ScriptValueType::Name };
+    kb::tests::Require(nameValue.Type() == ScriptValueType::Name, "Name ScriptValue must report ScriptValueType::Name");
+    kb::tests::Require(nameValue.AsString() == "PlayerTag", "Name ScriptValue must round-trip its string through AsString");
+
+    const ScriptValue guidValue{ std::string{ "3F2504E0-4F89-11D3-9A0C-0305E82C3301" }, ScriptValueType::Guid };
+    kb::tests::Require(guidValue.Type() == ScriptValueType::Guid, "Guid ScriptValue must report ScriptValueType::Guid");
+    kb::tests::Require(guidValue.AsString() == "3F2504E0-4F89-11D3-9A0C-0305E82C3301", "Guid ScriptValue must round-trip its canonical string through AsString");
+
+    const ScriptValue hashValue{ 0xDEADBEEFCAFEU, ScriptValueType::Hash };
+    kb::tests::Require(hashValue.Type() == ScriptValueType::Hash, "Hash ScriptValue must report ScriptValueType::Hash");
+    kb::tests::Require(hashValue.AsUInt64() == 0xDEADBEEFCAFEU, "Hash ScriptValue must round-trip its raw 64-bit value through AsUInt64");
+
+    // A ScriptValue built from an unrecognized tag for the tagged-string
+    // ctor must fall back to String, mirroring the existing uint64_t+type
+    // ctor's fallback-to-Void pattern for its own restricted type set.
+    const ScriptValue untaggedString{ std::string{ "plain" }, ScriptValueType::Bool };
+    kb::tests::Require(untaggedString.Type() == ScriptValueType::String, "ScriptValue(string, type) must fall back to String for a type outside {Name, Guid}");
+
+    // Structural equality (LIB-018) must hold for the new types too, and
+    // distinguish types that happen to share underlying Storage.
+    kb::tests::Require(ScriptValue{ std::int64_t{ 5 } } == ScriptValue{ std::int64_t{ 5 } }, "Int64 ScriptValue equality must hold for equal values");
+    kb::tests::Require(
+        ScriptValue{ 5U, ScriptValueType::Hash } != ScriptValue{ 5U, ScriptValueType::Entity },
+        "ScriptValue equality must distinguish Hash from Entity even though both share the uint64_t Storage alternative");
+    kb::tests::Require(
+        ScriptValue{ std::string{ "x" }, ScriptValueType::Name } != ScriptValue{ std::string{ "x" }, ScriptValueType::Guid },
+        "ScriptValue equality must distinguish Name from Guid even though both share the string Storage alternative");
+
+    // Visual Graph runtime value bridge round-trip.
+    kb::tests::Require(int64Value.ToVisualGraphValue().Type() == kb::visual::VisualGraphValueType::Int64, "Int64 must map to VisualGraphValueType::Int64");
+    kb::tests::Require(int64Value.ToVisualGraphValue().AsInt64() == -9000000000LL, "Int64 must round-trip through VisualGraphRuntimeValue");
+    kb::tests::Require(doubleValue.ToVisualGraphValue().Type() == kb::visual::VisualGraphValueType::Double, "Double must map to VisualGraphValueType::Double");
+    kb::tests::Require(doubleValue.ToVisualGraphValue().AsDouble() == 1.0e300, "Double must round-trip through VisualGraphRuntimeValue");
+    kb::tests::Require(guidValue.ToVisualGraphValue().Type() == kb::visual::VisualGraphValueType::Guid, "Guid must map to VisualGraphValueType::Guid");
+    kb::tests::Require(guidValue.ToVisualGraphValue().AsString() == "3F2504E0-4F89-11D3-9A0C-0305E82C3301", "Guid must round-trip through VisualGraphRuntimeValue");
+
+    // ToString/ToVisualGraphValueType must be defined for every new type
+    // (already exercised generically by RunTypeDescTest's kAllTypes loop
+    // via DescribeType; this pins the exact expected names).
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::Int64) } == "Int64", "ScriptValueType::Int64 must format as \"Int64\"");
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::UInt32) } == "UInt32", "ScriptValueType::UInt32 must format as \"UInt32\"");
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::Double) } == "Double", "ScriptValueType::Double must format as \"Double\"");
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::Name) } == "Name", "ScriptValueType::Name must format as \"Name\"");
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::Guid) } == "Guid", "ScriptValueType::Guid must format as \"Guid\"");
+    kb::tests::Require(std::string{ kb::script::ToString(ScriptValueType::Hash) } == "Hash", "ScriptValueType::Hash must format as \"Hash\"");
+
+    // A real end-to-end function call through the single choke point every
+    // Native/Lua/Visual Graph caller funnels through, proving the new
+    // types actually flow through ValidateInputs/ValidateOutputs (pin type
+    // matching via IsCompatible), not just construct/format in isolation.
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Expanded value types test host setup failed");
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{
+                .name = "Tests.EchoHash",
+                .inputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = ScriptValueType::Hash } },
+                .outputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = ScriptValueType::Hash } },
+            },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
+                return kb::script::ScriptFunctionCallResult{
+                    .executed = true,
+                    .outputs = { kb::script::ScriptFunctionArgument{ .name = "value", .value = arguments[0].value } },
+                };
+            },
+        }),
+        "Expanded value types test could not register Tests.EchoHash");
+    const std::array<kb::script::ScriptFunctionArgument, 1> echoArguments{
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = ScriptValue{ 0x1234ULL, ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult echoResult = host.Functions().Call("Tests.EchoHash", echoArguments, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(echoResult.Succeeded(), "Tests.EchoHash call with a Hash-typed argument must succeed through ValidateInputs/ValidateOutputs");
+    const std::optional<ScriptValue> echoedOutput = echoResult.Output("value");
+    kb::tests::Require(echoedOutput.has_value() && echoedOutput->Type() == ScriptValueType::Hash && echoedOutput->AsUInt64() == 0x1234ULL, "Tests.EchoHash must return the exact Hash value it was given");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -1119,6 +1220,7 @@ void RunEngineLibraryTests() {
     RunNoPointersCrossScriptBoundaryTest();
     RunErrorCodeTest();
     RunInputLimitsTest();
+    RunExpandedValueTypesTest();
 }
 
 } // namespace kb::tests
