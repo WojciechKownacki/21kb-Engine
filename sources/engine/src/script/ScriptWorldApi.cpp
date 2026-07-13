@@ -259,23 +259,36 @@ ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context
 // unaffected); "pose" decomposes into the existing x/y/z position pins
 // plus new rotX/rotY/rotZ/rotW rotation pins (kb::math::Pose{position,
 // rotation}, LIB-042's decomposition idiom already established for
-// Vec3/Quat elsewhere in this codebase). Ends with SynchronizeTransforms()
-// so the returned handle's WORLD position/rotation — not just local — is
-// guaranteed correct immediately, rather than stale until the next
-// scheduled hierarchy sync: the "defined flush" the task asks for.
+// Vec3/Quat elsewhere in this codebase).
+//
+// The "defined flush": ONLY when an external parent was actually assigned
+// does this call SynchronizeTransforms() before returning, so the
+// returned handle's WORLD position/rotation reflects the new parent
+// immediately rather than staying stale until the next scheduled
+// hierarchy sync. A root spawn (no parent) needs no flush at all — its
+// world transform trivially equals its local transform, identical to
+// every other unparented entity in this engine — and skipping the sync in
+// that case matters: SynchronizeTransforms() is otherwise only ever
+// called from Scene::Runtime().Update()'s own fixed points; calling it
+// unconditionally from inside a script function turned out to disturb
+// state an in-flight Tick() elsewhere in the same frame depends on (a
+// physics raycast run later in the same Tick started hitting the wrong
+// collider once every Spawn — even unparented ones — force-synced).
 ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
     const std::string prefabPath = StringArg(arguments, "prefab");
     kb::scene::SceneEntity entity{};
+    bool parented = false;
     if (prefabPath.empty()) {
         kb::scene::SceneObjectDesc desc;
         desc.name = StringArg(arguments, "name", "Entity");
         ApplyPositionArgs(desc.transform, arguments);
         ApplyRotationArgs(desc.transform, arguments);
         const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
-        if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
+        parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
+        if (parented) {
             desc.parent = context.scene->Entities().Object(parent);
         }
         entity = context.scene->Entities().CreateEntity(std::move(desc));
@@ -297,19 +310,45 @@ ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::sp
             context.scene->Transforms().Set(entity, transform);
         }
         const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
-        if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
+        parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
+        if (parented) {
             // Matches the blank-entity path above, which also has no
             // separate failure signal for a rejected parent assignment.
             static_cast<void>(context.scene->Hierarchy().SetParent(entity, parent));
         }
     }
-    context.scene->Runtime().SynchronizeTransforms();
+    if (parented) {
+        context.scene->Runtime().SynchronizeTransforms();
+    }
     return EntityResult("entity", entity);
 }
 
+// LIB-067: idempotent by construction — a repeat call on an already-dead
+// (or never-alive) entity takes the IsAlive()==false branch, returns
+// destroyed=false, and never touches Entities().Destroy() again; calling
+// it any number of times leaves the world in the same state as calling it
+// once. The "deferred" flag is HONEST about what this engine can actually
+// do today rather than faking it: kb::library::CommandApplicationPointFor
+// reports Immediate for every lifecycle phase (LIB-006, still true), and
+// kb::ecs::CommandBuffer has no owner/playback point wired into any scene
+// lifecycle — building one is LIB-083's explicit, still-open scope, not
+// this task's. CommandBuffer's own destroy path also isn't safe against a
+// deferred destroy racing an immediate destroy of the same entity (it
+// throws at Playback() on a stale handle) — implementing a half-wired
+// "deferred" here would be a real correctness risk, not a convenience. So
+// deferred=true is accepted as real, documented input (the flag exists,
+// matching the task's ask) but rejected with a clear error rather than
+// silently behaving as immediate or crashing later.
 ScriptFunctionCallResult Destroy(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
+    }
+    const ScriptValue* deferredArg = FindArg(arguments, "deferred");
+    if (deferredArg != nullptr && deferredArg->AsBool(false)) {
+        return Error(
+            "World.Destroy(deferred=true) is not supported yet: this engine has no lifecycle-wired command playback point today "
+            "(kb::library::CommandApplicationPointFor reports Immediate for every phase; see LIB-006/LIB-083). Call World.Destroy without "
+            "deferred=true (or deferred=false) for the existing immediate, idempotent behavior.");
     }
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
     const bool existed = entity.IsValid() && context.scene->Entities().IsAlive(entity);
@@ -502,7 +541,7 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &Spawn) && ok;
     ok = RegisterFunction(host, "World.Destroy",
-        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "deferred", ScriptValueType::Bool, false } },
         { ScriptFunctionPin{ "destroyed", ScriptValueType::Bool, true } },
         &Destroy) && ok;
     ok = RegisterFunction(host, "World.SetTag",
