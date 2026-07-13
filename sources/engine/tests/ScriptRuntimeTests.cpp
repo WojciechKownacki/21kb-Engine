@@ -7,6 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -41,9 +42,11 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -759,6 +762,61 @@ void RunCrossBackendEventDispatchTest() {
     kb::tests::Require(fakeLua.receivedArgumentCount == 1U, "Cross-backend event dispatch did not preserve payload");
 }
 
+// LIB-012: a queued/pending event command (the `pending` vector inside
+// ScriptRuntime::DrainEvents) targeting an entity that gets destroyed
+// before that event's dispatch turn must be cancelled — never delivered to
+// a dangling/stale entity, and never a crash or diagnostic-of-doom.
+// DispatchEvent re-collects the live behaviour set fresh on every dispatch
+// turn (ScriptRuntime.cpp: DispatchSceneBehaviours), so a target destroyed
+// earlier in the same frame is simply absent from that later snapshot;
+// this test proves the resulting silent drop is the actual, safe behavior.
+void RunPendingCommandCancelledByDestroyTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kSenderAsset{ 5601U };
+    constexpr kb::assets::AssetId kTargetAsset{ 5602U };
+
+    const kb::scene::SceneObject senderObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PendingCommandSender" });
+    const kb::scene::SceneObject targetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PendingCommandTarget" });
+    scene.Components().Behaviours().Set(senderObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kSenderAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(targetObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kTargetAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 1,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    const kb::scene::SceneEntity target = targetObject.Entity();
+    kb::tests::Require(
+        native->RegisterLifecycle(kSenderAsset, kb::script::ScriptLifecycleEvent::Tick, [target](kb::script::ScriptExecutionContext& context) {
+            context.EmitTo(target, "PendingCommand", {});
+            context.GetScene().Entities().Destroy(target);
+        }),
+        "Pending command cancellation sender registration failed");
+
+    int deliveries = 0;
+    kb::tests::Require(
+        native->RegisterEvent(kTargetAsset, "PendingCommand", [&deliveries](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+            ++deliveries;
+        }),
+        "Pending command cancellation target registration failed");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Pending command cancellation backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycleAndDispatchEvents(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Pending command cancellation produced diagnostics");
+    kb::tests::Require(!scene.Entities().IsAlive(target), "Pending command cancellation test fixture must have destroyed the target");
+    kb::tests::Require(deliveries == 0, "A pending command targeting an entity destroyed before its dispatch turn must be cancelled, not delivered");
+}
+
 void RunTargetedEventDispatchTest() {
     kb::scene::Scene scene;
     constexpr kb::assets::AssetId kNativeAsset{4101U};
@@ -1191,6 +1249,660 @@ end
     kb::tests::Require(sawFunctionError, "Visual script function call did not surface the registry error diagnostic");
 }
 
+// LIB-061: a CallNative node whose "failed" exec output IS wired must run
+// the wired handler instead of the whole Tick halting at the point of
+// failure — the "idiomatic Visual Graph adapter" for a fallible function
+// call, mirroring the Branch node's "true"/"false" pair. The overall Tick
+// still reports Succeeded() == false (a real failure genuinely happened,
+// and ScriptDiagnostic carries no severity to distinguish "handled" from
+// "fatal" — see the design note in VisualGraphRuntimeExecutor::ExecuteNode)
+// but, unlike an unwired failure, the success branch must NOT also run.
+void RunVisualGraphCallNativeFailureBranchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "CallNative failure branch host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFails" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{ .errors = { "deliberate LIB-061 test failure" } };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.AlwaysFails");
+
+    bool successPathRan = false;
+    bool failurePathRan = false;
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkSuccessPath" },
+                           .callback = [&successPathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               successPathRan = true;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.MarkSuccessPath");
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkFailurePath" },
+                           .callback = [&failurePathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               failurePathRan = true;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.MarkFailurePath");
+
+    constexpr kb::assets::AssetId kAsset{ 5015U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CallNativeFailureBranch" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "CallNativeFailureBranch";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.AlwaysFails" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.MarkSuccessPath" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.MarkFailurePath" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "failed", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "then", .toNode = 3U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "failed", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "CallNative failure branch graph did not compile");
+
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(!result.Succeeded(), "LIB-061: a genuinely failed function call must still report Succeeded() == false, handled or not");
+    kb::tests::Require(!successPathRan, "LIB-061: the \"then\" (success) branch must NOT run after the call failed");
+    kb::tests::Require(failurePathRan, "LIB-061: a wired \"failed\" exec output must run its handler instead of the Tick simply halting");
+    bool sawFailureMessage = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+        sawFailureMessage = sawFailureMessage || diagnostic.message.find("deliberate LIB-061 test failure") != std::string::npos;
+    }
+    kb::tests::Require(sawFailureMessage, "LIB-061: a handled call failure must still be recorded as a diagnostic, not silently dropped");
+}
+
+// LIB-061: formalizes and tests, from REAL executed Lua script text (not
+// just the C++ marshalling code in isolation), the idiomatic Lua Result
+// adapter this codebase already implements for a fallible CallFunction:
+// `value, err = CallFunction(...)` — nil plus an error string on failure,
+// the plain value (or a table, for multi-output) on success. This is
+// Lua's own idiom for "Result<T,E>" (Lua has no Option/Result type, but
+// this dual-return-plus-nil-check pattern is the idiomatic equivalent —
+// see PucLuaFunctionApi.cpp::LuaCallFunction), exercised end-to-end here
+// for the first time.
+void RunLuaCallFunctionResultAdapterTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua Result adapter host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFailsForLua" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{ .errors = { "lua adapter test failure" } };
+                           },
+                       }),
+        "Lua Result adapter did not register Tests.AlwaysFailsForLua");
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{
+                               .name = "Tests.SucceedsForLua",
+                               .outputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = kb::script::ScriptValueType::Int } },
+                           },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{
+                                   .executed = true,
+                                   .outputs = { kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 42 } } },
+                               };
+                           },
+                       }),
+        "Lua Result adapter did not register Tests.SucceedsForLua");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5016U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaResultAdapter" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local failedValue, failedError = CallFunction("Tests.AlwaysFailsForLua", {})
+    SetShared("luaSawNilOnFailure", failedValue == nil)
+    SetShared("luaSawErrorString", type(failedError) == "string")
+    SetShared("luaErrorMessage", failedError)
+
+    local succeededValue, succeededError = CallFunction("Tests.SucceedsForLua", {})
+    SetShared("luaSawValueOnSuccess", succeededValue)
+    SetShared("luaSawNilErrorOnSuccess", succeededError == nil)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua Result adapter script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Lua Result adapter Tick produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> sawNilOnFailure = host.SharedState().Get("luaSawNilOnFailure");
+    kb::tests::Require(sawNilOnFailure.has_value() && sawNilOnFailure->AsBool(), "Lua CallFunction must return nil as its first value when the call fails");
+    const std::optional<kb::script::ScriptValue> sawErrorString = host.SharedState().Get("luaSawErrorString");
+    kb::tests::Require(sawErrorString.has_value() && sawErrorString->AsBool(), "Lua CallFunction must return a string as its second value when the call fails");
+    const std::optional<kb::script::ScriptValue> errorMessage = host.SharedState().Get("luaErrorMessage");
+    kb::tests::Require(errorMessage.has_value() && errorMessage->AsString() == "lua adapter test failure", "Lua CallFunction's error string must be the real registry error message, not a generic placeholder");
+
+    const std::optional<kb::script::ScriptValue> sawValueOnSuccess = host.SharedState().Get("luaSawValueOnSuccess");
+    kb::tests::Require(sawValueOnSuccess.has_value() && sawValueOnSuccess->AsInt() == 42, "Lua CallFunction must return the real value as its first result when the call succeeds");
+    const std::optional<kb::script::ScriptValue> sawNilErrorOnSuccess = host.SharedState().Get("luaSawNilErrorOnSuccess");
+    kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
+}
+
+// LIB-010: a registered callback throwing a C++ exception must become a
+// ScriptFunctionCallResult error, not propagate. This is the single choke
+// point every caller (Native direct call, Lua's CallFunction, the future
+// Visual Graph CallNative node) goes through, so this also protects the Lua
+// boundary, where an uncaught C++ exception crossing PUC-Lua's C-compiled,
+// longjmp-based lua_pcall is undefined behaviour.
+void RunScriptFunctionRegistryExceptionSafetyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script function exception safety host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Throws" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
+                               throw std::runtime_error("boom");
+                           },
+                       }),
+        "Script function exception safety did not register Tests.Throws");
+
+    int survivorCalls = 0;
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Survivor" },
+                           .callback = [&survivorCalls](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               ++survivorCalls;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "Script function exception safety did not register Tests.Survivor");
+
+    const kb::script::ScriptFunctionCallResult throwingResult = host.Functions().Call("Tests.Throws", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!throwingResult.Succeeded(), "Script function registry did not report a thrown exception as a failed call");
+    bool sawExceptionMessage = false;
+    for (const std::string& error : throwingResult.errors) {
+        sawExceptionMessage = sawExceptionMessage || error.find("boom") != std::string::npos;
+    }
+    kb::tests::Require(sawExceptionMessage, "Script function registry did not surface the exception's message in the call result");
+
+    // The registry itself must stay usable after a callback throws: no
+    // corrupted state, no crash, the next call succeeds normally.
+    const kb::script::ScriptFunctionCallResult survivorResult = host.Functions().Call("Tests.Survivor", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(survivorResult.Succeeded() && survivorCalls == 1, "Script function registry did not remain usable after a callback threw");
+}
+
+// LIB-010: a native lifecycle/event callback throwing must not abort the
+// rest of that phase's behaviour dispatch loop (ScriptRuntime::
+// DispatchSceneBehaviours) — one misbehaving behaviour reports a diagnostic
+// instead of preventing every later-dispatched behaviour in the same phase
+// from running at all.
+void RunNativeScriptBackendExceptionSafetyTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kThrowingAsset{ 5101U };
+    constexpr kb::assets::AssetId kSurvivorAsset{ 5102U };
+
+    const kb::scene::SceneObject throwingObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ExceptionSafetyThrows" });
+    scene.Components().Behaviours().Set(throwingObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kThrowingAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    const kb::scene::SceneObject survivorObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ExceptionSafetySurvivor" });
+    scene.Components().Behaviours().Set(survivorObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kSurvivorAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 1,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    kb::tests::Require(
+        native->RegisterLifecycle(kThrowingAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext&) -> void {
+            throw std::runtime_error("native boom");
+        }),
+        "Native exception safety did not register the throwing behaviour");
+    int survivorTicks = 0;
+    kb::tests::Require(
+        native->RegisterLifecycle(kSurvivorAsset, kb::script::ScriptLifecycleEvent::Tick, [&survivorTicks](kb::script::ScriptExecutionContext&) {
+            ++survivorTicks;
+        }),
+        "Native exception safety did not register the survivor behaviour");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Native exception safety backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(!result.Succeeded(), "Native exception safety did not report a diagnostic for the throwing behaviour");
+    kb::tests::Require(result.visitedBehaviours == 2U, "Native exception safety did not visit both behaviours");
+    kb::tests::Require(result.executedBehaviours == 1U, "Native exception safety must not count the throwing behaviour as executed");
+    kb::tests::Require(survivorTicks == 1, "Native exception safety must still dispatch the behaviour after the one that threw");
+    bool sawExceptionMessage = false;
+    bool sawLifecyclePhase = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+        sawExceptionMessage = sawExceptionMessage || diagnostic.message.find("native boom") != std::string::npos;
+        sawLifecyclePhase = sawLifecyclePhase || (diagnostic.lifecyclePhase.has_value() && *diagnostic.lifecyclePhase == kb::script::ScriptLifecycleEvent::Tick);
+    }
+    kb::tests::Require(sawExceptionMessage, "Native exception safety did not surface the exception's message in the diagnostics");
+    kb::tests::Require(sawLifecyclePhase, "Native exception safety diagnostic must carry the lifecycle phase it failed in (LIB-036)");
+}
+
+// LIB-021: once the world has dispatched its first lifecycle phase, further
+// Register() calls on that ScriptFunctionRegistry must be rejected — a
+// function registered after the world starts running could be visible to
+// some already-running dispatch paths (Lua sugar tables, compiled Visual
+// Graph bindings, both generated/snapshotted at setup time) but not others.
+// LIB-030: a function name that was never registered (not exposed) must
+// never be callable — ScriptFunctionRegistry::Call, the single choke point
+// every frontend (Native direct call, Lua's CallFunction, the Visual Graph
+// CallNative node) funnels through, must reject it by name with a clear
+// diagnostic instead of silently succeeding or falling through.
+void RunUnexposedFunctionCannotBeCalledTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Unexposed function test host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Tests.NeverRegistered") == nullptr, "Unexposed function test fixture must not already have this name registered");
+
+    const kb::script::ScriptFunctionCallResult result = host.Functions().Call("Tests.NeverRegistered", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!result.Succeeded(), "An unexposed function name must not be callable");
+    kb::tests::Require(!result.executed, "An unexposed function name must not report executed=true");
+    bool sawNotRegisteredMessage = false;
+    for (const std::string& error : result.errors) {
+        sawNotRegisteredMessage = sawNotRegisteredMessage || error.find("is not registered") != std::string::npos;
+    }
+    kb::tests::Require(sawNotRegisteredMessage, "Unexposed function call must report a clear 'not registered' diagnostic, not a silent failure");
+}
+
+void RunScriptFunctionRegistryLocksAfterFirstDispatchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Registry lock test host setup failed");
+    kb::tests::Require(!host.Functions().IsLocked(), "Script function registry must not be locked before any dispatch");
+
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.BeforeStart" },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                return kb::script::ScriptFunctionCallResult{ .executed = true };
+            },
+        }),
+        "Registry lock test could not register before dispatch");
+
+    static_cast<void>(host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F));
+    kb::tests::Require(host.Functions().IsLocked(), "Script function registry must lock after the first lifecycle dispatch");
+
+    const bool registeredAfterStart = host.RegisterFunction(kb::script::ScriptFunctionDesc{
+        .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AfterStart" },
+        .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+            return kb::script::ScriptFunctionCallResult{ .executed = true };
+        },
+    });
+    kb::tests::Require(!registeredAfterStart, "Script function registry must reject registration after the world has started");
+    kb::tests::Require(host.Functions().FindSignature("Tests.AfterStart") == nullptr, "Script function registry must not have added the rejected function");
+
+    const kb::script::ScriptFunctionCallResult stillWorks = host.Functions().Call("Tests.BeforeStart", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(stillWorks.Succeeded(), "Script function registry must keep serving functions registered before the lock");
+}
+
+// LIB-038: a callback that calls back into ScriptFunctionRegistry::Call on
+// the same registry (directly here; the same guard also covers a chain of
+// distinct functions calling each other) must be rejected once the call
+// depth limit is reached, with a clear diagnostic, instead of recursing
+// until the native call stack overflows and crashes the process.
+void RunScriptFunctionRegistryReentrancyGuardTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Reentrancy guard test host setup failed");
+
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Recurse" },
+            .callback = [&host](const kb::script::ScriptFunctionCallContext& context, std::span<const kb::script::ScriptFunctionArgument>) {
+                return host.Functions().Call("Tests.Recurse", {}, context);
+            },
+        }),
+        "Reentrancy guard test could not register a self-recursive function");
+
+    const kb::script::ScriptFunctionCallResult result = host.Functions().Call("Tests.Recurse", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!result.Succeeded(), "A reentrant call chain past the depth limit must fail instead of overflowing the stack");
+    bool sawDepthMessage = false;
+    for (const std::string& error : result.errors) {
+        sawDepthMessage = sawDepthMessage || error.find("maximum call depth") != std::string::npos;
+    }
+    kb::tests::Require(sawDepthMessage, "Reentrancy guard must report a clear 'maximum call depth' diagnostic, not a silent or generic failure");
+
+    const kb::script::ScriptFunctionCallResult unrelatedStillWorks = host.Functions().Call("Tests.Recurse", {}, kb::script::ScriptFunctionCallContext{});
+    kb::tests::Require(!unrelatedStillWorks.Succeeded(), "Depth guard must reject the same recursive chain deterministically on a later call");
+    kb::tests::Require(host.Functions().FindSignature("Tests.Recurse") != nullptr, "The registry itself must remain intact and queryable after a rejected reentrant call chain");
+}
+
+// LIB-011: the full 10-event lifecycle order (Created, Activated, Ready,
+// FixedTick, Tick, LateTick, BeforeRender, AfterRender, Deactivated,
+// Destroyed) must hold for a Native behaviour end to end, not just the
+// fragments other tests already cover. Created/Activated/Ready/
+// FixedTick/Tick/LateTick/BeforeRender/AfterRender all happen within the
+// first ExecuteFrame call; Deactivated/Destroyed only appear once the
+// behaviour is removed and a second ExecuteFrame runs (see
+// ScriptRuntimeSceneSystem::SyncBehaviourLifecycles).
+void RunNativeFullLifecycleOrderTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 5201U };
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    std::vector<std::string> order;
+    const auto record = [&order](std::string name) {
+        return [&order, name = std::move(name)](kb::script::ScriptExecutionContext&) {
+            order.push_back(name);
+        };
+    };
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Created, record("Created")), "Full lifecycle order Created registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Activated, record("Activated")), "Full lifecycle order Activated registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Ready, record("Ready")), "Full lifecycle order Ready registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::FixedTick, record("FixedTick")), "Full lifecycle order FixedTick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Tick, record("Tick")), "Full lifecycle order Tick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::LateTick, record("LateTick")), "Full lifecycle order LateTick registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::BeforeRender, record("BeforeRender")), "Full lifecycle order BeforeRender registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::AfterRender, record("AfterRender")), "Full lifecycle order AfterRender registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Deactivated, record("Deactivated")), "Full lifecycle order Deactivated registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Destroyed, record("Destroyed")), "Full lifecycle order Destroyed registration failed");
+
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Full lifecycle order backend registration failed");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleNative" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order first frame produced diagnostics");
+
+    const std::vector<std::string> expectedFirstFrame{
+        "Created", "Activated", "Ready", "FixedTick", "Tick", "LateTick", "BeforeRender", "AfterRender",
+    };
+    kb::tests::Require(order == expectedFirstFrame, "Full lifecycle order did not dispatch Created..AfterRender in the documented order");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order second frame produced diagnostics");
+
+    const std::vector<std::string> expectedFull{
+        "Created", "Activated", "Ready", "FixedTick", "Tick", "LateTick", "BeforeRender", "AfterRender", "Deactivated", "Destroyed",
+    };
+    kb::tests::Require(order == expectedFull, "Full lifecycle order did not append Deactivated then Destroyed once the behaviour was removed");
+}
+
+// LIB-011: same guarantee as RunNativeFullLifecycleOrderTest, for a Lua
+// behaviour. Uses SetShared/GetShared to build a cumulative order string
+// rather than Emit(), because emitting an event literally named "Created"/
+// "Tick"/... would be redispatched (ScriptRuntime::DrainEvents) to any
+// handler function of that same name — including the lifecycle function
+// itself — which is not what this test wants to exercise.
+void RunPucLuaFullLifecycleOrderTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 5301U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local function record(name)
+    SetShared("lifecycleOrder", (GetShared("lifecycleOrder") or "") .. name .. ";")
+end
+function Created(self, dt) record("Created") end
+function Activated(self, dt) record("Activated") end
+function Ready(self, dt) record("Ready") end
+function FixedTick(self, dt) record("FixedTick") end
+function Tick(self, dt) record("Tick") end
+function LateTick(self, dt) record("LateTick") end
+function BeforeRender(self, dt) record("BeforeRender") end
+function AfterRender(self, dt) record("AfterRender") end
+function Deactivated(self, dt) record("Deactivated") end
+function Destroyed(self, dt) record("Destroyed") end
+)",
+        "FullLifecycle.lua");
+    kb::tests::Require(loaded.succeeded, "Full lifecycle order Lua script did not load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Full lifecycle order Lua backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleLua" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order Lua first frame produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> afterFirstFrame = runtime.SharedState().Get("lifecycleOrder");
+    kb::tests::Require(
+        afterFirstFrame.has_value() && afterFirstFrame->AsString() == "Created;Activated;Ready;FixedTick;Tick;LateTick;BeforeRender;AfterRender;",
+        "Full lifecycle order Lua did not dispatch Created..AfterRender in the documented order");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order Lua second frame produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> afterSecondFrame = runtime.SharedState().Get("lifecycleOrder");
+    kb::tests::Require(
+        afterSecondFrame.has_value() &&
+            afterSecondFrame->AsString() == "Created;Activated;Ready;FixedTick;Tick;LateTick;BeforeRender;AfterRender;Deactivated;Destroyed;",
+        "Full lifecycle order Lua did not append Deactivated then Destroyed once the behaviour was removed");
+}
+
+// LIB-011: same guarantee as the Native/Lua variants, for a Visual Graph
+// behaviour: one graph with an Event+EmitEvent pair per lifecycle phase,
+// each EmitEvent using a symbol that names no real event/function anywhere
+// (so ScriptRuntime::DrainEvents redispatching it is a harmless no-op).
+void RunVisualGraphFullLifecycleOrderTest() {
+    struct PhaseNode {
+        kb::visual::VisualGraphLifecycleEvent lifecycle;
+        const char* emitName;
+    };
+    const std::array<PhaseNode, 10> phases{ {
+        { kb::visual::VisualGraphLifecycleEvent::Created, "GraphCreated" },
+        { kb::visual::VisualGraphLifecycleEvent::Activated, "GraphActivated" },
+        { kb::visual::VisualGraphLifecycleEvent::Ready, "GraphReady" },
+        { kb::visual::VisualGraphLifecycleEvent::FixedTick, "GraphFixedTick" },
+        { kb::visual::VisualGraphLifecycleEvent::Tick, "GraphTick" },
+        { kb::visual::VisualGraphLifecycleEvent::LateTick, "GraphLateTick" },
+        { kb::visual::VisualGraphLifecycleEvent::BeforeRender, "GraphBeforeRender" },
+        { kb::visual::VisualGraphLifecycleEvent::AfterRender, "GraphAfterRender" },
+        { kb::visual::VisualGraphLifecycleEvent::Deactivated, "GraphDeactivated" },
+        { kb::visual::VisualGraphLifecycleEvent::Destroyed, "GraphDestroyed" },
+    } };
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "FullLifecycleGraph";
+    std::uint32_t nextId = 1U;
+    for (const PhaseNode& phase : phases) {
+        const std::uint32_t eventNodeId = nextId++;
+        const std::uint32_t emitNodeId = nextId++;
+        graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = eventNodeId, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = phase.lifecycle });
+        graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = emitNodeId, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = phase.emitName });
+        graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = eventNodeId, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+        graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = emitNodeId, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+        graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = eventNodeId, .fromPin = "then", .toNode = emitNodeId, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    }
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Full lifecycle order graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5401U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kGraphAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)),
+        "Full lifecycle order graph backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FullLifecycleGraph" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    std::vector<std::string> order;
+
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order graph first frame produced diagnostics");
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        order.push_back(event.name);
+    }
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Full lifecycle order graph second frame produced diagnostics");
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        order.push_back(event.name);
+    }
+
+    const std::vector<std::string> expected{
+        "GraphCreated", "GraphActivated", "GraphReady", "GraphFixedTick", "GraphTick", "GraphLateTick", "GraphBeforeRender", "GraphAfterRender",
+        "GraphDeactivated", "GraphDestroyed",
+    };
+    kb::tests::Require(order == expected, "Full lifecycle order graph did not dispatch every phase in the documented order");
+}
+
+// LIB-011 (parity): the guaranteed execution order (BehaviourExecutionOrderLess:
+// TickGroup, then executionOrder, then entity id) must hold ACROSS backends,
+// not just within one. Three behaviours — Native, Lua, Visual Graph — are
+// created in a different order than their expected dispatch order and given
+// distinct executionOrder values; only a real cross-backend sort could
+// produce the expected sequence.
+void RunCrossBackendLifecycleOrderParityTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kNativeAsset{ 5501U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5502U };
+    constexpr kb::assets::AssetId kGraphAsset{ 5503U };
+
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityGraph" });
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityNative" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParityLua" });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+        .executionOrder = 20,
+    });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .executionOrder = 10,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::tests::Require(
+        native->RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+            context.Emit("OrderMark", { kb::script::ScriptEventArgument{ .name = "who", .value = kb::script::ScriptValue{ std::string{ "Native" } } } });
+        }),
+        "Cross-backend lifecycle order parity Native registration failed");
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(luaRuntime.LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    Emit("OrderMark", { who = "Lua" })
+end
+)",
+                            "Parity.lua")
+                            .succeeded,
+        "Cross-backend lifecycle order parity Lua script did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ParityGraph";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "GraphOrderMark" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Cross-backend lifecycle order parity graph did not compile");
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Cross-backend lifecycle order parity native backend registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Cross-backend lifecycle order parity Lua backend registration failed");
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)),
+        "Cross-backend lifecycle order parity graph backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycleAndDispatchEvents(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Cross-backend lifecycle order parity produced diagnostics");
+
+    std::vector<std::string> who;
+    for (const kb::script::ScriptEvent& event : result.emittedEvents) {
+        if (event.name == "OrderMark") {
+            for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                if (argument.name == "who") {
+                    who.push_back(argument.value.AsString());
+                }
+            }
+        } else if (event.name == "GraphOrderMark") {
+            who.emplace_back("Graph");
+        }
+    }
+    const std::vector<std::string> expected{ "Native", "Lua", "Graph" };
+    kb::tests::Require(who == expected, "Cross-backend lifecycle dispatch must respect BehaviourExecutionOrderLess regardless of backend");
+}
+
 void RunScriptAudioApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -1325,6 +2037,62 @@ void RunScriptWorldTimePhysicsApiTest() {
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.y, 3.0F)
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.z, 4.0F),
         "World.Spawn did not apply direct spawn position");
+
+    // LIB-065: World.Current/IsPlaying/FrameIndex/FixedStepIndex, called
+    // the same way any other World.* function is (through the registry,
+    // not just the underlying kb::scene::Scene API directly).
+    const kb::script::ScriptFunctionCallResult currentResult = host.Functions().Call("World.Current", {}, context);
+    kb::tests::Require(currentResult.Succeeded() && currentResult.Output("world").has_value() && currentResult.Output("world")->AsUInt64() == scene.Id(),
+        "World.Current must return the calling scene's own runtime id");
+
+    const kb::script::ScriptFunctionCallResult playingResult = host.Functions().Call("World.IsPlaying", {}, context);
+    kb::tests::Require(playingResult.Succeeded() && playingResult.Output("playing").has_value() && playingResult.Output("playing")->AsBool(),
+        "World.IsPlaying must report true for a scene that has not been explicitly paused");
+    scene.Runtime().SetPlaying(false);
+    const kb::script::ScriptFunctionCallResult pausedResult = host.Functions().Call("World.IsPlaying", {}, context);
+    kb::tests::Require(pausedResult.Succeeded() && !pausedResult.Output("playing")->AsBool(), "World.IsPlaying must reflect Scene::Runtime().SetPlaying(false)");
+    scene.Runtime().SetPlaying(true);
+
+    const kb::script::ScriptFunctionCallResult frameBeforeUpdate = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(frameBeforeUpdate.Succeeded() && frameBeforeUpdate.Output("frame")->AsInt64() == 0, "World.FrameIndex must start at 0 before any Update()");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const kb::script::ScriptFunctionCallResult frameAfterUpdate = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(frameAfterUpdate.Succeeded() && frameAfterUpdate.Output("frame")->AsInt64() == 1, "World.FrameIndex must reflect Scene::Runtime().FrameIndex() after an Update()");
+
+    const kb::script::ScriptFunctionCallResult fixedStepResult = host.Functions().Call("World.FixedStepIndex", {}, context);
+    kb::tests::Require(fixedStepResult.Succeeded() && fixedStepResult.Output("step")->AsInt64() == 0, "World.FixedStepIndex must start at 0 for a scene with no fixed-step systems");
+
+    // LIB-066: World.Spawn(prefab, pose, parent?) — the prefab branch,
+    // exercising a full pose (position AND rotation, not just position)
+    // and an explicit parent, reusing the same "/Game/Prefabs/
+    // RuntimePrefab.kbprefab" fixture World.InstantiatePrefab uses below.
+    const std::vector<kb::script::ScriptFunctionArgument> spawnFromPrefabArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+        kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotW", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult spawnedFromPrefab = host.Functions().Call("World.Spawn", spawnFromPrefabArgs, context);
+    kb::tests::Require(spawnedFromPrefab.Succeeded(), "World.Spawn(prefab=...) direct call failed");
+    const kb::scene::SceneEntity spawnedPrefabRoot{ spawnedFromPrefab.Output("entity")->AsUInt64() };
+    kb::tests::Require(spawnedPrefabRoot.IsValid() && scene.Entities().Name(spawnedPrefabRoot) == "Prefab Root", "World.Spawn(prefab=...) did not return the prefab's root entity");
+    const kb::scene::TagsComponent* spawnedPrefabTags = scene.Components().Tags().TryGet(spawnedPrefabRoot);
+    kb::tests::Require(spawnedPrefabTags != nullptr && kb::scene::TagsText(*spawnedPrefabTags) == "Prefab, Runtime", "World.Spawn(prefab=...) did not preserve the prefab's own component data");
+    kb::tests::Require(scene.Hierarchy().Parent(spawnedPrefabRoot) == enemy, "World.Spawn(prefab=...) did not apply the requested parent");
+    const kb::scene::TransformComponent spawnedPrefabTransform = scene.Transforms().Get(spawnedPrefabRoot);
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.localPosition.x, 5.0F), "World.Spawn(prefab=...) did not apply the requested local position");
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.localRotation.w, 1.0F), "World.Spawn(prefab=...) did not apply the requested rotation pose");
+    // The "defined flush": world position must already reflect the parent
+    // (enemy at x=2) plus the local offset (x=5) = 7, immediately after
+    // World.Spawn returns — no separate Update()/SynchronizeTransforms()
+    // call from the test should be required.
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.worldPosition.x, 7.0F),
+        "World.Spawn(prefab=...) must return a handle whose WORLD position already reflects the parent hierarchy, not just local position, without a further flush from the caller");
 
     const std::vector<kb::script::ScriptFunctionArgument> translateArgs{
         kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
@@ -1489,6 +2257,571 @@ end
     const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
     kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
+}
+
+// LIB-067: World.Destroy idempotency (repeat call on an already-dead
+// entity is a safe no-op, not an error) and the "deferred" flag being
+// HONEST about this engine's current immediate-only lifecycle (rejected
+// with a clear error rather than silently behaving as immediate or
+// crashing later — see the design note on ScriptWorldApi.cpp's Destroy).
+// Deliberately its OWN fresh Scene/host rather than reusing
+// RunScriptWorldTimePhysicsApiTest's — a create-then-immediately-destroy
+// cycle interleaved into that giant, order-sensitive integration test was
+// observed to make an UNRELATED, LATER Physics.Raycast in the same test
+// hit the wrong entity (very likely stale broadphase/index-reuse state
+// from the freed entity slot, not anything about Destroy's own
+// correctness) — a real but separate finding, noted in _temp.md, that a
+// small isolated test sidesteps rather than chases down here.
+void RunWorldDestroyDeferredFlagTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.Destroy deferred-flag test host setup failed");
+
+    const kb::scene::SceneEntity target = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "DestroyTarget" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ target.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult firstDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(firstDestroy.Succeeded() && firstDestroy.Output("destroyed")->AsBool(), "World.Destroy must report destroyed=true for a live entity");
+    kb::tests::Require(!scene.Entities().IsAlive(target), "World.Destroy did not actually destroy the entity");
+
+    const kb::script::ScriptFunctionCallResult secondDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(secondDestroy.Succeeded() && !secondDestroy.Output("destroyed")->AsBool(),
+        "World.Destroy must be idempotent: a repeat call on an already-dead entity must succeed with destroyed=false, not error");
+    const kb::script::ScriptFunctionCallResult thirdDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(thirdDestroy.Succeeded() && !thirdDestroy.Output("destroyed")->AsBool(), "World.Destroy must remain idempotent across more than two repeat calls");
+
+    const kb::scene::SceneEntity liveEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "StillAlive" });
+    const std::vector<kb::script::ScriptFunctionArgument> deferredDestroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult deferredDestroy = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(!deferredDestroy.Succeeded(), "World.Destroy(deferred=true) must be rejected today, not silently treated as immediate");
+    kb::tests::Require(scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=true) must not have destroyed the entity when the call itself failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> explicitImmediateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult explicitImmediateDestroy = host.Functions().Call("World.Destroy", explicitImmediateArgs, context);
+    kb::tests::Require(explicitImmediateDestroy.Succeeded() && explicitImmediateDestroy.Output("destroyed")->AsBool(), "World.Destroy(deferred=false) must behave exactly like the default (immediate) call");
+    kb::tests::Require(!scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=false) must have actually destroyed the entity");
+}
+
+// LIB-068: World.IsActive/SetActive — an entity's own fresh Scene/host,
+// same reasoning as RunWorldDestroyDeferredFlagTest (keep create/destroy/
+// mutate cycles out of the large shared integration test).
+void RunWorldActiveStateTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World active-state test host setup failed");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "ActiveStateEntity" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> queryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult initiallyActive = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(initiallyActive.Succeeded() && initiallyActive.Output("active")->AsBool(), "World.IsActive must report true by default for a freshly created entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deactivateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "active", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult deactivated = host.Functions().Call("World.SetActive", deactivateArgs, context);
+    kb::tests::Require(deactivated.Succeeded() && deactivated.Output("set")->AsBool(), "World.SetActive must report set=true for a live entity");
+    kb::tests::Require(!scene.Entities().IsActive(entity), "World.SetActive(active=false) must be reflected by kb::scene::SceneEntities::IsActive");
+    const kb::script::ScriptFunctionCallResult nowInactive = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(nowInactive.Succeeded() && !nowInactive.Output("active")->AsBool(), "World.IsActive must reflect a prior World.SetActive(active=false)");
+    kb::tests::Require(scene.Entities().IsAlive(entity), "World.SetActive(active=false) must not destroy the entity — deactivation is not destruction");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reactivateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "active", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult reactivated = host.Functions().Call("World.SetActive", reactivateArgs, context);
+    kb::tests::Require(reactivated.Succeeded() && reactivated.Output("set")->AsBool(), "World.SetActive must report set=true when reactivating");
+    kb::tests::Require(scene.Entities().IsActive(entity), "World.SetActive(active=true) must reactivate the entity");
+
+    scene.Entities().Destroy(entity);
+    const kb::script::ScriptFunctionCallResult deadEntityQuery = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(deadEntityQuery.Succeeded() && !deadEntityQuery.Output("active")->AsBool(), "World.IsActive must report false (not throw) for a destroyed entity");
+    const kb::script::ScriptFunctionCallResult deadEntitySet = host.Functions().Call("World.SetActive", deactivateArgs, context);
+    kb::tests::Require(deadEntitySet.Succeeded() && !deadEntitySet.Output("set")->AsBool(), "World.SetActive must report set=false (not throw) when targeting a destroyed entity");
+}
+
+// LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
+// must be real, callable script functions (not just native kb::math
+// helpers) — reachable through ScriptFunctionRegistry::Call, the single
+// choke point every Native/Lua/Visual Graph caller funnels through, with
+// known-value correctness, not just "registered".
+void RunScriptMathApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script math API host did not initialize");
+    for (const char* name : {
+             "Math.Clamp", "Math.Lerp", "Math.InverseLerp", "Math.Remap", "Math.SmoothStep", "Math.MoveTowards", "Math.Damp",
+             "Math.Min", "Math.Max", "Math.Abs", "Math.Sign", "Math.Floor", "Math.Ceil", "Math.Round", "Math.Frac", "Math.Mod",
+             "Math.Sqrt", "Math.Pow", "Math.Exp", "Math.Log",
+             "Math.Sin", "Math.Cos", "Math.Tan", "Math.Asin", "Math.Acos", "Math.Atan", "Math.Atan2",
+             "Math.Dot", "Math.Cross", "Math.Length", "Math.Normalize", "Math.Distance", "Math.Project", "Math.Reflect", "Math.Refract",
+             "Math.Angle", "Math.SignedAngle", "Math.Slerp", "Math.LookRotation", "Math.FromToRotation", "Math.RotateTowards",
+             "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
+             "Math.RandomSeed", "Math.RandomNextUInt32", "Math.RandomNextFloat01", "Math.RandomRange", "Math.RandomRangeInt",
+             "Math.Ease",
+         }) {
+        const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
+    }
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const kb::script::ScriptFunctionCallResult clamped = host.Functions().Call(
+        "Math.Clamp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 15.0F } },
+            { .name = "min", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "max", .value = kb::script::ScriptValue{ 10.0F } },
+        },
+        context);
+    kb::tests::Require(clamped.Succeeded() && clamped.Output("result").has_value() && kb::tests::NearlyEqual(clamped.Output("result")->AsFloat(), 10.0F), "Math.Clamp direct call did not clamp above the max");
+
+    const kb::script::ScriptFunctionCallResult lerped = host.Functions().Call(
+        "Math.Lerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.25F } },
+        },
+        context);
+    kb::tests::Require(lerped.Succeeded() && lerped.Output("result").has_value() && kb::tests::NearlyEqual(lerped.Output("result")->AsFloat(), 2.5F), "Math.Lerp direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult inverseLerped = host.Functions().Call(
+        "Math.InverseLerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "value", .value = kb::script::ScriptValue{ 2.5F } },
+        },
+        context);
+    kb::tests::Require(inverseLerped.Succeeded() && inverseLerped.Output("t").has_value() && kb::tests::NearlyEqual(inverseLerped.Output("t")->AsFloat(), 0.25F), "Math.InverseLerp direct call returned the wrong t");
+
+    const kb::script::ScriptFunctionCallResult remapped = host.Functions().Call(
+        "Math.Remap",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "inMin", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "inMax", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "outMin", .value = kb::script::ScriptValue{ 100.0F } },
+            { .name = "outMax", .value = kb::script::ScriptValue{ 200.0F } },
+        },
+        context);
+    kb::tests::Require(remapped.Succeeded() && remapped.Output("result").has_value() && kb::tests::NearlyEqual(remapped.Output("result")->AsFloat(), 150.0F), "Math.Remap direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult movedTowards = host.Functions().Call(
+        "Math.MoveTowards",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "current", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "target", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "maxDelta", .value = kb::script::ScriptValue{ 3.0F } },
+        },
+        context);
+    kb::tests::Require(movedTowards.Succeeded() && movedTowards.Output("result").has_value() && kb::tests::NearlyEqual(movedTowards.Output("result")->AsFloat(), 3.0F), "Math.MoveTowards direct call did not move by maxDelta");
+
+    const kb::script::ScriptFunctionCallResult damped = host.Functions().Call(
+        "Math.Damp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "current", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "target", .value = kb::script::ScriptValue{ 10.0F } },
+            { .name = "velocity", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "smoothTime", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "deltaTime", .value = kb::script::ScriptValue{ 0.1F } },
+        },
+        context);
+    kb::tests::Require(
+        damped.Succeeded() && damped.Output("value").has_value() && damped.Output("velocity").has_value() &&
+            damped.Output("value")->AsFloat() > 0.0F && damped.Output("value")->AsFloat() < 10.0F,
+        "Math.Damp direct call did not move current toward target without overshooting");
+
+    const kb::script::ScriptFunctionCallResult maxed = host.Functions().Call(
+        "Math.Max",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 7.0F } },
+        },
+        context);
+    kb::tests::Require(maxed.Succeeded() && maxed.Output("result").has_value() && kb::tests::NearlyEqual(maxed.Output("result")->AsFloat(), 7.0F), "Math.Max direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult modded = host.Functions().Call(
+        "Math.Mod",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ -1.0F } },
+            { .name = "divisor", .value = kb::script::ScriptValue{ 4.0F } },
+        },
+        context);
+    kb::tests::Require(modded.Succeeded() && modded.Output("result").has_value() && kb::tests::NearlyEqual(modded.Output("result")->AsFloat(), 3.0F), "Math.Mod direct call must use the floor-based convention (mod(-1,4)=3, not -1)");
+
+    const kb::script::ScriptFunctionCallResult sqrted = host.Functions().Call(
+        "Math.Sqrt",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 16.0F } },
+        },
+        context);
+    kb::tests::Require(sqrted.Succeeded() && sqrted.Output("result").has_value() && kb::tests::NearlyEqual(sqrted.Output("result")->AsFloat(), 4.0F), "Math.Sqrt direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult sined = host.Functions().Call(
+        "Math.Sin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "angle", .value = kb::script::ScriptValue{ kb::math::kPi / 2.0F } },
+        },
+        context);
+    kb::tests::Require(sined.Succeeded() && sined.Output("result").has_value() && kb::tests::NearlyEqual(sined.Output("result")->AsFloat(), 1.0F), "Math.Sin direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult atan2ed = host.Functions().Call(
+        "Math.Atan2",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "y", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "x", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(atan2ed.Succeeded() && atan2ed.Output("result").has_value() && kb::tests::NearlyEqual(atan2ed.Output("result")->AsFloat(), kb::math::kPi / 4.0F), "Math.Atan2 direct call returned the wrong value");
+
+    // LIB-047's "zdefiniowana domena błędu": Math.Asin with a value
+    // outside [-1,1] must fail with a real error, not silently return NaN
+    // into the graph.
+    const kb::script::ScriptFunctionCallResult asinOutOfDomain = host.Functions().Call(
+        "Math.Asin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 2.0F } },
+        },
+        context);
+    kb::tests::Require(!asinOutOfDomain.Succeeded() && !asinOutOfDomain.errors.empty(), "Math.Asin with a value outside [-1,1] must report a real error, not succeed with NaN");
+
+    const kb::script::ScriptFunctionCallResult acosOutOfDomain = host.Functions().Call(
+        "Math.Acos",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ -1.5F } },
+        },
+        context);
+    kb::tests::Require(!acosOutOfDomain.Succeeded() && !acosOutOfDomain.errors.empty(), "Math.Acos with a value outside [-1,1] must report a real error, not succeed with NaN");
+
+    const kb::script::ScriptFunctionCallResult asinInDomain = host.Functions().Call(
+        "Math.Asin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(asinInDomain.Succeeded() && asinInDomain.Output("result").has_value() && kb::tests::NearlyEqual(asinInDomain.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Asin with a boundary-valid value (1.0) must succeed, not be rejected as out of domain");
+
+    // LIB-048: Vec3 is not a script pin type — every Vec3-shaped Math.*
+    // function decomposes into named-prefix Float pins (aX/aY/aZ, ...),
+    // the same convention Physics.Raycast already uses.
+    const kb::script::ScriptFunctionCallResult crossed = host.Functions().Call(
+        "Math.Cross",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        crossed.Succeeded() && crossed.Output("x").has_value() && crossed.Output("y").has_value() && crossed.Output("z").has_value() &&
+            kb::tests::NearlyEqual(crossed.Output("x")->AsFloat(), 0.0F) && kb::tests::NearlyEqual(crossed.Output("y")->AsFloat(), 0.0F) && kb::tests::NearlyEqual(crossed.Output("z")->AsFloat(), 1.0F),
+        "Math.Cross direct call must decompose Vec3 into aX/aY/aZ/bX/bY/bZ pins and return x/y/z outputs");
+
+    const kb::script::ScriptFunctionCallResult distanced = host.Functions().Call(
+        "Math.Distance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(distanced.Succeeded() && distanced.Output("result").has_value() && kb::tests::NearlyEqual(distanced.Output("result")->AsFloat(), 5.0F), "Math.Distance direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult angled = host.Functions().Call(
+        "Math.Angle",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(angled.Succeeded() && angled.Output("result").has_value() && kb::tests::NearlyEqual(angled.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Angle direct call returned the wrong value");
+
+    // LIB-049: Quat is not a script pin type either — decomposed into
+    // <prefix>X/Y/Z/W pins, mirroring Vec3's convention.
+    const kb::script::ScriptFunctionCallResult lookRotated = host.Functions().Call(
+        "Math.LookRotation",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "forwardX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "forwardY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "forwardZ", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "upX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "upY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "upZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        lookRotated.Succeeded() && lookRotated.Output("w").has_value() && kb::tests::NearlyEqual(lookRotated.Output("w")->AsFloat(), 1.0F),
+        "Math.LookRotation(+Z, +Y) direct call must decompose Vec3/Quat pins and return the identity rotation");
+
+    const kb::script::ScriptFunctionCallResult slerpedAtStart = host.Functions().Call(
+        "Math.Slerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aW", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 0.7071F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bW", .value = kb::script::ScriptValue{ 0.7071F } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(slerpedAtStart.Succeeded() && slerpedAtStart.Output("w").has_value() && kb::tests::NearlyEqual(slerpedAtStart.Output("w")->AsFloat(), 1.0F), "Math.Slerp direct call at t=0 must return the start rotation");
+
+    // LIB-050: seed/index are UInt32 (LIB-041), not Int — a ScriptValue
+    // constructed from a bare int literal would be rejected by pin
+    // validation as a type mismatch, proving the pin type is actually
+    // enforced, not just documented.
+    const kb::script::ScriptFunctionCallResult randomed = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 42U } } },
+            { .name = "index", .value = kb::script::ScriptValue{ std::uint32_t{ 7U } } },
+        },
+        context);
+    kb::tests::Require(randomed.Succeeded() && randomed.Output("result").has_value() && randomed.Output("result")->AsFloat() >= 0.0F && randomed.Output("result")->AsFloat() <= 1.0F, "Math.Random01 direct call must return a value in [0,1]");
+
+    const kb::script::ScriptFunctionCallResult noised = host.Functions().Call(
+        "Math.Noise3D",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "x", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "y", .value = kb::script::ScriptValue{ -2.0F } },
+            { .name = "z", .value = kb::script::ScriptValue{ 9.0F } },
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 42U } } },
+        },
+        context);
+    kb::tests::Require(noised.Succeeded() && noised.Output("result").has_value() && noised.Output("result")->AsFloat() == 0.0F, "Math.Noise3D direct call at an integer lattice point must be exactly zero");
+
+    // LIB-051: RandomStream's state (streamSeed/streamCounter, both
+    // UInt32) must round-trip through Math.RandomSeed and then thread
+    // correctly through Math.RandomRangeInt — proving the {value,
+    // advancedStream} pattern actually works end to end through the
+    // script boundary, not just natively.
+    const kb::script::ScriptFunctionCallResult seeded = host.Functions().Call(
+        "Math.RandomSeed",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ std::uint32_t{ 123U } } },
+        },
+        context);
+    kb::tests::Require(
+        seeded.Succeeded() && seeded.Output("streamSeed").has_value() && seeded.Output("streamCounter").has_value() &&
+            seeded.Output("streamSeed")->AsUInt32() == 123U && seeded.Output("streamCounter")->AsUInt32() == 0U,
+        "Math.RandomSeed must return a stream with the given seed and counter 0");
+
+    const kb::script::ScriptFunctionCallResult rangedInt = host.Functions().Call(
+        "Math.RandomRangeInt",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "streamSeed", .value = *seeded.Output("streamSeed") },
+            { .name = "streamCounter", .value = *seeded.Output("streamCounter") },
+            { .name = "min", .value = kb::script::ScriptValue{ 0 } },
+            { .name = "max", .value = kb::script::ScriptValue{ 10 } },
+        },
+        context);
+    kb::tests::Require(
+        rangedInt.Succeeded() && rangedInt.Output("value").has_value() && rangedInt.Output("value")->AsInt() >= 0 && rangedInt.Output("value")->AsInt() < 10 &&
+            rangedInt.Output("streamCounter").has_value() && rangedInt.Output("streamCounter")->AsUInt32() == 1U,
+        "Math.RandomRangeInt direct call must return a value in [0,10) and advance streamCounter by exactly one");
+
+    // LIB-052: Easing is exposed as an Int ordinal (no dedicated enum
+    // ScriptValueType), with an out-of-range ordinal rejected as a real
+    // domain error (same pattern as LIB-047's Asin/Acos) rather than an
+    // unchecked cast into undefined enum territory.
+    const kb::script::ScriptFunctionCallResult eased = host.Functions().Call(
+        "Math.Ease",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "easing", .value = kb::script::ScriptValue{ static_cast<int>(kb::math::Easing::InQuad) } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.5F } },
+        },
+        context);
+    kb::tests::Require(eased.Succeeded() && eased.Output("result").has_value() && kb::tests::NearlyEqual(eased.Output("result")->AsFloat(), 0.25F), "Math.Ease direct call with InQuad at t=0.5 must return 0.25");
+
+    const kb::script::ScriptFunctionCallResult easedOutOfRange = host.Functions().Call(
+        "Math.Ease",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "easing", .value = kb::script::ScriptValue{ 9999 } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.5F } },
+        },
+        context);
+    kb::tests::Require(!easedOutOfRange.Succeeded() && !easedOutOfRange.errors.empty(), "Math.Ease with an out-of-range easing ordinal must report a real error, not cast into undefined enum territory");
+}
+
+// LIB-056: Math.Clamp is a single ScriptFunctionRegistry-registered
+// function — calling it through Native/Lua/Visual Graph is calling the
+// SAME kb::math::Clamp underneath every time (ScriptMathApi.cpp's
+// callback), so this is a parity check on the marshalling paths
+// (ScriptExecutionContext::CallFunction, Lua's CallFunction global,
+// VisualGraph's CallNative binding), not on Clamp's own math — that's
+// already covered natively by EngineMathTests.cpp. Reuses exactly the
+// three-backend harness RunScriptFunctionRegistryCrossBackendTest (LIB-011)
+// already established (Native/Lua/VisualGraph BehaviourComponents driving
+// one ScriptRuntime::ExecuteLifecycle Tick), just with Math.Clamp's three
+// Float inputs (value/min/max) instead of Inventory.AddItem's single Int.
+void RunMathFunctionCrossBackendParityTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Math cross-backend parity host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Math.Clamp") != nullptr, "Math.Clamp must already be registered (LIB-045) before this parity test runs");
+
+    constexpr kb::assets::AssetId kNativeAsset{ 5020U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5021U };
+    constexpr kb::assets::AssetId kVisualAsset{ 5022U };
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Math Caller" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Math Caller" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visual Math Caller" });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .executionOrder = 0,
+    });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .executionOrder = 10,
+    });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kVisualAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+        .executionOrder = 20,
+    });
+
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+                           const std::vector<kb::script::ScriptFunctionArgument> arguments{
+                               kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 15.0F } },
+                               kb::script::ScriptFunctionArgument{ .name = "min", .value = kb::script::ScriptValue{ 0.0F } },
+                               kb::script::ScriptFunctionArgument{ .name = "max", .value = kb::script::ScriptValue{ 10.0F } },
+                           };
+                           const kb::script::ScriptFunctionCallResult result = context.CallFunction("Math.Clamp", arguments);
+                           kb::tests::Require(result.Succeeded(), "Native Math.Clamp call failed");
+                           const std::optional<kb::script::ScriptValue> value = result.Output("result");
+                           kb::tests::Require(value.has_value(), "Native Math.Clamp call did not return a result");
+                           kb::tests::Require(context.SetSharedValue("nativeClampResult", *value), "Native Math.Clamp call could not store shared result");
+                       }),
+        "Native Math caller did not register");
+
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local result = CallFunction("Math.Clamp", { value = 15.0, min = 0.0, max = 10.0 })
+    SetShared("luaClampResult", result)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Lua Math caller did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "VisualMathCaller";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "MathClampInputs" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "GraphClampResultKey" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Math.Clamp" },
+        kb::visual::VisualGraphNode{ .id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "result", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "value", .toNode = 4U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "min", .toNode = 4U, .toPin = "min", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "max", .toNode = 4U, .toPin = "max", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "result", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Visual Math caller graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kVisualAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "MathClampInputs",
+                           .outputs = {
+                               kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+                               kb::visual::VisualGraphPinSignature{ .name = "min", .type = kb::visual::VisualGraphValueType::Float },
+                               kb::visual::VisualGraphPinSignature{ .name = "max", .type = kb::visual::VisualGraphValueType::Float },
+                           },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ 15.0F });
+                               context.Store(instruction.sourceNodeId, "min", kb::visual::VisualGraphRuntimeValue{ 0.0F });
+                               context.Store(instruction.sourceNodeId, "max", kb::visual::VisualGraphRuntimeValue{ 10.0F });
+                           },
+                       }),
+        "Visual Math clamp-inputs binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "GraphClampResultKey",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "graphClampResult" } });
+                           },
+                       }),
+        "Visual Math clamp-result-key binding did not register");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Math cross-backend parity runtime produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> nativeResult = host.SharedState().Get("nativeClampResult");
+    const std::optional<kb::script::ScriptValue> luaResult = host.SharedState().Get("luaClampResult");
+    const std::optional<kb::script::ScriptValue> graphResult = host.SharedState().Get("graphClampResult");
+    kb::tests::Require(nativeResult.has_value(), "Native backend did not store a Math.Clamp result");
+    kb::tests::Require(luaResult.has_value(), "Lua backend did not store a Math.Clamp result");
+    kb::tests::Require(graphResult.has_value(), "Visual Graph backend did not store a Math.Clamp result");
+
+    // The actual parity check: kb::math::Clamp(15, 0, 10) == 10 exactly
+    // (no floating-point accumulation in a single Clamp call), and all
+    // three backends must agree with each other AND with the expected
+    // value, within float tolerance.
+    constexpr float kExpected = 10.0F;
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), kExpected), "Native Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), kExpected), "Lua Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(graphResult->AsFloat(), kExpected), "Visual Graph Math.Clamp result does not match the expected value");
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), luaResult->AsFloat()), "Native and Lua Math.Clamp results must match within float tolerance");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.Clamp results must match within float tolerance");
 }
 
 void RunScriptInputApiTest() {
@@ -2700,11 +4033,27 @@ void RunScriptRuntimeTests() {
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();
+    RunPendingCommandCancelledByDestroyTest();
     RunTargetedEventDispatchTest();
     RunCrossBackendSharedStateTest();
     RunScriptFunctionRegistryCrossBackendTest();
+    RunVisualGraphCallNativeFailureBranchTest();
+    RunLuaCallFunctionResultAdapterTest();
+    RunScriptFunctionRegistryExceptionSafetyTest();
+    RunNativeScriptBackendExceptionSafetyTest();
+    RunUnexposedFunctionCannotBeCalledTest();
+    RunScriptFunctionRegistryLocksAfterFirstDispatchTest();
+    RunScriptFunctionRegistryReentrancyGuardTest();
+    RunNativeFullLifecycleOrderTest();
+    RunPucLuaFullLifecycleOrderTest();
+    RunVisualGraphFullLifecycleOrderTest();
+    RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunWorldDestroyDeferredFlagTest();
+    RunWorldActiveStateTest();
+    RunScriptMathApiTest();
+    RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();

@@ -11,6 +11,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -71,6 +72,26 @@ void ApplyPositionArgs(kb::scene::TransformComponent& transform, std::span<const
     }
     if (HasArg(arguments, "z")) {
         transform.localPosition.z = FloatArg(arguments, "z", transform.localPosition.z);
+    }
+}
+
+// LIB-066: the rotation half of a World.Spawn "pose" (position from
+// ApplyPositionArgs above, rotation here) — same per-component-optional
+// idiom, defaulting to whatever is already in transform.localRotation
+// (identity, kb::math::Quat{}'s default, for a freshly constructed
+// TransformComponent).
+void ApplyRotationArgs(kb::scene::TransformComponent& transform, std::span<const ScriptFunctionArgument> arguments) noexcept {
+    if (HasArg(arguments, "rotX")) {
+        transform.localRotation.x = FloatArg(arguments, "rotX", transform.localRotation.x);
+    }
+    if (HasArg(arguments, "rotY")) {
+        transform.localRotation.y = FloatArg(arguments, "rotY", transform.localRotation.y);
+    }
+    if (HasArg(arguments, "rotZ")) {
+        transform.localRotation.z = FloatArg(arguments, "rotZ", transform.localRotation.z);
+    }
+    if (HasArg(arguments, "rotW")) {
+        transform.localRotation.w = FloatArg(arguments, "rotW", transform.localRotation.w);
     }
 }
 
@@ -173,6 +194,31 @@ ScriptFunctionCallResult Exists(const ScriptFunctionCallContext& context, std::s
     return BoolResult("exists", context.scene->Entities().IsAlive(EntityArg(arguments, "entity")));
 }
 
+// LIB-068: an entity is active by default and stays that way until an
+// explicit SetActive(false) — kb::scene::SceneEntityService::IsActive
+// also folds in IsAlive, so a dead/never-existed entity reports inactive
+// rather than throwing, the same "never crash on a stale handle" contract
+// every other World.* query in this file already follows.
+ScriptFunctionCallResult IsActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("active", context.scene->Entities().IsActive(EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult SetActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const bool alive = entity.IsValid() && context.scene->Entities().IsAlive(entity);
+    if (alive) {
+        const ScriptValue* activeValue = FindArg(arguments, "active");
+        context.scene->Entities().SetActive(entity, activeValue == nullptr || activeValue->AsBool(true));
+    }
+    return BoolResult("set", alive);
+}
+
 ScriptFunctionCallResult Name(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -186,24 +232,148 @@ ScriptFunctionCallResult Name(const ScriptFunctionCallContext& context, std::spa
     };
 }
 
+// LIB-065: the current scene's runtime instance id — an opaque identifier
+// (like Hash), not an arithmetic quantity, and NOT the same kind of thing
+// as kb::library::SceneRef (an on-disk SceneDocument asset handle); this
+// is the currently-executing, in-memory world.
+ScriptFunctionCallResult Current(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "world", ScriptValue{ context.scene->Id(), ScriptValueType::Hash } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult IsPlaying(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("playing", context.scene->Runtime().IsPlaying());
+}
+
+// LIB-065: monotonic since scene creation (kb::scene::SceneRuntime::
+// FrameIndex/FixedStepIndex never reset, unlike LastFixedStepCount).
+ScriptFunctionCallResult FrameIndex(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "frame", ScriptValue{ static_cast<std::int64_t>(context.scene->Runtime().FrameIndex()) } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "step", ScriptValue{ static_cast<std::int64_t>(context.scene->Runtime().FixedStepIndex()) } } },
+        .errors = {},
+    };
+}
+
+// LIB-066: World.Spawn(prefab?, pose, parent?) — "prefab" is optional
+// (empty means "spawn a blank entity", the pre-LIB-066 behavior, kept
+// byte-for-byte via its own branch below so existing callers are
+// unaffected); "pose" decomposes into the existing x/y/z position pins
+// plus new rotX/rotY/rotZ/rotW rotation pins (kb::math::Pose{position,
+// rotation}, LIB-042's decomposition idiom already established for
+// Vec3/Quat elsewhere in this codebase).
+//
+// The "defined flush": ONLY when an external parent was actually assigned
+// does this call SynchronizeTransforms() before returning, so the
+// returned handle's WORLD position/rotation reflects the new parent
+// immediately rather than staying stale until the next scheduled
+// hierarchy sync. A root spawn (no parent) needs no flush at all — its
+// world transform trivially equals its local transform, identical to
+// every other unparented entity in this engine — and skipping the sync in
+// that case matters: SynchronizeTransforms() is otherwise only ever
+// called from Scene::Runtime().Update()'s own fixed points; calling it
+// unconditionally from inside a script function turned out to disturb
+// state an in-flight Tick() elsewhere in the same frame depends on (a
+// physics raycast run later in the same Tick started hitting the wrong
+// collider once every Spawn — even unparented ones — force-synced).
 ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
-    kb::scene::SceneObjectDesc desc;
-    desc.name = StringArg(arguments, "name", "Entity");
-    ApplyPositionArgs(desc.transform, arguments);
-    const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
-    if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
-        desc.parent = context.scene->Entities().Object(parent);
+    const std::string prefabPath = StringArg(arguments, "prefab");
+    kb::scene::SceneEntity entity{};
+    bool parented = false;
+    if (prefabPath.empty()) {
+        kb::scene::SceneObjectDesc desc;
+        desc.name = StringArg(arguments, "name", "Entity");
+        ApplyPositionArgs(desc.transform, arguments);
+        ApplyRotationArgs(desc.transform, arguments);
+        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
+        if (parented) {
+            desc.parent = context.scene->Entities().Object(parent);
+        }
+        entity = context.scene->Entities().CreateEntity(std::move(desc));
+    } else {
+        kb::assets::AssetHandle<kb::scene::ScenePrefab> prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
+        if (!prefab.IsLoaded()) {
+            return Error("prefab asset could not be loaded");
+        }
+        const kb::scene::ScenePrefabInstance instance = context.scene->Prefabs().Instantiate(*prefab.Get());
+        entity = instance.Empty() ? kb::scene::SceneEntity{} : instance.ObjectAt(0).Entity();
+        if (!entity.IsValid()) {
+            return Error("prefab instantiation produced no root entity");
+        }
+        if (HasArg(arguments, "x") || HasArg(arguments, "y") || HasArg(arguments, "z") || HasArg(arguments, "rotX") || HasArg(arguments, "rotY") ||
+            HasArg(arguments, "rotZ") || HasArg(arguments, "rotW")) {
+            kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+            ApplyPositionArgs(transform, arguments);
+            ApplyRotationArgs(transform, arguments);
+            context.scene->Transforms().Set(entity, transform);
+        }
+        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
+        if (parented) {
+            // Matches the blank-entity path above, which also has no
+            // separate failure signal for a rejected parent assignment.
+            static_cast<void>(context.scene->Hierarchy().SetParent(entity, parent));
+        }
     }
-    const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
+    if (parented) {
+        context.scene->Runtime().SynchronizeTransforms();
+    }
     return EntityResult("entity", entity);
 }
 
+// LIB-067: idempotent by construction — a repeat call on an already-dead
+// (or never-alive) entity takes the IsAlive()==false branch, returns
+// destroyed=false, and never touches Entities().Destroy() again; calling
+// it any number of times leaves the world in the same state as calling it
+// once. The "deferred" flag is HONEST about what this engine can actually
+// do today rather than faking it: kb::library::CommandApplicationPointFor
+// reports Immediate for every lifecycle phase (LIB-006, still true), and
+// kb::ecs::CommandBuffer has no owner/playback point wired into any scene
+// lifecycle — building one is LIB-083's explicit, still-open scope, not
+// this task's. CommandBuffer's own destroy path also isn't safe against a
+// deferred destroy racing an immediate destroy of the same entity (it
+// throws at Playback() on a stale handle) — implementing a half-wired
+// "deferred" here would be a real correctness risk, not a convenience. So
+// deferred=true is accepted as real, documented input (the flag exists,
+// matching the task's ask) but rejected with a clear error rather than
+// silently behaving as immediate or crashing later.
 ScriptFunctionCallResult Destroy(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
+    }
+    const ScriptValue* deferredArg = FindArg(arguments, "deferred");
+    if (deferredArg != nullptr && deferredArg->AsBool(false)) {
+        return Error(
+            "World.Destroy(deferred=true) is not supported yet: this engine has no lifecycle-wired command playback point today "
+            "(kb::library::CommandApplicationPointFor reports Immediate for every phase; see LIB-006/LIB-083). Call World.Destroy without "
+            "deferred=true (or deferred=false) for the existing immediate, idempotent behavior.");
     }
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
     const bool existed = entity.IsValid() && context.scene->Entities().IsAlive(entity);
@@ -352,6 +522,22 @@ bool RegisterFunction(
 
 bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
+    ok = RegisterFunction(host, "World.Current",
+        {},
+        { ScriptFunctionPin{ "world", ScriptValueType::Hash, true } },
+        &Current) && ok;
+    ok = RegisterFunction(host, "World.IsPlaying",
+        {},
+        { ScriptFunctionPin{ "playing", ScriptValueType::Bool, true } },
+        &IsPlaying) && ok;
+    ok = RegisterFunction(host, "World.FrameIndex",
+        {},
+        { ScriptFunctionPin{ "frame", ScriptValueType::Int64, true } },
+        &FrameIndex) && ok;
+    ok = RegisterFunction(host, "World.FixedStepIndex",
+        {},
+        { ScriptFunctionPin{ "step", ScriptValueType::Int64, true } },
+        &FixedStepIndex) && ok;
     ok = RegisterFunction(host, "World.FindByName",
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
@@ -360,6 +546,14 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "exists", ScriptValueType::Bool, true } },
         &Exists) && ok;
+    ok = RegisterFunction(host, "World.IsActive",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "active", ScriptValueType::Bool, true } },
+        &IsActive) && ok;
+    ok = RegisterFunction(host, "World.SetActive",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "active", ScriptValueType::Bool, false } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetActive) && ok;
     ok = RegisterFunction(host, "World.Name",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
@@ -367,15 +561,20 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "World.Spawn",
         {
             ScriptFunctionPin{ "name", ScriptValueType::String, false },
+            ScriptFunctionPin{ "prefab", ScriptValueType::String, false },
             ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
             ScriptFunctionPin{ "x", ScriptValueType::Float, false },
             ScriptFunctionPin{ "y", ScriptValueType::Float, false },
             ScriptFunctionPin{ "z", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotZ", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotW", ScriptValueType::Float, false },
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &Spawn) && ok;
     ok = RegisterFunction(host, "World.Destroy",
-        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "deferred", ScriptValueType::Bool, false } },
         { ScriptFunctionPin{ "destroyed", ScriptValueType::Bool, true } },
         &Destroy) && ok;
     ok = RegisterFunction(host, "World.SetTag",

@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct ecs_query_t;
@@ -86,6 +87,16 @@ public:
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
+    // LIB-065: monotonic counters, never reset (unlike lastFixedStepCount,
+    // which is a per-frame count reset at the top of every Update()).
+    // frameIndex counts Update() calls; fixedStepIndex counts individual
+    // fixed-step substeps across the scene's whole lifetime.
+    std::uint64_t frameIndex = 0U;
+    std::uint64_t fixedStepIndex = 0U;
+    // LIB-065: true by default (a standalone/headless run has no "edit
+    // mode" to distinguish from) — an editor sets this false while the
+    // scene is being edited rather than simulated, via SetPlaying.
+    bool isPlaying = true;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
@@ -94,6 +105,13 @@ public:
     std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
+    // LIB-068: entities are active by default (absent from this set); an
+    // entity is only ever added here by an explicit SetActive(false) —
+    // same "presence means non-default" shape already used by
+    // hierarchyParents/hierarchyChildren for the (much more common)
+    // default-empty case, so a scene with no deactivated entities pays no
+    // per-entity storage cost.
+    std::unordered_set<SceneEntity::IdType> inactiveEntities;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;

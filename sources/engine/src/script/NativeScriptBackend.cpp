@@ -1,8 +1,43 @@
 #include "engine/script/NativeScriptBackend.hpp"
 
+#include <exception>
+#include <string>
 #include <utility>
 
 namespace kb::script {
+namespace {
+
+// A registered native callback can throw. DispatchSceneBehaviours
+// (ScriptRuntime.cpp) walks every behaviour in a phase in one loop; letting
+// an exception propagate out of here would abort every other behaviour's
+// dispatch for the rest of the frame. Converting it into a diagnostic here
+// keeps that loop resilient, the same way ScriptFunctionRegistry::Call does
+// for function calls.
+template <typename Invoke>
+void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::assets::AssetId assetId, ScriptBackendExecutionResult& result) {
+    try {
+        invoke();
+        result.executed = true;
+    } catch (const std::exception& exception) {
+        result.diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = assetId,
+            .backend = context.Backend(),
+            .lifecyclePhase = context.Lifecycle(),
+            .message = std::string{ "native script callback threw an exception: " } + exception.what(),
+        });
+    } catch (...) {
+        result.diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = assetId,
+            .backend = context.Backend(),
+            .lifecyclePhase = context.Lifecycle(),
+            .message = "native script callback threw a non-standard exception",
+        });
+    }
+}
+
+} // namespace
 
 std::size_t NativeScriptBackend::LifecycleKeyHasher::operator()(LifecycleKey key) const noexcept {
     return static_cast<std::size_t>(key.assetId ^ (static_cast<std::uint64_t>(key.event) + 0x9e3779b97f4a7c15ULL + (key.assetId << 6U) + (key.assetId >> 2U)));
@@ -123,12 +158,10 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteLifecycle(const kb::sce
         if (symbolCallback == symbolLifecycleCallbacks_.end()) {
             return result;
         }
-        symbolCallback->second(context);
-        result.executed = true;
+        InvokeNativeCallback([&] { symbolCallback->second(context); }, context, assetId, result);
         return result;
     }
-    iter->second(context);
-    result.executed = true;
+    InvokeNativeCallback([&] { iter->second(context); }, context, assetId, result);
     return result;
 }
 
@@ -145,12 +178,10 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::
         if (symbolCallback == symbolEventCallbacks_.end()) {
             return result;
         }
-        symbolCallback->second(context, event);
-        result.executed = true;
+        InvokeNativeCallback([&] { symbolCallback->second(context, event); }, context, assetId, result);
         return result;
     }
-    iter->second(context, event);
-    result.executed = true;
+    InvokeNativeCallback([&] { iter->second(context, event); }, context, assetId, result);
     return result;
 }
 

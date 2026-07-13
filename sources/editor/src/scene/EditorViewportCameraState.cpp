@@ -1,12 +1,22 @@
 #include "scene/EditorViewportCameraState.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <algorithm>
 #include <cmath>
 
 namespace kb::editor {
 namespace {
 
-constexpr float kPi = 3.14159265358979323846F;
+// LIB-042/LIB-043: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
+// TransformComponent.hpp), which already provides Length/Normalize/Cross —
+// this file's own copies used to be a second definition and would now be
+// an ambiguous overload via ADL against kb::math's. Sub/Mul have no
+// kb::math equivalent yet, so they stay local.
+using kb::math::Cross;
+using kb::math::Length;
+using kb::math::Normalize;
+
 constexpr float kLookSensitivity = 0.12F;
 constexpr float kLeftDollyScale = 0.045F;
 constexpr float kPanScale = 0.018F;
@@ -19,12 +29,10 @@ constexpr float kMinOrbitDistance = 0.15F;
 constexpr float kMinSpeed = 0.05F;
 constexpr float kMaxSpeed = 200.0F;
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant.
 [[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return degrees * kPi / 180.0F;
-}
-
-[[nodiscard]] kb::scene::Vec3 Add(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
-    return kb::scene::Vec3{ a.x + b.x, a.y + b.y, a.z + b.z };
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 [[nodiscard]] kb::scene::Vec3 Sub(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
@@ -33,26 +41,6 @@ constexpr float kMaxSpeed = 200.0F;
 
 [[nodiscard]] kb::scene::Vec3 Mul(kb::scene::Vec3 value, float scale) noexcept {
     return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
-}
-
-[[nodiscard]] float Length(kb::scene::Vec3 value) noexcept {
-    return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
-}
-
-[[nodiscard]] kb::scene::Vec3 Normalize(kb::scene::Vec3 value) noexcept {
-    const float length = Length(value);
-    if (length <= 0.00001F) {
-        return kb::scene::Vec3{};
-    }
-    return Mul(value, 1.0F / length);
-}
-
-[[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 a, kb::scene::Vec3 b) noexcept {
-    return kb::scene::Vec3{
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x,
-    };
 }
 
 [[nodiscard]] float DirectionSign(bool positive, bool negative) noexcept {
@@ -244,12 +232,12 @@ void EditorViewportCameraState::ClampPitch() noexcept {
 
 void EditorViewportCameraState::MoveLocal(float right, float up, float forward) noexcept {
     const EditorViewportCameraAxes axes = Axes();
-    position_ = Add(position_, Add(Mul(axes.right, right), Add(Mul(axes.up, up), Mul(axes.forward, forward))));
+    position_ = position_ + Mul(axes.right, right) + Mul(axes.up, up) + Mul(axes.forward, forward);
 }
 
 void EditorViewportCameraState::ResetOrbitPivot() noexcept {
     const EditorViewportCameraAxes axes = Axes();
-    orbitPivot_ = Add(position_, Mul(axes.forward, orbitDistance_));
+    orbitPivot_ = position_ + Mul(axes.forward, orbitDistance_);
 }
 
 void EditorViewportCameraState::UpdateOrbitPosition() noexcept {

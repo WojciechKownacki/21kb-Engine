@@ -23,7 +23,17 @@ namespace {
         return ScriptValue{ value.AsString() };
     case ScriptValueType::Entity:
     case ScriptValueType::Component:
+    case ScriptValueType::Hash:
         return ScriptValue{ value.AsUInt64(), expectedType };
+    case ScriptValueType::UInt32:
+        return ScriptValue{ static_cast<std::uint32_t>(value.AsUInt64()) };
+    case ScriptValueType::Int64:
+        return ScriptValue{ value.AsInt64() };
+    case ScriptValueType::Double:
+        return ScriptValue{ value.AsDouble() };
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return ScriptValue{ value.AsString(), expectedType };
     case ScriptValueType::Void:
         break;
     }

@@ -1,12 +1,51 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 
+#include "engine/library/EngineLibraryTextEncoding.hpp"
+
 #include <cstdint>
+#include <exception>
 #include <ranges>
 #include <set>
 #include <utility>
 
 namespace kb::script {
 namespace {
+
+// LIB-037: a unified input limit shared by every script function call
+// (Native, Lua, Visual Graph all funnel through ValidateInputs). Rejecting
+// an oversized String argument here — rather than letting it flow into a
+// callback that might log it, store it, or forward it to another
+// system — keeps one enforcement point instead of every callback needing
+// its own bound. kb::library::LibraryInputLimits::maxStringLength documents
+// this same value for callers that want to check it before calling.
+constexpr std::size_t kMaxScriptStringArgumentLength = 65536U;
+
+// LIB-038: reentrancy guard. A callback that (directly, or through a chain
+// of other functions calling each other) calls back into
+// ScriptFunctionRegistry::Call on the same registry increments
+// callDepth_; past this many nested calls, Call() rejects the call with a
+// diagnostic instead of recursing until the stack overflows. 64 comfortably
+// covers legitimate call chains (a handful of gameplay functions calling
+// each other) while catching runaway recursion long before the stack is at
+// risk.
+constexpr std::size_t kMaxCallDepth = 64U;
+
+// RAII so callDepth_ is decremented on every exit path (the normal return
+// and the two catch blocks below all exit through this destructor), not
+// duplicated at each return statement.
+class CallDepthGuard final {
+public:
+    explicit CallDepthGuard(std::size_t& depth) noexcept
+        : depth_(depth) {
+        ++depth_;
+    }
+    ~CallDepthGuard() noexcept { --depth_; }
+    CallDepthGuard(const CallDepthGuard&) = delete;
+    CallDepthGuard& operator=(const CallDepthGuard&) = delete;
+
+private:
+    std::size_t& depth_;
+};
 
 [[nodiscard]] std::string TypeMismatchMessage(std::string_view functionName, std::string_view pinName, ScriptValueType actual, ScriptValueType expected) {
     return "script function '" + std::string{functionName} + "' pin '" + std::string{pinName} + "' is " + ToString(actual) + " but expects " + ToString(expected);
@@ -25,7 +64,7 @@ std::optional<ScriptValue> ScriptFunctionCallResult::Output(std::string_view nam
 }
 
 bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
-    if (function.signature.name.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
+    if (locked_ || function.signature.name.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
         return false;
     }
     if (!HasValidPins(function.signature.inputs) || !HasValidPins(function.signature.outputs)) {
@@ -66,13 +105,54 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
         return ScriptFunctionCallResult{ .errors = std::move(errors) };
     }
 
-    ScriptFunctionCallResult result = iter->callback(context, normalized);
+    // LIB-038: a callback can itself call back into Call() on this same
+    // registry (directly, or through a chain of other functions calling
+    // each other) — reject before invoking once the depth limit is
+    // reached, rather than recursing until the native stack overflows,
+    // which would crash the process instead of returning a diagnostic.
+    if (callDepth_ >= kMaxCallDepth) {
+        return ScriptFunctionCallResult{
+            .errors = {
+                "script function '" + std::string{ name } + "' exceeded the maximum call depth (" +
+                std::to_string(kMaxCallDepth) + "); this usually means a reentrant or mutually recursive call chain" },
+        };
+    }
+
+    // A registered callback (Native directly, or kb::library helpers like
+    // EntityHandle::Validate() called from within one) can throw. This is
+    // the single choke point every caller goes through — Native dispatch,
+    // Lua's CallFunction, and the future Visual Graph CallNative node — so
+    // catching here turns a thrown exception into an error result instead
+    // of letting it unwind across the Lua C boundary, where PUC-Lua's
+    // longjmp-based lua_pcall cannot catch a C++ exception (this engine's
+    // Lua core is compiled as C, not C++) and the process would terminate.
+    ScriptFunctionCallResult result;
+    try {
+        const CallDepthGuard depthGuard{ callDepth_ };
+        result = iter->callback(context, normalized);
+    } catch (const std::exception& exception) {
+        return ScriptFunctionCallResult{
+            .errors = { "script function '" + std::string{ name } + "' threw an exception: " + exception.what() },
+        };
+    } catch (...) {
+        return ScriptFunctionCallResult{
+            .errors = { "script function '" + std::string{ name } + "' threw a non-standard exception" },
+        };
+    }
     if (!result.Succeeded()) {
         return result;
     }
 
     ValidateOutputs(iter->signature, result, result.errors);
     return result;
+}
+
+void ScriptFunctionRegistry::Lock() noexcept {
+    locked_ = true;
+}
+
+bool ScriptFunctionRegistry::IsLocked() const noexcept {
+    return locked_;
 }
 
 bool ScriptFunctionRegistry::HasValidPins(const std::vector<ScriptFunctionPin>& pins) {
@@ -159,6 +239,21 @@ void ScriptFunctionRegistry::ValidateInputs(
         }
         if (!IsCompatible(argument->value, input.type)) {
             errors.push_back(TypeMismatchMessage(signature.name, input.name, argument->value.Type(), input.type));
+            continue;
+        }
+        if (argument->value.Type() == ScriptValueType::String && argument->value.AsString().size() > kMaxScriptStringArgumentLength) {
+            errors.push_back(
+                "script function '" + signature.name + "' input '" + input.name + "' exceeds the maximum string length (" +
+                std::to_string(kMaxScriptStringArgumentLength) + " bytes)");
+            continue;
+        }
+        // LIB-064: UTF-8 is the only encoding a public String value may
+        // use — enforced at this same choke point (Native, Lua, Visual
+        // Graph all funnel through ValidateInputs) so a malformed byte
+        // sequence never reaches a callback that might log, store, or
+        // forward it further.
+        if (argument->value.Type() == ScriptValueType::String && !kb::library::IsValidUtf8(argument->value.AsString())) {
+            errors.push_back("script function '" + signature.name + "' input '" + input.name + "' is not valid UTF-8");
             continue;
         }
         normalized.push_back(CoerceArgument(*argument, input.type));

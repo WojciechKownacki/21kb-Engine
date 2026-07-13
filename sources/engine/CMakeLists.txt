@@ -18,6 +18,7 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
+    include/engine/math/EngineMath.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
@@ -129,6 +130,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMode.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
+    include/engine/scene/BehaviourExecutionOrder.hpp
     include/engine/scene/TagsComponent.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
@@ -179,6 +181,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
@@ -195,6 +198,32 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptValue.hpp
     include/engine/script/ScriptWorldApi.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
+    include/engine/library/EngineLibrary.hpp
+    include/engine/library/EngineLibraryArrayView.hpp
+    include/engine/library/EngineLibraryAssetRef.hpp
+    include/engine/library/EngineLibraryCollections.hpp
+    include/engine/library/EngineLibraryCommandApplication.hpp
+    include/engine/library/EngineLibraryDeprecation.hpp
+    include/engine/library/EngineLibraryContext.hpp
+    include/engine/library/EngineLibraryEntityHandle.hpp
+    include/engine/library/EngineLibraryError.hpp
+    include/engine/library/EngineLibraryResult.hpp
+    include/engine/library/EngineLibraryExecutionOrder.hpp
+    include/engine/library/EngineLibraryFunctionDesc.hpp
+    include/engine/library/EngineLibraryFunctionId.hpp
+    include/engine/library/EngineLibraryInputLimits.hpp
+    include/engine/library/EngineLibraryLifecycle.hpp
+    include/engine/library/EngineLibraryManifest.hpp
+    include/engine/library/EngineLibraryManifestComparison.hpp
+    include/engine/library/EngineLibraryModule.hpp
+    include/engine/library/EngineLibraryModuleDesc.hpp
+    include/engine/library/EngineLibraryModuleValidation.hpp
+    include/engine/library/EngineLibraryOwnership.hpp
+    include/engine/library/EngineLibraryParsing.hpp
+    include/engine/library/EngineLibraryPropertyDesc.hpp
+    include/engine/library/EngineLibraryTextEncoding.hpp
+    include/engine/library/EngineLibraryTextFormat.hpp
+    include/engine/library/EngineLibraryTypeDesc.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
     include/engine/visual/VisualGraphBehaviourInstanceRegistry.hpp
@@ -566,6 +595,7 @@ add_library(kb_engine STATIC
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
+    src/math/EngineMath.cpp
     src/scene/transform/QuatMath.cpp
     src/scene/transform/TransformMath.cpp
     src/scene/transform/Vec3Math.cpp
@@ -599,6 +629,7 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptMathApi.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
@@ -615,6 +646,20 @@ add_library(kb_engine STATIC
     src/script/ScriptValue.cpp
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
+    src/library/EngineLibrary.cpp
+    src/library/EngineLibraryDeprecation.cpp
+    src/library/EngineLibraryEntityHandle.cpp
+    src/library/EngineLibraryFunctionId.cpp
+    src/library/EngineLibraryError.cpp
+    src/library/EngineLibraryLifecycle.cpp
+    src/library/EngineLibraryManifest.cpp
+    src/library/EngineLibraryManifestComparison.cpp
+    src/library/EngineLibraryModule.cpp
+    src/library/EngineLibraryModuleValidation.cpp
+    src/library/EngineLibraryOwnership.cpp
+    src/library/EngineLibraryParsing.cpp
+    src/library/EngineLibraryTextEncoding.cpp
+    src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp
     src/private/script/lua/api/PucLuaModuleApi.hpp
@@ -1035,6 +1080,8 @@ if(BUILD_TESTING)
         tests/VisualGraphTests.cpp
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
+        tests/EngineLibraryTests.cpp
+        tests/EngineMathTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

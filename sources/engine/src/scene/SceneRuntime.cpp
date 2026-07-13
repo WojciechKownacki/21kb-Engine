@@ -1,4 +1,5 @@
 #include "engine/ecs/SystemScheduler.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
@@ -35,14 +36,10 @@ void SynchronizeTransformHierarchy(SceneState& state) {
     };
 }
 
-[[nodiscard]] Quat Normalize(Quat value) noexcept {
-    const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
-    if (length <= 0.0F) {
-        return Quat{};
-    }
-    const float inverse = 1.0F / length;
-    return Quat{ value.x * inverse, value.y * inverse, value.z * inverse, value.w * inverse };
-}
+// LIB-043: kb::scene::Quat is an alias to kb::math::Quat (TransformComponent.hpp),
+// which already provides Normalize — this file's own copy would now be an
+// ambiguous overload via ADL against kb::math's.
+using kb::math::Normalize;
 
 [[nodiscard]] Quat Lerp(Quat from, Quat to, float alpha) noexcept {
     const float dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
@@ -156,6 +153,22 @@ std::size_t SceneRuntimeService::LastFixedStepCount(const Scene& scene) noexcept
     return SceneAccess::State(scene).lastFixedStepCount;
 }
 
+std::uint64_t SceneRuntimeService::FrameIndex(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).frameIndex;
+}
+
+std::uint64_t SceneRuntimeService::FixedStepIndex(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).fixedStepIndex;
+}
+
+bool SceneRuntimeService::IsPlaying(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).isPlaying;
+}
+
+void SceneRuntimeService::SetPlaying(Scene& scene, bool playing) noexcept {
+    SceneAccess::State(scene).isPlaying = playing;
+}
+
 void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept {
     SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
 }
@@ -244,6 +257,10 @@ std::span<const SceneEntity> SceneRuntimeService::MeshRendererRenderProxyUpdateE
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    // LIB-065: counts every Update() call, unconditionally (including
+    // PrefabPrivate scenes below) — "how many times has this scene been
+    // stepped" is well-defined regardless of mode.
+    ++state.frameIndex;
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
@@ -291,6 +308,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             CaptureFixedStepEnd(scene, state);
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
             ++state.lastFixedStepCount;
+            ++state.fixedStepIndex;
         }
         if (state.lastFixedStepCount == fixed.maxFixedStepsPerFrame &&
             state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds) {
