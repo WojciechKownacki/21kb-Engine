@@ -41,12 +41,48 @@ struct IVec2 {
     int y = 0;
 };
 
+// LIB-043: left-handed, Y-up — the engine's explicit coordinate/rotation
+// convention. Previously implicit: every existing bx::mtxLookAt/mtxProj/
+// mtxOrtho call site (the renderer's underlying bgfx/bx math, see
+// third_party/bgfx.cmake/bx/include/bx/math.h) omits the `_handedness`
+// argument and so already used bx's Handedness::Left default; this makes
+// that default an explicit, documented engine decision rather than an
+// accident of an omitted parameter. Positive rotation around an axis
+// follows the left-hand rule (thumb along the axis, fingers curl toward
+// the rotation direction). kb::math::Quat/Mat3/Mat4 and every function
+// below are defined against this convention.
+//
 // Rotation, imaginary xyz + real w. Identity = {0,0,0,1}.
 struct Quat {
     float x = 0.0F;
     float y = 0.0F;
     float z = 0.0F;
     float w = 1.0F;
+};
+
+// LIB-043: 3x3 rotation/scale matrix, column-major (columns[0]/[1]/[2] are
+// the transformed X/Y/Z basis vectors) — matches kb::math::Mat4 and
+// kb::scene::WorldTransformAffine3x4's existing column-major layout, not a
+// second convention.
+struct Mat3 {
+    Vec3 columns[3]{
+        Vec3{ 1.0F, 0.0F, 0.0F },
+        Vec3{ 0.0F, 1.0F, 0.0F },
+        Vec3{ 0.0F, 0.0F, 1.0F },
+    };
+};
+
+// LIB-043: 4x4 matrix, column-major (translation lives in columns[3].xyz)
+// — the same layout bx::mtx* (the renderer's existing matrix math) and
+// kb::scene::WorldTransformAffine3x4 already use, not a parallel
+// convention invented for this type.
+struct Mat4 {
+    Vec4 columns[4]{
+        Vec4{ 1.0F, 0.0F, 0.0F, 0.0F },
+        Vec4{ 0.0F, 1.0F, 0.0F, 0.0F },
+        Vec4{ 0.0F, 0.0F, 1.0F, 0.0F },
+        Vec4{ 0.0F, 0.0F, 0.0F, 1.0F },
+    };
 };
 
 // Linear-space RGBA, intentionally unclamped: HDR values above 1 are
@@ -138,5 +174,60 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
         lhs.z > rhs.z ? lhs.z : rhs.z,
     };
 }
+
+[[nodiscard]] constexpr Vec3 Cross(Vec3 lhs, Vec3 rhs) noexcept {
+    return Vec3{
+        lhs.y * rhs.z - lhs.z * rhs.y,
+        lhs.z * rhs.x - lhs.x * rhs.z,
+        lhs.x * rhs.y - lhs.y * rhs.x,
+    };
+}
+
+// Hamilton product. lhs*rhs applies rhs first, then lhs — i.e. matches the
+// existing parent-composes-child convention (a world rotation is
+// `worldRotation = parentRotation * localRotation`, not the reverse).
+[[nodiscard]] constexpr Quat operator*(Quat lhs, Quat rhs) noexcept {
+    return Quat{
+        lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y,
+        lhs.w * rhs.y - lhs.x * rhs.z + lhs.y * rhs.w + lhs.z * rhs.x,
+        lhs.w * rhs.z + lhs.x * rhs.y - lhs.y * rhs.x + lhs.z * rhs.w,
+        lhs.w * rhs.w - lhs.x * rhs.x - lhs.y * rhs.y - lhs.z * rhs.z,
+    };
+}
+
+[[nodiscard]] Quat Normalize(Quat value) noexcept;
+
+// Rotates `value` by `rotation` (Rodrigues' rotation formula generalized
+// to quaternions — exact for any quaternion, not just unit-length ones,
+// unlike a formula that substitutes w²+|xyz|²=1).
+[[nodiscard]] constexpr Vec3 Rotate(Quat rotation, Vec3 value) noexcept {
+    const Vec3 u{ rotation.x, rotation.y, rotation.z };
+    const float s = rotation.w;
+    return u * (2.0F * Dot(u, value)) + value * (s * s - Dot(u, u)) + Cross(u, value) * (2.0F * s);
+}
+
+[[nodiscard]] constexpr Vec4 operator*(const Mat4& lhs, const Vec4& rhs) noexcept {
+    return Vec4{
+        lhs.columns[0].x * rhs.x + lhs.columns[1].x * rhs.y + lhs.columns[2].x * rhs.z + lhs.columns[3].x * rhs.w,
+        lhs.columns[0].y * rhs.x + lhs.columns[1].y * rhs.y + lhs.columns[2].y * rhs.z + lhs.columns[3].y * rhs.w,
+        lhs.columns[0].z * rhs.x + lhs.columns[1].z * rhs.y + lhs.columns[2].z * rhs.z + lhs.columns[3].z * rhs.w,
+        lhs.columns[0].w * rhs.x + lhs.columns[1].w * rhs.y + lhs.columns[2].w * rhs.z + lhs.columns[3].w * rhs.w,
+    };
+}
+
+[[nodiscard]] constexpr Mat4 operator*(const Mat4& lhs, const Mat4& rhs) noexcept {
+    return Mat4{ {
+        lhs * rhs.columns[0],
+        lhs * rhs.columns[1],
+        lhs * rhs.columns[2],
+        lhs * rhs.columns[3],
+    } };
+}
+
+// Builds the column-major Translate * Rotate * Scale matrix (apply scale,
+// then rotation, then translation to a point) — the standard TRS
+// composition order kb::scene::TransformComponent's
+// position/rotation/scale fields already imply.
+[[nodiscard]] Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept;
 
 } // namespace kb::math

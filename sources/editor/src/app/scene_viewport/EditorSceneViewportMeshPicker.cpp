@@ -1,6 +1,7 @@
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 
 #if defined(_WIN32)
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -75,38 +76,14 @@ struct RectPickContext {
             EditorSceneViewportMath::Mul(uuv, 2.0F)));
 }
 
-[[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
-    const kb::scene::Vec3 q{rotation.x, rotation.y, rotation.z};
-    const kb::scene::Vec3 uv{
-        q.y * value.z - q.z * value.y,
-        q.z * value.x - q.x * value.z,
-        q.x * value.y - q.y * value.x,
-    };
-    const kb::scene::Vec3 uuv{
-        q.y * uv.z - q.z * uv.y,
-        q.z * uv.x - q.x * uv.z,
-        q.x * uv.y - q.y * uv.x,
-    };
-    return EditorSceneViewportMath::Add(
-        value,
-        EditorSceneViewportMath::Add(
-            EditorSceneViewportMath::Mul(uv, 2.0F * rotation.w),
-            EditorSceneViewportMath::Mul(uuv, 2.0F)));
-}
-
-[[nodiscard]] kb::scene::Quat Normalize(kb::scene::Quat rotation) noexcept {
-    const float lengthSquared = rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w;
-    if (lengthSquared <= 0.000001F) {
-        return {};
-    }
-    const float invLength = 1.0F / std::sqrt(lengthSquared);
-    return kb::scene::Quat{
-        rotation.x * invLength,
-        rotation.y * invLength,
-        rotation.z * invLength,
-        rotation.w * invLength,
-    };
-}
+// LIB-043: kb::scene::Quat is an alias to kb::math::Quat (TransformComponent.hpp),
+// which already provides Normalize and Rotate (this file's own Rotate
+// formula assumed a unit-length quaternion, which every caller here
+// already passes, so it's numerically the same as kb::math::Rotate's
+// general formula) — this file's own copies would now be ambiguous
+// overloads via ADL against kb::math's.
+using kb::math::Normalize;
+using kb::math::Rotate;
 
 [[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
     return transform.worldDirty ? transform.localPosition : transform.worldPosition;

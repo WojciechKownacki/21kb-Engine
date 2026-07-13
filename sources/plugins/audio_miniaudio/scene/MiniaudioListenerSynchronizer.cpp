@@ -12,27 +12,18 @@
 namespace kb::audio_miniaudio {
 namespace {
 
-// LIB-042: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
-// TransformComponent.hpp), which already provides Add (operator+) — this
-// file's own copy would now be an ambiguous overload via ADL against
-// kb::math's. Cross/Scale have no kb::math equivalent yet, so they stay
-// local.
-[[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return kb::scene::Vec3{
-        lhs.y * rhs.z - lhs.z * rhs.y,
-        lhs.z * rhs.x - lhs.x * rhs.z,
-        lhs.x * rhs.y - lhs.y * rhs.x,
-    };
-}
+// LIB-042/LIB-043: kb::scene::Vec3/Quat are now aliases to kb::math::Vec3/
+// Quat (see TransformComponent.hpp), which already provides Add
+// (operator+), Cross, and Rotate — this file's own copies used to be a
+// second definition (this Rotate formula assumed a unit-length quaternion,
+// which every caller here already passes, so it's numerically the same as
+// kb::math::Rotate's general formula) and would be ambiguous overloads via
+// ADL against kb::math's. Scale has no kb::math equivalent yet, so it
+// stays local.
+using kb::math::Rotate;
 
 [[nodiscard]] kb::scene::Vec3 Scale(kb::scene::Vec3 value, float scale) noexcept {
     return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
-}
-
-[[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
-    const kb::scene::Vec3 axis{ rotation.x, rotation.y, rotation.z };
-    const kb::scene::Vec3 twiceCross = Scale(Cross(axis, value), 2.0F);
-    return value + Scale(twiceCross, rotation.w) + Cross(axis, twiceCross);
 }
 
 [[nodiscard]] kb::scene::Vec3 NormalizeOrForward(kb::scene::Vec3 value) noexcept {
