@@ -2646,6 +2646,128 @@ void RunSceneLoadedContentApiTest() {
     kb::tests::Require(!missingPathResult.Succeeded(), "Scene.Load must fail (not fabricate an id) for a nonexistent path");
 }
 
+// LIB-072: World.IsPersistent/SetPersistent basic contract — mirrors
+// RunWorldActiveStateTest's shape (LIB-068): default false, SetPersistent
+// does NOT itself destroy/move the entity, state reflects immediately,
+// dead entity reports false/set=false rather than throwing.
+void RunWorldPersistentStateTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetPersistent test host setup failed");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Candidate" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> isPersistentArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult defaultResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(defaultResult.Succeeded() && !defaultResult.Output("persistent")->AsBool(), "World.IsPersistent must default to false for a freshly created entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setTrueArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult setTrueResult = host.Functions().Call("World.SetPersistent", setTrueArgs, context);
+    kb::tests::Require(setTrueResult.Succeeded() && setTrueResult.Output("set")->AsBool(), "World.SetPersistent must report set=true for a live entity");
+    kb::tests::Require(scene.Entities().IsAlive(entity), "World.SetPersistent must not itself destroy or otherwise remove the entity");
+    const kb::script::ScriptFunctionCallResult afterSetResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(afterSetResult.Succeeded() && afterSetResult.Output("persistent")->AsBool(), "World.IsPersistent must reflect an immediately preceding SetPersistent(true)");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setFalseArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult setFalseResult = host.Functions().Call("World.SetPersistent", setFalseArgs, context);
+    kb::tests::Require(setFalseResult.Succeeded() && setFalseResult.Output("set")->AsBool(), "World.SetPersistent(false) must report set=true for a live entity");
+    const kb::script::ScriptFunctionCallResult afterClearResult = host.Functions().Call("World.IsPersistent", isPersistentArgs, context);
+    kb::tests::Require(afterClearResult.Succeeded() && !afterClearResult.Output("persistent")->AsBool(), "World.IsPersistent must reflect a following SetPersistent(false)");
+
+    const kb::scene::SceneEntity destroyed = scene.Entities().CreateEntity();
+    scene.Entities().Destroy(destroyed);
+    const std::vector<kb::script::ScriptFunctionArgument> deadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult deadIsPersistentResult = host.Functions().Call("World.IsPersistent", deadArgs, context);
+    kb::tests::Require(deadIsPersistentResult.Succeeded() && !deadIsPersistentResult.Output("persistent")->AsBool(), "World.IsPersistent on a destroyed entity must report false, not throw");
+    const std::vector<kb::script::ScriptFunctionArgument> deadSetArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "persistent", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult deadSetResult = host.Functions().Call("World.SetPersistent", deadSetArgs, context);
+    kb::tests::Require(deadSetResult.Succeeded() && !deadSetResult.Output("set")->AsBool(), "World.SetPersistent on a destroyed entity must report set=false, not throw");
+}
+
+// LIB-072: the real, end-to-end proof — a persistent ROOT entity (with a
+// child, proving the WHOLE hierarchy survives via cascade, not just the
+// root itself) genuinely survives a non-additive Scene.Load, while a
+// non-persistent root in the same scene is destroyed exactly as before
+// LIB-072. Also proves the LIB-071/LIB-072 interaction fix: the freshly
+// loaded document's own root is still correctly tracked by
+// SceneLoadedContentService (Scene.Find resolves to a record whose root is
+// the NEW entity, not the surviving persistent one) even though
+// RootEntities() now returns both after the load.
+void RunScenePersistentEntitySurvivesLoadTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "ScenePersistenceProject" / "GameplayScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "GameplayRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "GameplayScene"), "Scene persistence test fixture GameplayScene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject persistentRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Bootstrap" });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "BootstrapChild", .parent = persistentRoot }));
+    const kb::scene::SceneEntity transientRoot = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "OldLevelContent" });
+    scene.Entities().SetPersistent(persistentRoot.Entity(), true);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene persistence test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Load (non-additive, over a persistent entity) direct call failed");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    kb::tests::Require(loadedId != 0U, "Scene.Load must still return a nonzero id when a persistent entity is present");
+
+    kb::tests::Require(scene.Entities().IsAlive(persistentRoot.Entity()), "A persistent root entity must survive a non-additive Scene.Load");
+    const std::vector<kb::scene::SceneEntity> survivingChildren = scene.Hierarchy().ChildEntities(persistentRoot.Entity());
+    kb::tests::Require(survivingChildren.size() == 1U && scene.Entities().IsAlive(survivingChildren.front()) && scene.Entities().Name(survivingChildren.front()) == "BootstrapChild",
+        "A persistent root's WHOLE hierarchy must survive (cascade), not just the root entity itself");
+    kb::tests::Require(!scene.Entities().IsAlive(transientRoot), "A non-persistent root must still be destroyed by a non-additive Scene.Load, exactly as before LIB-072");
+
+    const std::vector<kb::scene::SceneEntity> rootsAfterLoad = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsAfterLoad.size() == 2U, "After the load, exactly the persistent survivor and the newly loaded document's root must remain as roots");
+    const bool hasPersistentRoot = std::any_of(rootsAfterLoad.begin(), rootsAfterLoad.end(), [&](kb::scene::SceneEntity e) { return e == persistentRoot.Entity(); });
+    const bool hasGameplayRoot = std::any_of(rootsAfterLoad.begin(), rootsAfterLoad.end(), [&scene](kb::scene::SceneEntity e) { return scene.Entities().Name(e) == "GameplayRoot"; });
+    kb::tests::Require(hasPersistentRoot && hasGameplayRoot, "Roots after load must be exactly the persistent survivor plus the newly loaded document's root");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "GameplayScene" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findResult = host.Functions().Call("Scene.Find", findArgs, context);
+    kb::tests::Require(findResult.Succeeded() && findResult.Output("id")->AsUInt64() == loadedId, "Scene.Find must resolve the newly loaded document's own name back to its id even with a persistent survivor also present as a root");
+
+    // The stronger proof: SceneLoadedContentService's record must have
+    // tracked the CORRECT new root (GameplayRoot), not misidentified the
+    // persistent survivor as "the newly loaded content" — Unload(loadedId)
+    // must destroy ONLY GameplayRoot, leaving the persistent hierarchy
+    // completely untouched.
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for the newly loaded document's id");
+    kb::tests::Require(scene.Entities().IsAlive(persistentRoot.Entity()) && scene.Entities().IsAlive(survivingChildren.front()),
+        "Scene.Unload(loadedId) must NOT touch the persistent survivor or its child — proof that SceneLoadedContentService correctly identified GameplayRoot, not the persistent entity, as the tracked root");
+    const std::vector<kb::scene::SceneEntity> rootsAfterUnload = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsAfterUnload.size() == 1U && rootsAfterUnload.front() == persistentRoot.Entity(), "After Scene.Unload(loadedId), only the persistent root must remain");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4350,6 +4472,8 @@ void RunScriptRuntimeTests() {
     RunWorldSetPropertyTest();
     RunWorldInstantiatePrefabOwnershipTest();
     RunSceneLoadedContentApiTest();
+    RunWorldPersistentStateTest();
+    RunScenePersistentEntitySurvivesLoadTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();

@@ -24,6 +24,10 @@ public:
     [[nodiscard]] std::string Name(SceneEntity entity) const;
     [[nodiscard]] bool IsActive(SceneObject object) const noexcept;
     [[nodiscard]] bool IsActive(SceneEntity entity) const noexcept;
+    // LIB-072: whether this entity is exempt from ClearSceneRoots (the
+    // non-additive Scene.Load wipe) — see SceneState::persistentEntities.
+    [[nodiscard]] bool IsPersistent(SceneObject object) const noexcept;
+    [[nodiscard]] bool IsPersistent(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t Count() const;
 
 private:
@@ -60,6 +64,16 @@ public:
     [[nodiscard]] bool IsActive(SceneEntity entity) const noexcept;
     void SetActive(SceneObject object, bool active) noexcept;
     void SetActive(SceneEntity entity, bool active) noexcept;
+    // LIB-072: marks a ROOT entity as exempt from ClearSceneRoots (the
+    // non-additive Scene.Load wipe) — its whole hierarchy survives with it,
+    // since Destroy cascades to children from whatever root is (not)
+    // destroyed. Marking a non-root entity persistent has no protective
+    // effect if its own ancestor root is not also persistent — see
+    // SceneState::persistentEntities' comment for why.
+    [[nodiscard]] bool IsPersistent(SceneObject object) const noexcept;
+    [[nodiscard]] bool IsPersistent(SceneEntity entity) const noexcept;
+    void SetPersistent(SceneObject object, bool persistent) noexcept;
+    void SetPersistent(SceneEntity entity, bool persistent) noexcept;
     [[nodiscard]] std::size_t Count() const;
 
 private:

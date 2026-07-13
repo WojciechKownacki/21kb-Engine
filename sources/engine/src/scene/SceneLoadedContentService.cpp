@@ -31,21 +31,39 @@ std::uint64_t SceneLoadedContentService::Load(Scene& scene, const std::filesyste
 
     SceneState& state = SceneAccess::State(scene);
     if (!additive) {
-        // LoadIntoScene's ClearSceneRoots destroys every root entity,
-        // including any previously tracked loaded-content roots — so
-        // every existing record is now stale and must be dropped too.
+        // LoadIntoScene's ClearSceneRoots destroys every root entity EXCEPT
+        // ones marked persistent (LIB-072) — so every existing record is
+        // now stale and must be dropped, EXCEPT that a persistent entity
+        // that happened to be a previous record's root survives the wipe
+        // while its record does not: it stays alive in the hierarchy, just
+        // no longer addressable via Scene.Find/Unload under its old id.
+        // Documented scope limit, not a crash risk — the entity itself is
+        // never destroyed by this.
+        const std::vector<SceneEntity> rootsBefore = scene.Hierarchy().RootEntities();
         if (!SceneDocumentService::LoadIntoScene(scene, loaded.document)) {
             return 0U;
         }
         state.loadedScenes.clear();
         state.activeLoadedSceneId = 0U;
-        const std::vector<SceneEntity> roots = scene.Hierarchy().RootEntities();
+        // Persistent roots survive ClearSceneRoots, so RootEntities() after
+        // the load can contain BOTH the freshly instantiated document root
+        // and any persistent survivors from before — the survivors were
+        // already present in rootsBefore, so the one genuinely NEW root is
+        // whichever entity in the after-set was not in the before-set.
+        const std::vector<SceneEntity> rootsAfter = scene.Hierarchy().RootEntities();
+        SceneEntity newRoot{};
+        for (const SceneEntity candidate : rootsAfter) {
+            if (std::ranges::find(rootsBefore, candidate) == rootsBefore.end()) {
+                newRoot = candidate;
+                break;
+            }
+        }
         const std::uint64_t id = state.nextLoadedSceneId++;
         state.loadedScenes.push_back(SceneState::LoadedSceneRecord{
             .id = id,
             .name = loaded.document.name,
             .path = path.string(),
-            .root = roots.empty() ? SceneEntity{} : roots.front(),
+            .root = newRoot,
         });
         state.activeLoadedSceneId = id;
         return id;

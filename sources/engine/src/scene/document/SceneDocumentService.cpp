@@ -15,9 +15,17 @@
 namespace kb::scene {
 namespace {
 
+// LIB-072: the persistent/gameplay boundary — a root marked persistent
+// (World.SetPersistent) survives a non-additive Scene.Load along with its
+// whole hierarchy (Destroy cascades to children, so skipping the root
+// alone preserves the entire subtree). See SceneState::persistentEntities'
+// comment for why this check is root-only.
 void ClearSceneRoots(Scene& scene) noexcept {
     const std::vector<SceneEntity> roots = scene.Hierarchy().RootEntities();
     for (const SceneEntity root : roots) {
+        if (scene.Entities().IsPersistent(root)) {
+            continue;
+        }
         scene.Entities().Destroy(root);
     }
 }
