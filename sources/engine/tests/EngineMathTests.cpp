@@ -227,6 +227,35 @@ void RunScalarMathFunctionsTest() {
     kb::tests::Require(std::isfinite(dampInvalidSmoothTime.value) && std::isfinite(dampInvalidSmoothTime.velocity), "Damp must not produce NaN/Inf for a non-positive smoothTime");
 }
 
+// LIB-046: Min/Max/Abs/Sign/Floor/Ceil/Round/Frac/Mod/Sqrt/Pow/Exp/Log
+// scalar overloads, including the edge case that distinguishes Mod's
+// floor-based convention from C's fmod (a negative dividend).
+void RunScalarMathFunctions2Test() {
+    kb::tests::Require(kb::math::Min(3.0F, 7.0F) == 3.0F && kb::math::Min(7.0F, 3.0F) == 3.0F, "Min must return the smaller of two values regardless of argument order");
+    kb::tests::Require(kb::math::Max(3.0F, 7.0F) == 7.0F && kb::math::Max(7.0F, 3.0F) == 7.0F, "Max must return the larger of two values regardless of argument order");
+    kb::tests::Require(kb::math::Abs(-4.5F) == 4.5F && kb::math::Abs(4.5F) == 4.5F, "Abs must return the magnitude regardless of sign");
+
+    kb::tests::Require(kb::math::Sign(5.0F) == 1.0F, "Sign must be 1 for a positive value");
+    kb::tests::Require(kb::math::Sign(-5.0F) == -1.0F, "Sign must be -1 for a negative value");
+    kb::tests::Require(kb::math::Sign(0.0F) == 0.0F, "Sign must be exactly 0 for zero, not +1 or -1");
+
+    kb::tests::Require(kb::math::Floor(2.7F) == 2.0F && kb::math::Floor(-2.7F) == -3.0F, "Floor must round toward negative infinity");
+    kb::tests::Require(kb::math::Ceil(2.3F) == 3.0F && kb::math::Ceil(-2.3F) == -2.0F, "Ceil must round toward positive infinity");
+    kb::tests::Require(kb::math::Round(2.5F) == 3.0F && kb::math::Round(-2.5F) == -3.0F, "Round must round ties away from zero");
+
+    kb::tests::Require(std::abs(kb::math::Frac(2.75F) - 0.75F) < 0.0001F, "Frac must return the fractional part for a positive value");
+    kb::tests::Require(std::abs(kb::math::Frac(-1.25F) - 0.75F) < 0.0001F, "Frac must stay non-negative for a negative value (floor-based, not truncation-based)");
+
+    kb::tests::Require(std::abs(kb::math::Mod(5.0F, 3.0F) - 2.0F) < 0.0001F, "Mod must match ordinary modulo for a positive dividend");
+    kb::tests::Require(std::abs(kb::math::Mod(-1.0F, 4.0F) - 3.0F) < 0.0001F, "Mod must be floor-based (result in [0, divisor)), unlike C's fmod which would return -1");
+
+    kb::tests::Require(std::abs(kb::math::Sqrt(9.0F) - 3.0F) < 0.0001F, "Sqrt must compute the square root");
+    kb::tests::Require(std::abs(kb::math::Pow(2.0F, 10.0F) - 1024.0F) < 0.01F, "Pow must compute base^exponent");
+    kb::tests::Require(std::abs(kb::math::Exp(0.0F) - 1.0F) < 0.0001F, "Exp(0) must be 1");
+    kb::tests::Require(std::abs(kb::math::Log(1.0F)) < 0.0001F, "Log(1) must be 0 (natural log)");
+    kb::tests::Require(std::abs(kb::math::Log(std::exp(1.0F)) - 1.0F) < 0.0001F, "Log(e) must be 1, confirming natural (not base-10/base-2) log");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -236,6 +265,7 @@ void RunEngineMathTests() {
     RunQuatAndMatrixMathTest();
     RunAngleUnitsTest();
     RunScalarMathFunctionsTest();
+    RunScalarMathFunctions2Test();
 }
 
 } // namespace kb::tests
