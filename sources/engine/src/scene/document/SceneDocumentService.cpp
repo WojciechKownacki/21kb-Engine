@@ -69,4 +69,16 @@ bool SceneDocumentService::LoadFileIntoScene(Scene& scene, const std::filesystem
     return loaded.succeeded && LoadIntoScene(scene, loaded.document);
 }
 
+SceneDocumentAdditiveLoadResult SceneDocumentService::LoadIntoSceneAdditive(Scene& scene, const SceneDocument& document) {
+    if (document.worldPrefab.Empty()) {
+        return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+    }
+    const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);
+    if (instance.Empty()) {
+        return SceneDocumentAdditiveLoadResult{ .succeeded = false, .root = {} };
+    }
+    scene.Runtime().SynchronizeTransforms();
+    return SceneDocumentAdditiveLoadResult{ .succeeded = true, .root = instance.ObjectAt(0).Entity() };
+}
+
 } // namespace kb::scene

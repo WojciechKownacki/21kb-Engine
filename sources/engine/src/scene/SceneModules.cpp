@@ -5,6 +5,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneHistory.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -61,6 +62,14 @@ SceneRuntime Scene::Runtime() noexcept {
 
 SceneRuntimeQueries Scene::Runtime() const noexcept {
     return SceneRuntimeQueries{ *this };
+}
+
+SceneLoadedContent Scene::LoadedContent() noexcept {
+    return SceneLoadedContent{ *this };
+}
+
+SceneLoadedContentQueries Scene::LoadedContent() const noexcept {
+    return SceneLoadedContentQueries{ *this };
 }
 
 } // namespace kb::scene

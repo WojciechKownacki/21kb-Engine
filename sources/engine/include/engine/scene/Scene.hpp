@@ -36,6 +36,8 @@ class SceneEntityQueries;
 class SceneHierarchyAccess;
 class SceneHierarchyQueries;
 class SceneHistory;
+class SceneLoadedContent;
+class SceneLoadedContentQueries;
 class ScenePrefabs;
 class SceneRuntime;
 class SceneRuntimeQueries;
@@ -85,6 +87,8 @@ public:
     [[nodiscard]] ScenePrefabs Prefabs() const noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
+    [[nodiscard]] SceneLoadedContent LoadedContent() noexcept;
+    [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
     void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
