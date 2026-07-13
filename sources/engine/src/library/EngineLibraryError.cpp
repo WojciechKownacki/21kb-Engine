@@ -2,11 +2,30 @@
 
 namespace kb::library {
 
-std::string ToString(const ScriptError& error) {
-    if (error.operation.empty()) {
-        return error.message;
+const char* ToString(LibraryErrorCode code) noexcept {
+    switch (code) {
+        case LibraryErrorCode::InvalidHandle:
+            return "InvalidHandle";
+        case LibraryErrorCode::InactiveWorld:
+            return "InactiveWorld";
+        case LibraryErrorCode::UnavailableCapability:
+            return "UnavailableCapability";
+        case LibraryErrorCode::Permission:
+            return "Permission";
+        case LibraryErrorCode::InvalidArgument:
+            return "InvalidArgument";
+        case LibraryErrorCode::Timeout:
+            return "Timeout";
     }
-    return error.operation + ": " + error.message;
+    return "InvalidArgument";
+}
+
+std::string ToString(const ScriptError& error) {
+    const std::string prefix = std::string{ "[" } + ToString(error.code) + "] ";
+    if (error.operation.empty()) {
+        return prefix + error.message;
+    }
+    return prefix + error.operation + ": " + error.message;
 }
 
 } // namespace kb::library

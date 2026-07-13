@@ -32,6 +32,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -720,14 +721,18 @@ void RunResultTest() {
     kb::tests::Require(ok.Succeeded(), "Engine21kbLibrary Result::Ok must report success");
     kb::tests::Require(ok.Value() == 42, "Engine21kbLibrary Result::Value() must return the stored value");
 
-    const Result<int> failed = Result<int>::Fail(ScriptError{ .operation = "Tests.Op", .message = "went wrong" });
+    const Result<int> failed = Result<int>::Fail(ScriptError{
+        .code = kb::library::LibraryErrorCode::InvalidArgument,
+        .operation = "Tests.Op",
+        .message = "went wrong",
+    });
     kb::tests::Require(!failed.Succeeded(), "Engine21kbLibrary Result::Fail must report failure");
     kb::tests::Require(failed.Error().operation == "Tests.Op", "Engine21kbLibrary Result::Error() must return the stored operation");
     kb::tests::Require(failed.Error().message == "went wrong", "Engine21kbLibrary Result::Error() must return the stored message");
-    kb::tests::Require(kb::library::ToString(failed.Error()) == "Tests.Op: went wrong", "Engine21kbLibrary ScriptError formatting is wrong");
+    kb::tests::Require(kb::library::ToString(failed.Error()) == "[InvalidArgument] Tests.Op: went wrong", "Engine21kbLibrary ScriptError formatting is wrong");
 
-    const ScriptError bare{ .message = "no operation name" };
-    kb::tests::Require(kb::library::ToString(bare) == "no operation name", "Engine21kbLibrary ScriptError formatting must omit an empty operation");
+    const ScriptError bare{ .code = kb::library::LibraryErrorCode::Timeout, .message = "no operation name" };
+    kb::tests::Require(kb::library::ToString(bare) == "[Timeout] no operation name", "Engine21kbLibrary ScriptError formatting must omit an empty operation but keep the code");
 }
 
 // LIB-019: LibraryPropertyDesc must be exactly kb::script::
@@ -1004,6 +1009,40 @@ void RunNoPointersCrossScriptBoundaryTest() {
     kb::tests::Require(true, "kb::script::ScriptValue::Storage shape is verified at compile time above");
 }
 
+// LIB-035: every LibraryErrorCode must format to a stable, distinct name,
+// and EntityHandle::CheckError() (the non-throwing counterpart of
+// Validate(), LIB-035's real consumer) must report InvalidHandle for every
+// EntityHandle failure mode and std::nullopt exactly when Validate()
+// would not throw.
+void RunErrorCodeTest() {
+    using kb::library::LibraryErrorCode;
+    const LibraryErrorCode kAllCodes[]{
+        LibraryErrorCode::InvalidHandle, LibraryErrorCode::InactiveWorld, LibraryErrorCode::UnavailableCapability,
+        LibraryErrorCode::Permission, LibraryErrorCode::InvalidArgument, LibraryErrorCode::Timeout,
+    };
+    std::vector<std::string> seenNames;
+    for (const LibraryErrorCode code : kAllCodes) {
+        const std::string name = kb::library::ToString(code);
+        kb::tests::Require(!name.empty(), "Engine21kbLibrary LibraryErrorCode must have a non-empty name");
+        kb::tests::Require(std::ranges::find(seenNames, name) == seenNames.end(), "Engine21kbLibrary LibraryErrorCode names must be distinct");
+        seenNames.push_back(name);
+    }
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ErrorCodeSubject" });
+    const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+
+    kb::tests::Require(!handle.CheckError(scene, "Test.Op").has_value(), "Engine21kbLibrary EntityHandle::CheckError must return nullopt for a live handle");
+
+    const kb::library::EntityHandle invalidHandle{};
+    const std::optional<kb::library::ScriptError> invalidError = invalidHandle.CheckError(scene, "Test.Op");
+    kb::tests::Require(invalidError.has_value() && invalidError->code == kb::library::LibraryErrorCode::InvalidHandle, "Engine21kbLibrary EntityHandle::CheckError must report InvalidHandle for an invalid handle");
+
+    scene.Entities().Destroy(object);
+    const std::optional<kb::library::ScriptError> staleError = handle.CheckError(scene, "Test.Op");
+    kb::tests::Require(staleError.has_value() && staleError->code == kb::library::LibraryErrorCode::InvalidHandle, "Engine21kbLibrary EntityHandle::CheckError must report InvalidHandle for a stale handle");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1040,6 +1079,7 @@ void RunEngineLibraryTests() {
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
+    RunErrorCodeTest();
 }
 
 } // namespace kb::tests
