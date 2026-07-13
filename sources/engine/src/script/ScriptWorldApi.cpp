@@ -194,6 +194,31 @@ ScriptFunctionCallResult Exists(const ScriptFunctionCallContext& context, std::s
     return BoolResult("exists", context.scene->Entities().IsAlive(EntityArg(arguments, "entity")));
 }
 
+// LIB-068: an entity is active by default and stays that way until an
+// explicit SetActive(false) — kb::scene::SceneEntityService::IsActive
+// also folds in IsAlive, so a dead/never-existed entity reports inactive
+// rather than throwing, the same "never crash on a stale handle" contract
+// every other World.* query in this file already follows.
+ScriptFunctionCallResult IsActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("active", context.scene->Entities().IsActive(EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult SetActive(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const bool alive = entity.IsValid() && context.scene->Entities().IsAlive(entity);
+    if (alive) {
+        const ScriptValue* activeValue = FindArg(arguments, "active");
+        context.scene->Entities().SetActive(entity, activeValue == nullptr || activeValue->AsBool(true));
+    }
+    return BoolResult("set", alive);
+}
+
 ScriptFunctionCallResult Name(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -521,6 +546,14 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "exists", ScriptValueType::Bool, true } },
         &Exists) && ok;
+    ok = RegisterFunction(host, "World.IsActive",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "active", ScriptValueType::Bool, true } },
+        &IsActive) && ok;
+    ok = RegisterFunction(host, "World.SetActive",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "active", ScriptValueType::Bool, false } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetActive) && ok;
     ok = RegisterFunction(host, "World.Name",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
