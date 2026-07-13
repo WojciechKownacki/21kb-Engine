@@ -3,6 +3,7 @@
 #include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
 #include <algorithm>
@@ -73,6 +74,7 @@ void ScriptRuntimeSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context)
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteStartup(kb::scene::Scene& scene, float deltaSeconds) {
     lastResult_ = {};
     PrepareScene(scene);
+    DispatchPendingSceneLifecycleEvents(scene, deltaSeconds);
     SyncBehaviourLifecycles(scene, deltaSeconds);
     return lastResult_;
 }
@@ -81,6 +83,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     lastResult_ = {};
     PrepareScene(scene);
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
+    DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     fixedAccumulatorSeconds_ += clampedDeltaSeconds;
     std::size_t fixedSteps = 0U;
@@ -130,6 +133,16 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
 
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    for (kb::scene::SceneLifecycleEventRecord& pending : scene.LoadedContent().DrainPendingLifecycleEvents()) {
+        ScriptEvent event;
+        event.name = std::move(pending.name);
+        event.arguments.push_back(ScriptEventArgument{ .name = "sceneId", .value = ScriptValue{ pending.sceneId, ScriptValueType::Hash } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "sceneName", .value = ScriptValue{ std::move(pending.sceneName) } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
 }
 
 void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds) {
