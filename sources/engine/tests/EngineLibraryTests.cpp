@@ -6,6 +6,7 @@
 #include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
+#include "engine/library/EngineLibraryComponentDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
@@ -35,6 +36,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -1524,6 +1526,86 @@ void RunFunctionIdTest() {
     kb::tests::Require(idFromA == idFromB, "Engine21kbLibrary function id must be identical across independently constructed hosts");
 }
 
+// LIB-076: the component registry — proves it does not silently drift from
+// the two mechanisms that actually gate script access to components
+// (ScriptSceneComponentApi.cpp's kComponentNames for Lua/VisualGraph, and
+// LIB-075's ScriptComponentAccess<T> specializations for native), and
+// that its "serializable" claim is honest by cross-checking against the
+// real save/load round trip (SceneDocumentService::Save/Load), not just
+// asserting the hand-written flag.
+void RunEngineLibraryComponentRegistryTest() {
+    const std::vector<kb::library::LibraryComponentDesc>& catalog = kb::library::EngineLibraryComponentRegistry::Catalog();
+    const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
+
+    kb::tests::Require(catalog.size() == scriptComponentNames.size(),
+        "Engine21kbLibrary component registry must catalog exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
+    for (const std::string_view scriptName : scriptComponentNames) {
+        const kb::library::LibraryComponentDesc* desc = kb::library::EngineLibraryComponentRegistry::Find(scriptName);
+        kb::tests::Require(desc != nullptr, "Engine21kbLibrary component registry is missing an entry for a component ScriptSceneComponentApi.cpp already gates Lua/VisualGraph access behind");
+    }
+    for (const kb::library::LibraryComponentDesc& desc : catalog) {
+        const bool foundInScriptNames = std::ranges::find(scriptComponentNames, std::string_view{ desc.name }) != scriptComponentNames.end();
+        kb::tests::Require(foundInScriptNames, "Engine21kbLibrary component registry names a component ScriptSceneComponentApi.cpp does not gate Lua/VisualGraph access behind — the two must never drift apart");
+        kb::tests::Require(desc.id != 0U, "Engine21kbLibrary component registry entry must have a nonzero id");
+        kb::tests::Require(desc.id == kb::library::ComputeLibraryComponentId(desc.name), "Engine21kbLibrary component registry entry's id must match ComputeLibraryComponentId(name)");
+        kb::tests::Require(desc.version.major == 1U && desc.version.minor == 0U, "Engine21kbLibrary component registry entries must all start at version 1.0 today");
+        kb::tests::Require(desc.threadPolicy == kb::library::LibraryThreadAffinity::MainThread, "Engine21kbLibrary component registry entries must all be MainThread today — no worker-safe component access path exists yet");
+        kb::tests::Require(desc.capability == kb::library::LibraryComponentCapability::ReadWrite, "Engine21kbLibrary component registry entries must all be ReadWrite today — no read-only component exists yet");
+    }
+
+    kb::tests::Require(kb::library::EngineLibraryComponentRegistry::Find("NoSuchComponent") == nullptr, "Engine21kbLibrary component registry Find() must return nullptr for an unregistered name");
+
+    // Id determinism, same contract as LIB-026's function id.
+    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") == kb::library::ComputeLibraryComponentId("Camera"),
+        "Engine21kbLibrary component id must be deterministic for the same name");
+    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("Light"),
+        "Engine21kbLibrary component id must differ for different names");
+
+    // Honest serializable check: round-trip a scene containing all six
+    // components, then verify only the ones marked serializable=true
+    // actually survive Save+Load, and the one marked false (Visibility)
+    // genuinely does not.
+    kb::scene::Scene source;
+    const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
+    source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .visible = false });
+    source.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 55.0F });
+    source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
+    source.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 77U });
+    source.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 88U, .enabled = true });
+
+    const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
+    std::error_code removeError;
+    std::filesystem::remove_all(testRoot, removeError);
+    std::error_code createError;
+    std::filesystem::create_directories(testRoot, createError);
+    kb::tests::Require(!createError, "Engine21kbLibrary component registry test root could not be prepared");
+    const std::filesystem::path sceneFile = testRoot / "RoundTrip.21kbscene";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "ComponentRegistryRoundTrip"), "Engine21kbLibrary component registry round-trip fixture was not saved");
+
+    kb::scene::Scene target;
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile), "Engine21kbLibrary component registry round-trip scene was not loaded");
+    const std::vector<kb::scene::SceneEntity> roots = target.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 1U, "Engine21kbLibrary component registry round-trip scene must restore exactly one root entity");
+    const kb::scene::SceneEntity restored = roots.front();
+
+    kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
+    kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
+    kb::tests::Require(target.Components().MeshRenderers().Has(restored), "Engine21kbLibrary component registry: MeshRenderer is marked serializable=true and must survive a save/load round trip");
+    kb::tests::Require(target.Components().Behaviours().Has(restored), "Engine21kbLibrary component registry: Behaviour is marked serializable=true and must survive a save/load round trip");
+    // Transform and Visibility are baked UNCONDITIONALLY per prefab node
+    // (ScenePrefabBakedArchetype::transforms/visibility, no mask bit — see
+    // ScenePrefabBakedData.hpp), unlike Camera/Light/MeshRenderer/
+    // Behaviour which are behind ScenePrefabBakedComponentMask bits — but
+    // both routes genuinely persist the data, so the non-default
+    // visible=false set on the source must survive too.
+    const kb::scene::VisibilityComponent* restoredVisibility = target.Components().Visibility().TryGet(restored);
+    kb::tests::Require(restoredVisibility != nullptr && !restoredVisibility->visible,
+        "Engine21kbLibrary component registry: Visibility is marked serializable=true and must survive a save/load round trip (baked unconditionally per prefab node)");
+    for (const kb::library::LibraryComponentDesc& desc : catalog) {
+        kb::tests::Require(desc.serializable, "Engine21kbLibrary component registry: all six currently cataloged components are serializable=true — verified against the real save/load round trip above, not assumed");
+    }
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -1812,6 +1894,7 @@ void RunEngineLibraryTests() {
     RunApiCompatibilityComparisonTest();
     RunDeprecationTest();
     RunFunctionIdTest();
+    RunEngineLibraryComponentRegistryTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
