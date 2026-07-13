@@ -2413,6 +2413,120 @@ void RunWorldFindAllByTagTest() {
         "World.FindAllByTag(skip past the last match) must return an invalid entity, not error or wrap around");
 }
 
+// LIB-070: World.SetProperty<Type> — data overrides on an ARBITRARY
+// entity (not the calling behaviour's own Self, which is all the
+// pre-existing Self.SetProperty sugar could target). Own fresh Scene/host,
+// same reasoning as the LIB-067/068/069 tests above.
+void RunWorldSetPropertyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetProperty test host setup failed");
+
+    const kb::scene::SceneObject cameraObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Camera" });
+    scene.Components().Cameras().Set(cameraObject.Entity(), kb::scene::CameraComponent{});
+    const kb::scene::SceneObject behaviourObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Behaviour" });
+    scene.Components().Behaviours().Set(behaviourObject.Entity(), kb::scene::BehaviourComponent{ .enabled = true });
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // A property setter is only meaningfully proven by first observing
+    // the property's default, then observing it changed — not merely
+    // that the call reported success.
+    const float defaultFov = scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees;
+    const std::vector<kb::script::ScriptFunctionArgument> setFovArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ cameraObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Camera" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "verticalFovDegrees" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 90.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setFovResult = host.Functions().Call("World.SetPropertyFloat", setFovArgs, context);
+    kb::tests::Require(setFovResult.Succeeded() && setFovResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for a real, writable property");
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees, defaultFov)
+            && kb::tests::NearlyEqual(scene.Components().Cameras().TryGet(cameraObject.Entity())->verticalFovDegrees, 90.0F),
+        "World.SetPropertyFloat must actually change the target entity's live component data, on an entity that is NOT the caller's own Self");
+
+    const std::vector<kb::script::ScriptFunctionArgument> disableArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ behaviourObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Behaviour" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "enabled" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult disableResult = host.Functions().Call("World.SetPropertyBool", disableArgs, context);
+    kb::tests::Require(disableResult.Succeeded() && disableResult.Output("set")->AsBool(), "World.SetPropertyBool must report set=true for a real, writable property");
+    kb::tests::Require(!scene.Components().Behaviours().TryGet(behaviourObject.Entity())->enabled, "World.SetPropertyBool must actually change the target entity's live component data");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownComponentArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ cameraObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "NoSuchComponent" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "value" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownComponentResult = host.Functions().Call("World.SetPropertyFloat", unknownComponentArgs, context);
+    kb::tests::Require(unknownComponentResult.Succeeded() && !unknownComponentResult.Output("set")->AsBool(),
+        "World.SetPropertyFloat targeting an unknown component must report set=false, not error or crash");
+
+    const kb::scene::SceneEntity destroyed = scene.Entities().CreateEntity();
+    scene.Entities().Destroy(destroyed);
+    const std::vector<kb::script::ScriptFunctionArgument> deadEntityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ destroyed.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Camera" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "verticalFovDegrees" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 45.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadEntityResult = host.Functions().Call("World.SetPropertyFloat", deadEntityArgs, context);
+    kb::tests::Require(deadEntityResult.Succeeded() && !deadEntityResult.Output("set")->AsBool(), "World.SetPropertyFloat targeting a destroyed entity must report set=false, not throw");
+}
+
+// LIB-070 ("ownership control"): proves that destroying the entity handle
+// World.InstantiatePrefab/World.Spawn(prefab=...) returns really does
+// relinquish the WHOLE instantiated hierarchy, not just the root — the
+// caller that owns the returned handle owns (and can fully release) the
+// entire prefab instance via the ordinary World.Destroy, with no separate
+// "destroy the whole instance" API needed. Verified against a REAL
+// multi-object prefab (root + child), not the single-object fixture used
+// elsewhere in this file.
+void RunWorldInstantiatePrefabOwnershipTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "PrefabOwnershipProject";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "ParentChildPrefab.kbprefab";
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Root" });
+        const kb::scene::SceneObject prefabChild = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = prefabRoot });
+        static_cast<void>(prefabChild);
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "ParentChildPrefab");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Prefab ownership test fixture was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab ownership test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab ownership test prefab was not discovered");
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Prefab ownership test host setup failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> instantiateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/ParentChildPrefab.kbprefab" } } },
+    };
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const kb::script::ScriptFunctionCallResult instantiated = host.Functions().Call("World.InstantiatePrefab", instantiateArgs, context);
+    kb::tests::Require(instantiated.Succeeded(), "World.InstantiatePrefab direct call failed");
+    kb::tests::Require(instantiated.Output("count")->AsInt() == 2, "World.InstantiatePrefab must report both the root and its child in count");
+    const kb::scene::SceneEntity root{ instantiated.Output("entity")->AsUInt64() };
+    kb::tests::Require(root.IsValid() && scene.Entities().IsAlive(root), "World.InstantiatePrefab must return a live root entity");
+    const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(root);
+    kb::tests::Require(children.size() == 1U && scene.Entities().IsAlive(children.front()), "The instantiated prefab's child must be alive and parented under the returned root");
+    const kb::scene::SceneEntity child = children.front();
+
+    const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ root.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult destroyResult = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(destroyResult.Succeeded() && destroyResult.Output("destroyed")->AsBool(), "World.Destroy on the instantiated prefab's root must succeed");
+    kb::tests::Require(!scene.Entities().IsAlive(root), "World.Destroy must have destroyed the prefab instance's root");
+    kb::tests::Require(!scene.Entities().IsAlive(child),
+        "World.Destroy on the prefab instance's root must cascade to destroy its child too — the caller that owns the returned handle owns the WHOLE instantiated hierarchy, not just the root");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4114,6 +4228,8 @@ void RunScriptRuntimeTests() {
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
+    RunWorldSetPropertyTest();
+    RunWorldInstantiatePrefabOwnershipTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
