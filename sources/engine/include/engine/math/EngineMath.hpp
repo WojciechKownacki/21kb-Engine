@@ -392,4 +392,47 @@ struct DampResult {
 // large value for effectively unclamped).
 [[nodiscard]] DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept;
 
+// LIB-046: scalar Min/Max/Abs/Sign/Floor/Ceil/Round/Frac/Mod/Sqrt/Pow/Exp/
+// Log — the same functions ScriptMathApi registers as `Math.Min`/etc.
+// Min/Max/Abs overload the existing Vec3 versions above rather than using
+// a different name for the scalar case.
+
+[[nodiscard]] constexpr float Min(float lhs, float rhs) noexcept {
+    return lhs < rhs ? lhs : rhs;
+}
+
+[[nodiscard]] constexpr float Max(float lhs, float rhs) noexcept {
+    return lhs > rhs ? lhs : rhs;
+}
+
+[[nodiscard]] constexpr float Abs(float value) noexcept {
+    return value < 0.0F ? -value : value;
+}
+
+// -1 for negative, 1 for positive, 0 for exactly zero (not "0 counts as
+// positive" — a caller multiplying by Sign(0) should get 0, not flip
+// direction).
+[[nodiscard]] constexpr float Sign(float value) noexcept {
+    return value > 0.0F ? 1.0F : (value < 0.0F ? -1.0F : 0.0F);
+}
+
+[[nodiscard]] float Floor(float value) noexcept;
+[[nodiscard]] float Ceil(float value) noexcept;
+// Ties round away from zero (std::round's convention), not to-even.
+[[nodiscard]] float Round(float value) noexcept;
+// Always in [0, 1) — the fractional part after Floor, not after
+// truncation (Frac(-1.25) is 0.75, not -0.25).
+[[nodiscard]] float Frac(float value) noexcept;
+// Floor-based modulo (GLSL's `mod`, not C's `fmod`): the result always has
+// the same sign as `divisor` and stays in [0, divisor) for divisor > 0 —
+// the convention that makes wrapping an angle or a repeating coordinate
+// well-defined for a negative dividend, which C's truncation-based fmod
+// is not (fmod(-1, 4) is -1, not 3).
+[[nodiscard]] float Mod(float value, float divisor) noexcept;
+[[nodiscard]] float Sqrt(float value) noexcept;
+[[nodiscard]] float Pow(float base, float exponent) noexcept;
+[[nodiscard]] float Exp(float value) noexcept;
+// Natural logarithm (base e), not base-10 or base-2.
+[[nodiscard]] float Log(float value) noexcept;
+
 } // namespace kb::math

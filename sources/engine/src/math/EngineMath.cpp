@@ -67,4 +67,40 @@ DampResult Damp(float current, float target, float velocity, float smoothTime, f
     return DampResult{ .value = output, .velocity = newVelocity };
 }
 
+float Floor(float value) noexcept {
+    return std::floor(value);
+}
+
+float Ceil(float value) noexcept {
+    return std::ceil(value);
+}
+
+float Round(float value) noexcept {
+    return std::round(value);
+}
+
+float Frac(float value) noexcept {
+    return value - std::floor(value);
+}
+
+float Mod(float value, float divisor) noexcept {
+    return value - divisor * std::floor(value / divisor);
+}
+
+float Sqrt(float value) noexcept {
+    return std::sqrt(value);
+}
+
+float Pow(float base, float exponent) noexcept {
+    return std::pow(base, exponent);
+}
+
+float Exp(float value) noexcept {
+    return std::exp(value);
+}
+
+float Log(float value) noexcept {
+    return std::log(value);
+}
+
 } // namespace kb::math

@@ -2048,7 +2048,11 @@ void RunScriptMathApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script math API host did not initialize");
-    for (const char* name : { "Math.Clamp", "Math.Lerp", "Math.InverseLerp", "Math.Remap", "Math.SmoothStep", "Math.MoveTowards", "Math.Damp" }) {
+    for (const char* name : {
+             "Math.Clamp", "Math.Lerp", "Math.InverseLerp", "Math.Remap", "Math.SmoothStep", "Math.MoveTowards", "Math.Damp",
+             "Math.Min", "Math.Max", "Math.Abs", "Math.Sign", "Math.Floor", "Math.Ceil", "Math.Round", "Math.Frac", "Math.Mod",
+             "Math.Sqrt", "Math.Pow", "Math.Exp", "Math.Log",
+         }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
     }
@@ -2121,6 +2125,32 @@ void RunScriptMathApiTest() {
         damped.Succeeded() && damped.Output("value").has_value() && damped.Output("velocity").has_value() &&
             damped.Output("value")->AsFloat() > 0.0F && damped.Output("value")->AsFloat() < 10.0F,
         "Math.Damp direct call did not move current toward target without overshooting");
+
+    const kb::script::ScriptFunctionCallResult maxed = host.Functions().Call(
+        "Math.Max",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "a", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "b", .value = kb::script::ScriptValue{ 7.0F } },
+        },
+        context);
+    kb::tests::Require(maxed.Succeeded() && maxed.Output("result").has_value() && kb::tests::NearlyEqual(maxed.Output("result")->AsFloat(), 7.0F), "Math.Max direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult modded = host.Functions().Call(
+        "Math.Mod",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ -1.0F } },
+            { .name = "divisor", .value = kb::script::ScriptValue{ 4.0F } },
+        },
+        context);
+    kb::tests::Require(modded.Succeeded() && modded.Output("result").has_value() && kb::tests::NearlyEqual(modded.Output("result")->AsFloat(), 3.0F), "Math.Mod direct call must use the floor-based convention (mod(-1,4)=3, not -1)");
+
+    const kb::script::ScriptFunctionCallResult sqrted = host.Functions().Call(
+        "Math.Sqrt",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 16.0F } },
+        },
+        context);
+    kb::tests::Require(sqrted.Succeeded() && sqrted.Output("result").has_value() && kb::tests::NearlyEqual(sqrted.Output("result")->AsFloat(), 4.0F), "Math.Sqrt direct call returned the wrong value");
 }
 
 void RunScriptInputApiTest() {
