@@ -4,10 +4,12 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
+#include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
 #include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
+#include "engine/library/EngineLibraryFunctionId.hpp"
 #include "engine/library/EngineLibraryLifecycle.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
@@ -855,6 +857,106 @@ void RunApiCompatibilityComparisonTest() {
     }
 }
 
+// LIB-025: a deprecated function's warning must name the function, the
+// version it was deprecated since, and (when declared) the replacement to
+// call instead; a Visual Graph CallNative node bound to the deprecated
+// function must be rewritten to the replacement's binding key, and only
+// when a replacement is actually declared.
+void RunDeprecationTest() {
+    using kb::library::LibraryApiVersion;
+    using kb::library::LibraryDeprecation;
+
+    const LibraryDeprecation withReplacement{
+        .message = "renamed for clarity",
+        .replacementCanonicalName = "World.FindByTagFast",
+        .sinceVersion = LibraryApiVersion{ 0U, 2U, 0U },
+    };
+    const std::string warning = kb::library::FormatDeprecationWarning("World.FindByTag", withReplacement);
+    kb::tests::Require(warning.find("World.FindByTag") != std::string::npos, "Engine21kbLibrary deprecation warning must name the deprecated function");
+    kb::tests::Require(warning.find("0.2.0") != std::string::npos, "Engine21kbLibrary deprecation warning must name the version it was deprecated since");
+    kb::tests::Require(warning.find("World.FindByTagFast") != std::string::npos, "Engine21kbLibrary deprecation warning must name the replacement");
+
+    const LibraryDeprecation withoutReplacement{ .message = "capability removed", .sinceVersion = LibraryApiVersion{ 0U, 3U, 0U } };
+    const std::string bareWarning = kb::library::FormatDeprecationWarning("World.Legacy", withoutReplacement);
+    kb::tests::Require(bareWarning.find("instead") == std::string::npos, "Engine21kbLibrary deprecation warning must not invent a replacement when none is declared");
+
+    std::vector<kb::visual::VisualGraphNode> nodes{
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.World.FindByTag" },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.World.Exists" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::Event, .symbol = "Function.World.FindByTag" },
+    };
+    const std::size_t migrated = kb::library::MigrateVisualGraphCallNativeNodes(nodes, "World.FindByTag", withReplacement);
+    kb::tests::Require(migrated == 1U, "Engine21kbLibrary Visual Graph migration must rewrite exactly the matching CallNative node");
+    kb::tests::Require(nodes[0].symbol == "Function.World.FindByTagFast", "Engine21kbLibrary Visual Graph migration did not rewrite the matching node's symbol");
+    kb::tests::Require(nodes[1].symbol == "Function.World.Exists", "Engine21kbLibrary Visual Graph migration must not touch an unrelated node");
+    kb::tests::Require(nodes[2].symbol == "Function.World.FindByTag", "Engine21kbLibrary Visual Graph migration must not touch a non-CallNative node even with a matching symbol");
+
+    std::vector<kb::visual::VisualGraphNode> unmigratable{
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.World.Legacy" },
+    };
+    const std::size_t migratedWithoutReplacement = kb::library::MigrateVisualGraphCallNativeNodes(unmigratable, "World.Legacy", withoutReplacement);
+    kb::tests::Require(migratedWithoutReplacement == 0U, "Engine21kbLibrary Visual Graph migration must not rewrite anything when no replacement is declared");
+    kb::tests::Require(unmigratable[0].symbol == "Function.World.Legacy", "Engine21kbLibrary Visual Graph migration must leave the node untouched when no replacement is declared");
+}
+
+// LIB-026: a function's id must depend only on its canonical name, not on
+// where it lands in ScriptFunctionRegistry::Functions() or which
+// ScriptRuntimeHost instance registered it.
+void RunFunctionIdTest() {
+    kb::tests::Require(
+        kb::library::ComputeLibraryFunctionId("World.Exists") == kb::library::ComputeLibraryFunctionId("World.Exists"),
+        "Engine21kbLibrary function id must be deterministic for the same name");
+    kb::tests::Require(
+        kb::library::ComputeLibraryFunctionId("World.Exists") != kb::library::ComputeLibraryFunctionId("World.Name"),
+        "Engine21kbLibrary function id must differ for different names");
+
+    // Two independently constructed hosts register the same six modules;
+    // the id for the same function name must match across both, proving
+    // it does not depend on which ScriptRuntimeHost instance (or its
+    // internal registration order) computed it.
+    kb::scene::Scene sceneA;
+    kb::script::ScriptRuntimeHost hostA{ sceneA };
+    kb::scene::Scene sceneB;
+    kb::script::ScriptRuntimeHost hostB{ sceneB };
+    kb::tests::Require(hostA.Succeeded() && hostB.Succeeded(), "Engine21kbLibrary function id test hosts failed to set up");
+    kb::tests::Require(hostA.Functions().FindSignature("World.Exists") != nullptr, "Engine21kbLibrary function id test fixture is missing World.Exists");
+
+    const kb::library::LibraryFunctionId idFromA = kb::library::ComputeLibraryFunctionId("World.Exists");
+    const kb::library::LibraryFunctionId idFromB = kb::library::ComputeLibraryFunctionId("World.Exists");
+    kb::tests::Require(idFromA == idFromB, "Engine21kbLibrary function id must be identical across independently constructed hosts");
+}
+
+// LIB-029: every function the catalog reports must have a real binding in
+// every supported frontend. Native + generic Lua CallFunction reachability
+// are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
+// the single registration path (LIB-002) — this test covers the one step
+// that registers separately and could independently regress: the Visual
+// Graph CallNative binding ScriptFunctionVisualGraphBindings attaches to
+// every RegisterFunction call.
+void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary catalog binding test host setup failed");
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
+
+    for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string bindingKey = "Function." + function.name;
+        const std::string missingNativeBindingMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Visual Graph native binding";
+        kb::tests::Require(
+            host.VisualGraphNativeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, bindingKey) != nullptr,
+            missingNativeBindingMessage.c_str());
+        const std::string missingRuntimeBindingMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Visual Graph runtime binding";
+        kb::tests::Require(
+            host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, bindingKey) != nullptr,
+            missingRuntimeBindingMessage.c_str());
+        const std::string missingRegistryEntryMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Native/Lua CallFunction registry entry";
+        kb::tests::Require(
+            host.Functions().FindSignature(function.name) != nullptr,
+            missingRegistryEntryMessage.c_str());
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -886,6 +988,9 @@ void RunEngineLibraryTests() {
     RunResultTest();
     RunApiManifestTest();
     RunApiCompatibilityComparisonTest();
+    RunDeprecationTest();
+    RunFunctionIdTest();
+    RunCatalogFunctionsHaveVisualGraphBindingsTest();
 }
 
 } // namespace kb::tests
