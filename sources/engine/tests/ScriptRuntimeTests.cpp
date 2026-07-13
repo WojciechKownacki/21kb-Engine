@@ -7,6 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -2052,6 +2053,7 @@ void RunScriptMathApiTest() {
              "Math.Clamp", "Math.Lerp", "Math.InverseLerp", "Math.Remap", "Math.SmoothStep", "Math.MoveTowards", "Math.Damp",
              "Math.Min", "Math.Max", "Math.Abs", "Math.Sign", "Math.Floor", "Math.Ceil", "Math.Round", "Math.Frac", "Math.Mod",
              "Math.Sqrt", "Math.Pow", "Math.Exp", "Math.Log",
+             "Math.Sin", "Math.Cos", "Math.Tan", "Math.Asin", "Math.Acos", "Math.Atan", "Math.Atan2",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2151,6 +2153,50 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(sqrted.Succeeded() && sqrted.Output("result").has_value() && kb::tests::NearlyEqual(sqrted.Output("result")->AsFloat(), 4.0F), "Math.Sqrt direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult sined = host.Functions().Call(
+        "Math.Sin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "angle", .value = kb::script::ScriptValue{ kb::math::kPi / 2.0F } },
+        },
+        context);
+    kb::tests::Require(sined.Succeeded() && sined.Output("result").has_value() && kb::tests::NearlyEqual(sined.Output("result")->AsFloat(), 1.0F), "Math.Sin direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult atan2ed = host.Functions().Call(
+        "Math.Atan2",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "y", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "x", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(atan2ed.Succeeded() && atan2ed.Output("result").has_value() && kb::tests::NearlyEqual(atan2ed.Output("result")->AsFloat(), kb::math::kPi / 4.0F), "Math.Atan2 direct call returned the wrong value");
+
+    // LIB-047's "zdefiniowana domena błędu": Math.Asin with a value
+    // outside [-1,1] must fail with a real error, not silently return NaN
+    // into the graph.
+    const kb::script::ScriptFunctionCallResult asinOutOfDomain = host.Functions().Call(
+        "Math.Asin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 2.0F } },
+        },
+        context);
+    kb::tests::Require(!asinOutOfDomain.Succeeded() && !asinOutOfDomain.errors.empty(), "Math.Asin with a value outside [-1,1] must report a real error, not succeed with NaN");
+
+    const kb::script::ScriptFunctionCallResult acosOutOfDomain = host.Functions().Call(
+        "Math.Acos",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ -1.5F } },
+        },
+        context);
+    kb::tests::Require(!acosOutOfDomain.Succeeded() && !acosOutOfDomain.errors.empty(), "Math.Acos with a value outside [-1,1] must report a real error, not succeed with NaN");
+
+    const kb::script::ScriptFunctionCallResult asinInDomain = host.Functions().Call(
+        "Math.Asin",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "value", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(asinInDomain.Succeeded() && asinInDomain.Output("result").has_value() && kb::tests::NearlyEqual(asinInDomain.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Asin with a boundary-valid value (1.0) must succeed, not be rejected as out of domain");
 }
 
 void RunScriptInputApiTest() {
