@@ -323,4 +323,73 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // position/rotation/scale fields already imply.
 [[nodiscard]] Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept;
 
+// LIB-045: scalar math foundation — the plain-Float functions LIB-046
+// through LIB-049's Vec3/Quat-level operations (Dot, Cross, Slerp, ...)
+// build on. These are the same functions `sources/script/ScriptMathApi`
+// registers as `Math.Clamp`/`Math.Lerp`/etc for Native/Lua/Visual Graph;
+// this header is their native implementation, not a second copy of it.
+
+[[nodiscard]] constexpr float Clamp(float value, float min, float max) noexcept {
+    return value < min ? min : (value > max ? max : value);
+}
+
+// Clamps t to [0,1] before interpolating (matches the game-engine
+// convention this API otherwise follows — e.g. Unity's Mathf.Lerp — so a
+// caller can't overshoot past `b` by accident; Remap below is built on
+// this and inherits the same clamped behavior).
+[[nodiscard]] constexpr float Lerp(float a, float b, float t) noexcept {
+    const float clampedT = Clamp(t, 0.0F, 1.0F);
+    return a + (b - a) * clampedT;
+}
+
+// Inverse of Lerp: returns the t in [0,1] such that Lerp(a, b, t) == value
+// (clamped, so a value outside [a,b] reports 0 or 1 rather than
+// extrapolating). a == b (zero-width range) returns 0 rather than
+// dividing by zero.
+[[nodiscard]] constexpr float InverseLerp(float a, float b, float value) noexcept {
+    if (a == b) {
+        return 0.0F;
+    }
+    return Clamp((value - a) / (b - a), 0.0F, 1.0F);
+}
+
+// Maps value from [inMin, inMax] to [outMin, outMax], built directly on
+// InverseLerp+Lerp (one source of truth for the clamping behavior) rather
+// than a second, independently-derived formula.
+[[nodiscard]] constexpr float Remap(float value, float inMin, float inMax, float outMin, float outMax) noexcept {
+    return Lerp(outMin, outMax, InverseLerp(inMin, inMax, value));
+}
+
+// Standard smoothstep: 0 at/before edge0, 1 at/after edge1, cubic
+// (3t²-2t³) ease in between.
+[[nodiscard]] constexpr float SmoothStep(float edge0, float edge1, float x) noexcept {
+    const float t = InverseLerp(edge0, edge1, x);
+    return t * t * (3.0F - 2.0F * t);
+}
+
+// Moves current toward target by at most maxDelta, without overshooting
+// past target (Unity's Mathf.MoveTowards) — unlike Lerp, this is
+// frame-rate-independent when maxDelta = speed * deltaTime.
+[[nodiscard]] constexpr float MoveTowards(float current, float target, float maxDelta) noexcept {
+    const float difference = target - current;
+    if (difference <= maxDelta && difference >= -maxDelta) {
+        return target;
+    }
+    return current + (difference < 0.0F ? -maxDelta : maxDelta);
+}
+
+struct DampResult {
+    float value = 0.0F;
+    float velocity = 0.0F;
+};
+
+// Critically-damped spring smoothing (Unity's Mathf.SmoothDamp / Game
+// Programming Gems 4's "critically damped ease-in ease-out" formula).
+// `velocity` is state the caller owns and threads back in every call
+// (there is no by-reference output across the script boundary — LIB-032
+// forbids that — so this returns {value, velocity} instead of taking
+// velocity by reference); maxSpeed caps the rate of change (pass a very
+// large value for effectively unclamped).
+[[nodiscard]] DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept;
+
 } // namespace kb::math

@@ -5,6 +5,7 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace kb::tests {
@@ -188,6 +189,44 @@ void RunAngleUnitsTest() {
     kb::tests::Require(Radians{ 1.0F } < Radians{ 2.0F }, "Radians operator< must compare same-unit values");
 }
 
+// LIB-045: the scalar math foundation (also registered as Math.* script
+// functions in ScriptMathApi.cpp, which reuse these directly) must be
+// correct against known values, including the edge cases that distinguish
+// each function from a naive implementation (a==b in InverseLerp, an
+// already-reached target in MoveTowards, a non-positive smoothTime in
+// Damp).
+void RunScalarMathFunctionsTest() {
+    kb::tests::Require(kb::math::Clamp(5.0F, 0.0F, 10.0F) == 5.0F, "Clamp must pass through a value already inside the range");
+    kb::tests::Require(kb::math::Clamp(-5.0F, 0.0F, 10.0F) == 0.0F, "Clamp must clamp a value below min");
+    kb::tests::Require(kb::math::Clamp(15.0F, 0.0F, 10.0F) == 10.0F, "Clamp must clamp a value above max");
+
+    kb::tests::Require(kb::math::Lerp(0.0F, 10.0F, 0.5F) == 5.0F, "Lerp must interpolate at the midpoint");
+    kb::tests::Require(kb::math::Lerp(0.0F, 10.0F, 1.5F) == 10.0F, "Lerp must clamp t above 1");
+    kb::tests::Require(kb::math::Lerp(0.0F, 10.0F, -0.5F) == 0.0F, "Lerp must clamp t below 0");
+
+    kb::tests::Require(kb::math::InverseLerp(0.0F, 10.0F, 2.5F) == 0.25F, "InverseLerp must invert Lerp");
+    kb::tests::Require(kb::math::InverseLerp(5.0F, 5.0F, 5.0F) == 0.0F, "InverseLerp must return 0 for a zero-width range instead of dividing by zero");
+    kb::tests::Require(kb::math::InverseLerp(0.0F, 10.0F, 20.0F) == 1.0F, "InverseLerp must clamp a value beyond the range to 1");
+
+    kb::tests::Require(kb::math::Remap(5.0F, 0.0F, 10.0F, 100.0F, 200.0F) == 150.0F, "Remap must linearly map between ranges");
+
+    kb::tests::Require(kb::math::SmoothStep(0.0F, 10.0F, 0.0F) == 0.0F, "SmoothStep must be 0 at edge0");
+    kb::tests::Require(kb::math::SmoothStep(0.0F, 10.0F, 10.0F) == 1.0F, "SmoothStep must be 1 at edge1");
+    kb::tests::Require(kb::math::SmoothStep(0.0F, 10.0F, 5.0F) == 0.5F, "SmoothStep must be 0.5 at the midpoint (symmetric curve)");
+
+    kb::tests::Require(kb::math::MoveTowards(0.0F, 10.0F, 3.0F) == 3.0F, "MoveTowards must move by maxDelta when far from target");
+    kb::tests::Require(kb::math::MoveTowards(9.0F, 10.0F, 3.0F) == 10.0F, "MoveTowards must not overshoot the target");
+    kb::tests::Require(kb::math::MoveTowards(5.0F, 5.0F, 3.0F) == 5.0F, "MoveTowards must stay put when already at the target");
+    kb::tests::Require(kb::math::MoveTowards(10.0F, 0.0F, 3.0F) == 7.0F, "MoveTowards must move toward a lower target");
+
+    const kb::math::DampResult dampStep = kb::math::Damp(0.0F, 10.0F, 0.0F, 1.0F, 0.1F, std::numeric_limits<float>::max());
+    kb::tests::Require(dampStep.value > 0.0F && dampStep.value < 10.0F, "Damp must move current toward target without overshooting on the first step");
+    kb::tests::Require(dampStep.velocity > 0.0F, "Damp must report a positive velocity when moving toward a higher target");
+
+    const kb::math::DampResult dampInvalidSmoothTime = kb::math::Damp(0.0F, 10.0F, 0.0F, -1.0F, 0.1F, std::numeric_limits<float>::max());
+    kb::tests::Require(std::isfinite(dampInvalidSmoothTime.value) && std::isfinite(dampInvalidSmoothTime.velocity), "Damp must not produce NaN/Inf for a non-positive smoothTime");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -196,6 +235,7 @@ void RunEngineMathTests() {
     RunVec3MathTest();
     RunQuatAndMatrixMathTest();
     RunAngleUnitsTest();
+    RunScalarMathFunctionsTest();
 }
 
 } // namespace kb::tests
