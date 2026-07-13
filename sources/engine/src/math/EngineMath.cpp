@@ -16,6 +16,27 @@ Vec3 Normalize(Vec3 value) noexcept {
     return value * (1.0F / length);
 }
 
+float Distance(Vec3 a, Vec3 b) noexcept {
+    return Length(a - b);
+}
+
+Vec3 Project(Vec3 value, Vec3 onto) noexcept {
+    const float ontoLengthSquared = Dot(onto, onto);
+    if (ontoLengthSquared <= 0.000001F) {
+        return {};
+    }
+    return onto * (Dot(value, onto) / ontoLengthSquared);
+}
+
+Vec3 Refract(Vec3 incident, Vec3 normal, float eta) noexcept {
+    const float cosIncident = Dot(normal, incident);
+    const float k = 1.0F - eta * eta * (1.0F - cosIncident * cosIncident);
+    if (k < 0.0F) {
+        return {};
+    }
+    return incident * eta - normal * (eta * cosIncident + std::sqrt(k));
+}
+
 Quat Normalize(Quat value) noexcept {
     const float lengthSquared = value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
     if (lengthSquared <= 0.000001F) {

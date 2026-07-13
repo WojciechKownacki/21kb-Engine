@@ -2054,6 +2054,7 @@ void RunScriptMathApiTest() {
              "Math.Min", "Math.Max", "Math.Abs", "Math.Sign", "Math.Floor", "Math.Ceil", "Math.Round", "Math.Frac", "Math.Mod",
              "Math.Sqrt", "Math.Pow", "Math.Exp", "Math.Log",
              "Math.Sin", "Math.Cos", "Math.Tan", "Math.Asin", "Math.Acos", "Math.Atan", "Math.Atan2",
+             "Math.Dot", "Math.Cross", "Math.Length", "Math.Normalize", "Math.Distance", "Math.Project", "Math.Reflect", "Math.Refract",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2197,6 +2198,38 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(asinInDomain.Succeeded() && asinInDomain.Output("result").has_value() && kb::tests::NearlyEqual(asinInDomain.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Asin with a boundary-valid value (1.0) must succeed, not be rejected as out of domain");
+
+    // LIB-048: Vec3 is not a script pin type — every Vec3-shaped Math.*
+    // function decomposes into named-prefix Float pins (aX/aY/aZ, ...),
+    // the same convention Physics.Raycast already uses.
+    const kb::script::ScriptFunctionCallResult crossed = host.Functions().Call(
+        "Math.Cross",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        crossed.Succeeded() && crossed.Output("x").has_value() && crossed.Output("y").has_value() && crossed.Output("z").has_value() &&
+            kb::tests::NearlyEqual(crossed.Output("x")->AsFloat(), 0.0F) && kb::tests::NearlyEqual(crossed.Output("y")->AsFloat(), 0.0F) && kb::tests::NearlyEqual(crossed.Output("z")->AsFloat(), 1.0F),
+        "Math.Cross direct call must decompose Vec3 into aX/aY/aZ/bX/bY/bZ pins and return x/y/z outputs");
+
+    const kb::script::ScriptFunctionCallResult distanced = host.Functions().Call(
+        "Math.Distance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(distanced.Succeeded() && distanced.Output("result").has_value() && kb::tests::NearlyEqual(distanced.Output("result")->AsFloat(), 5.0F), "Math.Distance direct call returned the wrong value");
 }
 
 void RunScriptInputApiTest() {

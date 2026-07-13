@@ -281,6 +281,36 @@ void RunTrigFunctionsTest() {
     kb::tests::Require(kb::math::Atan2(0.0F, 0.0F).Value() == 0.0F, "Atan2(0,0) must conventionally be 0, not NaN/undefined");
 }
 
+// LIB-048: Distance/Project/Reflect/Refract, the four Vec3 functions this
+// task adds on top of the LIB-042 Dot/Cross/Length/Normalize foundation.
+void RunVec3DistanceProjectReflectRefractTest() {
+    using kb::math::Vec3;
+
+    kb::tests::Require(std::abs(kb::math::Distance(Vec3{ 0.0F, 0.0F, 0.0F }, Vec3{ 3.0F, 4.0F, 0.0F }) - 5.0F) < 0.0001F, "Distance must compute the Euclidean distance (3-4-5 triangle)");
+    kb::tests::Require(kb::math::Distance(Vec3{ 1.0F, 2.0F, 3.0F }, Vec3{ 1.0F, 2.0F, 3.0F }) == 0.0F, "Distance between identical points must be zero");
+
+    // Projecting (2,2,0) onto the X axis leaves only the X component.
+    const Vec3 projected = kb::math::Project(Vec3{ 2.0F, 2.0F, 0.0F }, Vec3{ 5.0F, 0.0F, 0.0F });
+    kb::tests::Require(std::abs(projected.x - 2.0F) < 0.0001F && std::abs(projected.y) < 0.0001F, "Project must return the component of value parallel to onto");
+    const Vec3 projectedOntoZero = kb::math::Project(Vec3{ 1.0F, 1.0F, 1.0F }, Vec3{});
+    kb::tests::Require(projectedOntoZero.x == 0.0F && projectedOntoZero.y == 0.0F && projectedOntoZero.z == 0.0F, "Project onto the zero vector must return zero, not divide by zero");
+
+    // A ray going straight down (0,-1,0) reflecting off an upward-facing
+    // floor normal (0,1,0) must bounce straight back up (0,1,0).
+    const Vec3 reflected = kb::math::Reflect(Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F });
+    kb::tests::Require(std::abs(reflected.x) < 0.0001F && std::abs(reflected.y - 1.0F) < 0.0001F, "Reflect off a floor normal must bounce a downward ray straight up");
+
+    // Refracting straight through a surface (incident parallel to
+    // -normal, eta=1: same medium on both sides) must pass through
+    // unchanged.
+    const Vec3 refractedStraight = kb::math::Refract(Vec3{ 0.0F, -1.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, 1.0F);
+    kb::tests::Require(std::abs(refractedStraight.x) < 0.0001F && std::abs(refractedStraight.y - (-1.0F)) < 0.0001F, "Refract with eta=1 straight through a surface must pass through unchanged");
+    // A grazing-angle ray with a large eta triggers total internal
+    // reflection — must return the zero vector, not NaN.
+    const Vec3 refractedTIR = kb::math::Refract(Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, 2.0F);
+    kb::tests::Require(refractedTIR.x == 0.0F && refractedTIR.y == 0.0F && refractedTIR.z == 0.0F, "Refract must return the zero vector on total internal reflection, not NaN");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -292,6 +322,7 @@ void RunEngineMathTests() {
     RunScalarMathFunctionsTest();
     RunScalarMathFunctions2Test();
     RunTrigFunctionsTest();
+    RunVec3DistanceProjectReflectRefractTest();
 }
 
 } // namespace kb::tests
