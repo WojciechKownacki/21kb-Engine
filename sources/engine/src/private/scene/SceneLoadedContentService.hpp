@@ -1,8 +1,11 @@
 #pragma once
 
+#include "engine/scene/SceneLoadedContent.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string_view>
+#include <vector>
 
 namespace kb::scene {
 
@@ -37,6 +40,8 @@ public:
     [[nodiscard]] static float Progress(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool SetActive(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t ActiveScene(const Scene& scene) noexcept;
+    // LIB-073: returns and clears SceneState::pendingSceneLifecycleEvents.
+    [[nodiscard]] static std::vector<SceneLifecycleEventRecord> DrainPendingLifecycleEvents(Scene& scene);
 };
 
 } // namespace kb::scene
