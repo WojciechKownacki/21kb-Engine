@@ -209,6 +209,66 @@ void RunModuleInstallSkipsUnavailableCapabilityTest() {
     kb::tests::Require(g_moduleInstallSkipCallCount == 0, "Engine21kbLibrary module install must never call Register() for a capability=false module");
 }
 
+// LIB-028: InstallModules() must produce a real startup report — one entry
+// per catalog module (installed, version, owner, and, for a disabled one,
+// the reason) — not just the older failure-only diagnostics list, and
+// FormatStartupReport() must actually turn that into readable text.
+void RunModuleInstallStartupReportTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary startup report test host setup failed");
+
+    const std::vector<kb::library::LibraryModuleDesc> modules{
+        kb::library::LibraryModuleDesc{
+            .name = "AvailableTestModule",
+            .version = kb::library::LibraryModuleVersion{ 1U, 2U, 3U },
+            .ownerRuntime = "kb::tests::FakeRuntime",
+            .capability = true,
+            .Register = [](kb::script::ScriptRuntimeHost&) { return true; },
+        },
+        kb::library::LibraryModuleDesc{
+            .name = "DisabledTestModule",
+            .version = kb::library::LibraryModuleVersion{ 4U, 5U, 6U },
+            .ownerRuntime = "kb::tests::MissingRuntime",
+            .capability = false,
+            .disabledReason = "optional backend not compiled into this test build",
+            .Register = &RecordModuleInstallCall,
+        },
+    };
+    const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+    kb::tests::Require(result.report.size() == 2U, "Engine21kbLibrary startup report must have exactly one entry per catalog module");
+
+    const kb::library::EngineLibraryModuleReportEntry& availableEntry = result.report[0];
+    kb::tests::Require(availableEntry.name == "AvailableTestModule" && availableEntry.installed && availableEntry.capability && availableEntry.reason.empty(),
+        "Engine21kbLibrary startup report must mark a successfully registered module installed, with no reason text");
+    kb::tests::Require(availableEntry.version.major == 1U && availableEntry.version.minor == 2U && availableEntry.version.patch == 3U,
+        "Engine21kbLibrary startup report must carry the module's own version, not a default");
+
+    const kb::library::EngineLibraryModuleReportEntry& disabledEntry = result.report[1];
+    kb::tests::Require(disabledEntry.name == "DisabledTestModule" && !disabledEntry.installed && !disabledEntry.capability,
+        "Engine21kbLibrary startup report must mark a capability=false module as not installed");
+    kb::tests::Require(disabledEntry.reason == "optional backend not compiled into this test build",
+        "Engine21kbLibrary startup report must carry the module's own disabledReason verbatim, not a generic placeholder");
+
+    const std::string formatted = kb::library::FormatStartupReport(result.report);
+    kb::tests::Require(formatted.find("AvailableTestModule") != std::string::npos && formatted.find("1.2.3") != std::string::npos,
+        "FormatStartupReport must render the installed module's name and version as readable text");
+    kb::tests::Require(formatted.find("DisabledTestModule") != std::string::npos && formatted.find("optional backend not compiled into this test build") != std::string::npos,
+        "FormatStartupReport must render the disabled module's name and its real reason as readable text");
+
+    // Real end-to-end: a normal host installs the real seven-module
+    // Catalog(), all with capability=true, so ScriptRuntimeHost's own
+    // report (populated from the real Install() call it made while
+    // constructing, not a separately re-run InstallModules) must show all
+    // seven as installed.
+    const std::vector<kb::library::EngineLibraryModuleReportEntry>& realReport = host.LibraryStartupReport();
+    kb::tests::Require(realReport.size() == kb::library::EngineLibraryModule::Catalog().size(),
+        "ScriptRuntimeHost::LibraryStartupReport must have one entry per real catalog module");
+    for (const kb::library::EngineLibraryModuleReportEntry& entry : realReport) {
+        kb::tests::Require(entry.installed && entry.capability && entry.reason.empty(), "ScriptRuntimeHost::LibraryStartupReport must show every real catalog module as installed, since every module's capability is true today");
+    }
+}
+
 // LIB-017: every audited LibraryFunctionDesc::canonicalName across the
 // whole module catalog must resolve to a function ScriptApiCatalog reports
 // as actually registered — an audited function description can never
@@ -1651,6 +1711,7 @@ void RunEngineLibraryTests() {
     RunModuleInstallReportsDuplicateDiagnosticsTest();
     RunModuleCatalogTest();
     RunModuleInstallSkipsUnavailableCapabilityTest();
+    RunModuleInstallStartupReportTest();
     RunFunctionDescCatalogResolvesTest();
     RunModuleCatalogValidatesTest();
     RunModuleValidationDuplicateNameTest();
