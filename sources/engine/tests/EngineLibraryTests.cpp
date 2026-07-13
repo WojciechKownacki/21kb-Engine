@@ -20,6 +20,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
+#include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
 #include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
@@ -39,6 +40,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -1019,6 +1021,52 @@ void RunTextFormatBufferTest() {
     kb::tests::Require(tiny.Length() == 0U, "TextFormatBuffer::AppendInt must not advance Length after a failed conversion");
 }
 
+// LIB-063: TryParseInt64/UInt64/Double/Guid/Color/Date — each must accept
+// exactly its one documented grammar and reject everything else (empty
+// input, trailing garbage, wrong length, syntactically plausible but
+// calendrically invalid dates), never throw, never partially write the
+// output on failure.
+void RunParsingTest() {
+    std::int64_t intValue = 0;
+    kb::tests::Require(kb::library::TryParseInt64("42", intValue) && intValue == 42, "TryParseInt64 must parse a plain positive integer");
+    kb::tests::Require(kb::library::TryParseInt64("-42", intValue) && intValue == -42, "TryParseInt64 must parse a negative integer");
+    kb::tests::Require(!kb::library::TryParseInt64("", intValue), "TryParseInt64 must reject an empty string");
+    kb::tests::Require(!kb::library::TryParseInt64("42abc", intValue), "TryParseInt64 must reject trailing non-numeric garbage, not silently stop at the first invalid character");
+    kb::tests::Require(!kb::library::TryParseInt64("  42", intValue), "TryParseInt64 must reject leading whitespace rather than skipping it");
+
+    std::uint64_t uintValue = 0;
+    kb::tests::Require(kb::library::TryParseUInt64("4000000000", uintValue) && uintValue == 4000000000ULL, "TryParseUInt64 must parse a value beyond int32 range");
+    kb::tests::Require(!kb::library::TryParseUInt64("-1", uintValue), "TryParseUInt64 must reject a negative value");
+
+    double doubleValue = 0.0;
+    kb::tests::Require(kb::library::TryParseDouble("3.14", doubleValue) && doubleValue > 3.139 && doubleValue < 3.141, "TryParseDouble must parse a decimal value using '.' as the invariant decimal separator, not the process locale's");
+    kb::tests::Require(kb::library::TryParseDouble("1e3", doubleValue) && doubleValue == 1000.0, "TryParseDouble must parse scientific notation");
+    kb::tests::Require(!kb::library::TryParseDouble("not-a-number", doubleValue), "TryParseDouble must reject non-numeric text");
+
+    kb::tests::Require(kb::library::TryParseGuid("3F2504E0-4F89-11D3-9A0C-0305E82C3301"), "TryParseGuid must accept the canonical uppercase-hex 8-4-4-4-12 form");
+    kb::tests::Require(kb::library::TryParseGuid("3f2504e0-4f89-11d3-9a0c-0305e82c3301"), "TryParseGuid must accept lowercase hex digits too");
+    kb::tests::Require(!kb::library::TryParseGuid("3F2504E0-4F89-11D3-9A0C-0305E82C330"), "TryParseGuid must reject a string one character short of the canonical length");
+    kb::tests::Require(!kb::library::TryParseGuid("3F2504E04F8911D39A0C0305E82C3301-"), "TryParseGuid must reject hyphens in the wrong positions");
+    kb::tests::Require(!kb::library::TryParseGuid("3G2504E0-4F89-11D3-9A0C-0305E82C3301"), "TryParseGuid must reject a non-hex character");
+
+    kb::math::Color color{};
+    kb::tests::Require(kb::library::TryParseColor("#FF0000", color) && color.r == 1.0F && color.g == 0.0F && color.b == 0.0F && color.a == 1.0F, "TryParseColor must parse a 6-digit hex color as fully opaque red");
+    kb::tests::Require(kb::library::TryParseColor("#00FF0080", color) && color.g == 1.0F, "TryParseColor must parse an 8-digit hex color's RGB channels");
+    kb::tests::Require(color.a > 0.501F && color.a < 0.503F, "TryParseColor must parse the explicit alpha channel from an 8-digit hex color (0x80/255)");
+    kb::tests::Require(!kb::library::TryParseColor("FF0000", color), "TryParseColor must reject a hex string missing the leading '#'");
+    kb::tests::Require(!kb::library::TryParseColor("#FF00", color), "TryParseColor must reject a hex string of the wrong length");
+    kb::tests::Require(!kb::library::TryParseColor("#GG0000", color), "TryParseColor must reject a non-hex character");
+
+    std::chrono::year_month_day date{};
+    kb::tests::Require(kb::library::TryParseDate("2024-03-15", date) && date.year() == std::chrono::year{ 2024 } && date.month() == std::chrono::month{ 3 } && date.day() == std::chrono::day{ 15 },
+        "TryParseDate must parse a valid ISO 8601 calendar date");
+    kb::tests::Require(!kb::library::TryParseDate("2023-02-30", date), "TryParseDate must reject a syntactically well-formed but calendrically invalid date (February has no 30th day)");
+    kb::tests::Require(!kb::library::TryParseDate("2024-13-01", date), "TryParseDate must reject an out-of-range month");
+    kb::tests::Require(!kb::library::TryParseDate("15-03-2024", date), "TryParseDate must reject a non-ISO-8601 field order, even if every field is individually numeric");
+    kb::tests::Require(kb::library::TryParseDate("2024-02-29", date), "TryParseDate must accept February 29th in a leap year");
+    kb::tests::Require(!kb::library::TryParseDate("2023-02-29", date), "TryParseDate must reject February 29th in a non-leap year");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1558,6 +1606,7 @@ void RunEngineLibraryTests() {
     RunCollectionsNonAllocTest();
     RunCollectionsDeterministicIterationTest();
     RunTextFormatBufferTest();
+    RunParsingTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
