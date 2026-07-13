@@ -1,5 +1,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 
+#include "engine/library/EngineLibraryTextEncoding.hpp"
+
 #include <cstdint>
 #include <exception>
 #include <ranges>
@@ -243,6 +245,15 @@ void ScriptFunctionRegistry::ValidateInputs(
             errors.push_back(
                 "script function '" + signature.name + "' input '" + input.name + "' exceeds the maximum string length (" +
                 std::to_string(kMaxScriptStringArgumentLength) + " bytes)");
+            continue;
+        }
+        // LIB-064: UTF-8 is the only encoding a public String value may
+        // use — enforced at this same choke point (Native, Lua, Visual
+        // Graph all funnel through ValidateInputs) so a malformed byte
+        // sequence never reaches a callback that might log, store, or
+        // forward it further.
+        if (argument->value.Type() == ScriptValueType::String && !kb::library::IsValidUtf8(argument->value.AsString())) {
+            errors.push_back("script function '" + signature.name + "' input '" + input.name + "' is not valid UTF-8");
             continue;
         }
         normalized.push_back(CoerceArgument(*argument, input.type));
