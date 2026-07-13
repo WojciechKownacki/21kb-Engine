@@ -57,6 +57,14 @@ private:
     };
 
     void PrepareScene(kb::scene::Scene& scene);
+    // LIB-073: drains kb::scene::SceneLoadedContent's pending
+    // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
+    // notifications and turns each into a real ScriptEvent broadcast via
+    // ScriptRuntime::DispatchEventAndDrain — called before
+    // SyncBehaviourLifecycles so "the scene finished loading" is observed
+    // before any newly-instantiated entities' own Created/Activated/Ready
+    // lifecycle fires in the same pass.
+    void DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

@@ -16,6 +16,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2768,6 +2769,102 @@ void RunScenePersistentEntitySurvivesLoadTest() {
     kb::tests::Require(rootsAfterUnload.size() == 1U && rootsAfterUnload.front() == persistentRoot.Entity(), "After Scene.Unload(loadedId), only the persistent root must remain");
 }
 
+// LIB-073: proves SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/
+// SceneUnloaded genuinely reach a REAL running behaviour through the full
+// production path — Scene.Load/Unload (called through
+// ScriptFunctionRegistry, exactly as a script would) queue notifications
+// via SceneLoadedContentService, which ScriptRuntimeSceneSystem::
+// ExecuteFrame drains and turns into a real ScriptEvent broadcast on the
+// NEXT scene.Runtime().Update() — not just "DispatchEvent was called
+// directly" in isolation, and not synchronously inside the Scene.Load/
+// Unload call itself (proven by asserting the received list is still
+// empty immediately after each call, before the next Update()).
+void RunSceneLifecycleEventsReachBehaviourTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "SceneLifecycleEventsProject" / "LifecycleScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "LifecycleRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "LifecycleScene"), "Scene lifecycle events test fixture was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene lifecycle events test host setup failed");
+
+    struct ReceivedRecord {
+        std::string name;
+        std::uint64_t sceneId = 0U;
+        std::string sceneName;
+    };
+    std::vector<ReceivedRecord> received;
+    constexpr kb::assets::AssetId kListenerAsset{ 9101U };
+    kb::script::NativeScriptBackend& nativeBackend = host.NativeBackend();
+    for (const char* eventName : { "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded" }) {
+        kb::tests::Require(
+            nativeBackend.RegisterEvent(kListenerAsset, eventName, [&received](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                std::uint64_t sceneId = 0U;
+                std::string sceneName;
+                for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                    if (argument.name == "sceneId") {
+                        sceneId = argument.value.AsUInt64();
+                    } else if (argument.name == "sceneName") {
+                        sceneName = argument.value.AsString();
+                    }
+                }
+                received.push_back(ReceivedRecord{ .name = event.name, .sceneId = sceneId, .sceneName = sceneName });
+            }),
+            (std::string{ "Scene lifecycle events test event registration failed for " } + eventName).c_str());
+    }
+    // A listener that survives Scene.Load's ClearSceneRoots must itself be
+    // persistent (LIB-072) — exactly the real-world shape this event exists
+    // to serve (a bootstrap/manager entity reacting to gameplay scene
+    // changes). A non-persistent listener would be destroyed by the very
+    // same non-additive Scene.Load call it's supposed to be notified about.
+    const kb::scene::SceneObject listener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Listener" });
+    scene.Components().Behaviours().Set(listener.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kListenerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Entities().SetPersistent(listener.Entity(), true);
+
+    kb::tests::Require(host.InstallSceneSystem(), "Scene lifecycle events test scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.empty(), "No scene lifecycle events must fire before any Scene.Load/Unload/SetActive call");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Load direct call failed in lifecycle events test");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    kb::tests::Require(loadedId != 0U, "Scene.Load must succeed in lifecycle events test");
+    kb::tests::Require(received.empty(), "Scene lifecycle events must not fire synchronously inside Scene.Load itself — only once drained on the next frame");
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.size() == 3U, "Scene.Load (non-additive, becomes active) must dispatch exactly SceneLoading, SceneLoaded, SceneActivated");
+    kb::tests::Require(received[0].name == "SceneLoading" && received[1].name == "SceneLoaded" && received[2].name == "SceneActivated",
+        "Scene.Load's events must dispatch in SceneLoading -> SceneLoaded -> SceneActivated order");
+    for (const ReceivedRecord& record : received) {
+        kb::tests::Require(record.sceneId == loadedId && record.sceneName == "LifecycleScene", "Every Scene.Load lifecycle event must carry the correct sceneId/sceneName payload");
+    }
+    received.clear();
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload direct call failed in lifecycle events test");
+    kb::tests::Require(received.empty(), "Scene lifecycle events must not fire synchronously inside Scene.Unload itself");
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(received.size() == 2U && received[0].name == "SceneUnloading" && received[1].name == "SceneUnloaded",
+        "Scene.Unload must dispatch exactly SceneUnloading then SceneUnloaded, in order");
+    kb::tests::Require(received[0].sceneId == loadedId && received[1].sceneId == loadedId, "Scene.Unload's events must carry the unloaded scene's id");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4474,6 +4571,7 @@ void RunScriptRuntimeTests() {
     RunSceneLoadedContentApiTest();
     RunWorldPersistentStateTest();
     RunScenePersistentEntitySurvivesLoadTest();
+    RunSceneLifecycleEventsReachBehaviourTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();

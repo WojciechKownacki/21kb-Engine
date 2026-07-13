@@ -54,4 +54,8 @@ std::uint64_t SceneLoadedContent::ActiveScene() const noexcept {
     return SceneLoadedContentService::ActiveScene(scene_);
 }
 
+std::vector<SceneLifecycleEventRecord> SceneLoadedContent::DrainPendingLifecycleEvents() {
+    return SceneLoadedContentService::DrainPendingLifecycleEvents(scene_);
+}
+
 } // namespace kb::scene
