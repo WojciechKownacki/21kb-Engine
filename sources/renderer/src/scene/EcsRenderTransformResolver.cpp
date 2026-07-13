@@ -1,5 +1,6 @@
 #include "scene/EcsRenderTransformResolver.hpp"
 
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -10,16 +11,15 @@
 namespace kb::render {
 namespace {
 
-[[nodiscard]] kb::scene::Vec3 Add(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return kb::scene::Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
-}
+// LIB-042: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
+// TransformComponent.hpp), which already provides Add (operator+) and
+// Dot — this file's own copies used to be a second definition and would
+// now be an ambiguous overload via ADL against kb::math's. Multiply/
+// Cross/Scale have no kb::math equivalent yet, so they stay local.
+using kb::math::Dot;
 
 [[nodiscard]] kb::scene::Vec3 Multiply(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
     return kb::scene::Vec3{ lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z };
-}
-
-[[nodiscard]] float Dot(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
 }
 
 [[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
@@ -61,9 +61,7 @@ namespace {
 [[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
     const kb::scene::Vec3 u{ rotation.x, rotation.y, rotation.z };
     const float s = rotation.w;
-    return Add(
-        Add(Scale(u, 2.0F * Dot(u, value)), Scale(value, s * s - Dot(u, u))),
-        Scale(Cross(u, value), 2.0F * s));
+    return Scale(u, 2.0F * Dot(u, value)) + Scale(value, s * s - Dot(u, u)) + Scale(Cross(u, value), 2.0F * s);
 }
 
 } // namespace
@@ -121,7 +119,7 @@ kb::scene::TransformComponent EcsRenderTransformResolver::Compose(
     kb::scene::TransformComponent result = local;
     result.worldScale = Multiply(parent.worldScale, local.localScale);
     result.worldRotation = Normalize(Multiply(parent.worldRotation, local.localRotation));
-    result.worldPosition = Add(parent.worldPosition, Rotate(parent.worldRotation, Multiply(parent.worldScale, local.localPosition)));
+    result.worldPosition = parent.worldPosition + Rotate(parent.worldRotation, Multiply(parent.worldScale, local.localPosition));
     result.parentVersion = parent.worldVersion;
     result.worldVersion = local.worldVersion + 1U;
     result.worldDirty = false;
