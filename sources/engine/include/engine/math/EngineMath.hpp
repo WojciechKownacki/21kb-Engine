@@ -305,6 +305,20 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // a legitimate physical outcome, not an invalid input to reject.
 [[nodiscard]] Vec3 Refract(Vec3 incident, Vec3 normal, float eta) noexcept;
 
+// LIB-049: the unsigned angle between two vectors (always >= 0). Returns
+// Radians (LIB-044/047's convention: a function whose result IS an angle
+// returns a typed angle, not a bare float). Internally clamps the dot
+// product of the two normalized vectors to [-1,1] before calling Acos —
+// unlike LIB-047's Math.Asin/Acos (which reject an out-of-domain value the
+// SCRIPT CALLER supplied), this clamp corrects float round-off in an
+// internal computation that is mathematically guaranteed to be in
+// [-1,1] for genuine unit vectors; it is not hiding a caller error.
+[[nodiscard]] Radians Angle(Vec3 a, Vec3 b) noexcept;
+// Signed angle from a to b around the given reference axis (positive when
+// the rotation from a to b is counterclockwise looking down -axis, the
+// same left-handed convention this file documents next to Quat).
+[[nodiscard]] Radians SignedAngle(Vec3 a, Vec3 b, Vec3 axis) noexcept;
+
 // Hamilton product. lhs*rhs applies rhs first, then lhs — i.e. matches the
 // existing parent-composes-child convention (a world rotation is
 // `worldRotation = parentRotation * localRotation`, not the reverse).
@@ -327,6 +341,34 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
     const float s = rotation.w;
     return u * (2.0F * Dot(u, value)) + value * (s * s - Dot(u, u)) + Cross(u, value) * (2.0F * s);
 }
+
+// LIB-049: spherical linear interpolation between two rotations. Takes
+// the shorter of the two paths around the 4D unit sphere (negating `b`
+// when the quaternions are more than 90 degrees apart as 4D points, since
+// q and -q represent the same rotation) and falls back to a plain linear
+// interpolation when a and b are nearly identical, to avoid dividing by
+// a near-zero sin(omega).
+[[nodiscard]] Quat Slerp(Quat a, Quat b, float t) noexcept;
+
+// Builds the rotation that points local +Z (this file's forward
+// convention — see Ray's default direction) along `forward`, with `up` as
+// a hint for which way local +Y should point. If `forward` is parallel to
+// `up` (a degenerate basis), falls back to an arbitrary up hint rather
+// than producing a NaN/zero basis.
+[[nodiscard]] Quat LookRotation(Vec3 forward, Vec3 up) noexcept;
+
+// The shortest rotation that takes the direction `from` to the direction
+// `to`. `from` and `to` exactly opposite (180 degrees apart) is a
+// genuinely underdetermined case (infinitely many valid rotation axes) —
+// resolved by picking an arbitrary axis perpendicular to `from`, the same
+// resolution Ogre3D/Unity's equivalent functions use.
+[[nodiscard]] Quat FromToRotation(Vec3 from, Vec3 to) noexcept;
+
+// Rotates from `from` toward `to` by at most `maxDelta`, without
+// overshooting (the Quat analog of MoveTowards). Uses the shortest-path
+// angle between the two rotations (q and -q are the same rotation, so the
+// angle is derived from |Dot(from,to)|, not the raw dot product).
+[[nodiscard]] Quat RotateTowards(Quat from, Quat to, Radians maxDelta) noexcept;
 
 [[nodiscard]] constexpr Vec4 operator*(const Mat4& lhs, const Vec4& rhs) noexcept {
     return Vec4{
