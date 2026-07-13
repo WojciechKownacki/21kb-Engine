@@ -76,6 +76,48 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     };
 }
 
+// LIB-049: same decompose-into-named-scalar-pins convention as Vec3Arg/
+// Vec3Result/Vec3Pins, for Quat-shaped Math.* functions.
+[[nodiscard]] kb::math::Quat QuatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Quat{
+        FloatArg(arguments, std::string{ prefix } + "X"),
+        FloatArg(arguments, std::string{ prefix } + "Y"),
+        FloatArg(arguments, std::string{ prefix } + "Z"),
+        FloatArg(arguments, std::string{ prefix } + "W", 1.0F),
+    };
+}
+
+[[nodiscard]] ScriptFunctionCallResult QuatResult(kb::math::Quat value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "x", ScriptValue{ value.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ value.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ value.z } },
+            ScriptFunctionArgument{ "w", ScriptValue{ value.w } },
+        },
+        .errors = {},
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> QuatPins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Z", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "W", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> QuatOutputPins() {
+    return {
+        ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "w", ScriptValueType::Float, true },
+    };
+}
+
 [[nodiscard]] std::vector<ScriptFunctionPin> ConcatPins(std::vector<ScriptFunctionPin> lhs, std::vector<ScriptFunctionPin> rhs) {
     lhs.insert(lhs.end(), std::make_move_iterator(rhs.begin()), std::make_move_iterator(rhs.end()));
     return lhs;
@@ -265,6 +307,30 @@ ScriptFunctionCallResult VecReflect(const ScriptFunctionCallContext&, std::span<
 
 ScriptFunctionCallResult VecRefract(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     return Vec3Result(kb::math::Refract(Vec3Arg(arguments, "incident"), Vec3Arg(arguments, "normal"), FloatArg(arguments, "eta")));
+}
+
+ScriptFunctionCallResult VecAngle(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Angle(Vec3Arg(arguments, "a"), Vec3Arg(arguments, "b")).Value());
+}
+
+ScriptFunctionCallResult VecSignedAngle(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::SignedAngle(Vec3Arg(arguments, "a"), Vec3Arg(arguments, "b"), Vec3Arg(arguments, "axis")).Value());
+}
+
+ScriptFunctionCallResult QuatSlerp(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return QuatResult(kb::math::Slerp(QuatArg(arguments, "a"), QuatArg(arguments, "b"), FloatArg(arguments, "t")));
+}
+
+ScriptFunctionCallResult QuatLookRotation(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return QuatResult(kb::math::LookRotation(Vec3Arg(arguments, "forward"), Vec3Arg(arguments, "up")));
+}
+
+ScriptFunctionCallResult QuatFromToRotation(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return QuatResult(kb::math::FromToRotation(Vec3Arg(arguments, "from"), Vec3Arg(arguments, "to")));
+}
+
+ScriptFunctionCallResult QuatRotateTowards(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return QuatResult(kb::math::RotateTowards(QuatArg(arguments, "from"), QuatArg(arguments, "to"), kb::math::Radians{ FloatArg(arguments, "maxDelta") }));
 }
 
 bool RegisterFunction(
@@ -476,6 +542,30 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         ConcatPins(ConcatPins(Vec3Pins("incident"), Vec3Pins("normal")), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "eta", ScriptValueType::Float, true } }),
         Vec3OutputPins(),
         &VecRefract) && ok;
+    ok = RegisterFunction(host, "Math.Angle",
+        ConcatPins(Vec3Pins("a"), Vec3Pins("b")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &VecAngle) && ok;
+    ok = RegisterFunction(host, "Math.SignedAngle",
+        ConcatPins(ConcatPins(Vec3Pins("a"), Vec3Pins("b")), Vec3Pins("axis")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &VecSignedAngle) && ok;
+    ok = RegisterFunction(host, "Math.Slerp",
+        ConcatPins(ConcatPins(QuatPins("a"), QuatPins("b")), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "t", ScriptValueType::Float, true } }),
+        QuatOutputPins(),
+        &QuatSlerp) && ok;
+    ok = RegisterFunction(host, "Math.LookRotation",
+        ConcatPins(Vec3Pins("forward"), Vec3Pins("up")),
+        QuatOutputPins(),
+        &QuatLookRotation) && ok;
+    ok = RegisterFunction(host, "Math.FromToRotation",
+        ConcatPins(Vec3Pins("from"), Vec3Pins("to")),
+        QuatOutputPins(),
+        &QuatFromToRotation) && ok;
+    ok = RegisterFunction(host, "Math.RotateTowards",
+        ConcatPins(ConcatPins(QuatPins("from"), QuatPins("to")), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "maxDelta", ScriptValueType::Float, true } }),
+        QuatOutputPins(),
+        &QuatRotateTowards) && ok;
     return ok;
 }
 

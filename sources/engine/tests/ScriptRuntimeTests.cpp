@@ -2055,6 +2055,7 @@ void RunScriptMathApiTest() {
              "Math.Sqrt", "Math.Pow", "Math.Exp", "Math.Log",
              "Math.Sin", "Math.Cos", "Math.Tan", "Math.Asin", "Math.Acos", "Math.Atan", "Math.Atan2",
              "Math.Dot", "Math.Cross", "Math.Length", "Math.Normalize", "Math.Distance", "Math.Project", "Math.Reflect", "Math.Refract",
+             "Math.Angle", "Math.SignedAngle", "Math.Slerp", "Math.LookRotation", "Math.FromToRotation", "Math.RotateTowards",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -2230,6 +2231,52 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(distanced.Succeeded() && distanced.Output("result").has_value() && kb::tests::NearlyEqual(distanced.Output("result")->AsFloat(), 5.0F), "Math.Distance direct call returned the wrong value");
+
+    const kb::script::ScriptFunctionCallResult angled = host.Functions().Call(
+        "Math.Angle",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(angled.Succeeded() && angled.Output("result").has_value() && kb::tests::NearlyEqual(angled.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Angle direct call returned the wrong value");
+
+    // LIB-049: Quat is not a script pin type either — decomposed into
+    // <prefix>X/Y/Z/W pins, mirroring Vec3's convention.
+    const kb::script::ScriptFunctionCallResult lookRotated = host.Functions().Call(
+        "Math.LookRotation",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "forwardX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "forwardY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "forwardZ", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "upX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "upY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "upZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        lookRotated.Succeeded() && lookRotated.Output("w").has_value() && kb::tests::NearlyEqual(lookRotated.Output("w")->AsFloat(), 1.0F),
+        "Math.LookRotation(+Z, +Y) direct call must decompose Vec3/Quat pins and return the identity rotation");
+
+    const kb::script::ScriptFunctionCallResult slerpedAtStart = host.Functions().Call(
+        "Math.Slerp",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "aW", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 0.7071F } },
+            { .name = "bZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "bW", .value = kb::script::ScriptValue{ 0.7071F } },
+            { .name = "t", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(slerpedAtStart.Succeeded() && slerpedAtStart.Output("w").has_value() && kb::tests::NearlyEqual(slerpedAtStart.Output("w")->AsFloat(), 1.0F), "Math.Slerp direct call at t=0 must return the start rotation");
 }
 
 void RunScriptInputApiTest() {
