@@ -4,6 +4,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string>
@@ -34,6 +35,50 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
         .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ value } } },
         .errors = {},
     };
+}
+
+// LIB-048: Vec3 is not a ScriptValueType pin (LIB-032/LIB-042) — every
+// Vec3-shaped Math.* function decomposes into three named-prefix Float
+// pins, the same convention Physics.Raycast/Transform.* already use.
+[[nodiscard]] kb::math::Vec3 Vec3Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Vec3{
+        FloatArg(arguments, std::string{ prefix } + "X"),
+        FloatArg(arguments, std::string{ prefix } + "Y"),
+        FloatArg(arguments, std::string{ prefix } + "Z"),
+    };
+}
+
+[[nodiscard]] ScriptFunctionCallResult Vec3Result(kb::math::Vec3 value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "x", ScriptValue{ value.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ value.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ value.z } },
+        },
+        .errors = {},
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> Vec3Pins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Z", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> Vec3OutputPins() {
+    return {
+        ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> ConcatPins(std::vector<ScriptFunctionPin> lhs, std::vector<ScriptFunctionPin> rhs) {
+    lhs.insert(lhs.end(), std::make_move_iterator(rhs.begin()), std::make_move_iterator(rhs.end()));
+    return lhs;
 }
 
 ScriptFunctionCallResult Clamp(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
@@ -188,6 +233,38 @@ ScriptFunctionCallResult Atan(const ScriptFunctionCallContext&, std::span<const 
 
 ScriptFunctionCallResult Atan2(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     return FloatResult("result", kb::math::Atan2(FloatArg(arguments, "y"), FloatArg(arguments, "x")).Value());
+}
+
+ScriptFunctionCallResult VecDot(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Dot(Vec3Arg(arguments, "a"), Vec3Arg(arguments, "b")));
+}
+
+ScriptFunctionCallResult VecCross(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::Cross(Vec3Arg(arguments, "a"), Vec3Arg(arguments, "b")));
+}
+
+ScriptFunctionCallResult VecLength(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Length(Vec3Arg(arguments, "value")));
+}
+
+ScriptFunctionCallResult VecNormalize(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::Normalize(Vec3Arg(arguments, "value")));
+}
+
+ScriptFunctionCallResult VecDistance(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Distance(Vec3Arg(arguments, "a"), Vec3Arg(arguments, "b")));
+}
+
+ScriptFunctionCallResult VecProject(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::Project(Vec3Arg(arguments, "value"), Vec3Arg(arguments, "onto")));
+}
+
+ScriptFunctionCallResult VecReflect(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::Reflect(Vec3Arg(arguments, "incident"), Vec3Arg(arguments, "normal")));
+}
+
+ScriptFunctionCallResult VecRefract(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::Refract(Vec3Arg(arguments, "incident"), Vec3Arg(arguments, "normal"), FloatArg(arguments, "eta")));
 }
 
 bool RegisterFunction(
@@ -367,6 +444,38 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
         &Atan2) && ok;
+    ok = RegisterFunction(host, "Math.Dot",
+        ConcatPins(Vec3Pins("a"), Vec3Pins("b")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &VecDot) && ok;
+    ok = RegisterFunction(host, "Math.Cross",
+        ConcatPins(Vec3Pins("a"), Vec3Pins("b")),
+        Vec3OutputPins(),
+        &VecCross) && ok;
+    ok = RegisterFunction(host, "Math.Length",
+        Vec3Pins("value"),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &VecLength) && ok;
+    ok = RegisterFunction(host, "Math.Normalize",
+        Vec3Pins("value"),
+        Vec3OutputPins(),
+        &VecNormalize) && ok;
+    ok = RegisterFunction(host, "Math.Distance",
+        ConcatPins(Vec3Pins("a"), Vec3Pins("b")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &VecDistance) && ok;
+    ok = RegisterFunction(host, "Math.Project",
+        ConcatPins(Vec3Pins("value"), Vec3Pins("onto")),
+        Vec3OutputPins(),
+        &VecProject) && ok;
+    ok = RegisterFunction(host, "Math.Reflect",
+        ConcatPins(Vec3Pins("incident"), Vec3Pins("normal")),
+        Vec3OutputPins(),
+        &VecReflect) && ok;
+    ok = RegisterFunction(host, "Math.Refract",
+        ConcatPins(ConcatPins(Vec3Pins("incident"), Vec3Pins("normal")), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "eta", ScriptValueType::Float, true } }),
+        Vec3OutputPins(),
+        &VecRefract) && ok;
     return ok;
 }
 
