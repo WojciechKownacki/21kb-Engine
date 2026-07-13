@@ -1,5 +1,6 @@
 #include "scene/MiniaudioListenerSynchronizer.hpp"
 
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -11,16 +12,17 @@
 namespace kb::audio_miniaudio {
 namespace {
 
+// LIB-042: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
+// TransformComponent.hpp), which already provides Add (operator+) — this
+// file's own copy would now be an ambiguous overload via ADL against
+// kb::math's. Cross/Scale have no kb::math equivalent yet, so they stay
+// local.
 [[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
     return kb::scene::Vec3{
         lhs.y * rhs.z - lhs.z * rhs.y,
         lhs.z * rhs.x - lhs.x * rhs.z,
         lhs.x * rhs.y - lhs.y * rhs.x,
     };
-}
-
-[[nodiscard]] kb::scene::Vec3 Add(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return kb::scene::Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
 }
 
 [[nodiscard]] kb::scene::Vec3 Scale(kb::scene::Vec3 value, float scale) noexcept {
@@ -30,7 +32,7 @@ namespace {
 [[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
     const kb::scene::Vec3 axis{ rotation.x, rotation.y, rotation.z };
     const kb::scene::Vec3 twiceCross = Scale(Cross(axis, value), 2.0F);
-    return Add(Add(value, Scale(twiceCross, rotation.w)), Cross(axis, twiceCross));
+    return value + Scale(twiceCross, rotation.w) + Cross(axis, twiceCross);
 }
 
 [[nodiscard]] kb::scene::Vec3 NormalizeOrForward(kb::scene::Vec3 value) noexcept {

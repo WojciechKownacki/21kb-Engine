@@ -1,21 +1,17 @@
 #pragma once
 
+#include "engine/math/EngineMath.hpp"
+
 #include <cstdint>
 
 namespace kb::scene {
 
-struct Vec3 {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-};
-
-struct Quat {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-    float w = 1.0F;
-};
+// LIB-042: Vec3/Quat are aliases to the single canonical kb::math family,
+// not a second definition — every existing kb::scene::Vec3/Quat call site
+// (LocalTransform, WorldTransform, TransformComponent, ColliderComponent,
+// Vec3Math, QuatMath, ...) keeps compiling unchanged.
+using Vec3 = kb::math::Vec3;
+using Quat = kb::math::Quat;
 
 struct LocalTransform {
     Vec3 position{};
