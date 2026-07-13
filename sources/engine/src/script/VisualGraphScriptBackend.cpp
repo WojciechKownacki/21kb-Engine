@@ -22,6 +22,18 @@ namespace {
         return ScriptValue{value.AsUInt64(), ScriptValueType::Entity};
     case kb::visual::VisualGraphValueType::Component:
         return ScriptValue{value.AsUInt64(), ScriptValueType::Component};
+    case kb::visual::VisualGraphValueType::UInt32:
+        return ScriptValue{static_cast<std::uint32_t>(value.AsUInt64())};
+    case kb::visual::VisualGraphValueType::Hash:
+        return ScriptValue{value.AsUInt64(), ScriptValueType::Hash};
+    case kb::visual::VisualGraphValueType::Int64:
+        return ScriptValue{value.AsInt64()};
+    case kb::visual::VisualGraphValueType::Double:
+        return ScriptValue{value.AsDouble()};
+    case kb::visual::VisualGraphValueType::Name:
+        return ScriptValue{value.AsString(), ScriptValueType::Name};
+    case kb::visual::VisualGraphValueType::Guid:
+        return ScriptValue{value.AsString(), ScriptValueType::Guid};
     case kb::visual::VisualGraphValueType::Void:
         break;
     }

@@ -13,7 +13,7 @@ using kb::script::ScriptValueType;
 using kb::script::ToString;
 using kb::script::ToVisualGraphValueType;
 
-constexpr std::size_t kTypeCount = 7U;
+constexpr std::size_t kTypeCount = 13U;
 
 std::array<LibraryTypeDesc, kTypeCount> BuildDescriptors() {
     std::array<LibraryTypeDesc, kTypeCount> descriptors{};
@@ -73,6 +73,54 @@ std::array<LibraryTypeDesc, kTypeCount> BuildDescriptors() {
         .luaTypeName = "number (integer, component id)",
         .supportsEquality = true,
         .defaultValue = ScriptValue{ 0U, ScriptValueType::Component },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::Int64)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::Int64,
+        .canonicalName = ToString(ScriptValueType::Int64),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::Int64),
+        .luaTypeName = "number (integer, 64-bit)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ std::int64_t{ 0 } },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::UInt32)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::UInt32,
+        .canonicalName = ToString(ScriptValueType::UInt32),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::UInt32),
+        .luaTypeName = "number (integer, unsigned 32-bit)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ std::uint32_t{ 0U } },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::Double)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::Double,
+        .canonicalName = ToString(ScriptValueType::Double),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::Double),
+        .luaTypeName = "number (double precision)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ 0.0 },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::Name)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::Name,
+        .canonicalName = ToString(ScriptValueType::Name),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::Name),
+        .luaTypeName = "string (identifier)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ std::string{}, ScriptValueType::Name },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::Guid)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::Guid,
+        .canonicalName = ToString(ScriptValueType::Guid),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::Guid),
+        .luaTypeName = "string (GUID)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ std::string{}, ScriptValueType::Guid },
+    };
+    descriptors[static_cast<std::size_t>(ScriptValueType::Hash)] = LibraryTypeDesc{
+        .scriptType = ScriptValueType::Hash,
+        .canonicalName = ToString(ScriptValueType::Hash),
+        .visualGraphPinType = ToVisualGraphValueType(ScriptValueType::Hash),
+        .luaTypeName = "number (integer, opaque 64-bit hash)",
+        .supportsEquality = true,
+        .defaultValue = ScriptValue{ 0U, ScriptValueType::Hash },
     };
 
     return descriptors;
