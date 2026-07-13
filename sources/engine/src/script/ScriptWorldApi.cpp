@@ -59,6 +59,11 @@ ScriptFunctionCallResult NoScene() {
     return value == nullptr ? fallback : value->AsFloat(fallback);
 }
 
+[[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback = 0) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
 [[nodiscard]] bool HasArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
     return FindArg(arguments, name) != nullptr;
 }
@@ -173,6 +178,12 @@ void FindByNameVisitor(kb::scene::SceneEntity entity, const kb::scene::Transform
     }
 }
 
+// LIB-069 (documented cost): O(n) in the scene's entity count — a linear
+// scan over every entity via Transforms().ForEach, early-exiting the
+// instant a match is found (best case O(1) for the first entity created,
+// worst case O(n) when the match is last or absent). No name index
+// exists; a scene with many entities calling this every frame should
+// cache the returned handle instead of re-searching.
 ScriptFunctionCallResult FindByName(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -448,6 +459,9 @@ void FindByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformC
     }
 }
 
+// LIB-069 (documented cost): same O(n) linear scan as FindByName above —
+// no tag index exists, every entity's TagsComponent is checked in turn
+// until the first match, early-exiting there.
 ScriptFunctionCallResult FindByTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -459,6 +473,69 @@ ScriptFunctionCallResult FindByTag(const ScriptFunctionCallContext& context, std
         .found = {},
     };
     context.scene->Transforms().ForEach(&FindByTagVisitor, &findContext);
+    return EntityResult("entity", findContext.found);
+}
+
+struct FindAllByTagContext {
+    kb::scene::Scene* scene = nullptr;
+    std::string_view tag;
+    int skip = 0;
+    int matchIndex = 0;
+    kb::scene::SceneEntity found{};
+};
+
+void FindAllByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, void* rawContext) {
+    auto* context = static_cast<FindAllByTagContext*>(rawContext);
+    if (context == nullptr || context->scene == nullptr || context->found.IsValid()) {
+        return;
+    }
+    const kb::scene::TagsComponent* tags = context->scene->Components().Tags().TryGet(entity);
+    if (tags == nullptr || !HasTagValue(kb::scene::TagsText(*tags), context->tag)) {
+        return;
+    }
+    if (context->matchIndex == context->skip) {
+        context->found = entity;
+        return;
+    }
+    ++context->matchIndex;
+}
+
+// LIB-069: FindAllByTag has no dedicated collection type crossing the
+// script boundary (kb::script::ScriptValue is purely scalar; a real
+// collection-handle bridge is a separate, larger, still-undecided
+// architectural piece — see others/_temp.md's LIB-058 note). Instead it's
+// an index-based iterator: call repeatedly with an increasing `skip`
+// (0, 1, 2, ...) — same "entity" output/invalid-entity-means-not-found
+// convention FindByName/FindByTag above already use — until the returned
+// entity is invalid, meaning no (skip+1)-th match exists. This mirrors
+// the pattern already established by RandomStream's {value, newState}
+// idiom (LIB-051): the caller explicitly threads state (here, the skip
+// count) across calls rather than the engine holding an iterator alive
+// only on its own side of the boundary.
+//
+// Documented cost: EACH call is an independent O(n) linear scan from the
+// start of the scene (Transforms().ForEach), early-exiting once it
+// reaches the (skip+1)-th match — so retrieving all m matches out of n
+// entities costs O(n*m) in total, not O(n). This is a real, honest
+// trade-off against building the collection-crossing-boundary
+// infrastructure FindAllByTag would need to do better (a single O(n)
+// scan producing a script-visible list) — acceptable for the occasional
+// "find every enemy" query this API targets, not for a hot per-frame path
+// over a scene with many thousands of tagged entities.
+ScriptFunctionCallResult FindAllByTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::string tag = Trim(StringArg(arguments, "tag"));
+    const int skip = IntArg(arguments, "skip", 0);
+    FindAllByTagContext findContext{
+        .scene = context.scene,
+        .tag = tag,
+        .skip = skip < 0 ? 0 : skip,
+        .matchIndex = 0,
+        .found = {},
+    };
+    context.scene->Transforms().ForEach(&FindAllByTagVisitor, &findContext);
     return EntityResult("entity", findContext.found);
 }
 
@@ -589,6 +666,10 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &FindByTag) && ok;
+    ok = RegisterFunction(host, "World.FindAllByTag",
+        { ScriptFunctionPin{ "tag", ScriptValueType::String, true }, ScriptFunctionPin{ "skip", ScriptValueType::Int, false } },
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        &FindAllByTag) && ok;
     ok = RegisterFunction(host, "World.SetParent",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "parent", ScriptValueType::Entity, false } },
         { ScriptFunctionPin{ "parented", ScriptValueType::Bool, true } },
