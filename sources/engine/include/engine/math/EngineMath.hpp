@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace kb::math {
 
@@ -710,5 +711,64 @@ enum class Easing : std::uint8_t {
 // "overshoot" effect that makes them useful), so clamping the result
 // would silently break the curve's defining characteristic.
 [[nodiscard]] float Evaluate(Easing easing, float t) noexcept;
+
+// LIB-053: Curve/Gradient — deterministic keyframe interpolation, reusing
+// Easing (LIB-052) as the per-segment interpolation mode rather than
+// inventing a second, parallel curve-shape enum.
+//
+// Keyframes must be sorted by ascending `time` (not enforced by the type
+// itself — the same "caller-maintained invariant, not type-enforced"
+// choice ScriptFunctionRegistry makes for e.g. pin ordering). Evaluate()
+// CLAMPS t outside the keyframe range to the first/last keyframe's value
+// rather than extrapolating — the same "don't silently guess past defined
+// data" rule InverseLerp/Lerp already apply to their own t.
+
+struct CurveKeyframe {
+    float time = 0.0F;
+    float value = 0.0F;
+    // Interpolation used between THIS keyframe and the next one.
+    Easing easing = Easing::Linear;
+};
+
+struct Curve {
+    std::vector<CurveKeyframe> keyframes;
+};
+
+[[nodiscard]] float Evaluate(const Curve& curve, float t) noexcept;
+
+struct GradientStop {
+    float time = 0.0F;
+    Color color{};
+};
+
+struct Gradient {
+    std::vector<GradientStop> stops;
+};
+
+[[nodiscard]] Color Evaluate(const Gradient& gradient, float t) noexcept;
+
+// LIB-053's "serializacja assetowa": a minimal, self-contained binary
+// (de)serialization pair, NOT a reuse of kb::scene's SceneAssetBinaryIO —
+// that header is private to kb::scene (sources/engine/src/private/...),
+// and kb::math is a zero-dependency foundational module every other type
+// in this file already keeps free of upward dependencies on scene/asset
+// internals. Any asset codec that wants to embed a Curve/Gradient inside
+// its own file format calls these and copies the resulting bytes into its
+// own buffer, the same way SceneAssetBinaryIO's own helpers are meant to
+// be reused generically.
+//
+// A full standalone IAssetLoader-registered "load a .curve file" asset
+// type is intentionally NOT implemented here: nothing in the engine
+// consumes a top-level Curve/Gradient asset yet (no particle system,
+// animation curve field, etc. exists to reference one) — building that
+// loader/registration chain now would be speculative infrastructure with
+// zero real callers, which this codebase's own rules forbid. Deterministic
+// evaluation and a real byte-level round-trip are what LIB-053 asks for;
+// wiring a specific consumer's IAssetLoader is that future consumer's job.
+[[nodiscard]] std::vector<std::uint8_t> Serialize(const Curve& curve);
+[[nodiscard]] bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve);
+
+[[nodiscard]] std::vector<std::uint8_t> Serialize(const Gradient& gradient);
+[[nodiscard]] bool Deserialize(std::span<const std::uint8_t> bytes, Gradient& outGradient);
 
 } // namespace kb::math

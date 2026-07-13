@@ -514,6 +514,82 @@ void RunEasingTest() {
     kb::tests::Require(std::string{ kb::math::ToString(kb::math::Easing::InOutElastic) } == "InOutElastic", "Easing::ToString must format the enumerator name");
 }
 
+// LIB-053: Curve/Gradient deterministic evaluation and a real byte-level
+// serialization round-trip.
+void RunCurveAndGradientTest() {
+    using kb::math::Color;
+    using kb::math::Curve;
+    using kb::math::CurveKeyframe;
+    using kb::math::Easing;
+    using kb::math::Gradient;
+    using kb::math::GradientStop;
+
+    kb::tests::Require(kb::math::Evaluate(Curve{}, 0.5F) == 0.0F, "Evaluate on an empty Curve must return 0, not crash or read out of bounds");
+
+    Curve curve;
+    curve.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .easing = Easing::Linear },
+        CurveKeyframe{ .time = 1.0F, .value = 10.0F, .easing = Easing::Linear },
+    };
+    kb::tests::Require(kb::math::Evaluate(curve, 0.0F) == 0.0F, "Evaluate at the first keyframe's exact time must return its exact value");
+    kb::tests::Require(kb::math::Evaluate(curve, 1.0F) == 10.0F, "Evaluate at the last keyframe's exact time must return its exact value");
+    kb::tests::Require(kb::math::Evaluate(curve, 0.5F) == 5.0F, "Evaluate at the midpoint with Linear easing must Lerp between the two keyframes");
+    kb::tests::Require(kb::math::Evaluate(curve, -1.0F) == 0.0F, "Evaluate before the first keyframe must clamp to the first keyframe's value, not extrapolate");
+    kb::tests::Require(kb::math::Evaluate(curve, 2.0F) == 10.0F, "Evaluate after the last keyframe must clamp to the last keyframe's value, not extrapolate");
+
+    Curve threeKeyframeCurve;
+    threeKeyframeCurve.keyframes = {
+        CurveKeyframe{ .time = 0.0F, .value = 0.0F, .easing = Easing::Linear },
+        CurveKeyframe{ .time = 1.0F, .value = 100.0F, .easing = Easing::Linear },
+        CurveKeyframe{ .time = 2.0F, .value = 0.0F, .easing = Easing::Linear },
+    };
+    kb::tests::Require(kb::math::Evaluate(threeKeyframeCurve, 1.0F) == 100.0F, "Evaluate at a middle keyframe's exact time must return its exact value, not blend across two segments");
+    kb::tests::Require(kb::math::Evaluate(threeKeyframeCurve, 1.5F) == 50.0F, "Evaluate must select the correct segment (the second one) for a t past the middle keyframe");
+
+    const std::vector<std::uint8_t> curveBytes = kb::math::Serialize(curve);
+    Curve roundTrippedCurve;
+    kb::tests::Require(kb::math::Deserialize(curveBytes, roundTrippedCurve), "Deserialize must succeed on bytes Serialize just produced");
+    kb::tests::Require(
+        roundTrippedCurve.keyframes.size() == curve.keyframes.size() && roundTrippedCurve.keyframes[0].time == curve.keyframes[0].time &&
+            roundTrippedCurve.keyframes[0].value == curve.keyframes[0].value && roundTrippedCurve.keyframes[1].value == curve.keyframes[1].value,
+        "A Curve deserialized from Serialize's output must exactly match the original");
+    kb::tests::Require(kb::math::Evaluate(roundTrippedCurve, 0.5F) == kb::math::Evaluate(curve, 0.5F), "A round-tripped Curve must evaluate identically to the original");
+
+    Curve emptyResult;
+    kb::tests::Require(!kb::math::Deserialize(std::span<const std::uint8_t>{}, emptyResult), "Deserialize must fail (not crash) on an empty byte span");
+    const std::vector<std::uint8_t> truncated{ curveBytes.begin(), curveBytes.begin() + 4 };
+    Curve truncatedResult;
+    kb::tests::Require(!kb::math::Deserialize(truncated, truncatedResult), "Deserialize must fail on truncated bytes rather than reading out of bounds");
+    std::vector<std::uint8_t> wrongMagic = curveBytes;
+    wrongMagic[0] = static_cast<std::uint8_t>(wrongMagic[0] + 1U);
+    Curve wrongMagicResult;
+    kb::tests::Require(!kb::math::Deserialize(wrongMagic, wrongMagicResult), "Deserialize must reject bytes with the wrong magic number (e.g. accidentally handed Gradient bytes)");
+
+    kb::tests::Require(kb::math::Evaluate(Gradient{}, 0.5F).r == 1.0F, "Evaluate on an empty Gradient must return the default Color (opaque white), not crash");
+
+    Gradient gradient;
+    gradient.stops = {
+        GradientStop{ .time = 0.0F, .color = Color{ 0.0F, 0.0F, 0.0F, 1.0F } },
+        GradientStop{ .time = 1.0F, .color = Color{ 1.0F, 1.0F, 1.0F, 1.0F } },
+    };
+    kb::tests::Require(kb::math::Evaluate(gradient, 0.0F).r == 0.0F, "Evaluate at the first stop's exact time must return its exact color");
+    const Color midColor = kb::math::Evaluate(gradient, 0.5F);
+    kb::tests::Require(std::abs(midColor.r - 0.5F) < 0.0001F && std::abs(midColor.g - 0.5F) < 0.0001F && std::abs(midColor.b - 0.5F) < 0.0001F, "Evaluate at the midpoint must linearly blend between the two stop colors");
+
+    const std::vector<std::uint8_t> gradientBytes = kb::math::Serialize(gradient);
+    Gradient roundTrippedGradient;
+    kb::tests::Require(kb::math::Deserialize(gradientBytes, roundTrippedGradient), "Deserialize must succeed on bytes Serialize just produced (Gradient)");
+    kb::tests::Require(
+        roundTrippedGradient.stops.size() == gradient.stops.size() && roundTrippedGradient.stops[1].color.r == gradient.stops[1].color.r,
+        "A Gradient deserialized from Serialize's output must exactly match the original");
+
+    // A Curve's bytes must not silently parse as a valid Gradient (they
+    // have different magic numbers) — proves the format is self-describing,
+    // not just "however many bytes happen to be there".
+    Gradient crossParsed;
+    kb::tests::Require(!kb::math::Deserialize(curveBytes, crossParsed), "Curve bytes must not be misinterpreted as a valid Gradient");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -530,6 +606,7 @@ void RunEngineMathTests() {
     RunNoiseAndRandomTest();
     RunRandomStreamTest();
     RunEasingTest();
+    RunCurveAndGradientTest();
 }
 
 } // namespace kb::tests
