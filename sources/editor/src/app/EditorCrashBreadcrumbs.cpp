@@ -1,7 +1,6 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 
 #include <chrono>
-#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -29,10 +28,6 @@ std::mutex g_breadcrumbMutex;
     return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
 }
 
-[[nodiscard]] std::filesystem::path AaTracePath() {
-    return std::filesystem::current_path() / "aa_trace.log";
-}
-
 [[nodiscard]] std::string NowMs() {
     const auto now = std::chrono::system_clock::now();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -47,31 +42,29 @@ std::mutex g_breadcrumbMutex;
 #endif
 }
 
+// EditorCrashBreadcrumbs::Write is called unconditionally from ~150+ sites across the per-frame
+// paint/submit path (it exists to leave a trail leading up to a crash, so it can't just be gated
+// off like the opt-in renderer debug traces). The previous implementation opened, wrote, and closed
+// a file handle -- plus re-checked/created its parent directory -- on every single call, which meant
+// every rendered frame paid for dozens of synchronous filesystem round trips regardless of scene
+// complexity. Keeping the handles open for the process lifetime and only flush()-ing (which just
+// pushes the already-buffered bytes out, not a full open/close) keeps the same crash-time durability
+// at a fraction of the cost.
+[[nodiscard]] std::ofstream& BreadcrumbStream() {
+    static std::ofstream stream = [] {
+        std::error_code error;
+        std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);
+        return std::ofstream{BreadcrumbPath(), std::ios::out | std::ios::app};
+    }();
+    return stream;
+}
+
 void AppendLine(std::string_view line) {
-#if defined(_WIN32)
-    if (line.find("[aa_trace]") != std::string_view::npos) {
-        std::string debugLine{line};
-        debugLine.push_back('\n');
-        OutputDebugStringA(debugLine.c_str());
-        static bool consoleAttachAttempted = false;
-        if (!consoleAttachAttempted) {
-            consoleAttachAttempted = true;
-            if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-                FILE* stream = nullptr;
-                static_cast<void>(freopen_s(&stream, "CONOUT$", "a", stderr));
-            }
-        }
-        std::fputs(debugLine.c_str(), stderr);
-        std::ofstream aaTraceOutput{AaTracePath(), std::ios::out | std::ios::app};
-        if (aaTraceOutput.is_open()) {
-            aaTraceOutput << line << '\n';
-        }
-    }
-#endif
+    // Single mutex covers both persistent stream handles below -- they're shared across calls (and
+    // threads) now instead of each call getting its own throwaway ofstream, so every read/write on
+    // them has to be serialized here, not just the main breadcrumb log's.
     std::lock_guard lock{g_breadcrumbMutex};
-    std::error_code error;
-    std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);
-    std::ofstream output{BreadcrumbPath(), std::ios::out | std::ios::app};
+    std::ofstream& output = BreadcrumbStream();
     if (!output.is_open()) {
         return;
     }

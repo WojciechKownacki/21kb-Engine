@@ -31,6 +31,7 @@ struct RenderMeshGltfImportDesc {
 };
 
 struct RenderMeshFbxImportDesc {
+    bool importMaterialSlots = true;
 };
 
 struct RenderMeshEmbeddedMaterial {

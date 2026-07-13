@@ -132,6 +132,15 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (materialEditorContent.has_value() && x >= materialEditorContent->left && x < materialEditorContent->right && y >= materialEditorContent->top && y < materialEditorContent->bottom) {
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (sceneContext_.MaterialEditor().InfoPanelVisible() &&
+            MaterialEditorPanelRectWidth(layout.detailsPanel) >= 220 &&
+            MaterialEditorPanelRectHeight(layout.detailsPanel) >= 140 &&
+            MaterialEditorPanelPointInRect(layout.detailsPanel, x, y)) {
+            static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
+            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (MaterialEditorPanelPointInRect(layout.graphCanvas, x, y)) {
             sceneContext_.AssetBrowser().ClearSelection();
             sceneContext_.ClearHierarchySelection();
@@ -143,9 +152,15 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 : sceneContext_.ReadMaterialDocumentAsset(materialId);
             if (material.has_value()) {
                 if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
-                } else {
-                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                    static_cast<void>(sceneContext_.SelectMaterialGraphContextTarget(*nodeId, 0U));
+                } else if (const std::optional<std::uint32_t> commentId = MaterialEditorPanelRenderer::GraphCommentAt(
+                               *materialEditorContent,
+                               material->graph,
+                               sceneContext_,
+                               materialId,
+                               x,
+                               y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphContextTarget(0U, *commentId));
                 }
             }
             static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());

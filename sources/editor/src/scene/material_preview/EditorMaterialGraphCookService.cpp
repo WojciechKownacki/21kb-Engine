@@ -1,6 +1,7 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <sstream>
 #include <utility>
 
 #if defined(_WIN32)
@@ -140,6 +142,67 @@ namespace {
     return { "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent" };
 }
 
+void HashVariantBytes(std::uint64_t& hash, std::string_view value) noexcept {
+    for (const char ch : value) {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 1099511628211ULL;
+    }
+    hash ^= 0xffU;
+    hash *= 1099511628211ULL;
+}
+
+[[nodiscard]] std::string CanonicalPassSet(const EditorMaterialGraphCookConfig& config) {
+    std::string result;
+    for (const std::string& pass : EffectivePasses(config)) {
+        if (!result.empty()) {
+            result.push_back(';');
+        }
+        result += pass;
+    }
+    return result;
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphVariantKey BuildCookVariantKey(
+    const EditorMaterialGraphCookConfig& config,
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialAssetData& material,
+    const kb::render::RenderMaterialGraphBuildContext& context) {
+    std::uint64_t inputHash = kb::render::RenderMaterialShaderSemanticHash(material);
+    HashVariantBytes(inputHash, config.shadercPath);
+    HashVariantBytes(inputHash, config.varyingDefPath);
+    for (const std::string& includeDir : config.includeDirs) {
+        HashVariantBytes(inputHash, includeDir);
+    }
+    for (const std::string& dependencyFile : config.dependencyFiles) {
+        HashVariantBytes(inputHash, dependencyFile);
+    }
+    const std::string passSet = CanonicalPassSet(config);
+    HashVariantBytes(inputHash, passSet);
+    HashVariantBytes(inputHash, std::to_string(config.materialTypeVersion));
+    return kb::render::RenderMaterialGraphVariantKey{
+        .materialAssetId = assetId.value,
+        .usage = context.variantUsage,
+        .qualityLevel = static_cast<std::uint8_t>(context.qualityLevel),
+        .featureLevel = static_cast<std::uint8_t>(context.featureLevel),
+        .shadingPath = static_cast<std::uint8_t>(context.shadingPath),
+        .shaderStage = static_cast<std::uint8_t>(context.shaderStage),
+        .pass = passSet,
+        .backend = static_cast<std::uint32_t>(config.backend),
+        .binaryInputHash = inputHash == 0U ? 1U : inputHash,
+    };
+}
+
+template <typename Map>
+void EraseSupersededProgramFamily(Map& map, const kb::render::RenderMaterialGraphVariantKey& key) {
+    for (auto it = map.begin(); it != map.end();) {
+        if (it->first.SameProgramFamily(key) && !(it->first == key)) {
+            it = map.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 struct CookCacheFootprint {
     std::uint32_t entryCount = 0U;
     std::uint64_t byteSize = 0U;
@@ -198,6 +261,7 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
     const auto startedAt = std::chrono::steady_clock::now();
     EditorMaterialGraphCookResult result{};
     result.materialAssetId = assetId;
+    result.variantKey = BuildCookVariantKey(config, assetId, material, graphContext);
     result.materialTypeVersion = material.materialTypeVersion;
 
     const auto finish = [&config, startedAt](EditorMaterialGraphCookResult& cookResult) {
@@ -231,6 +295,12 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
         return result;
     }
     result.graphSourceHash = compiled.shader.sourceHash;
+    result.backendName = std::string{ kb::render::RenderMaterialGraphShaderBackendName(config.backend) };
+    result.textureBindingCount = static_cast<std::uint32_t>(compiled.shader.reflection.textures.size()) +
+        (compiled.shader.reflection.usesSceneColor ? 1U : 0U) +
+        (compiled.shader.reflection.usesSceneDepth ? 1U : 0U);
+    result.uniformCount = static_cast<std::uint32_t>(compiled.shader.reflection.uniforms.size());
+    result.varyingCount = static_cast<std::uint32_t>(compiled.shader.reflection.requiredVaryings.size());
 
     const std::array<kb::render::RenderMaterialGraphShaderBackend, 1U> backends{ config.backend };
     bool anyFailure = false;
@@ -240,6 +310,7 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
         request.shadercPath = config.shadercPath;
         request.varyingDefPath = config.varyingDefPath;
         request.includeDirs = config.includeDirs;
+        request.dependencyFiles = config.dependencyFiles;
         request.cacheRoot = config.cacheRoot;
         request.pass = pass;
         request.materialTypeVersion = material.materialTypeVersion;
@@ -417,21 +488,28 @@ std::uint64_t EditorMaterialGraphCookService::RequestCook(
         // program loader reads from for the active bgfx renderer.
         config_.backend = EditorMaterialGraphCookConfig::BackendForActiveRenderer();
         generation = ++generationCounter_;
+        const kb::render::RenderMaterialGraphVariantKey variantKey =
+            BuildCookVariantKey(config_, assetId, material, graphContext);
+        // A newer source revision supersedes only the same program family. Preview,
+        // scene and node-preview variants remain independently queued and reported.
+        EraseSupersededProgramFamily(pending_, variantKey);
+        EraseSupersededProgramFamily(latest_, variantKey);
         PendingEntry entry{};
         entry.material = material;
         entry.graphContext = std::move(graphContext);
         entry.generation = generation;
         entry.readyAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.debounceMs);
-        pending_[assetId.value] = std::move(entry);
+        pending_[variantKey] = std::move(entry);
 
         EditorMaterialGraphCookResult pendingResult{};
         pendingResult.materialAssetId = assetId;
+        pendingResult.variantKey = variantKey;
         pendingResult.materialTypeVersion = material.materialTypeVersion;
         pendingResult.requestGeneration = generation;
         pendingResult.status = config_.shadercPath.empty()
             ? EditorMaterialGraphCookStatus::CookUnavailable
             : EditorMaterialGraphCookStatus::Pending;
-        latest_[assetId.value] = std::move(pendingResult);
+        latest_[variantKey] = std::move(pendingResult);
     }
     wakeCv_.notify_all();
     return generation;
@@ -458,13 +536,63 @@ std::vector<EditorMaterialGraphCookResult> EditorMaterialGraphCookService::Drain
 
 EditorMaterialGraphCookResult EditorMaterialGraphCookService::LatestResult(kb::assets::AssetId assetId) const {
     std::lock_guard<std::mutex> lock{ mutex_ };
-    const auto it = latest_.find(assetId.value);
-    if (it != latest_.end()) {
-        return it->second;
+    const EditorMaterialGraphCookResult* newest = nullptr;
+    for (const auto& [key, result] : latest_) {
+        if (key.materialAssetId == assetId.value &&
+            (newest == nullptr || result.requestGeneration > newest->requestGeneration)) {
+            newest = &result;
+        }
+    }
+    if (newest != nullptr) {
+        return *newest;
     }
     EditorMaterialGraphCookResult idle{};
     idle.materialAssetId = assetId;
     idle.status = EditorMaterialGraphCookStatus::Idle;
+    return idle;
+}
+
+EditorMaterialGraphCookResult EditorMaterialGraphCookService::LatestResult(
+    const kb::render::RenderMaterialGraphVariantKey& variantKey) const {
+    std::lock_guard<std::mutex> lock{ mutex_ };
+    const auto exact = latest_.find(variantKey);
+    if (exact != latest_.end()) {
+        return exact->second;
+    }
+    for (const auto& [key, result] : latest_) {
+        if (key.SameProgramFamily(variantKey)) {
+            return result;
+        }
+    }
+    EditorMaterialGraphCookResult idle{};
+    idle.materialAssetId = kb::assets::AssetId{ variantKey.materialAssetId };
+    idle.variantKey = variantKey;
+    return idle;
+}
+
+EditorMaterialGraphCookResult EditorMaterialGraphCookService::LatestResult(
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialGraphBuildContext& graphContext) const {
+    kb::render::RenderMaterialGraphVariantKey family{};
+    {
+        std::lock_guard<std::mutex> lock{ mutex_ };
+        family.materialAssetId = assetId.value;
+        family.usage = graphContext.variantUsage;
+        family.qualityLevel = static_cast<std::uint8_t>(graphContext.qualityLevel);
+        family.featureLevel = static_cast<std::uint8_t>(graphContext.featureLevel);
+        family.shadingPath = static_cast<std::uint8_t>(graphContext.shadingPath);
+        family.shaderStage = static_cast<std::uint8_t>(graphContext.shaderStage);
+        family.pass = CanonicalPassSet(config_);
+        family.backend = static_cast<std::uint32_t>(config_.backend);
+        for (const auto& [key, result] : latest_) {
+            if (key.SameProgramFamily(family)) {
+                return result;
+            }
+        }
+    }
+    EditorMaterialGraphCookResult idle{};
+    idle.materialAssetId = assetId;
+    idle.variantKey = std::move(family);
     return idle;
 }
 
@@ -512,13 +640,13 @@ void EditorMaterialGraphCookService::WorkerLoop() {
             continue;
         }
 
-        const std::uint64_t assetKey = dueIt->first;
+        const kb::render::RenderMaterialGraphVariantKey variantKey = dueIt->first;
         PendingEntry entry = std::move(dueIt->second);
         pending_.erase(dueIt);
         ++inFlight_;
 
-        const kb::assets::AssetId assetId{ assetKey };
-        latest_[assetKey].status = EditorMaterialGraphCookStatus::Cooking;
+        const kb::assets::AssetId assetId{ variantKey.materialAssetId };
+        latest_[variantKey].status = EditorMaterialGraphCookStatus::Cooking;
         const EditorMaterialGraphCookConfig snapshot = config_;
 
         lock.unlock();
@@ -526,25 +654,38 @@ void EditorMaterialGraphCookService::WorkerLoop() {
         result.requestGeneration = entry.generation;
         lock.lock();
 
-        const auto superseded = pending_.find(assetKey);
-        const bool stillCurrent = superseded == pending_.end() || superseded->second.generation <= entry.generation;
+        bool stillCurrent = true;
+        for (const auto& [pendingKey, pendingEntry] : pending_) {
+            if (pendingKey.SameProgramFamily(variantKey) && pendingEntry.generation > entry.generation) {
+                stillCurrent = false;
+                break;
+            }
+        }
         if (stillCurrent) {
             // Hot-reload last-good policy (MAT-33): a successful cook becomes the new last-good; a
             // failed/unavailable cook keeps the previous good program live and reports Stale so the
             // viewport never drops to a black/error frame while the artist is mid-edit.
             if (result.status == EditorMaterialGraphCookStatus::Ready || result.status == EditorMaterialGraphCookStatus::UpToDate) {
-                lastGood_[assetKey] = result;
+                EraseSupersededProgramFamily(lastGood_, result.variantKey);
+                lastGood_[result.variantKey] = result;
             } else if (result.status == EditorMaterialGraphCookStatus::Failed || result.status == EditorMaterialGraphCookStatus::CookUnavailable) {
-                const auto good = lastGood_.find(assetKey);
-                if (good != lastGood_.end()) {
-                    EditorMaterialGraphCookResult stale = good->second;
+                const EditorMaterialGraphCookResult* good = nullptr;
+                for (const auto& [goodKey, goodResult] : lastGood_) {
+                    if (goodKey.SameProgramFamily(result.variantKey)) {
+                        good = &goodResult;
+                        break;
+                    }
+                }
+                if (good != nullptr) {
+                    EditorMaterialGraphCookResult stale = *good;
                     stale.status = EditorMaterialGraphCookStatus::Stale;
                     stale.requestGeneration = result.requestGeneration;
                     stale.diagnostics = result.diagnostics; // carry the failure reason for the panel
                     result = std::move(stale);
                 }
             }
-            latest_[assetKey] = result;
+            EraseSupersededProgramFamily(latest_, result.variantKey);
+            latest_[result.variantKey] = result;
             completed_.push_back(std::move(result));
         }
         --inFlight_;

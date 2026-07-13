@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/resources/RenderMaterialGraphVariantKey.hpp"
+
 #include <array>
 #include <cstdint>
 #include <cstddef>
@@ -14,7 +16,7 @@
 
 namespace kb::render {
 
-inline constexpr std::uint32_t kRenderMaterialGraphDocumentVersion = 2U;
+inline constexpr std::uint32_t kRenderMaterialGraphDocumentVersion = 3U;
 
 enum class RenderMaterialGraphNodeKind : std::uint8_t {
     MaterialOutput,
@@ -303,9 +305,11 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     UnsupportedMaterialDomain,
     UnsupportedShadingModel,
     StaticPermutationExplosion,
+    MissingSourceGraph,
     MissingMaterialFunction,
     MaterialFunctionCycle,
     MaterialFunctionSignatureMismatch,
+    SourceGraphLoadDiagnostic,
 };
 
 enum class RenderMaterialGraphSamplerFilter : std::uint8_t {
@@ -499,6 +503,7 @@ struct RenderMaterialGraphBuildContext {
     RenderMaterialGraphFeatureLevel featureLevel = RenderMaterialGraphFeatureLevel::Sm5;
     RenderMaterialGraphShadingPath shadingPath = RenderMaterialGraphShadingPath::Forward;
     RenderMaterialGraphShaderStage shaderStage = RenderMaterialGraphShaderStage::Fragment;
+    RenderMaterialGraphVariantUsage variantUsage = RenderMaterialGraphVariantUsage::Runtime;
     const RenderMaterialGraphFunctionLibrary* functionLibrary = nullptr;
 };
 
@@ -593,6 +598,7 @@ struct RenderMaterialGraphReflectionTexture {
     std::string samplerName;
     std::string stableId;
     std::uint32_t slot = 0U;
+    std::string role;
     RenderMaterialTextureColorSpace colorSpace = RenderMaterialTextureColorSpace::Unknown;
     RenderMaterialGraphSamplerState samplerState{};
     RenderMaterialGraphTextureDimension dimension = RenderMaterialGraphTextureDimension::Texture2D;
@@ -607,11 +613,7 @@ struct RenderMaterialGraphReflection {
     bool hasWorldPositionOffset = false;
     bool hasCustomizedUv0 = false;
     bool hasDisplacement = false;
-    bool hasClearCoatNormal = false;
-    bool hasBentNormal = false;
     bool hasTangentOutput = false;
-    bool hasThinTranslucentOutput = false;
-    bool hasSingleLayerWaterOutput = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
@@ -715,6 +717,8 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
 [[nodiscard]] std::vector<RenderMaterialGraphNodeSupportMatrixEntry> BuildRenderMaterialGraphNodeSupportMatrix();
 [[nodiscard]] RenderMaterialGraphDocument MakeDefaultRenderMaterialGraphDocument();
 void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterialGraphDocument& graph);
+[[nodiscard]] std::uint64_t RenderMaterialGraphShaderSemanticHash(const RenderMaterialGraphDocument& graph);
+void StripRenderMaterialGraphEditorOnlyState(RenderMaterialGraphDocument& graph) noexcept;
 [[nodiscard]] RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});
@@ -807,15 +811,12 @@ enum class MaterialSurfaceRenderQueue : std::uint8_t {
 struct MaterialSurface {
     float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float normal[3] = {0.0f, 0.0f, 1.0f};
-    float clearCoatNormal[3] = {0.0f, 0.0f, 1.0f};
-    float bentNormal[3] = {0.0f, 0.0f, 1.0f};
     float tangentOutput[3] = {1.0f, 0.0f, 0.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
+    float specular = 0.5f;
     float occlusion = 1.0f;
     float emissive[3] = {0.0f, 0.0f, 0.0f};
-    float thinTranslucentOutput[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float singleLayerWaterOutput[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float alpha = 1.0f;
     float alphaClipThreshold = 0.5f;
     MaterialSurfaceAlphaMode alphaMode = MaterialSurfaceAlphaMode::Opaque;

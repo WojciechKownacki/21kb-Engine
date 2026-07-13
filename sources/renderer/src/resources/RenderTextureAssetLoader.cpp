@@ -6,11 +6,9 @@
 #include <bimg/decode.h>
 #include <bx/allocator.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <charconv>
 #include <cctype>
-#include <cstring>
 #include <fstream>
 #include <istream>
 #include <limits>
@@ -62,6 +60,73 @@ template <typename T>
         asset.height > 0U;
 }
 
+[[nodiscard]] bool ParseDimension(std::string_view text, RenderTextureDimension& dimension) noexcept {
+    text = Trim(text);
+    if (text == "2d" || text == "Texture2D") {
+        dimension = RenderTextureDimension::Texture2D;
+        return true;
+    }
+    if (text == "cube" || text == "TextureCube") {
+        dimension = RenderTextureDimension::TextureCube;
+        return true;
+    }
+    if (text == "3d" || text == "volume" || text == "Texture3D") {
+        dimension = RenderTextureDimension::Texture3D;
+        return true;
+    }
+    if (text == "2dArray" || text == "array" || text == "Texture2DArray") {
+        dimension = RenderTextureDimension::Texture2DArray;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseColorSpace(std::string_view text, RenderTextureAssetColorSpace& colorSpace) noexcept {
+    text = Trim(text);
+    if (text == "unknown" || text == "Unknown") {
+        colorSpace = RenderTextureAssetColorSpace::Unknown;
+        return true;
+    }
+    if (text == "linear" || text == "Linear") {
+        colorSpace = RenderTextureAssetColorSpace::Linear;
+        return true;
+    }
+    if (text == "srgb" || text == "sRGB" || text == "Srgb") {
+        colorSpace = RenderTextureAssetColorSpace::Srgb;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseSemantic(std::string_view text, RenderTextureAssetSemantic& semantic) noexcept {
+    text = Trim(text);
+    if (text == "unknown" || text == "Unknown") {
+        semantic = RenderTextureAssetSemantic::Unknown;
+        return true;
+    }
+    if (text == "baseColor" || text == "BaseColor") {
+        semantic = RenderTextureAssetSemantic::BaseColor;
+        return true;
+    }
+    if (text == "normal" || text == "Normal") {
+        semantic = RenderTextureAssetSemantic::Normal;
+        return true;
+    }
+    if (text == "metallicRoughness" || text == "MetallicRoughness") {
+        semantic = RenderTextureAssetSemantic::MetallicRoughness;
+        return true;
+    }
+    if (text == "occlusion" || text == "Occlusion") {
+        semantic = RenderTextureAssetSemantic::Occlusion;
+        return true;
+    }
+    if (text == "emissive" || text == "Emissive") {
+        semantic = RenderTextureAssetSemantic::Emissive;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool ParseRgba8(std::string_view rest, std::uint8_t (&rgba)[4]) {
     std::istringstream stream{ std::string{ rest } };
     std::string r;
@@ -75,14 +140,51 @@ template <typename T>
         ParseUnsigned(a, rgba[3]);
 }
 
-void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
-    asset.rgba8.resize(static_cast<std::size_t>(asset.width) * static_cast<std::size_t>(asset.height) * 4U);
+[[nodiscard]] std::optional<std::size_t> TextureTexelCount(const RenderTextureAssetData& asset) noexcept {
+    std::size_t sliceCount = 1U;
+    switch (asset.dimension) {
+    case RenderTextureDimension::Texture2D:
+        if (asset.depth != 1U || asset.layers != 1U) return std::nullopt;
+        break;
+    case RenderTextureDimension::TextureCube:
+        if (asset.width != asset.height || asset.depth != 1U || asset.layers != 1U) return std::nullopt;
+        sliceCount = 6U;
+        break;
+    case RenderTextureDimension::Texture3D:
+        if (asset.depth <= 1U || asset.layers != 1U) return std::nullopt;
+        sliceCount = asset.depth;
+        break;
+    case RenderTextureDimension::Texture2DArray:
+        if (asset.depth != 1U || asset.layers <= 1U) return std::nullopt;
+        sliceCount = asset.layers;
+        break;
+    }
+
+    const std::size_t width = asset.width;
+    const std::size_t height = asset.height;
+    if (width == 0U || height == 0U || width > std::numeric_limits<std::size_t>::max() / height) {
+        return std::nullopt;
+    }
+    const std::size_t sliceTexels = width * height;
+    if (sliceTexels > std::numeric_limits<std::size_t>::max() / sliceCount) {
+        return std::nullopt;
+    }
+    return sliceTexels * sliceCount;
+}
+
+[[nodiscard]] bool FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
+    const std::optional<std::size_t> texelCount = TextureTexelCount(asset);
+    if (!texelCount.has_value() || *texelCount > std::numeric_limits<std::size_t>::max() / 4U) {
+        return false;
+    }
+    asset.rgba8.resize(*texelCount * 4U);
     for (std::size_t index = 0U; index < asset.rgba8.size(); index += 4U) {
         asset.rgba8[index + 0U] = rgba[0];
         asset.rgba8[index + 1U] = rgba[1];
         asset.rgba8[index + 2U] = rgba[2];
         asset.rgba8[index + 3U] = rgba[3];
     }
+    return true;
 }
 
 [[nodiscard]] std::string LowerExtension(const std::filesystem::path& path) {
@@ -132,8 +234,12 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
     RenderTextureAssetData asset{};
     if (image->m_width == 0U ||
         image->m_height == 0U ||
+        image->m_depth == 0U ||
+        image->m_numLayers == 0U ||
+        image->m_numMips == 0U ||
         image->m_width > std::numeric_limits<std::uint16_t>::max() ||
         image->m_height > std::numeric_limits<std::uint16_t>::max() ||
+        image->m_depth > std::numeric_limits<std::uint16_t>::max() ||
         image->m_data == nullptr ||
         image->m_size == 0U) {
         bimg::imageFree(image);
@@ -142,11 +248,59 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
 
     asset.width = static_cast<std::uint16_t>(image->m_width);
     asset.height = static_cast<std::uint16_t>(image->m_height);
-    asset.rgba8.resize(static_cast<std::size_t>(asset.width) * static_cast<std::size_t>(asset.height) * 4U);
-    const std::size_t copyBytes = std::min<std::size_t>(asset.rgba8.size(), image->m_size);
-    std::memcpy(asset.rgba8.data(), image->m_data, copyBytes);
-    if (copyBytes < asset.rgba8.size()) {
-        std::fill(asset.rgba8.begin() + static_cast<std::ptrdiff_t>(copyBytes), asset.rgba8.end(), 255U);
+    asset.depth = static_cast<std::uint16_t>(image->m_depth);
+    asset.layers = image->m_numLayers;
+    // The runtime raw-texture API accepts only a hasMips bit and therefore requires a complete
+    // chain. Preserve the legacy loader contract (LOD0 only), but collect LOD0 from every
+    // face/layer; a volume's side 0 payload already contains its complete depth.
+    asset.mipCount = 1U;
+    if (image->m_cubeMap) {
+        // samplerCubeArray is not part of the material graph contract. Reject it instead of silently
+        // presenting a cube array as a samplerCube resource.
+        if (asset.layers != 1U || asset.depth != 1U || asset.width != asset.height) {
+            bimg::imageFree(image);
+            return std::nullopt;
+        }
+        asset.dimension = RenderTextureDimension::TextureCube;
+    } else if (asset.depth > 1U) {
+        if (asset.layers != 1U) {
+            bimg::imageFree(image);
+            return std::nullopt;
+        }
+        asset.dimension = RenderTextureDimension::Texture3D;
+    } else if (asset.layers > 1U) {
+        asset.dimension = RenderTextureDimension::Texture2DArray;
+    } else {
+        asset.dimension = RenderTextureDimension::Texture2D;
+    }
+
+    const std::optional<std::size_t> texelCount = TextureTexelCount(asset);
+    const std::size_t baseLevelBytes = texelCount.has_value() && *texelCount <= std::numeric_limits<std::size_t>::max() / 4U
+        ? *texelCount * 4U
+        : 0U;
+    if (baseLevelBytes == 0U) {
+        bimg::imageFree(image);
+        return std::nullopt;
+    }
+
+    const std::uint16_t sideCount = image->m_cubeMap ? 6U : asset.layers;
+    asset.rgba8.reserve(baseLevelBytes);
+    for (std::uint16_t side = 0U; side < sideCount; ++side) {
+        bimg::ImageMip mip{};
+        if (!bimg::imageGetRawData(*image, side, 0U, image->m_data, image->m_size, mip) ||
+            mip.m_data == nullptr || mip.m_format != bimg::TextureFormat::RGBA8 ||
+            mip.m_width != asset.width || mip.m_height != asset.height ||
+            mip.m_depth != (asset.dimension == RenderTextureDimension::Texture3D ? asset.depth : 1U) ||
+            mip.m_size > baseLevelBytes - asset.rgba8.size()) {
+            bimg::imageFree(image);
+            return std::nullopt;
+        }
+        const auto* begin = static_cast<const std::uint8_t*>(mip.m_data);
+        asset.rgba8.insert(asset.rgba8.end(), begin, begin + mip.m_size);
+    }
+    if (asset.rgba8.size() != baseLevelBytes) {
+        bimg::imageFree(image);
+        return std::nullopt;
     }
 
     bimg::imageFree(image);
@@ -186,14 +340,18 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
 
 } // namespace
 
-RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace colorSpace) const noexcept {
+RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace runtimeColorSpace) const noexcept {
     return RenderTextureDesc{
         .width = width,
         .height = height,
+        .depth = depth,
+        .layers = layers,
+        .mipCount = mipCount,
+        .dimension = dimension,
         .format = bgfx::TextureFormat::RGBA8,
-        .flags = BGFX_SAMPLER_NONE | (colorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
+        .flags = BGFX_SAMPLER_NONE | (runtimeColorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
         .memory = memory,
-        .colorSpace = colorSpace,
+        .colorSpace = runtimeColorSpace,
     };
 }
 
@@ -256,6 +414,26 @@ std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(std:
                 return std::nullopt;
             }
             sawSize = true;
+        } else if (keyword == "dimension") {
+            if (!ParseDimension(rest, asset.dimension)) {
+                return std::nullopt;
+            }
+        } else if (keyword == "depth") {
+            if (!ParseUnsigned(rest, asset.depth) || asset.depth == 0U) {
+                return std::nullopt;
+            }
+        } else if (keyword == "layers") {
+            if (!ParseUnsigned(rest, asset.layers) || asset.layers == 0U) {
+                return std::nullopt;
+            }
+        } else if (keyword == "colorSpace") {
+            if (!ParseColorSpace(rest, asset.colorSpace)) {
+                return std::nullopt;
+            }
+        } else if (keyword == "semantic") {
+            if (!ParseSemantic(rest, asset.semantic)) {
+                return std::nullopt;
+            }
         } else if (keyword == "rgba8") {
             if (!ParseRgba8(rest, rgba)) {
                 return std::nullopt;
@@ -270,8 +448,7 @@ std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(std:
         return std::nullopt;
     }
 
-    FillTexture(asset, rgba);
-    return asset;
+    return FillTexture(asset, rgba) ? std::optional<RenderTextureAssetData>{ std::move(asset) } : std::nullopt;
 }
 
 } // namespace kb::render

@@ -1,17 +1,21 @@
 #pragma once
 
+#include "scene/material/MaterialEditorModels.hpp"
+
 #include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "engine/assets/AssetId.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -19,387 +23,13 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace kb::editor {
-
-enum class MaterialEditorParameterValueKind : std::uint8_t {
-    None,
-    Scalar,
-    Vec2,
-    Vec3,
-    Vec4,
-    Color,
-    Enum,
-    Bool,
-    TextureAsset,
-};
-
-enum class MaterialEditorParameterGroup : std::uint8_t {
-    Core,
-    Surface,
-    Texture,
-    Advanced,
-};
-
-struct MaterialEditorGraphDiagnosticMarker {
-    std::uint32_t nodeId = 0U;
-    std::uint32_t linkId = 0U;
-    std::uint32_t pinId = 0U;
-    std::string pin;
-    kb::render::RenderMaterialGraphDiagnosticSeverity severity = kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
-    kb::render::RenderMaterialGraphDiagnosticKind kind = kb::render::RenderMaterialGraphDiagnosticKind::UnsupportedNode;
-    std::string message;
-};
-
-enum class MaterialEditorGraphMenuCommand : std::uint8_t {
-    None,
-    CreateTextureSample,
-    CreateTextureParameter,
-    CreateTextureObject,
-    CreateTextureSampleCube,
-    CreateTextureObjectCube,
-    CreateTextureSampleVolume,
-    CreateTextureObjectVolume,
-    CreateTextureSample2DArray,
-    CreateTextureObject2DArray,
-    CreateUv,
-    CreateScalar,
-    CreateBool,
-    CreateVector2,
-    CreateVector,
-    CreateColor,
-    CreateScalarParameter,
-    CreateVectorParameter,
-    CreateColorParameter,
-    CreateCollectionParameter,
-    CreateAdd,
-    CreateSubtract,
-    CreateMultiply,
-    CreateDivide,
-    CreatePower,
-    CreateOneMinus,
-    CreateAbsolute,
-    CreateMinimum,
-    CreateMaximum,
-    CreateSaturate,
-    CreateFloor,
-    CreateCeil,
-    CreateFraction,
-    CreateSquareRoot,
-    CreateSine,
-    CreateCosine,
-    CreateExponential,
-    CreateExponential2,
-    CreateLogarithm,
-    CreateLogarithm2,
-    CreateSrgbToLinear,
-    CreateLinearToSrgb,
-    CreateLogarithm10,
-    CreateHsvToRgb,
-    CreateRgbToHsv,
-    CreateDeriveNormalZ,
-    CreateFmod,
-    CreateInverseLerp,
-    CreatePartialDerivativeX,
-    CreatePartialDerivativeY,
-    CreateSphereMask,
-    CreateBlackBody,
-    CreateNoise,
-    CreateVectorNoise,
-    CreateSobol,
-    CreateAppendVector,
-    CreateColorRamp,
-    CreateAntialiasedTextureMask,
-    CreateTransform,
-    CreateTransformPosition,
-    CreateDotProduct,
-    CreateCrossProduct,
-    CreateNormalize,
-    CreateLength,
-    CreateDistance,
-    CreateBreakVector,
-    CreateMakeVector,
-    CreateStep,
-    CreateSmoothStep,
-    CreateIf,
-    CreateSwitch,
-    CreateDesaturate,
-    CreateFresnel,
-    CreateNegate,
-    CreateSign,
-    CreateRound,
-    CreateTruncate,
-    CreateTangent,
-    CreateArcSine,
-    CreateArcCosine,
-    CreateArcTangent,
-    CreateArcTangent2,
-    CreateArcSineFast,
-    CreateArcCosineFast,
-    CreateArcTangentFast,
-    CreateArcTangent2Fast,
-    CreateClamp,
-    CreateLerp,
-    CreateNormalUnpack,
-    CreateTime,
-    CreateDeltaTime,
-    CreateDynamicParameter,
-    CreateVertexColor,
-    CreateScreenPosition,
-    CreatePixelPosition,
-    CreateLocalPosition,
-    CreateObjectPosition,
-    CreateWorldPosition,
-    CreatePerInstanceRandom,
-    CreatePerInstanceFadeAmount,
-    CreatePerInstanceCustomData,
-    CreateObjectRadius,
-    CreateObjectBounds,
-    CreateObjectOrientation,
-    CreatePreSkinnedPosition,
-    CreatePreSkinnedNormal,
-    CreateMakeMaterialAttributes,
-    CreateBreakMaterialAttributes,
-    CreateBlendMaterialAttributes,
-    CreateGetMaterialAttributes,
-    CreateSetMaterialAttributes,
-    CreateStaticBoolParameter,
-    CreateStaticSwitch,
-    CreateStaticComponentMask,
-    CreateQualitySwitch,
-    CreateFeatureLevelSwitch,
-    CreateShadingPathSwitch,
-    CreateShaderStageSwitch,
-    CreateTextureCoordinate,
-    CreatePanner,
-    CreateRotator,
-    CreateBumpOffset,
-    CreateConstantBiasScale,
-    CreateRotateAboutAxis,
-    CreateViewportUV,
-    CreateCameraPosition,
-    CreateCameraVector,
-    CreateReflectionVector,
-    CreateLightVector,
-    CreatePixelNormalWS,
-    CreateVertexNormalWS,
-    CreateVertexTangentWS,
-    CreateViewProperty,
-    CreateViewSize,
-    CreateTwoSidedSign,
-    CreateSceneColor,
-    CreateSceneTexture,
-    CreateSceneDepth,
-    CreateDepthFade,
-    CreateCustomCode,
-    CreateReroute,
-    CreateNamedRerouteDeclaration,
-    CreateNamedRerouteUsage,
-    CreateCompositeInput,
-    CreateCompositeOutput,
-    CreateFunctionInput,
-    CreateFunctionOutput,
-    CreateMaterialFunctionCall,
-    CreateLayerStack,
-    CreateComposite,
-    CreateComment,
-    FrameSelected,
-    SelectUpstream,
-    SelectDownstream,
-    AlignLeft,
-    AlignCenter,
-    AlignRight,
-    AlignTop,
-    AlignMiddle,
-    AlignBottom,
-    DistributeHorizontal,
-    DistributeVertical,
-    PromoteToParameter,
-    DisconnectSelected,
-    DeleteSelected,
-    CreatePixelDepth,
-    CreateCameraDepthFade,
-    CreateDistanceCullFade,
-};
-
-enum class MaterialEditorGraphAlignMode : std::uint8_t {
-    Left,
-    Center,
-    Right,
-    Top,
-    Middle,
-    Bottom,
-};
-
-enum class MaterialEditorGraphDistributeAxis : std::uint8_t {
-    Horizontal,
-    Vertical,
-};
-
-struct MaterialEditorParameterValue {
-    MaterialEditorParameterValueKind kind = MaterialEditorParameterValueKind::None;
-    std::array<float, 4U> numbers{};
-    std::uint64_t assetId = 0;
-    bool boolValue = false;
-    std::string text;
-};
-
-struct MaterialEditorParameter {
-    std::string stableId;
-    kb::render::RenderMaterialParameterType type = kb::render::RenderMaterialParameterType::Scalar;
-    MaterialEditorParameterGroup group = MaterialEditorParameterGroup::Core;
-    std::string displayName;
-    std::string description;
-    MaterialEditorParameterValue value{};
-    MaterialEditorParameterValue defaultValue{};
-    std::optional<kb::render::RenderMaterialParameterRange> range;
-    std::optional<kb::render::RenderMaterialTextureColorSpace> expectedTextureColorSpace;
-    bool overrideEnabled = true;
-    bool overrideActive = false;
-    bool enabled = true;
-    std::uint32_t sortOrder = 0U;
-};
-
-enum class MaterialEditorGraphNodePropertyKind : std::uint8_t {
-    Text,
-    Numeric,
-    Color,
-    Enum,
-    TextureAsset,
-};
-
-struct MaterialEditorGraphNodePropertyOption {
-    std::string value;
-    std::string label;
-};
-
-struct MaterialEditorGraphNodeProperty {
-    std::uint32_t nodeId = 0U;
-    std::string stableId;
-    std::string displayName;
-    MaterialEditorGraphNodePropertyKind kind = MaterialEditorGraphNodePropertyKind::Numeric;
-    kb::render::RenderMaterialParameterType type = kb::render::RenderMaterialParameterType::Scalar;
-    MaterialEditorParameterValue value{};
-    std::optional<kb::render::RenderMaterialParameterRange> range;
-    std::vector<MaterialEditorGraphNodePropertyOption> options;
-    std::size_t componentIndex = 0U;
-    bool dropdownOpen = false;
-    bool enabled = true;
-};
-
-struct MaterialEditorInstanceParentChainRow {
-    kb::assets::AssetId assetId{};
-    std::string label;
-    bool current = false;
-};
-
-struct MaterialEditorInstanceOverrideGroupRow {
-    MaterialEditorParameterGroup group = MaterialEditorParameterGroup::Core;
-    bool expanded = true;
-    std::uint32_t activeOverrideCount = 0U;
-    std::uint32_t totalParameterCount = 0U;
-    std::vector<MaterialEditorParameter> parameters;
-};
-
-struct MaterialEditorInstanceStaticSwitchRow {
-    std::uint32_t nodeId = 0U;
-    std::string stableId;
-    std::string displayName;
-    kb::render::RenderMaterialGraphNodeKind nodeKind = kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter;
-    std::string parentValue;
-    std::string value;
-    bool overrideActive = false;
-};
-
-struct MaterialEditorLayerTreeRow {
-    std::uint32_t nodeId = 0U;
-    std::size_t index = 0U;
-    bool enabled = true;
-    std::uint64_t layerFunctionAssetId = 0U;
-    std::uint64_t blendFunctionAssetId = 0U;
-    std::string layerName;
-    std::string blendName;
-    std::string linkState;
-    std::uint32_t layerParameterCount = 0U;
-    std::uint32_t blendParameterCount = 0U;
-};
-
-struct MaterialEditorMaterialStatsPassRow {
-    std::string passName;
-    bool graphProgram = false;
-    std::uint32_t instructionEstimate = 0U;
-    std::uint32_t textureSampleCount = 0U;
-    std::uint32_t samplerCount = 0U;
-    std::uint32_t uniformCount = 0U;
-    std::uint32_t varyingCount = 0U;
-    std::uint32_t staticVariantCount = 1U;
-    std::vector<std::string> warnings;
-};
-
-struct MaterialEditorMaterialStatsModel {
-    bool available = false;
-    std::uint64_t sourceHash = 0U;
-    std::vector<MaterialEditorMaterialStatsPassRow> passRows;
-    std::vector<std::string> warnings;
-};
-
-struct MaterialEditorShaderSourceView {
-    std::string passName;
-    std::string backendName;
-    std::string stageName;
-    std::string source;
-    std::uint64_t sourceHash = 0U;
-};
-
-struct MaterialEditorShaderReflectionRow {
-    std::string category;
-    std::string name;
-    std::string stableId;
-    std::string detail;
-};
-
-struct MaterialEditorShaderViewerModel {
-    bool available = false;
-    std::uint64_t sourceHash = 0U;
-    std::uint64_t reflectionHash = 0U;
-    std::vector<MaterialEditorShaderSourceView> sources;
-    std::vector<MaterialEditorShaderReflectionRow> reflectionRows;
-    std::vector<std::string> warnings;
-};
-
-enum class MaterialEditorFindResultKind : std::uint8_t {
-    Node,
-    Pin,
-    Parameter,
-    Comment,
-};
-
-struct MaterialEditorFindResult {
-    MaterialEditorFindResultKind kind = MaterialEditorFindResultKind::Node;
-    std::uint32_t nodeId = 0U;
-    std::uint32_t commentId = 0U;
-    std::string label;
-    std::string detail;
-    std::int32_t focusX = 0;
-    std::int32_t focusY = 0;
-};
-
-struct MaterialEditorFindFocusTarget {
-    std::int32_t graphX = 0;
-    std::int32_t graphY = 0;
-};
-
-struct GraphHintNumericPropertyDefinition {
-    std::string_view stableId;
-    std::string_view displayName;
-    float defaultValue = 0.0F;
-    float rangeMin = 0.0F;
-    float rangeMax = 1.0F;
-};
 
 class MaterialEditorState {
     struct GraphClipboard {
@@ -1388,7 +1018,7 @@ public:
     }
 
     [[nodiscard]] bool SetGraphConstantComponentValue(std::uint32_t nodeId, std::size_t componentIndex, float componentValue) {
-        if (!workingCopy_.has_value() || nodeId == 0U) {
+        if (!workingCopy_.has_value() || nodeId == 0U || !std::isfinite(componentValue)) {
             return false;
         }
         kb::render::RenderMaterialAssetData document = *workingCopy_;
@@ -1464,7 +1094,8 @@ public:
     }
 
     [[nodiscard]] bool SetGraphConstantColorValue(std::uint32_t nodeId, const std::array<float, 4U>& color) {
-        if (!workingCopy_.has_value() || nodeId == 0U) {
+        if (!workingCopy_.has_value() || nodeId == 0U ||
+            !std::ranges::all_of(color, [](float component) { return std::isfinite(component); })) {
             return false;
         }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
@@ -1480,7 +1111,8 @@ public:
         std::uint32_t nodeId,
         std::string_view propertyId,
         const std::array<float, 4U>& color) {
-        if (!workingCopy_.has_value() || nodeId == 0U || propertyId.empty()) {
+        if (!workingCopy_.has_value() || nodeId == 0U || propertyId.empty() ||
+            !std::ranges::all_of(color, [](float component) { return std::isfinite(component); })) {
             return false;
         }
         if (propertyId == "constant.color") {
@@ -1829,9 +1461,7 @@ public:
             }
         }
 
-        if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
-            node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
-            node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        if (IsGraphTextureAssetNode(node->kind)) {
             properties.push_back(MaterialEditorGraphNodeProperty{
                 .nodeId = node->id,
                 .stableId = "texture.asset",
@@ -2439,6 +2069,14 @@ public:
     }
 
     [[nodiscard]] bool MoveGraphCommentGroup(std::uint32_t commentId, std::int32_t positionX, std::int32_t positionY) {
+        return MoveGraphCommentGroup(commentId, positionX, positionY, GraphNodeIdsInsideComment(commentId));
+    }
+
+    [[nodiscard]] bool MoveGraphCommentGroup(
+        std::uint32_t commentId,
+        std::int32_t positionX,
+        std::int32_t positionY,
+        std::span<const std::uint32_t> memberNodeIds) {
         if (!workingCopy_.has_value() || commentId == 0U) {
             return false;
         }
@@ -2452,16 +2090,10 @@ public:
             return false;
         }
 
-        std::vector<std::uint32_t> containedNodeIds;
-        for (const kb::render::RenderMaterialGraphNode& node : workingCopy_->graph.nodes) {
-            if (GraphNodeInsideComment(node, *comment)) {
-                containedNodeIds.push_back(node.id);
-            }
-        }
         comment->positionX = positionX;
         comment->positionY = positionY;
         for (kb::render::RenderMaterialGraphNode& node : workingCopy_->graph.nodes) {
-            if (std::ranges::find(containedNodeIds, node.id) != containedNodeIds.end()) {
+            if (std::ranges::find(memberNodeIds, node.id) != memberNodeIds.end()) {
                 node.positionX += deltaX;
                 node.positionY += deltaY;
             }
@@ -2674,6 +2306,9 @@ public:
             ? std::move(*schema)
             : kb::render::GetBuiltInPbrMaterialTypeSchema();
         dirty_ = false;
+        externalDiagnostics_.clear();
+        externalDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         selectedNodeId_ = 0U;
         selectedNodeIds_.clear();
         selectedCommentId_ = 0U;
@@ -2711,8 +2346,16 @@ public:
         CloseGraphNodeEnumDropdown();
         CancelGraphNodeRenameEdit();
         diagnostics_.clear();
+        graphDiagnosticsLines_.clear();
+        compilerDiagnostics_.clear();
+        externalDiagnostics_.clear();
+        cookDiagnostics_.clear();
         graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = false;
+        graphDiagnosticsHaveError_ = false;
+        compilerDiagnosticsHaveError_ = false;
+        externalDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         materialStats_ = {};
         shaderViewer_ = {};
     }
@@ -2931,12 +2574,79 @@ public:
     }
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError) {
-        diagnostics_ = std::move(diagnostics);
-        graphDiagnosticMarkers_.clear();
-        diagnosticsHaveError_ = hasError;
+        externalDiagnostics_.clear();
+        externalDiagnostics_.reserve(diagnostics.size());
+        for (std::string& diagnostic : diagnostics) {
+            externalDiagnostics_.push_back("[external] " + std::move(diagnostic));
+        }
+        externalDiagnosticsHaveError_ = hasError;
+        RebuildMergedDiagnostics();
+    }
+
+    void ApplyCookResult(
+        std::vector<std::string> diagnostics,
+        bool cookSucceeded,
+        bool hasGpuProgram,
+        bool hasLastGood,
+        bool fallbackApplied) {
+        cookDiagnostics_.clear();
+        cookDiagnostics_.reserve(diagnostics.size());
+        for (std::string& diagnostic : diagnostics) {
+            cookDiagnostics_.push_back("[cook] " + std::move(diagnostic));
+        }
+        cookCompleted_ = true;
+        cookSucceeded_ = cookSucceeded;
+        cookHasGpuProgram_ = hasGpuProgram;
+        cookHasLastGood_ = hasLastGood;
+        cookFallbackApplied_ = fallbackApplied;
+        RefreshGraphRuntimeState();
+        RebuildMergedDiagnostics();
+    }
+
+    void ApplyCookMaterialStats(
+        std::uint64_t sourceHash,
+        std::string backendName,
+        std::uint32_t textureBindingCount,
+        std::uint32_t uniformCount,
+        std::uint32_t varyingCount,
+        std::vector<MaterialEditorCookPassTelemetry> passes) {
+        MaterialEditorMaterialStatsModel model{};
+        model.sourceHash = sourceHash;
+        model.available = std::ranges::any_of(passes, [](const MaterialEditorCookPassTelemetry& pass) {
+            return pass.succeeded;
+        });
+        for (MaterialEditorCookPassTelemetry& pass : passes) {
+            MaterialEditorMaterialStatsPassRow row{
+                .passName = std::move(pass.passName),
+                .graphProgram = pass.succeeded,
+                .cacheHit = pass.cacheHit,
+                .instructionCountAvailable = false,
+                .instructionCount = 0U,
+                .samplerCount = pass.succeeded ? textureBindingCount : 0U,
+                .uniformCount = pass.succeeded ? uniformCount : 0U,
+                .varyingCount = pass.succeeded ? varyingCount : 0U,
+                .staticVariantCount = pass.succeeded ? 1U : 0U,
+                .binaryByteSize = pass.succeeded ? pass.binaryByteSize : 0U,
+                .backendName = backendName,
+            };
+            if (!pass.succeeded) {
+                row.warnings.push_back("GPU program unavailable for this cooked pass.");
+            }
+            model.passRows.push_back(std::move(row));
+        }
+        if (model.available) {
+            model.warnings.push_back(
+                "GPU instruction count unavailable for backend '" + backendName +
+                "'; no source-text estimate is reported.");
+        } else {
+            model.warnings.push_back("Material stats unavailable: no cooked GPU pass succeeded.");
+        }
+        materialStats_ = std::move(model);
     }
 
     void ClearDiagnostics() {
+        externalDiagnostics_.clear();
+        externalDiagnosticsHaveError_ = false;
         RefreshGraphDiagnostics();
     }
 
@@ -3146,11 +2856,7 @@ private:
         if (text.empty() || text == "_") {
             return values;
         }
-        std::istringstream input{ std::string{ text } };
-        float value = 0.0F;
-        while (input >> value) {
-            values.push_back(value);
-        }
+        static_cast<void>(kb::render::ParseFiniteMaterialFloatSequence(text, values, 1U, 64U));
         return values;
     }
 
@@ -3171,9 +2877,9 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return "XY";
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-            return "RGB";
+            return "RGB Node";
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-            return "RGBA";
+            return "RGBA Node";
         default:
             return "Constant";
         }
@@ -3198,13 +2904,12 @@ private:
     [[nodiscard]] static std::optional<std::array<float, 4U>> ParseConstantValue(
         kb::render::RenderMaterialGraphNodeKind kind,
         std::string_view text) {
-        std::string normalized{ text };
-        std::replace(normalized.begin(), normalized.end(), ',', ' ');
-        std::istringstream input{ normalized };
         std::array<float, 4U> value{ 0.0F, 0.0F, 0.0F, 1.0F };
+        std::vector<float> numericValues;
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-            if (input >> value[0]) {
+            if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 1U, 1U)) {
+                value[0] = numericValues[0];
                 return value;
             }
             return std::nullopt;
@@ -3215,20 +2920,21 @@ private:
             }
             return std::nullopt;
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-            if (input >> value[0] >> value[1]) {
+            if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 2U, 2U)) {
+                std::copy(numericValues.begin(), numericValues.end(), value.begin());
                 return value;
             }
             return std::nullopt;
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-            if (input >> value[0] >> value[1] >> value[2]) {
+            if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 3U, 3U)) {
+                std::copy(numericValues.begin(), numericValues.end(), value.begin());
                 return value;
             }
             return std::nullopt;
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-            if (input >> value[0] >> value[1] >> value[2]) {
-                if (!(input >> value[3])) {
-                    value[3] = 1.0F;
-                }
+            if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 3U, 4U)) {
+                std::copy(numericValues.begin(), numericValues.end(), value.begin());
+                value[3] = numericValues.size() == 4U ? numericValues[3] : 1.0F;
                 return value;
             }
             return std::nullopt;
@@ -3937,6 +3643,18 @@ private:
             return 1U;
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] static bool IsGraphTextureAssetNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
     }
 
     [[nodiscard]] static std::uint64_t GraphNodeTextureAssetId(
@@ -4746,13 +4464,13 @@ private:
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "RGB",
+                .displayName = "RGB Node",
                 .defaultValueHint = "0 0 0",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "RGBA",
+                .displayName = "RGBA Node",
                 .defaultValueHint = "1 1 1 1",
                 .hasRange = true,
                 .rangeMin = 0.0F,
@@ -5036,199 +4754,6 @@ private:
             break;
         }
         return {};
-    }
-
-    [[nodiscard]] static std::uint32_t CountMaterialStatsOccurrences(std::string_view text, std::string_view needle) noexcept {
-        if (needle.empty()) {
-            return 0U;
-        }
-        std::uint32_t count = 0U;
-        std::size_t offset = 0U;
-        while ((offset = text.find(needle, offset)) != std::string_view::npos) {
-            ++count;
-            offset += needle.size();
-        }
-        return count;
-    }
-
-    [[nodiscard]] static std::uint32_t EstimateMaterialShaderInstructions(std::string_view source) noexcept {
-        std::uint32_t estimate = 0U;
-        std::size_t lineStart = 0U;
-        while (lineStart < source.size()) {
-            const std::size_t lineEnd = source.find('\n', lineStart);
-            const std::string_view line = lineEnd == std::string_view::npos
-                ? source.substr(lineStart)
-                : source.substr(lineStart, lineEnd - lineStart);
-            const std::size_t first = line.find_first_not_of(" \t\r");
-            if (first != std::string_view::npos) {
-                const std::string_view trimmed = line.substr(first);
-                const bool declaration =
-                    trimmed.rfind("SAMPLER", 0U) == 0U ||
-                    trimmed.rfind("uniform", 0U) == 0U ||
-                    trimmed.rfind("struct ", 0U) == 0U ||
-                    trimmed.rfind("//", 0U) == 0U;
-                if (!declaration &&
-                    (trimmed.find('=') != std::string_view::npos ||
-                     trimmed.find("return ") != std::string_view::npos ||
-                     trimmed.find("texture2D(") != std::string_view::npos ||
-                     trimmed.find("textureCube(") != std::string_view::npos ||
-                     trimmed.find("texture3D(") != std::string_view::npos ||
-                     trimmed.find("texture2DArray(") != std::string_view::npos)) {
-                    ++estimate;
-                }
-            }
-            if (lineEnd == std::string_view::npos) {
-                break;
-            }
-            lineStart = lineEnd + 1U;
-        }
-        return estimate;
-    }
-
-    [[nodiscard]] static std::uint32_t CountMaterialShaderTextureSamples(std::string_view source) noexcept {
-        return CountMaterialStatsOccurrences(source, "texture2D(") +
-            CountMaterialStatsOccurrences(source, "textureCube(") +
-            CountMaterialStatsOccurrences(source, "texture3D(") +
-            CountMaterialStatsOccurrences(source, "texture2DArray(");
-    }
-
-    [[nodiscard]] static std::uint32_t SaturatingMaterialVariantMultiply(std::uint32_t value, std::uint32_t multiplier) noexcept {
-        constexpr std::uint32_t kMaxReportedVariants = 4096U;
-        if (value >= kMaxReportedVariants || multiplier == 0U) {
-            return kMaxReportedVariants;
-        }
-        if (value > kMaxReportedVariants / multiplier) {
-            return kMaxReportedVariants;
-        }
-        return value * multiplier;
-    }
-
-    [[nodiscard]] static std::uint32_t EstimateMaterialVariantCount(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
-        std::uint32_t variants = 1U;
-        for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
-            switch (node.kind) {
-            case kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter:
-            case kb::render::RenderMaterialGraphNodeKind::StaticSwitch:
-            case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
-                variants = SaturatingMaterialVariantMultiply(variants, 2U);
-                break;
-            case kb::render::RenderMaterialGraphNodeKind::StaticComponentMask:
-                variants = SaturatingMaterialVariantMultiply(variants, 16U);
-                break;
-            case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
-                variants = SaturatingMaterialVariantMultiply(variants, 4U);
-                break;
-            case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
-            case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
-                variants = SaturatingMaterialVariantMultiply(variants, 3U);
-                break;
-            default:
-                break;
-            }
-        }
-        return variants;
-    }
-
-    [[nodiscard]] static std::vector<std::string> MaterialStatsBudgetWarnings(
-        const MaterialEditorMaterialStatsPassRow& row) {
-        constexpr std::uint32_t kSamplerWarningThreshold = 8U;
-        constexpr std::uint32_t kUniformWarningThreshold = 32U;
-        constexpr std::uint32_t kVaryingWarningThreshold = 8U;
-        constexpr std::uint32_t kInstructionWarningThreshold = 160U;
-        constexpr std::uint32_t kVariantWarningThreshold = 16U;
-
-        std::vector<std::string> warnings;
-        const std::uint32_t graphSamplerBudget =
-            kb::render::kRenderMaterialGraphMaxTextureSamplers - kb::render::kRenderMaterialGraphTextureBaseSlot;
-        if (row.samplerCount > kSamplerWarningThreshold) {
-            warnings.push_back(
-                "Sampler budget high: " + std::to_string(row.samplerCount) + "/" + std::to_string(graphSamplerBudget));
-        }
-        if (row.uniformCount > kUniformWarningThreshold) {
-            warnings.push_back("Uniform budget high: " + std::to_string(row.uniformCount) + "/32");
-        }
-        if (row.varyingCount > kVaryingWarningThreshold) {
-            warnings.push_back("Varying budget high: " + std::to_string(row.varyingCount) + "/8");
-        }
-        if (row.instructionEstimate > kInstructionWarningThreshold) {
-            warnings.push_back("Instruction estimate high: " + std::to_string(row.instructionEstimate) + "/160");
-        }
-        if (row.staticVariantCount > kVariantWarningThreshold) {
-            warnings.push_back("Variant count high: " + std::to_string(row.staticVariantCount) + "/16");
-        }
-        return warnings;
-    }
-
-    [[nodiscard]] static MaterialEditorMaterialStatsModel MaterialStatsCompileFailure(
-        const kb::render::RenderMaterialGraphCompileResult& compile) {
-        MaterialEditorMaterialStatsModel model{};
-        model.warnings.push_back("Material stats unavailable: graph compile failed.");
-        for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compile.diagnostics) {
-            model.warnings.push_back(GraphDiagnosticLine(diagnostic));
-        }
-        return model;
-    }
-
-    [[nodiscard]] static MaterialEditorMaterialStatsModel BuildMaterialStats(
-        const kb::render::RenderMaterialAssetData& document,
-        const kb::render::RenderMaterialGraphCompileResult& compile) {
-        if (!compile.Succeeded()) {
-            return MaterialStatsCompileFailure(compile);
-        }
-        MaterialEditorMaterialStatsModel model{};
-        const kb::render::RenderMaterialGraphReflection& reflection = compile.shader.reflection;
-        const std::uint32_t textureSampleCount = CountMaterialShaderTextureSamples(compile.shader.source);
-        const std::uint32_t sceneSamplerCount =
-            (reflection.usesSceneColor ? 1U : 0U) + (reflection.usesSceneDepth ? 1U : 0U);
-        const std::uint32_t staticVariantCount = EstimateMaterialVariantCount(document.graph);
-        const bool hasVertexDomainOutput =
-            reflection.hasWorldPositionOffset || reflection.hasCustomizedUv0 || reflection.hasDisplacement;
-
-        MaterialEditorMaterialStatsPassRow baseRow{
-            .passName = kb::render::IsRenderMaterialGraphBlendModeTransparent(reflection.blendMode)
-                ? "BaseTransparent"
-                : "BaseOpaque",
-            .graphProgram = true,
-            .instructionEstimate = EstimateMaterialShaderInstructions(compile.shader.source),
-            .textureSampleCount = textureSampleCount,
-            .samplerCount = static_cast<std::uint32_t>(reflection.textures.size()) + sceneSamplerCount,
-            .uniformCount = static_cast<std::uint32_t>(reflection.uniforms.size()),
-            .varyingCount = static_cast<std::uint32_t>(reflection.requiredVaryings.size()),
-            .staticVariantCount = staticVariantCount,
-        };
-        baseRow.warnings = MaterialStatsBudgetWarnings(baseRow);
-
-        MaterialEditorMaterialStatsPassRow shadowRow{
-            .passName = "ShadowDepth",
-            .graphProgram = hasVertexDomainOutput,
-            .instructionEstimate = hasVertexDomainOutput ? baseRow.instructionEstimate : 0U,
-            .textureSampleCount = hasVertexDomainOutput ? baseRow.textureSampleCount : 0U,
-            .samplerCount = hasVertexDomainOutput ? baseRow.samplerCount : 0U,
-            .uniformCount = hasVertexDomainOutput ? baseRow.uniformCount : 0U,
-            .varyingCount = hasVertexDomainOutput ? baseRow.varyingCount : 0U,
-            .staticVariantCount = staticVariantCount,
-        };
-        shadowRow.warnings = MaterialStatsBudgetWarnings(shadowRow);
-
-        model.available = true;
-        model.sourceHash = compile.shader.sourceHash;
-        model.passRows.push_back(std::move(baseRow));
-        model.passRows.push_back(std::move(shadowRow));
-        for (const MaterialEditorMaterialStatsPassRow& row : model.passRows) {
-            for (const std::string& warning : row.warnings) {
-                model.warnings.push_back(row.passName + ": " + warning);
-            }
-        }
-        return model;
-    }
-
-    [[nodiscard]] static MaterialEditorMaterialStatsModel BuildMaterialStats(
-        const kb::render::RenderMaterialAssetData& document) {
-        kb::render::RenderMaterialGraphBuildContext context{};
-        context.assetId = document.materialTypeAssetId;
-        const kb::render::RenderMaterialGraphCompileResult compile =
-            kb::render::CompileRenderMaterialGraphToShaderSource(document.graph, context);
-        return BuildMaterialStats(document, compile);
     }
 
     [[nodiscard]] static std::string TextureDimensionName(kb::render::RenderMaterialGraphTextureDimension dimension) {
@@ -5532,20 +5057,24 @@ private:
     }
 
     void RefreshGraphDiagnostics() {
-        diagnostics_.clear();
+        graphDiagnosticsLines_.clear();
+        compilerDiagnostics_.clear();
         graphDiagnosticMarkers_.clear();
-        diagnosticsHaveError_ = false;
+        graphDiagnosticsHaveError_ = false;
+        compilerDiagnosticsHaveError_ = false;
+        ResetCookDiagnostics();
         materialStats_ = {};
         shaderViewer_ = {};
         if (!workingCopy_.has_value()) {
             graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
+            RebuildMergedDiagnostics();
             return;
         }
         const std::vector<kb::render::RenderMaterialGraphDiagnostic> graphDiagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(*workingCopy_);
-        diagnostics_.reserve(graphDiagnostics.size());
+        graphDiagnosticsLines_.reserve(graphDiagnostics.size());
         graphDiagnosticMarkers_.reserve(graphDiagnostics.size());
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : graphDiagnostics) {
-            diagnostics_.push_back(GraphDiagnosticLine(diagnostic));
+            graphDiagnosticsLines_.push_back("[validator] " + GraphDiagnosticLine(diagnostic));
             if (diagnostic.nodeId != 0U) {
                 graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
                     .nodeId = diagnostic.nodeId,
@@ -5558,27 +5087,82 @@ private:
                 });
             }
             if (diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error) {
-                diagnosticsHaveError_ = true;
+                graphDiagnosticsHaveError_ = true;
             }
         }
-        const bool valid = !diagnosticsHaveError_;
+        const bool valid = !graphDiagnosticsHaveError_;
+        bool compileSucceeded = false;
         if (valid) {
             kb::render::RenderMaterialGraphBuildContext context{};
-            context.assetId = workingCopy_->materialTypeAssetId;
+            context.assetId = openAssetId_.value;
             const kb::render::RenderMaterialGraphCompileResult compile =
                 kb::render::CompileRenderMaterialGraphToShaderSource(workingCopy_->graph, context);
-            materialStats_ = BuildMaterialStats(*workingCopy_, compile);
+            compileSucceeded = compile.Succeeded();
+            for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compile.diagnostics) {
+                compilerDiagnostics_.push_back("[compiler] " + GraphDiagnosticLine(diagnostic));
+                compilerDiagnosticsHaveError_ = compilerDiagnosticsHaveError_ ||
+                    diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+                if (diagnostic.nodeId != 0U) {
+                    graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
+                        .nodeId = diagnostic.nodeId,
+                        .linkId = diagnostic.linkId,
+                        .pinId = diagnostic.pinId,
+                        .pin = diagnostic.pin,
+                        .severity = diagnostic.severity,
+                        .kind = diagnostic.kind,
+                        .message = diagnostic.message,
+                    });
+                }
+            }
+            materialStats_ = {};
+            materialStats_.sourceHash = compile.shader.sourceHash;
+            materialStats_.warnings.push_back("Awaiting cooked GPU pass telemetry.");
             shaderViewer_ = BuildShaderViewer(compile);
         }
+        localCompileSucceeded_ = valid && compileSucceeded;
+        RefreshGraphRuntimeState();
+        RebuildMergedDiagnostics();
+    }
+
+    void ResetCookDiagnostics() {
+        cookDiagnostics_.clear();
+        cookCompleted_ = false;
+        cookSucceeded_ = false;
+        cookHasGpuProgram_ = false;
+        cookHasLastGood_ = false;
+        cookFallbackApplied_ = false;
+        localCompileSucceeded_ = false;
+    }
+
+    void RefreshGraphRuntimeState() {
+        if (!workingCopy_.has_value()) {
+            graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
+            return;
+        }
         graphRuntimeState_ = kb::render::ResolveRenderMaterialGraphRuntimeState(kb::render::RenderMaterialGraphRuntimeStateInput{
-            .phase = kb::render::RenderMaterialGraphCompilePhase::Compiled,
-            .validationSucceeded = valid,
-            .compileSucceeded = valid,
-            .hasGpuProgram = valid,
-            .hasLastGood = workingCopy_->graph.lastGoodArtifact.IsValid(),
-            .fallbackApplied = true,
+            .phase = cookCompleted_ || !localCompileSucceeded_
+                ? kb::render::RenderMaterialGraphCompilePhase::Compiled
+                : kb::render::RenderMaterialGraphCompilePhase::Compiling,
+            .validationSucceeded = !graphDiagnosticsHaveError_,
+            .compileSucceeded = localCompileSucceeded_ && cookSucceeded_,
+            .hasGpuProgram = cookHasGpuProgram_,
+            .hasLastGood = cookHasLastGood_,
+            .fallbackApplied = cookCompleted_ ? cookFallbackApplied_ : !localCompileSucceeded_,
             .failurePolicy = workingCopy_->graph.artifactFailurePolicy,
         });
+    }
+
+    void RebuildMergedDiagnostics() {
+        diagnostics_.clear();
+        const auto append = [this](const std::vector<std::string>& source) {
+            diagnostics_.insert(diagnostics_.end(), source.begin(), source.end());
+        };
+        append(graphDiagnosticsLines_);
+        append(compilerDiagnostics_);
+        append(externalDiagnostics_);
+        append(cookDiagnostics_);
+        diagnosticsHaveError_ = graphDiagnosticsHaveError_ || compilerDiagnosticsHaveError_ ||
+            externalDiagnosticsHaveError_ || (!cookSucceeded_ && cookCompleted_);
     }
 
     void RefreshParameters() {
@@ -5639,8 +5223,21 @@ private:
     std::array<bool, 4U> instanceOverrideGroupExpanded_{ true, true, true, true };
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
+    std::vector<std::string> graphDiagnosticsLines_;
+    std::vector<std::string> compilerDiagnostics_;
+    std::vector<std::string> externalDiagnostics_;
+    std::vector<std::string> cookDiagnostics_;
     std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
     bool diagnosticsHaveError_ = false;
+    bool graphDiagnosticsHaveError_ = false;
+    bool compilerDiagnosticsHaveError_ = false;
+    bool externalDiagnosticsHaveError_ = false;
+    bool localCompileSucceeded_ = false;
+    bool cookCompleted_ = false;
+    bool cookSucceeded_ = false;
+    bool cookHasGpuProgram_ = false;
+    bool cookHasLastGood_ = false;
+    bool cookFallbackApplied_ = false;
     MaterialEditorMaterialStatsModel materialStats_{};
     MaterialEditorShaderViewerModel shaderViewer_{};
     std::string findQuery_;

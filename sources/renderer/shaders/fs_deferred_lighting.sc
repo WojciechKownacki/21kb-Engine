@@ -1,11 +1,14 @@
 $input v_texcoord0
 
 #include <bgfx_shader.sh>
+#include "gbuffer_contract.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
 SAMPLER2D(s_gbufferNormal, 1);
 SAMPLER2D(s_gbufferMaterial, 2);
-SAMPLER2D(s_gbufferDepth, 3);
+SAMPLER2D(s_gbufferSurface, 3);
+SAMPLER2D(s_gbufferDepth, 4);
+SAMPLER2D(s_deferredShadowMap, 5);
 uniform vec4 u_deferredLightDirKind[32];
 uniform vec4 u_deferredLightPositionRange[32];
 uniform vec4 u_deferredLightColorIntensity[32];
@@ -18,10 +21,18 @@ uniform vec4 u_deferredEnvironmentParams;
 uniform vec4 u_deferredCameraPosition;
 uniform mat4 u_deferredInverseViewProjection;
 uniform vec4 u_deferredDepthParams;
+uniform mat4 u_deferredShadowViewProj;
+uniform vec4 u_deferredShadowParams;
 
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (vec3(1.0, 1.0, 1.0) - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
+{
+    vec3 roughF0 = max(vec3_splat(1.0 - roughness), f0);
+    return f0 + (roughF0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 float DistributionGgx(float nDotH, float roughness)
@@ -66,15 +77,15 @@ vec3 EnvironmentColor(vec3 direction)
     return u_deferredEnvironmentParams.x < 1.5 ? constantColor : hemisphereColor;
 }
 
-vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     if (u_deferredEnvironmentParams.x < 0.5) {
         return vec3(0.0, 0.0, 0.0);
     }
 
     float nDotV = max(dot(normal, viewDir), 0.0);
-    vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
-    vec3 fresnel = FresnelSchlick(nDotV, f0);
+    vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
+    vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
     vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_deferredEnvironmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
@@ -82,7 +93,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     return diffuseEnv + specularEnv;
 }
 
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     vec4 dirKind = u_deferredLightDirKind[lightIndex];
     vec4 positionRange = u_deferredLightPositionRange[lightIndex];
@@ -118,38 +129,79 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
     float lDotH = max(dot(lightVector, halfVector), 0.0);
-    vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
+    vec3 f0 = mix(vec3_splat(0.08 * specular), albedo, metallic);
     vec3 fresnel = FresnelSchlick(hDotV, f0);
     float distribution = DistributionGgx(nDotH, roughness);
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
-    vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
+    vec3 specularTerm = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
-    return (diffuse + specular) * radiance * nDotL;
+    return (diffuse + specularTerm) * radiance * nDotL;
+}
+
+float SampleShadowVisibility(vec3 shadowCoord)
+{
+    float biasedDepth = shadowCoord.z + u_deferredShadowParams.x;
+    float storedDepth = texture2D(s_deferredShadowMap, shadowCoord.xy).x;
+    float hardShadow = biasedDepth < storedDepth ? 1.0 : 0.0;
+    float texelSize = max(u_deferredShadowParams.z, 0.000001);
+    float shadowSamples =
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, -texelSize)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(0.0, -texelSize)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, -texelSize)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, 0.0)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, 0.0)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, texelSize)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(0.0, texelSize)).x ? 1.0 : 0.0) +
+        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, texelSize)).x ? 1.0 : 0.0);
+    float inShadow = shadowSamples * 0.11111111;
+    float selectedShadow = u_deferredShadowParams.w < 2.0 ? hardShadow : inShadow;
+    return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
 }
 
 void main()
 {
     vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
     float depth = texture2D(s_gbufferDepth, v_texcoord0).x;
-    if (depth <= 0.000001 || albedo.a <= 0.000001) {
+    if (depth <= 0.000001) {
         discard;
     }
     vec3 normal = normalize(texture2D(s_gbufferNormal, v_texcoord0).xyz * 2.0 - 1.0);
     vec4 material = texture2D(s_gbufferMaterial, v_texcoord0);
+    vec4 surface = texture2D(s_gbufferSurface, v_texcoord0);
     float metallic = clamp(material.x, 0.0, 1.0);
     float roughness = clamp(material.y, 0.04, 1.0);
     float occlusion = clamp(material.z, 0.0, 1.0);
+    float shadingModel = KbDecodeGBufferShadingModel(material.w);
+    float specular = clamp(surface.w, 0.0, 1.0);
+
+    if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_UNLIT) < 0.5) {
+        gl_FragColor = vec4(albedo.rgb + surface.rgb, 1.0);
+        return;
+    }
 
     vec3 worldPos = ReconstructWorldPosition(v_texcoord0, depth);
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
-    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
+
+    vec4 shadowClip = mul(u_deferredShadowViewProj, vec4(worldPos, 1.0));
+    vec3 shadowCoord = shadowClip.xyz / max(shadowClip.w, 0.0001);
+    float shadowVisible = 1.0;
+    if (u_deferredShadowParams.w > 0.5 &&
+        shadowCoord.x >= 0.0 && shadowCoord.x <= 1.0 &&
+        shadowCoord.y >= 0.0 && shadowCoord.y <= 1.0 &&
+        shadowCoord.z >= 0.0 && shadowCoord.z <= 1.0) {
+        shadowVisible = SampleShadowVisibility(shadowCoord);
+    }
+
+    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion);
 
     for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
         if (float(lightIndex) < u_deferredLightParams.x) {
-            lighting += EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, occlusion);
+            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular, occlusion);
+            lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
         }
     }
 
-    gl_FragColor = vec4(lighting, 1.0);
+    gl_FragColor = vec4(lighting + surface.rgb, 1.0);
 }

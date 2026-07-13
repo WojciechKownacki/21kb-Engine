@@ -33,6 +33,10 @@ namespace {
         .environmentGroundColor = requested.environmentGroundColor != defaultConfig.environmentGroundColor ? requested.environmentGroundColor : fallback.environmentGroundColor,
         .environmentDiffuseIntensity = requested.environmentDiffuseIntensity != defaultConfig.environmentDiffuseIntensity ? requested.environmentDiffuseIntensity : fallback.environmentDiffuseIntensity,
         .environmentSpecularIntensity = requested.environmentSpecularIntensity != defaultConfig.environmentSpecularIntensity ? requested.environmentSpecularIntensity : fallback.environmentSpecularIntensity,
+        .editorPreviewKeyLightEnabled = requested.editorPreviewKeyLightEnabled != defaultConfig.editorPreviewKeyLightEnabled ? requested.editorPreviewKeyLightEnabled : fallback.editorPreviewKeyLightEnabled,
+        .editorPreviewKeyLightDirection = requested.editorPreviewKeyLightDirection != defaultConfig.editorPreviewKeyLightDirection ? requested.editorPreviewKeyLightDirection : fallback.editorPreviewKeyLightDirection,
+        .editorPreviewKeyLightColor = requested.editorPreviewKeyLightColor != defaultConfig.editorPreviewKeyLightColor ? requested.editorPreviewKeyLightColor : fallback.editorPreviewKeyLightColor,
+        .editorPreviewKeyLightIntensity = requested.editorPreviewKeyLightIntensity != defaultConfig.editorPreviewKeyLightIntensity ? requested.editorPreviewKeyLightIntensity : fallback.editorPreviewKeyLightIntensity,
         .ibl = requested.ibl.HasEnvironment() || requested.ibl.reflectionProbeCount != 0U ? requested.ibl : fallback.ibl,
         .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
         .shadowMapSize = requested.shadowMapSize != defaultConfig.shadowMapSize ? requested.shadowMapSize : fallback.shadowMapSize,
@@ -47,6 +51,7 @@ namespace {
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
     };
 }
 
@@ -146,6 +151,7 @@ void SceneRenderer::SubmitMeshPass(
                 << " shadows=" << (effectiveLightingConfig.shadowsEnabled ? "true" : "false")
                 << " gpuDrivenOverride=" << (gpuDrivenSupportOverride != nullptr ? "true" : "false");
         WriteRendererDebugLog("scene_renderer", message.str());
+        WriteRendererMaterialGraphDebugLog("scene", message.str());
     }
     if (!initialized_ || camera == nullptr || viewportWidth == 0U || viewportHeight == 0U) {
         lastSubmitStats_ = SceneMeshSubmitter::ValidateResourcesInto(
@@ -230,9 +236,11 @@ void SceneRenderer::SubmitMeshPass(
                 << " missingMaterialResource=" << lastSubmitStats_.missingMaterialResourceCount
                 << " missingTextureBinding=" << lastSubmitStats_.missingTextureBindingCount
                 << " missingTextureResource=" << lastSubmitStats_.missingTextureResourceCount
+                << " textureDimensionMismatch=" << lastSubmitStats_.textureDimensionMismatchCount
                 << " diagnostics=" << lastDiagnostics_.events.size()
                 << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
         WriteRendererDebugLog("scene_renderer", message.str());
+        WriteRendererMaterialGraphDebugLog("scene", message.str());
     }
 }
 
@@ -298,6 +306,9 @@ void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
 }
 
 void SceneRenderer::TickFrame() noexcept {
+    if (meshSubmitter_ != nullptr) {
+        meshSubmitter_->EndFrame(frameTimeIndex_);
+    }
     resources_.TickFrame();
     resourceMap_.PruneInvalidBindings(resources_);
 }

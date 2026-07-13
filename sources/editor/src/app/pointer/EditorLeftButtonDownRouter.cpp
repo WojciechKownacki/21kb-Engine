@@ -28,11 +28,10 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
-
-#include <CommDlg.h>
 
 #include <algorithm>
 #include <array>
@@ -90,7 +89,7 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return std::nullopt;
 }
 
-[[nodiscard]] POINT MaterialGraphCanvasPoint(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+[[nodiscard]] POINT MaterialGraphDocumentPointFromWindow(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     return POINT{
         static_cast<LONG>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom),
@@ -238,25 +237,50 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
     HWND owner,
     const MaterialEditorParameterValue& value) {
-    static COLORREF customColors[16]{};
-    CHOOSECOLORW chooseColor{};
-    chooseColor.lStructSize = sizeof(chooseColor);
-    chooseColor.hwndOwner = owner;
-    chooseColor.lpCustColors = customColors;
-    chooseColor.Flags = CC_FULLOPEN | CC_RGBINIT;
-    chooseColor.rgbResult = RGB(
-        std::clamp(static_cast<int>(value.numbers[0] * 255.0F), 0, 255),
-        std::clamp(static_cast<int>(value.numbers[1] * 255.0F), 0, 255),
-        std::clamp(static_cast<int>(value.numbers[2] * 255.0F), 0, 255));
-    if (!ChooseColorW(&chooseColor)) {
-        return std::nullopt;
+    return EditorMaterialColorPickerDialog::Show(owner, "Material Graph Color", value.numbers);
+}
+
+[[nodiscard]] std::string GraphColorValueText(const MaterialEditorParameterValue& value, bool alpha) {
+    std::string text = MaterialEditorPanelFloat(value.numbers[0]) + " " +
+        MaterialEditorPanelFloat(value.numbers[1]) + " " +
+        MaterialEditorPanelFloat(value.numbers[2]);
+    if (alpha) {
+        text += " " + MaterialEditorPanelFloat(value.numbers[3]);
     }
-    return std::array<float, 4U>{
-        static_cast<float>(GetRValue(chooseColor.rgbResult)) / 255.0F,
-        static_cast<float>(GetGValue(chooseColor.rgbResult)) / 255.0F,
-        static_cast<float>(GetBValue(chooseColor.rgbResult)) / 255.0F,
-        value.numbers[3],
-    };
+    return text;
+}
+
+[[nodiscard]] bool ApplyGraphColorWatcherHit(
+    HWND owner,
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId materialId,
+    const MaterialEditorGraphColorWatcherHit& hit) {
+    MaterialEditorParameterValue value = hit.value;
+    if (!hit.applyImmediately) {
+        const std::optional<std::array<float, 4U>> picked = ShowGraphColorPicker(owner, hit.value);
+        if (!picked.has_value()) {
+            return false;
+        }
+        value.numbers = *picked;
+    }
+
+    switch (hit.target) {
+    case MaterialEditorGraphColorWatcherTarget::ConstantRgb:
+        return sceneContext.SetMaterialGraphConstantValue(materialId, hit.nodeId, GraphColorValueText(value, false));
+    case MaterialEditorGraphColorWatcherTarget::ConstantColor:
+        return sceneContext.SetMaterialGraphNodeColorPropertyValue(materialId, hit.nodeId, "constant.color", value.numbers);
+    case MaterialEditorGraphColorWatcherTarget::ParameterColor:
+        return sceneContext.SetMaterialEditorGraphParameterValue(
+            materialId,
+            hit.stableId,
+            kb::render::RenderMaterialParameterType::Color,
+            GraphColorValueText(value, true));
+    case MaterialEditorGraphColorWatcherTarget::ColorRampStop:
+        return sceneContext.SetMaterialGraphNodeColorPropertyValue(materialId, hit.nodeId, hit.propertyId, value.numbers);
+    case MaterialEditorGraphColorWatcherTarget::None:
+        break;
+    }
+    return false;
 }
 
 } // namespace
@@ -334,6 +358,43 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             ? sceneContext_.Scene().Assets().Manager().Registry().Find(materialId)
             : nullptr;
         const bool editingMaterialInstance = materialMetadata != nullptr && materialMetadata->type == "RenderMaterialInstance";
+        if (sceneContext_.IsMaterialGraphTexturePickerOpen()) {
+            const MaterialEditorGraphTexturePickerHit pickerHit =
+                MaterialEditorPanelRenderer::GraphTexturePickerHit(*materialEditorContent, sceneContext_, x, y);
+            const auto acceptTexturePickerSelection = [&]() {
+                const kb::assets::AssetId textureId = sceneContext_.MaterialGraphTexturePickerSelectedAssetId();
+                static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(
+                    sceneContext_.MaterialGraphTexturePickerAssetId(),
+                    sceneContext_.MaterialGraphTexturePickerNodeId(),
+                    textureId));
+                static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
+            };
+            switch (pickerHit.kind) {
+            case MaterialEditorGraphTexturePickerHitKind::Search:
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::Texture:
+                if (sceneContext_.MaterialGraphTexturePickerSelectedAssetId() == pickerHit.assetId) {
+                    acceptTexturePickerSelection();
+                } else {
+                    static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected(pickerHit.assetId));
+                }
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::Clear:
+                static_cast<void>(sceneContext_.SetMaterialGraphTexturePickerSelected({}));
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::Accept:
+                acceptTexturePickerSelection();
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::Cancel:
+            case MaterialEditorGraphTexturePickerHitKind::Backdrop:
+                static_cast<void>(sceneContext_.CloseMaterialGraphTexturePicker());
+                break;
+            case MaterialEditorGraphTexturePickerHitKind::None:
+                break;
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
             const MaterialEditorGraphContextMenuHit menuHit = MaterialEditorPanelRenderer::GraphContextMenuHit(sceneContext_, x, y);
             if (menuHit.kind == MaterialEditorGraphContextMenuHitKind::Search) {
@@ -358,6 +419,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
                 const MaterialEditorPanelLayout menuLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
                 sceneContext_.SetMaterialGraphCanvasViewport(
+                    menuLayout.graphCanvas.left,
+                    menuLayout.graphCanvas.top,
                     MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
                     MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
                 const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
@@ -386,6 +449,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (hadPendingPinConnection) {
                 static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
             }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
         if (command != MaterialEditorPanelCommand::None) {
@@ -395,9 +460,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
 
         const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        const MaterialEditorOpaqueOverlayHit opaqueOverlay =
+            MaterialEditorPanelRenderer::OpaqueOverlayAt(*materialEditorContent, sceneContext_, x, y);
+        if (opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::None &&
+            opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::Details) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
             sceneContext_.AssetBrowser().ClearSelection();
-            sceneContext_.ClearHierarchySelection();
             sceneContext_.FocusMaterialGraph(true);
             EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
             const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
@@ -405,130 +476,144 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 : sceneContext_.ReadMaterialDocumentAsset(materialId);
             if (material.has_value()) {
                 if (sceneContext_.MaterialEditor().InfoPanelVisible()) {
-                    const std::size_t debugRowCount = MaterialAssetFormatter::DebugChannelRows(material->desc, materialId.value).size();
-                    const std::vector<MaterialEditorGraphNodeProperty> nodeProperties =
-                        editingMaterialInstance
-                            ? std::vector<MaterialEditorGraphNodeProperty>{}
-                            : sceneContext_.MaterialEditor().GraphNodeProperties(sceneContext_.MaterialEditor().SelectedNodeId());
-                    if (const std::optional<MaterialEditorGraphNodePropertyHit> property =
-                            MaterialEditorPanelRenderer::GraphNodePropertyAt(
-                                *materialEditorContent,
-                                nodeProperties,
-                                x,
-                                y)) {
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(property->nodeId));
-                        switch (property->kind) {
+                    const MaterialEditorPanelDetailsRows detailsRows =
+                        MaterialEditorPanelRenderer::DetailsRowsForDocument(
+                            sceneContext_,
+                            *material,
+                            editingMaterialInstance);
+                    const MaterialEditorDetailsLayout detailsLayout =
+                        MaterialEditorPanelRenderer::ResolveDetailsLayout(
+                            *materialEditorContent,
+                            detailsRows,
+                            sceneContext_.MaterialEditorDetailsScrollOffset());
+                    const MaterialEditorDetailsHit detailsHit =
+                        MaterialEditorPanelRenderer::DetailsHitAt(detailsLayout, detailsRows, x, y);
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Search) {
+                        sceneContext_.FocusMaterialEditorFind(true);
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::FindResult) {
+                        static_cast<void>(sceneContext_.FocusMaterialEditorFindResult(
+                            detailsHit.resultIndex,
+                            MaterialEditorPanelRectWidth(materialLayout.graphCanvas),
+                            MaterialEditorPanelRectHeight(materialLayout.graphCanvas)));
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::NodeProperty) {
+                        const MaterialEditorGraphNodePropertyHit& property = detailsHit.nodeProperty;
+                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(property.nodeId));
+                        switch (property.kind) {
                         case MaterialEditorGraphNodePropertyHitKind::TextField:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            if (property->stableId == "node.name") {
-                                static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property->nodeId));
+                            if (property.stableId == "node.name") {
+                                static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
                             } else {
                                 const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
                                     mainWindow_,
-                                    property->displayName,
-                                    MaterialEditorPanelParameterValueText(property->value));
+                                    property.displayName,
+                                    MaterialEditorPanelParameterValueText(property.value));
                                 if (value.has_value()) {
                                     static_cast<void>(sceneContext_.SetMaterialGraphNodeTextProperty(
                                         materialId,
-                                        property->nodeId,
-                                        property->stableId,
+                                        property.nodeId,
+                                        property.stableId,
                                         *value));
                                 }
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
-                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property->value)) {
+                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property.value)) {
                                 static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
                                     materialId,
-                                    property->nodeId,
-                                    property->stableId,
+                                    property.nodeId,
+                                    property.stableId,
                                     *color));
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::Slider:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property->nodeId));
-                            if (sceneContext_.BeginMaterialGraphConstantSliderDrag(materialId, property->nodeId, property->componentIndex, x)) {
-                                SetCapture(messageWindow);
-                            }
+                            static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property.nodeId));
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::EnumField:
-                            sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property->nodeId, property->stableId);
+                            sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::EnumOption:
-                            static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property->nodeId, property->stableId, property->optionValue));
+                            static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property.nodeId, property.stableId, property.optionValue));
                             break;
-                        case MaterialEditorGraphNodePropertyHitKind::TexturePicker: {
+                        case MaterialEditorGraphNodePropertyHitKind::TexturePicker:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
-                                mainWindow_,
-                                MakeEditorDarkTheme(),
-                                sceneContext_,
-                                TextureGraphAssetId(*material, property->nodeId));
-                            if (result.accepted) {
-                                static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, property->nodeId, result.assetId));
-                            }
+                            static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
+                                materialId,
+                                property.nodeId,
+                                TextureGraphAssetId(*material, property.nodeId)));
                             break;
-                        }
                         case MaterialEditorGraphNodePropertyHitKind::None:
                             break;
                         }
                         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                         return;
                     }
-                    if (const std::optional<MaterialEditorPanelParameterHit> parameter =
-                            MaterialEditorPanelRenderer::ParameterAt(
-                                *materialEditorContent,
-                                sceneContext_.MaterialEditor().Parameters(),
-                                nodeProperties,
-                                debugRowCount,
-                                x,
-                                y)) {
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Parameter) {
+                        const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
                         const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
                             mainWindow_,
-                            parameter->displayName,
-                            MaterialEditorPanelParameterValueText(parameter->value));
+                            parameter.displayName,
+                            MaterialEditorPanelParameterValueText(parameter.value));
                         if (value.has_value()) {
                             if (editingMaterialInstance) {
                                 static_cast<void>(sceneContext_.SetMaterialInstanceEditorGraphParameterValue(
                                     materialId,
-                                    parameter->stableId,
-                                    parameter->type,
+                                    parameter.stableId,
+                                    parameter.type,
                                     *value));
                             } else {
                                 static_cast<void>(sceneContext_.SetMaterialEditorGraphParameterValue(
                                     materialId,
-                                    parameter->stableId,
-                                    parameter->type,
+                                    parameter.stableId,
+                                    parameter.type,
                                     *value));
                             }
                         }
                         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                         return;
                     }
-                    if (editingMaterialInstance) {
-                        if (const std::optional<MaterialEditorPanelParameterHit> textureParameter =
-                                MaterialEditorPanelRenderer::TextureParameterAt(
-                                    *materialEditorContent,
-                                    sceneContext_.MaterialEditor().Parameters(),
-                                    nodeProperties,
-                                    debugRowCount,
-                                    x,
-                                    y)) {
-                            const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
-                                mainWindow_,
-                                MakeEditorDarkTheme(),
-                                sceneContext_,
-                                kb::assets::AssetId{ textureParameter->value.assetId });
-                            if (result.accepted) {
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::TextureParameter) {
+                        const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
+                        const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
+                            mainWindow_,
+                            MakeEditorDarkTheme(),
+                            sceneContext_,
+                            kb::assets::AssetId{ parameter.value.assetId },
+                            EditorTextureAssetPickerFilter::Texture2D);
+                        if (result.accepted) {
+                            if (editingMaterialInstance) {
                                 static_cast<void>(sceneContext_.SetMaterialInstanceEditorTextureParameterValue(
                                     materialId,
-                                    textureParameter->stableId,
+                                    parameter.stableId,
                                     result.assetId));
+                            } else {
+                                const auto materialSlot = [&]() -> std::optional<EditorMaterialTextureSlot> {
+                                    if (parameter.stableId == "albedoTextureAssetId") return EditorMaterialTextureSlot::Albedo;
+                                    if (parameter.stableId == "normalTextureAssetId") return EditorMaterialTextureSlot::Normal;
+                                    if (parameter.stableId == "metallicRoughnessTextureAssetId") return EditorMaterialTextureSlot::MetallicRoughness;
+                                    if (parameter.stableId == "occlusionTextureAssetId") return EditorMaterialTextureSlot::Occlusion;
+                                    if (parameter.stableId == "emissiveTextureAssetId") return EditorMaterialTextureSlot::Emissive;
+                                    return std::nullopt;
+                                }();
+                                if (materialSlot.has_value()) {
+                                    static_cast<void>(sceneContext_.SetMaterialTextureAsset(materialId, *materialSlot, result.assetId));
+                                }
                             }
-                            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                            return;
                         }
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
+                    }
+                    if (detailsHit.kind == MaterialEditorDetailsHitKind::Backdrop) {
+                        sceneContext_.FocusMaterialEditorFind(false);
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return;
                     }
                 }
                 if (editingMaterialInstance) {
@@ -556,6 +641,28 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         return;
                     }
                 }
+                if (const std::optional<std::uint32_t> textureSampleNodeId = MaterialEditorPanelRenderer::GraphTextureSampleAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*textureSampleNodeId));
+                    static_cast<void>(sceneContext_.OpenMaterialGraphTexturePicker(
+                        materialId,
+                        *textureSampleNodeId,
+                        TextureGraphAssetId(*material, *textureSampleNodeId)));
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
+                        MaterialEditorPanelRenderer::GraphColorWatcherAt(*materialEditorContent, *material, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
+                    static_cast<void>(ApplyGraphColorWatcherHit(mainWindow_, sceneContext_, materialId, *colorWatcher));
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
+                    static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
                 if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
                     const bool connectionStarted = pin->direction == MaterialEditorGraphPinDirection::Output
@@ -563,28 +670,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         : (sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y) ||
                             sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
                     if (connectionStarted) {
-                        SetCapture(messageWindow);
-                    }
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (const std::optional<std::uint32_t> textureSampleNodeId = MaterialEditorPanelRenderer::GraphTextureSampleAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*textureSampleNodeId));
-                    const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
-                        mainWindow_,
-                        MakeEditorDarkTheme(),
-                        sceneContext_,
-                        TextureGraphAssetId(*material, *textureSampleNodeId));
-                    if (result.accepted) {
-                        static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, *textureSampleNodeId, result.assetId));
-                    }
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
-                    static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
-                    if (sceneContext_.BeginMaterialGraphConstantSliderDrag(materialId, constant->nodeId, constant->componentIndex, x)) {
                         SetCapture(messageWindow);
                     }
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -612,11 +697,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         SetCapture(messageWindow);
                     }
                 } else if (const std::optional<kb::render::RenderMaterialGraphNodeKind> shortcutKind = MaterialGraphShortcutNodeKind()) {
-                    const POINT graphPoint = MaterialGraphCanvasPoint(materialLayout, sceneContext_, x, y);
+                    const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
                     static_cast<void>(sceneContext_.AddMaterialGraphNode(materialId, *shortcutKind, graphPoint.x, graphPoint.y));
                 } else {
                     static_cast<void>(sceneContext_.ClearMaterialGraphCommentSelection());
-                    if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, KeyDown(VK_CONTROL) || KeyDown(VK_SHIFT))) {
+                    const MaterialGraphSelectionOperation selectionOperation =
+                        ResolveMaterialGraphSelectionOperation(
+                            KeyDown(VK_MENU),
+                            KeyDown(VK_CONTROL),
+                            KeyDown(VK_SHIFT));
+                    if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, selectionOperation)) {
                         SetCapture(messageWindow);
                     }
                 }

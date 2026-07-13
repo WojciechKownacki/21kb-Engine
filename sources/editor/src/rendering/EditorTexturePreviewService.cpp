@@ -26,6 +26,8 @@ namespace kb::editor {
 namespace {
 
 constexpr std::array<char, 8> kImportedAssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
+constexpr std::size_t kScaledPreviewMaxEntries = 96U;
+constexpr std::size_t kScaledPreviewMaxBytes = 64U * 1024U * 1024U;
 
 class ScopedComStream {
 public:
@@ -264,20 +266,213 @@ private:
     return cache;
 }
 
+// StretchDIBits in HALFTONE mode (a proper box-filtered resample, not a cheap nearest/bilinear
+// stretch) is expensive enough that re-running it every repaint for every texture-preview node
+// visibly dominated the node graph's frame time. The decoded source image is already cached by
+// identity (Cache above); this second-level cache keys off that same stable pointer plus the
+// target size and holds the already-scaled result in an offscreen DIB, so the slow resample runs
+// once per (texture, preview size) instead of once per paint.
+struct ScaledPreviewEntry {
+    HDC dc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ previousBitmap = nullptr;
+    std::size_t byteSize = 0U;
+    std::uint64_t lastUsed = 0U;
+
+    ScaledPreviewEntry() = default;
+    ScaledPreviewEntry(const ScaledPreviewEntry&) = delete;
+    ScaledPreviewEntry& operator=(const ScaledPreviewEntry&) = delete;
+    ScaledPreviewEntry(ScaledPreviewEntry&& other) noexcept {
+        *this = std::move(other);
+    }
+    ScaledPreviewEntry& operator=(ScaledPreviewEntry&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            dc = other.dc;
+            bitmap = other.bitmap;
+            previousBitmap = other.previousBitmap;
+            byteSize = other.byteSize;
+            lastUsed = other.lastUsed;
+            other.dc = nullptr;
+            other.bitmap = nullptr;
+            other.previousBitmap = nullptr;
+            other.byteSize = 0U;
+            other.lastUsed = 0U;
+        }
+        return *this;
+    }
+    ~ScaledPreviewEntry() {
+        Reset();
+    }
+
+private:
+    void Reset() noexcept {
+        if (dc != nullptr && previousBitmap != nullptr) {
+            SelectObject(dc, previousBitmap);
+            previousBitmap = nullptr;
+        }
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+            bitmap = nullptr;
+        }
+        if (dc != nullptr) {
+            DeleteDC(dc);
+            dc = nullptr;
+        }
+        byteSize = 0U;
+        lastUsed = 0U;
+    }
+};
+
+struct ScaledPreviewKey {
+    std::uintptr_t image = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+
+    [[nodiscard]] bool operator==(const ScaledPreviewKey& other) const noexcept {
+        return image == other.image && width == other.width && height == other.height;
+    }
+};
+
+struct ScaledPreviewKeyHash {
+    [[nodiscard]] std::size_t operator()(const ScaledPreviewKey& key) const noexcept {
+        std::size_t hash = static_cast<std::size_t>(key.image);
+        hash ^= static_cast<std::size_t>(key.width) + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        hash ^= static_cast<std::size_t>(key.height) + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        return hash;
+    }
+};
+
+class ScaledPreviewCache {
+public:
+    [[nodiscard]] HDC DcFor(const EditorTexturePreviewImage& image, int width, int height) {
+        const ScaledPreviewKey key{
+            .image = reinterpret_cast<std::uintptr_t>(&image),
+            .width = static_cast<std::uint32_t>(width),
+            .height = static_cast<std::uint32_t>(height),
+        };
+        if (const auto found = entries_.find(key); found != entries_.end()) {
+            ++hitCount_;
+            found->second.lastUsed = ++useClock_;
+            return found->second.dc;
+        }
+        ++missCount_;
+
+        BITMAPINFO targetInfo{};
+        targetInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        targetInfo.bmiHeader.biWidth = width;
+        targetInfo.bmiHeader.biHeight = -height;
+        targetInfo.bmiHeader.biPlanes = 1;
+        targetInfo.bmiHeader.biBitCount = 32;
+        targetInfo.bmiHeader.biCompression = BI_RGB;
+
+        ScaledPreviewEntry entry;
+        HDC screenDc = GetDC(nullptr);
+        if (screenDc == nullptr) {
+            return nullptr;
+        }
+        entry.dc = CreateCompatibleDC(screenDc);
+        void* bits = nullptr;
+        entry.bitmap = CreateDIBSection(screenDc, &targetInfo, DIB_RGB_COLORS, &bits, nullptr, 0U);
+        ReleaseDC(nullptr, screenDc);
+        if (entry.dc == nullptr || entry.bitmap == nullptr) {
+            return nullptr;
+        }
+        entry.previousBitmap = SelectObject(entry.dc, entry.bitmap);
+        if (entry.previousBitmap == nullptr) {
+            return nullptr;
+        }
+        entry.byteSize = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * sizeof(std::uint32_t);
+        entry.lastUsed = ++useClock_;
+
+        BITMAPINFO sourceInfo{};
+        sourceInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        sourceInfo.bmiHeader.biWidth = image.width;
+        sourceInfo.bmiHeader.biHeight = -image.height;
+        sourceInfo.bmiHeader.biPlanes = 1;
+        sourceInfo.bmiHeader.biBitCount = 32;
+        sourceInfo.bmiHeader.biCompression = BI_RGB;
+        const int oldMode = SetStretchBltMode(entry.dc, HALFTONE);
+        SetBrushOrgEx(entry.dc, 0, 0, nullptr);
+        const int stretchedLines = StretchDIBits(
+            entry.dc, 0, 0, width, height,
+            0, 0, image.width, image.height,
+            image.bgra.data(), &sourceInfo, DIB_RGB_COLORS, SRCCOPY);
+        SetStretchBltMode(entry.dc, oldMode);
+        if (stretchedLines <= 0) {
+            return nullptr;
+        }
+
+        const HDC result = entry.dc;
+        byteCount_ += entry.byteSize;
+        entries_.emplace(key, std::move(entry));
+        TrimToBudget();
+        return result;
+    }
+
+    [[nodiscard]] std::uint64_t HitCount() const noexcept {
+        return hitCount_;
+    }
+
+    [[nodiscard]] std::uint64_t MissCount() const noexcept {
+        return missCount_;
+    }
+
+    [[nodiscard]] std::size_t EntryCount() const noexcept {
+        return entries_.size();
+    }
+
+    [[nodiscard]] std::size_t ByteCount() const noexcept {
+        return byteCount_;
+    }
+
+private:
+    void TrimToBudget() {
+        while (entries_.size() > 1U && (entries_.size() > kScaledPreviewMaxEntries || byteCount_ > kScaledPreviewMaxBytes)) {
+            auto evict = entries_.begin();
+            for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+                if (it->second.lastUsed < evict->second.lastUsed) {
+                    evict = it;
+                }
+            }
+            byteCount_ -= std::min(byteCount_, evict->second.byteSize);
+            entries_.erase(evict);
+        }
+    }
+
+    std::unordered_map<ScaledPreviewKey, ScaledPreviewEntry, ScaledPreviewKeyHash> entries_;
+    std::uint64_t hitCount_ = 0U;
+    std::uint64_t missCount_ = 0U;
+    std::uint64_t useClock_ = 0U;
+    std::size_t byteCount_ = 0U;
+};
+
+[[nodiscard]] ScaledPreviewCache& TextureScaledPreviewCache() {
+    static ScaledPreviewCache cache;
+    return cache;
+}
+
 } // namespace
 
 bool EditorTexturePreviewService::IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "Texture" || metadata.importCategory == "Texture";
 }
 
+EditorTexturePreviewScaledCacheStats EditorTexturePreviewService::ScaledCacheStats() {
+    const ScaledPreviewCache& cache = TextureScaledPreviewCache();
+    return EditorTexturePreviewScaledCacheStats{
+        .hitCount = cache.HitCount(),
+        .missCount = cache.MissCount(),
+        .entryCount = cache.EntryCount(),
+        .byteCount = cache.ByteCount(),
+    };
+}
+
 const EditorTexturePreviewImage* EditorTexturePreviewService::PreviewFor(const kb::assets::AssetMetadata& metadata) {
     return TextureCache().PreviewFor(metadata);
 }
 
-void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border) {
-    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || target.right <= target.left || target.bottom <= target.top) {
-        return;
-    }
+void DrawDirectScaledPreview(HDC dc, RECT target, const EditorTexturePreviewImage& image) {
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = image.width;
@@ -303,6 +498,20 @@ void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorT
         DIB_RGB_COLORS,
         SRCCOPY));
     SetStretchBltMode(dc, oldMode);
+}
+
+void EditorTexturePreviewService::DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border) {
+    const int width = target.right - target.left;
+    const int height = target.bottom - target.top;
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (const HDC scaledDc = TextureScaledPreviewCache().DcFor(image, width, height); scaledDc != nullptr) {
+        BitBlt(dc, target.left, target.top, width, height, scaledDc, 0, 0, SRCCOPY);
+    } else {
+        DrawDirectScaledPreview(dc, target, image);
+    }
 
     if (border) {
         ScopedPen borderPen{ 1, RGB(52, 59, 68) };

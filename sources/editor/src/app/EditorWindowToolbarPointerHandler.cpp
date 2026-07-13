@@ -130,7 +130,7 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
-                if (sceneContext.SaveCurrentScene()) {
+                if (sceneContext.SaveOpenDocuments()) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
@@ -257,7 +257,7 @@ struct TransportClickResult {
     }
 
     static_cast<void>(shellInteraction.SetPressedSave(true));
-    if (sceneContext.SaveCurrentScene()) {
+    if (sceneContext.SaveOpenDocuments()) {
         sceneViewport.RequestPresent();
     }
     InvalidateToolbar(mainWindow, layout);

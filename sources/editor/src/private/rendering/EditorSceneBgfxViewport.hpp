@@ -54,6 +54,7 @@ public:
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
+        render::RenderMaterialGraphBuildContext materialGraphContext{};
         std::optional<render::ScenePostProcessSettings> postProcessSettings{};
         std::uint8_t msaaSamples = 0U;
         bool shadowPassEnabled = true;
@@ -267,6 +268,7 @@ private:
     void ReportAaRouteTrace(std::string_view message, bool force = false);
     void ReportAaPipelineTrace(std::string_view message, bool force = false);
     void SetFailureDetail(std::string detail);
+    void TrackPaintHost(HWND parent) noexcept;
     void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
     [[nodiscard]] bool QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
@@ -281,6 +283,7 @@ private:
     std::uint8_t rendererMsaaSamples_ = 0;
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
+    std::vector<HWND> paintHosts_;
     bool windowClassRegistered_ = false;
     bool presentRequested_ = true;
     bool renderFailed_ = false;

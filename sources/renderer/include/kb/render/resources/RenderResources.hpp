@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::render {
@@ -299,6 +300,21 @@ enum class RenderTextureColorSpace : std::uint8_t {
     Srgb,
 };
 
+// Texture dimension is intrinsic asset/resource metadata. Keep the graph-facing name as the
+// serialized authoring type, but use this alias throughout the generic runtime texture pipeline so
+// a sampler can be checked against the resource that is actually bound.
+using RenderTextureDimension = RenderMaterialGraphTextureDimension;
+
+[[nodiscard]] constexpr std::string_view RenderTextureDimensionName(RenderTextureDimension dimension) noexcept {
+    switch (dimension) {
+    case RenderTextureDimension::Texture2D: return "Texture2D";
+    case RenderTextureDimension::TextureCube: return "TextureCube";
+    case RenderTextureDimension::Texture3D: return "Texture3D";
+    case RenderTextureDimension::Texture2DArray: return "Texture2DArray";
+    }
+    return "Texture2D";
+}
+
 enum class RenderMaterialGraphUniformBindingType : std::uint8_t {
     Scalar,
     Vector,
@@ -326,6 +342,7 @@ struct RenderMaterialGraphTextureBinding {
     std::uint32_t slot = 0U;
     std::uint64_t textureAssetId = 0U;
     RenderTextureHandle texture{};
+    std::string role;
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
     // Resolved bgfx sampler flags (filter/wrap) from the graph sampler state; UINT32_MAX = texture default.
     std::uint32_t samplerFlags = UINT32_MAX;
@@ -417,6 +434,10 @@ struct RenderMaterialResource {
 struct RenderTextureDesc {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
+    std::uint16_t depth = 1;
+    std::uint16_t layers = 1;
+    std::uint8_t mipCount = 1;
+    RenderTextureDimension dimension = RenderTextureDimension::Texture2D;
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
     std::uint64_t flags = 0;
     const bgfx::Memory* memory = nullptr;
@@ -427,6 +448,10 @@ struct RenderTextureResource {
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
     std::uint16_t width = 0;
     std::uint16_t height = 0;
+    std::uint16_t depth = 1;
+    std::uint16_t layers = 1;
+    std::uint8_t mipCount = 1;
+    RenderTextureDimension dimension = RenderTextureDimension::Texture2D;
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
     std::uint64_t version = 0;

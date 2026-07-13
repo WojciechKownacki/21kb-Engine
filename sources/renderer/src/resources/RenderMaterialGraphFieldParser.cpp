@@ -1,4 +1,5 @@
 #include "resources/RenderMaterialGraphFieldParser.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
 #include <charconv>
 #include <sstream>
@@ -31,10 +32,7 @@ namespace {
 }
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(begin, end, output);
-    return result.ec == std::errc{} && result.ptr == end;
+    return ParseFiniteMaterialFloatToken(text, output);
 }
 
 [[nodiscard]] bool ParseBool(std::string_view text, bool& output) noexcept {
@@ -79,6 +77,10 @@ void AddGraphMigrationDiagnostic(
         .message = std::move(message),
         .text = std::move(text),
     });
+}
+
+[[nodiscard]] bool IsDeprecatedDefaultLitGraphShadingToken(std::string_view text) noexcept {
+    return text == "lit" || text == "default_lit" || text == "defaultlit";
 }
 
 [[nodiscard]] std::string DecodeToken(std::string_view value) {
@@ -149,6 +151,34 @@ void AddGraphMigrationDiagnostic(
     }
     if (text == "Unknown") {
         output = RenderMaterialTextureColorSpace::Unknown;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseSamplerFilter(std::string_view text, RenderMaterialGraphSamplerFilter& output) noexcept {
+    if (text == "Linear") {
+        output = RenderMaterialGraphSamplerFilter::Linear;
+        return true;
+    }
+    if (text == "Point") {
+        output = RenderMaterialGraphSamplerFilter::Point;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseSamplerWrap(std::string_view text, RenderMaterialGraphSamplerWrap& output) noexcept {
+    if (text == "Repeat") {
+        output = RenderMaterialGraphSamplerWrap::Repeat;
+        return true;
+    }
+    if (text == "Clamp") {
+        output = RenderMaterialGraphSamplerWrap::Clamp;
+        return true;
+    }
+    if (text == "Mirror") {
+        output = RenderMaterialGraphSamplerWrap::Mirror;
         return true;
     }
     return false;
@@ -417,6 +447,7 @@ void AddGraphMigrationDiagnostic(
             node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
             node->kind == RenderMaterialGraphNodeKind::ConstantColor ||
             node->kind == RenderMaterialGraphNodeKind::CollectionParameter ||
+            node->kind == RenderMaterialGraphNodeKind::ColorRamp ||
             node->kind == RenderMaterialGraphNodeKind::Uv ||
             node->kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
             node->kind == RenderMaterialGraphNodeKind::StaticSwitch ||
@@ -472,6 +503,44 @@ void AddGraphMigrationDiagnostic(
         .editorOrder = editorOrder,
         .description = description == "_" ? std::string{} : DecodeToken(description),
     };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphSamplerState(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string nodeIdText;
+    std::string minFilterText;
+    std::string magFilterText;
+    std::string mipFilterText;
+    std::string wrapUText;
+    std::string wrapVText;
+    std::string trailing;
+    if (!(stream >> nodeIdText >> minFilterText >> magFilterText >> mipFilterText >> wrapUText >> wrapVText) ||
+        (stream >> trailing)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line,
+            "graphSamplerState", "Material graph sampler state requires node id, min/mag/mip filters and U/V wrap modes.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    std::uint32_t nodeId = 0U;
+    RenderMaterialGraphNode* node = nullptr;
+    RenderMaterialGraphSamplerState state{};
+    if (!ParseUInt32(nodeIdText, nodeId) || nodeId == 0U ||
+        (node = FindMutableGraphNode(graph, nodeId)) == nullptr ||
+        !ParseSamplerFilter(minFilterText, state.minFilter) ||
+        !ParseSamplerFilter(magFilterText, state.magFilter) ||
+        !ParseSamplerFilter(mipFilterText, state.mipFilter) ||
+        !ParseSamplerWrap(wrapUText, state.wrapU) ||
+        !ParseSamplerWrap(wrapVText, state.wrapV)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line,
+            "graphSamplerState", "Material graph sampler state references an invalid node or enum value.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    node->parameter.samplerState = state;
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -968,6 +1037,9 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     if (keyword == "graphParameter") {
         return ParseGraphParameter(rest, line, asset.graph, diagnostics);
     }
+    if (keyword == "graphSamplerState") {
+        return ParseGraphSamplerState(rest, line, asset.graph, diagnostics);
+    }
     if (keyword == "graphCustomCode") {
         return ParseGraphCustomCode(rest, line, asset.graph, diagnostics);
     }
@@ -987,6 +1059,47 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
         return ParseGraphComposite(rest, line, asset.graph, diagnostics);
     }
     return RenderMaterialGraphFieldParseResult::Unknown;
+}
+
+void FinalizeRenderMaterialGraphDocument(
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t graphShadingModelLine,
+    std::string_view graphShadingModelSourceText,
+    std::size_t graphLastGoodArtifactLine) {
+    const std::uint32_t sourceVersion = graph.documentVersion == 0U ? 1U : graph.documentVersion;
+    if (sourceVersion <= kRenderMaterialGraphDocumentVersion) {
+        if (sourceVersion < 2U && IsDeprecatedDefaultLitGraphShadingToken(graph.shadingModel)) {
+            const std::string deprecatedToken = graph.shadingModel;
+            graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+            if (graphShadingModelLine > 0U) {
+                AddGraphMigrationDiagnostic(
+                    diagnostics,
+                    graphShadingModelLine,
+                    "graphShadingModel",
+                    "Migrated deprecated material graph shading token '" + deprecatedToken +
+                        "' to canonical 'defaultLit' while upgrading graph schema from version " +
+                        std::to_string(sourceVersion) + " to " + std::to_string(kRenderMaterialGraphDocumentVersion) + ".",
+                    std::string{ graphShadingModelSourceText });
+            }
+        }
+
+        if (graph.shadingModel.empty()) {
+            graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+        }
+        graph.documentVersion = kRenderMaterialGraphDocumentVersion;
+        graph.hasExplicitDocumentVersion = true;
+    }
+
+    if ((graph.lastGoodArtifact.assetId == 0U) != (graph.lastGoodArtifact.contentHash == 0U)) {
+        AddDiagnostic(
+            diagnostics,
+            RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
+            graphLastGoodArtifactLine,
+            "graphLastGoodArtifact",
+            "Material graph last-good artifact requires both asset id and content hash.",
+            {});
+    }
 }
 
 } // namespace kb::render

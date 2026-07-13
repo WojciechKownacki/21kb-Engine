@@ -21,7 +21,7 @@ namespace kb::editor {
 
 namespace {
 
-[[nodiscard]] POINT MaterialGraphCanvasPoint(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+[[nodiscard]] POINT MaterialGraphDocumentPointFromWindow(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     return POINT{
         static_cast<LONG>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom),
@@ -63,13 +63,6 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
-    if (sceneContext_.IsMaterialGraphConstantSliderDragging()) {
-        static_cast<void>(sceneContext_.EndMaterialGraphConstantSliderDrag());
-        ReleaseCapture();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        return;
-    }
-
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
         static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
         ReleaseCapture();
@@ -89,6 +82,16 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
         const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         if (materialEditorContent.has_value()) {
+            const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+            if (sceneContext_.MaterialEditor().InfoPanelVisible() &&
+                MaterialEditorPanelRectWidth(materialLayout.detailsPanel) >= 220 &&
+                MaterialEditorPanelRectHeight(materialLayout.detailsPanel) >= 140 &&
+                MaterialEditorPanelPointInRect(materialLayout.detailsPanel, x, y)) {
+                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                ReleaseCapture();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
             const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
                 ? sceneContext_.MaterialEditor().WorkingCopy()
                 : sceneContext_.ReadMaterialDocumentAsset(materialId);
@@ -113,6 +116,16 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         const kb::assets::AssetId materialId = sceneContext_.MaterialGraphPinConnectionAssetId();
         const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         if (materialEditorContent.has_value()) {
+            const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+            if (sceneContext_.MaterialEditor().InfoPanelVisible() &&
+                MaterialEditorPanelRectWidth(materialLayout.detailsPanel) >= 220 &&
+                MaterialEditorPanelRectHeight(materialLayout.detailsPanel) >= 140 &&
+                MaterialEditorPanelPointInRect(materialLayout.detailsPanel, x, y)) {
+                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                ReleaseCapture();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
             const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
                 ? sceneContext_.MaterialEditor().WorkingCopy()
                 : sceneContext_.ReadMaterialDocumentAsset(materialId);
@@ -126,9 +139,8 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
                         static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
                     }
                 } else {
-                    const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
                     if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
-                        const POINT graphPoint = MaterialGraphCanvasPoint(materialLayout, sceneContext_, x, y);
+                        const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
                         if (!sceneContext_.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphPoint.x, graphPoint.y)) {
                             static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
                         }

@@ -13,6 +13,8 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 
 #include <optional>
 
@@ -54,9 +56,40 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool HandleMaterialGraphShortcut(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, WPARAM key) {
+[[nodiscard]] bool HandleMaterialGraphShortcut(HWND messageWindow, EditorWindowMessageContext& context, WPARAM key) {
+    HWND mainWindow = context.mainWindow;
+    EditorSceneContext& sceneContext = context.sceneContext;
     if (!sceneContext.IsMaterialGraphFocused()) {
         return false;
+    }
+
+    if (sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        bool handled = true;
+        switch (key) {
+        case VK_BACK:
+            sceneContext.BackspaceMaterialGraphTexturePickerSearch();
+            break;
+        case VK_RETURN:
+            static_cast<void>(sceneContext.SetMaterialGraphTextureSampleAsset(
+                sceneContext.MaterialGraphTexturePickerAssetId(),
+                sceneContext.MaterialGraphTexturePickerNodeId(),
+                sceneContext.MaterialGraphTexturePickerSelectedAssetId()));
+            static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
+            break;
+        case VK_ESCAPE:
+            static_cast<void>(sceneContext.CloseMaterialGraphTexturePicker());
+            break;
+        default:
+            handled = true;
+            break;
+        }
+        if (handled) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != mainWindow) {
+                InvalidateRect(mainWindow, nullptr, FALSE);
+            }
+            return true;
+        }
     }
 
     if (sceneContext.IsMaterialGraphContextMenuOpen()) {
@@ -64,6 +97,15 @@ namespace {
         switch (key) {
         case VK_BACK:
             sceneContext.BackspaceMaterialGraphContextMenuSearch();
+            break;
+        case VK_UP:
+            static_cast<void>(sceneContext.MoveMaterialGraphContextMenuKeyboardSelection(-1));
+            break;
+        case VK_DOWN:
+            static_cast<void>(sceneContext.MoveMaterialGraphContextMenuKeyboardSelection(1));
+            break;
+        case VK_RETURN:
+            static_cast<void>(sceneContext.ActivateMaterialGraphContextMenuKeyboardSelection());
             break;
         case VK_ESCAPE:
             static_cast<void>(sceneContext.CloseMaterialGraphContextMenu());
@@ -80,6 +122,34 @@ namespace {
             }
             return true;
         }
+    }
+
+    if (key == VK_SPACE && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+        const std::optional<RECT> materialEditorContent =
+            EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow, context.dockModel, context.floatingWindows, context.metrics);
+        if (!materialEditorContent.has_value()) {
+            return false;
+        }
+        const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        const int canvasWidth = std::max(0L, layout.graphCanvas.right - layout.graphCanvas.left);
+        const int canvasHeight = std::max(0L, layout.graphCanvas.bottom - layout.graphCanvas.top);
+        if (canvasWidth <= 0 || canvasHeight <= 0) {
+            return false;
+        }
+        const int x = layout.graphCanvas.left + canvasWidth / 2;
+        const int y = layout.graphCanvas.top + canvasHeight / 2;
+        const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
+        const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom);
+        const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext.MaterialGraphPanY()) / zoom);
+        sceneContext.SetMaterialGraphCanvasViewport(layout.graphCanvas.left, layout.graphCanvas.top, canvasWidth, canvasHeight);
+        if (!sceneContext.OpenMaterialGraphContextMenu(sceneContext.MaterialEditor().OpenAssetId(), x, y, graphX, graphY)) {
+            return false;
+        }
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
     }
 
     if (sceneContext.IsMaterialGraphConstantInlineEditing()) {
@@ -255,6 +325,17 @@ namespace {
     if (!sceneContext.IsMaterialGraphFocused()) {
         return false;
     }
+    if (sceneContext.IsMaterialGraphTexturePickerOpen()) {
+        if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
+            return false;
+        }
+        sceneContext.AppendMaterialGraphTexturePickerSearchText(character);
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
     if (sceneContext.IsMaterialGraphContextMenuOpen()) {
         if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
             return false;
@@ -344,6 +425,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
+        static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
         EditorSceneViewportCameraController{
             context_.mainWindow,
             context_.dockModel,
@@ -364,6 +446,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         HWND newCapture = reinterpret_cast<HWND>(lparam);
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
+            static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
             EditorSceneViewportCameraController{
                 context_.mainWindow,
                 context_.dockModel,
@@ -427,7 +510,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             return 0;
         }
-        if (HandleMaterialGraphShortcut(context_.mainWindow, messageWindow, context_.sceneContext, wparam)) {
+        if (HandleMaterialGraphShortcut(messageWindow, context_, wparam)) {
             context_.sceneViewport.RequestPresent();
             return 0;
         }

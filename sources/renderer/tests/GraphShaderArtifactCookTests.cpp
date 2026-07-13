@@ -3,10 +3,12 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -34,8 +36,11 @@ namespace {
     return link;
 }
 
-[[nodiscard]] RenderMaterialGraphShaderSource CompileConstantColorGraph(std::string_view colorHint) {
+[[nodiscard]] RenderMaterialGraphShaderSource CompileConstantColorGraph(
+    std::string_view colorHint,
+    std::string_view shadingModel = "defaultLit") {
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = std::string{ shadingModel };
     graph.nodes.push_back(RenderMaterialGraphNode{
         .id = 2U,
         .kind = RenderMaterialGraphNodeKind::ConstantColor,
@@ -46,6 +51,38 @@ namespace {
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0400U });
     Require(compiled.Succeeded(), "KBMAT-MAT04: Constant color graph must compile before cooking");
+    return compiled.shader;
+}
+
+[[nodiscard]] RenderMaterialGraphShaderSource CompileMaskedWorldPositionOffsetGraph() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.blendMode = "masked";
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = -220,
+        .positionY = 40,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25 0 0" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = -220,
+        .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25" },
+    });
+    graph.links.push_back(MakeGraphLink(
+        RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz",
+        RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+    graph.links.push_back(MakeGraphLink(
+        RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value",
+        RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+        graph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x5005U });
+    Require(compiled.Succeeded() && compiled.shader.reflection.hasWorldPositionOffset &&
+            compiled.shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked,
+        "P0.5: masked WPO graph must compile with both shadow requirements");
     return compiled.shader;
 }
 
@@ -65,10 +102,19 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT08: Forward wrapper must reuse the shared PBR lighting library");
     Require(opaque.find("KbEvaluateForwardLighting(") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must run PBR lighting over the evaluated surface");
+    Require(opaque.find("uniform vec4 u_materialParams;") != std::string::npos &&
+            opaque.find("graphNormal.xy * u_materialParams.z") != std::string::npos &&
+            opaque.find("basisTangent * graphNormal.x") != std::string::npos,
+        "KBMAT-MAT87: Forward graph normal mapping must honor material normalScale before TBN lighting");
     Require(opaque.find("ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;") != std::string::npos,
         "KBMAT-MAT46: Forward wrapper must expose a real front/back-face sign to graph nodes");
     Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must combine lit color, emissive and surface alpha");
+    Require(opaque.find("basisTangent = vertexTangent;") != std::string::npos &&
+            opaque.find("basisBitangent = vertexBitangent;") != std::string::npos &&
+            opaque.find("basisTangent = derivativeTangent") == std::string::npos &&
+            opaque.find("dFdx(v_texcoord0)") == std::string::npos,
+        "KBMAT-MAT87: Forward graph normal mapping must use the mesh vertex TBN, not a screen-derivative UV basis");
 
     const std::string shadow = BuildGraphFragmentWrapperSource(shader, "ShadowDepth");
     Require(shadow.find("gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);") != std::string::npos,
@@ -78,13 +124,32 @@ void RunGraphShaderWrapperSourceTest() {
     const std::string gbuffer = BuildGraphFragmentWrapperSource(shader, "GBuffer");
     Require(gbuffer.find("// pass:GBuffer") != std::string::npos,
         "KBMAT-MAT04: GBuffer wrapper must carry its own pass identity");
-    Require(gbuffer.find("gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);") != std::string::npos &&
+    Require(gbuffer.find("#include \"gbuffer_contract.sh\"") != std::string::npos &&
+            gbuffer.find("gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);") != std::string::npos &&
             gbuffer.find("gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);") != std::string::npos &&
-            gbuffer.find("gl_FragData[2] = vec4(clamp(surface.metallic") != std::string::npos,
-        "Deferred graph wrapper must write albedo, normal and material MRT outputs");
+            gbuffer.find("gl_FragData[2] = vec4(clamp(surface.metallic") != std::string::npos &&
+            gbuffer.find("KbEncodeGBufferShadingModel(1.0)") != std::string::npos &&
+            gbuffer.find("gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));") != std::string::npos,
+        "Deferred graph wrapper must write albedo, normal, material/shading-model and emissive/specular MRT outputs");
+    Require(gbuffer.find("graphNormal.xy * u_materialParams.z") != std::string::npos &&
+            gbuffer.find("basisTangent * graphNormal.x") != std::string::npos,
+        "KBMAT-MAT87: GBuffer graph normal mapping must honor material normalScale before writing the normal MRT");
     Require(gbuffer.find("KbEvaluateForwardLighting(") == std::string::npos,
         "Deferred graph GBuffer wrapper must not light through the forward shader");
+    Require(gbuffer.find("basisTangent = vertexTangent;") != std::string::npos &&
+            gbuffer.find("basisBitangent = vertexBitangent;") != std::string::npos &&
+            gbuffer.find("basisTangent = derivativeTangent") == std::string::npos &&
+            gbuffer.find("dFdx(v_texcoord0)") == std::string::npos,
+        "KBMAT-MAT87: GBuffer graph normal mapping must use the mesh vertex TBN, not a screen-derivative UV basis");
     Require(opaque != shadow && opaque != gbuffer && shadow != gbuffer, "KBMAT-MAT04: Different passes must produce different wrapper sources");
+
+    const RenderMaterialGraphShaderSource unlitShader = CompileConstantColorGraph("0.25 0.5 0.75 1", "unlit");
+    const std::string unlitGBuffer = BuildGraphFragmentWrapperSource(unlitShader, "GBuffer");
+    Require(unlitGBuffer.find("KbEncodeGBufferShadingModel(0.0)") != std::string::npos &&
+            unlitGBuffer.find("gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));") != std::string::npos,
+        "P0.6: Unlit GBuffer writer must preserve the stable shading-model id, emissive and explicit specular");
+    Require(unlitGBuffer.find("KbEvaluateForwardLighting(") == std::string::npos,
+        "P0.6: Unlit GBuffer geometry pass must defer shading without running forward PBR");
 }
 
 void RunGraphShaderBackendMetadataTest() {
@@ -110,6 +175,22 @@ void RunGraphShaderReflectionHashTest() {
     extended.textures.push_back(RenderMaterialGraphReflectionTexture{ .samplerName = "u_extra_texture", .stableId = "extra", .slot = 0U });
     Require(ComputeRenderMaterialGraphReflectionHash(extended) != hashA,
         "KBMAT-MAT04: Reflection hash must change when bindings change");
+
+    RenderMaterialGraphReflection boundaryA{};
+    boundaryA.uniforms.push_back(RenderMaterialGraphReflectionUniform{ .name = "ab", .stableId = "c" });
+    RenderMaterialGraphReflection boundaryB{};
+    boundaryB.uniforms.push_back(RenderMaterialGraphReflectionUniform{ .name = "a", .stableId = "bc" });
+    Require(ComputeRenderMaterialGraphReflectionHash(boundaryA) != ComputeRenderMaterialGraphReflectionHash(boundaryB),
+        "P0.7: reflection identity must preserve field boundaries instead of hashing ambiguous string concatenation");
+
+    RenderMaterialGraphShaderSource unlit = shaderA;
+    unlit.reflection.shadingModel = RenderMaterialShadingModel::Unlit;
+    Require(ComputeRenderMaterialGraphVariantKey(unlit) != ComputeRenderMaterialGraphVariantKey(shaderA),
+        "P0.7: canonical variant identity must include wrapper-affecting shading model reflection");
+    RenderMaterialGraphShaderSource masked = shaderA;
+    masked.reflection.blendMode = RenderMaterialGraphBlendMode::Masked;
+    Require(ComputeRenderMaterialGraphVariantKey(masked) != ComputeRenderMaterialGraphVariantKey(shaderA),
+        "P0.7: canonical variant identity must include wrapper-affecting blend mode reflection");
 }
 
 void RunGraphShaderManifestValidationTest() {
@@ -182,6 +263,17 @@ void RunGraphShaderCookProducesBinaryTest() {
     Require(!spirv->cacheHit, "KBMAT-MAT04: First cook of a fresh graph must be a real shaderc compile, not a cache hit");
     Require(std::filesystem::exists(spirv->binaryPath, error) && std::filesystem::file_size(spirv->binaryPath, error) > 0U,
         "KBMAT-MAT04: Cooked graph fragment binary must exist on disk in the staging cache");
+    const std::filesystem::path graphCacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(shader.sourceHash));
+    const bool leftCompilerLog = std::ranges::any_of(
+        std::filesystem::recursive_directory_iterator(graphCacheRoot),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return entry.is_regular_file() &&
+                (name.ends_with(".shaderc.log") || name.ends_with(".shaderc.tmp"));
+        });
+    Require(!leftCompilerLog,
+        "Material graph cook must not leave shaderc debug or temporary logs in the artifact cache");
 
     const std::array<RenderMaterialGraphShaderArtifact, 1U> manifestArtifacts{ *first.artifact };
     const RenderMaterialGraphShaderManifest manifest = BuildRenderMaterialGraphShaderManifest(manifestArtifacts);
@@ -207,6 +299,82 @@ void RunGraphShaderCookProducesBinaryTest() {
         "Deferred graph GBuffer artifact must be discoverable in the shader manifest");
 }
 
+void RunGraphShaderVariantArtifactCoexistenceTest() {
+    const RenderMaterialGraphShaderSource defaultOpaque = CompileConstantColorGraph("0.35 0.45 0.55 1");
+    RenderMaterialGraphShaderSource masked = defaultOpaque;
+    masked.reflection.blendMode = RenderMaterialGraphBlendMode::Masked;
+    RenderMaterialGraphShaderSource unlit = defaultOpaque;
+    unlit.reflection.shadingModel = RenderMaterialShadingModel::Unlit;
+
+    Require(defaultOpaque.sourceHash == masked.sourceHash && defaultOpaque.sourceHash == unlit.sourceHash,
+        "P0.7: variant regression requires identical graph source hashes");
+    const std::array<std::uint64_t, 3U> identities{
+        ComputeRenderMaterialGraphVariantKey(defaultOpaque),
+        ComputeRenderMaterialGraphVariantKey(masked),
+        ComputeRenderMaterialGraphVariantKey(unlit),
+    };
+    Require(identities[0] != identities[1] && identities[0] != identities[2] && identities[1] != identities[2],
+        "P0.7: opaque/masked and DefaultLit/Unlit variants must have distinct canonical identities");
+
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    const std::array<const RenderMaterialGraphShaderSource*, 3U> forwardOrder{ &defaultOpaque, &masked, &unlit };
+    const std::array<const RenderMaterialGraphShaderSource*, 3U> reverseOrder{ &unlit, &masked, &defaultOpaque };
+    const auto cookOrder = [&](std::string_view suffix, const auto& order) {
+        const std::filesystem::path root = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } /
+            ("p07_variants_" + std::string{ suffix });
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+        std::array<std::filesystem::path, 3U> paths;
+        for (const RenderMaterialGraphShaderSource* shader : order) {
+            RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+            request.cacheRoot = root.generic_string();
+            const RenderMaterialGraphShaderArtifactResult cooked =
+                CookRenderMaterialGraphShaderArtifact(*shader, backends, request);
+            Require(cooked.Succeeded() && cooked.artifact.has_value(),
+                "P0.7: variant cook failed");
+            const RenderMaterialGraphShaderBinary* binary =
+                cooked.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv);
+            Require(binary != nullptr && cooked.artifact->variantKey == ComputeRenderMaterialGraphVariantKey(*shader),
+                "P0.7: cooked artifact lost canonical variant identity");
+            const auto identity = std::ranges::find(identities, cooked.artifact->variantKey);
+            Require(identity != identities.end(), "P0.7: cooked unexpected variant identity");
+            const std::size_t index = static_cast<std::size_t>(std::distance(identities.begin(), identity));
+            paths[index] = binary->binaryPath;
+        }
+        Require(paths[0] != paths[1] && paths[0] != paths[2] && paths[1] != paths[2],
+            "P0.7: variants must never share a physical binary path");
+        for (std::size_t index = 0U; index < paths.size(); ++index) {
+            Require(std::filesystem::exists(paths[index], error) && std::filesystem::file_size(paths[index], error) > 0U &&
+                    paths[index].generic_string().find("variant_" + std::to_string(identities[index])) != std::string::npos,
+                "P0.7: cooking another variant overwrote or hid an existing binary");
+        }
+    };
+
+    cookOrder("forward", forwardOrder);
+    cookOrder("reverse", reverseOrder);
+}
+
+void RunGraphShadowDepthVertexAndAlphaCookTest() {
+    const RenderMaterialGraphShaderSource shader = CompileMaskedWorldPositionOffsetGraph();
+    const std::filesystem::path root = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "p05_shadow_depth";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("ShadowDepth");
+    request.cacheRoot = root.generic_string();
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    Require(cooked.Succeeded() && cooked.artifact.has_value() && cooked.artifact->hasVertexShader,
+        "P0.5: ShadowDepth cook must produce a generated vertex shader for WPO/displacement");
+    const RenderMaterialGraphShaderBinary* fragment = cooked.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv);
+    const RenderMaterialGraphShaderBinary* vertex = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Spirv);
+    Require(fragment != nullptr && vertex != nullptr &&
+            std::filesystem::exists(fragment->binaryPath, error) && std::filesystem::exists(vertex->binaryPath, error),
+        "P0.5: ShadowDepth artifact must contain loadable fragment and generated vertex binaries");
+    Require(cooked.artifact->wrapperSource.find("surface.alpha < surface.alphaClipThreshold") != std::string::npos &&
+            cooked.artifact->vertexWrapperSource.find("EvaluateWorldPositionOffset(ctx)") != std::string::npos,
+        "P0.5: ShadowDepth artifact must preserve masked graph alpha clip and WPO evaluation");
+}
+
 void RunGraphShaderCookShadercFailureTest() {
     RenderMaterialGraphShaderSource broken{};
     broken.entryPoint = "EvaluateMaterialGraph";
@@ -226,6 +394,17 @@ void RunGraphShaderCookShadercFailureTest() {
         }
     }
     Require(hasError, "KBMAT-MAT04: shaderc compilation failure must produce an error diagnostic");
+    const std::filesystem::path brokenCacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / ("graph_" + std::to_string(broken.sourceHash));
+    const bool leftFailureLog = std::filesystem::exists(brokenCacheRoot, error) && std::ranges::any_of(
+        std::filesystem::recursive_directory_iterator(brokenCacheRoot),
+        [](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return entry.is_regular_file() &&
+                (name.ends_with(".shaderc.log") || name.ends_with(".shaderc.tmp"));
+        });
+    Require(!leftFailureLog,
+        "Failed material graph cook must return diagnostics without leaving shaderc log files");
 }
 
 void RunGraphShaderArtifactDependencyInvalidationTest() {
@@ -277,11 +456,123 @@ void RunGraphShaderArtifactDependencyInvalidationTest() {
     Require(changedBinary != nullptr && !changedBinary->cacheHit,
         "KBMAT-MAT13: Changing a wrapper dependency must invalidate the cooked binary and force a recompile");
 }
+
+void RunGraphShaderAutomaticIncludeInvalidationTest() {
+    const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.7 0.2 0.4 1");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    const std::filesystem::path cacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "p07_automatic_include_dependency";
+    const std::filesystem::path includeRoot = cacheRoot / "includes";
+    const std::filesystem::path sourceInclude =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_INCLUDE_DIR } / "pbr_graph_forward.sh";
+    const std::filesystem::path copiedInclude = includeRoot / "pbr_graph_forward.sh";
+    std::error_code error;
+    std::filesystem::remove_all(cacheRoot, error);
+    error.clear();
+    std::filesystem::create_directories(includeRoot, error);
+    Require(!error, "P0.7: automatic include dependency test could not create its cache root");
+    Require(std::filesystem::copy_file(sourceInclude, copiedInclude, std::filesystem::copy_options::overwrite_existing, error) && !error,
+        "P0.7: automatic include dependency test could not copy the shared PBR include");
+
+    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+    request.cacheRoot = cacheRoot.generic_string();
+    request.includeDirs.insert(request.includeDirs.begin(), includeRoot.generic_string());
+
+    const RenderMaterialGraphShaderArtifactResult first = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    Require(first.Succeeded() && first.artifact.has_value(),
+        "P0.7: graph cook with an automatically discovered shared include must succeed");
+    const auto hasDependency = [&](std::string_view name) {
+        return std::ranges::any_of(first.artifact->dependencies, [name](const RenderMaterialGraphArtifactDependency& dependency) {
+            return dependency.name == name;
+        });
+    };
+    Require(hasDependency("pbr_graph_forward.sh") && hasDependency("bgfx_shader.sh"),
+        "P0.7: artifact identity must automatically include direct and transitive shader includes");
+
+    const RenderMaterialGraphShaderArtifactResult unchanged = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* unchangedBinary = unchanged.artifact.has_value()
+        ? unchanged.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(unchanged.Succeeded() && unchangedBinary != nullptr && unchangedBinary->cacheHit,
+        "P0.7: unchanged automatic include dependencies must preserve a cache hit");
+
+    {
+        std::ofstream output{ copiedInclude, std::ios::binary | std::ios::app };
+        output << "\n// P0.7 dependency invalidation regression\n";
+    }
+    const RenderMaterialGraphShaderArtifactResult changed = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* changedBinary = changed.artifact.has_value()
+        ? changed.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(changed.Succeeded() && changed.artifact.has_value() && changedBinary != nullptr && !changedBinary->cacheHit &&
+            changed.artifact->dependencyHash != first.artifact->dependencyHash &&
+            changed.artifact->artifactHash != first.artifact->artifactHash,
+        "P0.7: editing a shared include must invalidate the binary and complete artifact identity without manual dependency registration");
+}
+
+void RunGraphShaderToolchainIdentityInvalidationTest() {
+    const RenderMaterialGraphShaderSource shader = CompileConstantColorGraph("0.15 0.35 0.75 1");
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    const std::filesystem::path cacheRoot =
+        std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "p13_toolchain_identity";
+    std::error_code error;
+    std::filesystem::remove_all(cacheRoot, error);
+    std::filesystem::create_directories(cacheRoot, error);
+
+    const std::filesystem::path shadercCopy = cacheRoot /
+        (std::filesystem::path{ KB_TEST_GRAPH_SHADERC_PATH }.extension().empty() ? "shaderc-copy" : "shaderc-copy.exe");
+    Require(std::filesystem::copy_file(
+                KB_TEST_GRAPH_SHADERC_PATH,
+                shadercCopy,
+                std::filesystem::copy_options::overwrite_existing,
+                error) && !error,
+        "P1.3: toolchain identity test could not copy shaderc");
+
+    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+    request.cacheRoot = cacheRoot.generic_string();
+    request.shadercPath = shadercCopy.generic_string();
+    const RenderMaterialGraphShaderArtifactResult first =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    Require(first.Succeeded() && first.artifact.has_value(),
+        "P1.3: initial cook with an explicit shaderc identity must succeed");
+
+    const RenderMaterialGraphShaderArtifactResult unchanged =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* unchangedBinary = unchanged.artifact.has_value()
+        ? unchanged.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(unchangedBinary != nullptr && unchangedBinary->cacheHit,
+        "P1.3: an unchanged shaderc and include search path must preserve the cache hit");
+
+    std::ranges::reverse(request.includeDirs);
+    const RenderMaterialGraphShaderArtifactResult reordered =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* reorderedBinary = reordered.artifact.has_value()
+        ? reordered.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(reordered.Succeeded() && reorderedBinary != nullptr && !reorderedBinary->cacheHit &&
+            reordered.artifact->dependencyHash != first.artifact->dependencyHash,
+        "P1.3: changing ordered include-directory resolution must force a recompile");
+
+    {
+        std::ofstream mutateTool{ shadercCopy, std::ios::binary | std::ios::app };
+        mutateTool.put('\0');
+    }
+    const RenderMaterialGraphShaderArtifactResult changedTool =
+        CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    const RenderMaterialGraphShaderBinary* changedToolBinary = changedTool.artifact.has_value()
+        ? changedTool.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv)
+        : nullptr;
+    Require(changedTool.Succeeded() && changedToolBinary != nullptr && !changedToolBinary->cacheHit &&
+            changedTool.artifact->dependencyHash != reordered.artifact->dependencyHash,
+        "P1.3: changing the shaderc binary identity must force a recompile");
+}
 #endif
 
 void RunGraphShaderManifestRoundTripTest() {
     RenderMaterialGraphShaderArtifact artifactA{};
     artifactA.graphSourceHash = 0x1111U;
+    artifactA.variantKey = 0x1212U;
     artifactA.wrapperHash = 0x2222U;
     artifactA.reflectionHash = 0x3333U;
     artifactA.dependencyHash = 0x4444U;
@@ -304,9 +595,9 @@ void RunGraphShaderManifestRoundTripTest() {
     Require(parsed.manifestHash == manifest.manifestHash, "KBMAT-MAT13: Manifest round-trip must preserve the manifest hash");
     Require(parsed.entries.size() == manifest.entries.size(), "KBMAT-MAT13: Manifest round-trip must preserve every entry");
 
-    const RenderMaterialGraphShaderManifestEntry* dxbc = parsed.Find(0x1111U, "BaseOpaque", RenderMaterialGraphShaderBackend::Dxbc);
+    const RenderMaterialGraphShaderManifestEntry* dxbc = parsed.Find(0x1111U, 0x1212U, "BaseOpaque", RenderMaterialGraphShaderBackend::Dxbc);
     Require(dxbc != nullptr, "KBMAT-MAT13: Round-tripped manifest must remain queryable by graph hash/pass/backend");
-    Require(dxbc->wrapperHash == 0x2222U && dxbc->reflectionHash == 0x3333U && dxbc->dependencyHash == 0x4444U &&
+    Require(dxbc->variantKey == 0x1212U && dxbc->wrapperHash == 0x2222U && dxbc->reflectionHash == 0x3333U && dxbc->dependencyHash == 0x4444U &&
             dxbc->artifactHash == 0x5555U && dxbc->materialTypeVersion == 2U,
         "KBMAT-MAT13: Manifest round-trip must preserve the artifact identity hashes");
     Require(dxbc->binaryPath == "cache/graph_1/BaseOpaque/dxbc/fs.bin",
@@ -323,8 +614,12 @@ void RunGraphShaderArtifactCookTests() {
     RunGraphShaderManifestRoundTripTest();
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
     RunGraphShaderCookProducesBinaryTest();
+    RunGraphShaderVariantArtifactCoexistenceTest();
+    RunGraphShadowDepthVertexAndAlphaCookTest();
     RunGraphShaderCookShadercFailureTest();
     RunGraphShaderArtifactDependencyInvalidationTest();
+    RunGraphShaderAutomaticIncludeInvalidationTest();
+    RunGraphShaderToolchainIdentityInvalidationTest();
 #endif
 }
 

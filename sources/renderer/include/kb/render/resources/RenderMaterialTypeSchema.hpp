@@ -145,6 +145,7 @@ struct RenderMaterialParameterSchema {
 
 struct RenderMaterialTextureSlotSchema {
     std::string name;
+    std::string stableId;
     std::string role;
     std::string assetIdFieldName;
     std::string pathFieldName;

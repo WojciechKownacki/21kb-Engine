@@ -168,7 +168,10 @@ struct RenderMaterialAssetParseResult {
     std::optional<RenderMaterialAssetData> asset;
     std::vector<RenderMaterialAssetParseDiagnostic> diagnostics;
 
+    [[nodiscard]] bool HasErrors() const noexcept;
+    [[nodiscard]] bool HasWarnings() const noexcept;
     [[nodiscard]] bool Succeeded() const noexcept;
+    [[nodiscard]] std::string DiagnosticMessage() const;
     [[nodiscard]] std::string ErrorMessage() const;
 };
 

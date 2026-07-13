@@ -242,9 +242,9 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
         model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
-    // The default center leaf carries Scene (2) + Script Editor (8), so the
-    // docked Inspector (4) lands at tab index 2.
-    kb::editor::tests::Require(preview->tabInsertionIndex == 2U, "Tab strip insertion index did not match the cursor position");
+    // The default center leaf carries Scene (2), Script Editor (8), and
+    // Material Editor (10), so the docked Inspector (4) lands at tab index 3.
+    kb::editor::tests::Require(preview->tabInsertionIndex == 3U, "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
         preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
@@ -253,8 +253,8 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
-    kb::editor::tests::Require(order.size() >= 4U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 5U && order[3] == 4U, "Docked tab was not inserted at the resolved tab strip index");
+    kb::editor::tests::Require(order.size() >= 5U, "Docked tab was not inserted into the target leaf");
+    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 10U && order[3] == 5U && order[4] == 4U, "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {
@@ -330,8 +330,10 @@ void RunDefaultWorkspaceRegistersMaterialEditorPanelTest() {
     const kb::editor::DockLayout layout = BuildDefaultLayout(model);
     const kb::editor::DockLeafLayout* materialLeaf = FindLeafForPanel(layout, 10U);
     kb::editor::tests::Require(materialLeaf != nullptr, "Material Editor panel should be placed in a dock leaf");
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(layout, 2U);
     const kb::editor::DockLeafLayout* inspectorLeaf = FindLeafForPanel(layout, 4U);
-    kb::editor::tests::Require(materialLeaf != nullptr && inspectorLeaf != nullptr && materialLeaf->leafId == inspectorLeaf->leafId, "Material Editor panel should share the right dock leaf with the Inspector");
+    kb::editor::tests::Require(materialLeaf != nullptr && sceneLeaf != nullptr && materialLeaf->leafId == sceneLeaf->leafId, "Material Editor panel should share the center dock leaf with Scene View");
+    kb::editor::tests::Require(inspectorLeaf != nullptr && materialLeaf->leafId != inspectorLeaf->leafId, "Material Editor panel should not be constrained to the narrow right Inspector dock");
 }
 
 void RunMaterialEditorPanelActivationTest() {
@@ -348,24 +350,24 @@ void RunMaterialEditorPanelActivationTest() {
     kb::editor::tests::Require(active != nullptr && active->active, "Material Editor panel did not become active after activation");
 }
 
-void RunClosedMaterialEditorReopensInRightDockTest() {
+void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
-    const kb::editor::DockLeafLayout* inspectorLeaf = FindLeafForPanel(initialLayout, 4U);
-    kb::editor::tests::Require(inspectorLeaf != nullptr, "Inspector leaf should exist before reopening Material Editor");
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    kb::editor::tests::Require(sceneLeaf != nullptr, "Scene View leaf should exist before reopening Material Editor");
 
     kb::editor::tests::Require(model.Commands().ClosePanel(10U), "Closing Material Editor tab should succeed");
     const kb::editor::DockLayout closedLayout = BuildDefaultLayout(model);
     kb::editor::tests::Require(FindPanelLayout(closedLayout, 10U) == nullptr, "Closed Material Editor tab should leave the layout");
 
     kb::editor::tests::Require(
-        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::MaterialEditor, kb::editor::DockArea::Right),
+        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::MaterialEditor, kb::editor::DockArea::Center),
         "Double-click activation should reopen a closed Material Editor panel");
     const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
     const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 10U);
-    const kb::editor::DockPanelLayout* inspector = FindPanelLayout(reopenedLayout, 4U);
+    const kb::editor::DockPanelLayout* scene = FindPanelLayout(reopenedLayout, 2U);
     kb::editor::tests::Require(reopened != nullptr && reopened->active, "Reopened Material Editor should be active");
-    kb::editor::tests::Require(inspector != nullptr && reopened->leafId == inspector->leafId, "Reopened Material Editor should return to the right dock group");
+    kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
 void RunEditorDockingTests() {
@@ -382,7 +384,7 @@ void RunEditorDockingTests() {
     RunMainToolbarTransportButtonsAreVerticallyCenteredTest();
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
-    RunClosedMaterialEditorReopensInRightDockTest();
+    RunClosedMaterialEditorReopensInCenterDockTest();
 }
 
 } // namespace kb::editor::tests

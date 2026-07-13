@@ -141,6 +141,10 @@ private:
     kb::assets::AssetId textureId_{};
 };
 
+[[nodiscard]] bool ApplyEditorMaterialOutputNormalTextureGraph(
+    kb::render::RenderMaterialAssetData& material,
+    kb::assets::AssetId textureId);
+
 class EditorMaterialAssetEditCommand final : public IEditorCommand {
 public:
     [[nodiscard]] static std::unique_ptr<EditorMaterialAssetEditCommand> Create(
@@ -158,6 +162,7 @@ public:
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
     [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -192,6 +197,7 @@ public:
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
     [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -231,12 +237,15 @@ public:
         kb::render::RenderMaterialAssetData after,
         std::vector<std::uint32_t> beforeSelectedNodeIds,
         std::vector<std::uint32_t> afterSelectedNodeIds,
+        std::uint32_t beforePrimaryNodeId,
+        std::uint32_t afterPrimaryNodeId,
         std::uint32_t beforeSelectedCommentId = 0U,
         std::uint32_t afterSelectedCommentId = 0U);
 
     [[nodiscard]] std::string_view Label() const noexcept override;
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
+    [[nodiscard]] EditorCommandHistoryKey HistoryKey() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -250,12 +259,15 @@ private:
         kb::render::RenderMaterialAssetData after,
         std::vector<std::uint32_t> beforeSelectedNodeIds,
         std::vector<std::uint32_t> afterSelectedNodeIds,
+        std::uint32_t beforePrimaryNodeId,
+        std::uint32_t afterPrimaryNodeId,
         std::uint32_t beforeSelectedCommentId,
         std::uint32_t afterSelectedCommentId);
 
     [[nodiscard]] bool Apply(
         const kb::render::RenderMaterialAssetData& asset,
         const std::vector<std::uint32_t>& selectedNodeIds,
+        std::uint32_t primaryNodeId,
         std::uint32_t selectedCommentId);
 
     MaterialEditorState& editor_;
@@ -265,6 +277,8 @@ private:
     kb::render::RenderMaterialAssetData after_;
     std::vector<std::uint32_t> beforeSelectedNodeIds_;
     std::vector<std::uint32_t> afterSelectedNodeIds_;
+    std::uint32_t beforePrimaryNodeId_ = 0U;
+    std::uint32_t afterPrimaryNodeId_ = 0U;
     std::uint32_t beforeSelectedCommentId_ = 0U;
     std::uint32_t afterSelectedCommentId_ = 0U;
 };

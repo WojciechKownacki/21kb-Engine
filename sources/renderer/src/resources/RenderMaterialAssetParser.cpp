@@ -3,6 +3,7 @@
 #include "resources/RenderMaterialAssetFieldParser.hpp"
 #include "resources/RenderMaterialGraphFieldParser.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 
 #include <cmath>
@@ -53,10 +54,12 @@ namespace {
 
 [[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
     text = Trim(text);
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(begin, end, output);
-    return result.ec == std::errc{} && result.ptr == end;
+    return ParseFiniteMaterialFloatToken(text, output);
+}
+
+[[nodiscard]] bool HasNoTrailingToken(std::istringstream& stream) {
+    std::string trailing;
+    return !(stream >> trailing);
 }
 
 [[nodiscard]] bool ParseBoolToken(std::string_view text, bool& output) noexcept {
@@ -103,14 +106,14 @@ namespace {
     std::string token;
     switch (type) {
     case RenderMaterialParameterType::Scalar:
-        return (stream >> token) && ParseFloat(token, output.numbers[0]);
+        return (stream >> token) && ParseFloat(token, output.numbers[0]) && HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Vec3:
         for (std::size_t index = 0U; index < 3U; ++index) {
             if (!(stream >> token) || !ParseFloat(token, output.numbers[index])) {
                 return false;
             }
         }
-        return true;
+        return HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Vec4:
     case RenderMaterialParameterType::Color:
         for (std::size_t index = 0U; index < 4U; ++index) {
@@ -118,9 +121,9 @@ namespace {
                 return false;
             }
         }
-        return true;
+        return HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Bool:
-        return (stream >> token) && ParseBoolToken(token, output.boolValue);
+        return (stream >> token) && ParseBoolToken(token, output.boolValue) && HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Enum:
         if (!(stream >> output.text)) {
             return false;
@@ -128,9 +131,9 @@ namespace {
         if (output.text == "_") {
             output.text.clear();
         }
-        return true;
+        return HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Texture:
-        return (stream >> token) && ParseUInt64(token, output.assetId);
+        return (stream >> token) && ParseUInt64(token, output.assetId) && HasNoTrailingToken(stream);
     }
     return false;
 }
@@ -161,58 +164,6 @@ void AttachContext(RenderMaterialAssetParseResult& result, const RenderMaterialA
         }
     }
     return false;
-}
-
-[[nodiscard]] bool IsDeprecatedDefaultLitGraphShadingToken(std::string_view text) noexcept {
-    return text == "lit" || text == "default_lit" || text == "defaultlit";
-}
-
-void AddGraphMigrationDiagnostic(
-    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
-    std::size_t line,
-    std::string field,
-    std::string message,
-    std::string text) {
-    diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-        .code = RenderMaterialAssetParseDiagnosticCode::GraphMigration,
-        .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
-        .line = line,
-        .field = std::move(field),
-        .message = std::move(message),
-        .text = std::move(text),
-    });
-}
-
-void MigrateRenderMaterialGraphDocument(
-    RenderMaterialGraphDocument& graph,
-    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
-    std::size_t graphShadingModelLine,
-    const std::string& graphShadingModelSourceText) {
-    const std::uint32_t sourceVersion = graph.documentVersion == 0U ? 1U : graph.documentVersion;
-    if (sourceVersion > kRenderMaterialGraphDocumentVersion) {
-        return;
-    }
-
-    if (sourceVersion < 2U && IsDeprecatedDefaultLitGraphShadingToken(graph.shadingModel)) {
-        const std::string deprecatedToken = graph.shadingModel;
-        graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
-        if (graphShadingModelLine > 0U) {
-            AddGraphMigrationDiagnostic(
-                diagnostics,
-                graphShadingModelLine,
-                "graphShadingModel",
-                "Migrated deprecated material graph shading token '" + deprecatedToken +
-                    "' to canonical 'defaultLit' while upgrading graph schema from version " +
-                    std::to_string(sourceVersion) + " to " + std::to_string(kRenderMaterialGraphDocumentVersion) + ".",
-                graphShadingModelSourceText);
-        }
-    }
-
-    if (graph.shadingModel.empty()) {
-        graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
-    }
-    graph.documentVersion = kRenderMaterialGraphDocumentVersion;
-    graph.hasExplicitDocumentVersion = true;
 }
 
 [[nodiscard]] bool IsEnumMaterialField(std::string_view keyword) noexcept {
@@ -860,16 +811,12 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
         asset.graph.lastGoodArtifact = graphMetadata.lastGoodArtifact;
     }
     if (sawMaterialProperty) {
-        MigrateRenderMaterialGraphDocument(asset.graph, diagnostics, graphShadingModelLine, graphShadingModelSourceText);
-    }
-    if ((asset.graph.lastGoodArtifact.assetId == 0U) != (asset.graph.lastGoodArtifact.contentHash == 0U)) {
-        diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-            .code = RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
-            .line = graphLastGoodArtifactLine,
-            .field = "graphLastGoodArtifact",
-            .message = "Material graph last-good artifact requires both asset id and content hash.",
-            .text = {},
-        });
+        FinalizeRenderMaterialGraphDocument(
+            asset.graph,
+            diagnostics,
+            graphShadingModelLine,
+            graphShadingModelSourceText,
+            graphLastGoodArtifactLine);
     }
 
     return RenderMaterialAssetParseResult{

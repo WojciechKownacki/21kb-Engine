@@ -1,7 +1,6 @@
 #include "app/EditorPaintDispatcher.hpp"
 
 #if defined(_WIN32)
-#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorWindowResizeInteraction.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -90,9 +89,15 @@ namespace {
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
+        .materialGraphContext = kb::render::RenderMaterialGraphBuildContext{
+            .qualityLevel = previewSettings.qualityLevel,
+            .variantUsage = sceneContext.MaterialPreviewNodePreviewEnabled()
+                ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
+                : kb::render::RenderMaterialGraphVariantUsage::Preview,
+        },
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
-        .postProcessEnabled = previewSettings.postProcessEnabled,
+        .postProcessEnabled = previewSettings.postProcessEnabled && !previewSettings.normalDebugView,
         .selectionMaskEnabled = false,
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
@@ -133,30 +138,19 @@ namespace {
     std::uint64_t viewportKey,
     const std::optional<RECT>& preview,
     bool forcePresent) {
-    EditorCrashBreadcrumbs::WriteValue("material_preview_present", "begin viewport", viewportKey);
     if (!preview.has_value() || (!forcePresent && sceneViewport.IsHostSurfaceVisible(host, viewportKey))) {
-        EditorCrashBreadcrumbs::Write("material_preview_present", !preview.has_value() ? "skip no preview rect" : "skip host surface visible");
         return false;
     }
     const kb::assets::AssetMetadata* metadata = MaterialMetadataForAsset(
         sceneContext,
         viewportKey == kMaterialEditorPreviewViewportKey ? sceneContext.MaterialEditor().OpenAssetId() : sceneContext.AssetBrowser().InspectorAsset());
     if (metadata == nullptr) {
-        EditorCrashBreadcrumbs::Write("material_preview_present", "skip no metadata");
         return false;
     }
-    EditorCrashBreadcrumbs::Write("material_preview_present", "metadata type=" + metadata->type + " path=" + metadata->virtualPath.generic_string());
 
-    EditorCrashBreadcrumbs::Write("material_preview_present", "MaterialPreviewScene begin");
     const kb::scene::Scene& previewScene = sceneContext.MaterialPreviewScene(metadata->id);
-    EditorCrashBreadcrumbs::Write("material_preview_present", "BuildMaterialPreviewSettings begin");
     const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(sceneContext, *preview, viewportKey);
-    EditorCrashBreadcrumbs::Write(
-        "material_preview_present",
-        "Present begin render=" + std::to_string(settings.renderWidth) + "x" + std::to_string(settings.renderHeight) +
-            " post=" + (settings.postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     sceneViewport.Present(host, *preview, previewScene, settings);
-    EditorCrashBreadcrumbs::Write("material_preview_present", "Present end");
     return true;
 }
 

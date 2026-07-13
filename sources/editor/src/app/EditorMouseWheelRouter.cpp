@@ -7,6 +7,8 @@
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "assets/EditorAssetBrowserGeometry.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
@@ -82,9 +84,66 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
 
     const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (materialEditorContent.has_value() && Contains(*materialEditorContent, x, y)) {
+        if (sceneContext_.IsMaterialGraphTexturePickerOpen()) {
+            const bool scrolled = sceneContext_.ScrollMaterialGraphTexturePicker(
+                wheelDelta,
+                MaterialEditorPanelRenderer::GraphTexturePickerMaxScroll(*materialEditorContent, sceneContext_));
+            if (scrolled) {
+                InvalidateRect(messageWindow_, nullptr, FALSE);
+                if (messageWindow_ != mainWindow_) {
+                    InvalidateRect(mainWindow_, nullptr, FALSE);
+                }
+            }
+            return true;
+        }
+        if (sceneContext_.IsMaterialGraphContextMenuOpen() &&
+            Contains(MaterialEditorPanelRenderer::GraphContextMenuRect(sceneContext_), x, y)) {
+            const bool scrolled = sceneContext_.ScrollMaterialGraphContextMenu(
+                wheelDelta,
+                MaterialEditorGraphContextMenuMaxScroll(sceneContext_));
+            if (scrolled) {
+                InvalidateRect(messageWindow_, nullptr, FALSE);
+                if (messageWindow_ != mainWindow_) {
+                    InvalidateRect(mainWindow_, nullptr, FALSE);
+                }
+            }
+            return true;
+        }
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (sceneContext_.MaterialEditor().InfoPanelVisible() &&
+            MaterialEditorPanelRectWidth(layout.detailsPanel) >= 220 &&
+            MaterialEditorPanelRectHeight(layout.detailsPanel) >= 140 &&
+            Contains(layout.detailsPanel, x, y)) {
+            const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+                ? sceneContext_.MaterialEditor().WorkingCopy()
+                : sceneContext_.ReadMaterialDocumentAsset(materialId);
+            const kb::assets::AssetMetadata* metadata = materialId.IsValid()
+                ? sceneContext_.Scene().Assets().Manager().Registry().Find(materialId)
+                : nullptr;
+            if (material.has_value() && metadata != nullptr) {
+                const MaterialEditorPanelDetailsRows rows = MaterialEditorPanelRenderer::DetailsRowsForDocument(
+                    sceneContext_,
+                    *material,
+                    metadata->type == "RenderMaterialInstance");
+                const MaterialEditorDetailsLayout details = MaterialEditorPanelRenderer::ResolveDetailsLayout(
+                    *materialEditorContent,
+                    rows,
+                    sceneContext_.MaterialEditorDetailsScrollOffset());
+                const bool scrolled = sceneContext_.ScrollMaterialEditorDetails(wheelDelta, details.maxScroll);
+                if (scrolled) {
+                    InvalidateRect(messageWindow_, nullptr, FALSE);
+                    if (messageWindow_ != mainWindow_) {
+                        InvalidateRect(mainWindow_, nullptr, FALSE);
+                    }
+                }
+            }
+            return true;
+        }
         if (Contains(layout.graphCanvas, x, y)) {
             sceneContext_.SetMaterialGraphCanvasViewport(
+                layout.graphCanvas.left,
+                layout.graphCanvas.top,
                 MaterialEditorPanelRectWidth(layout.graphCanvas),
                 MaterialEditorPanelRectHeight(layout.graphCanvas));
             return sceneContext_.ZoomMaterialGraph(wheelDelta, x - layout.graphCanvas.left, y - layout.graphCanvas.top);

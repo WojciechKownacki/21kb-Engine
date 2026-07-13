@@ -6,6 +6,8 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -14,12 +16,15 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "resources/RenderTextureResourceBuilder.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -53,6 +58,67 @@ void RunRenderTextureColorSpaceDescTest() {
     Require((linear.flags & BGFX_TEXTURE_SRGB) == 0U, "Linear texture desc should not request bgfx sRGB sampling");
     Require(srgb.colorSpace == RenderTextureColorSpace::Srgb, "sRGB texture desc did not preserve color-space metadata");
     Require((srgb.flags & BGFX_TEXTURE_SRGB) != 0U, "Base Color sRGB texture desc should request bgfx sRGB sampling");
+}
+
+void RunRenderTextureTextAssetPreservesDimensionTest() {
+    struct TextureCase {
+        const char* text;
+        RenderTextureDimension dimension;
+        std::uint16_t depth;
+        std::uint16_t layers;
+        std::size_t byteSize;
+    };
+    const std::array cases{
+        TextureCase{ "size 2 2\nrgba8 1 2 3 255\n", RenderTextureDimension::Texture2D, 1U, 1U, 16U },
+        TextureCase{ "dimension cube\nsize 2 2\nrgba8 4 5 6 255\n", RenderTextureDimension::TextureCube, 1U, 1U, 96U },
+        TextureCase{ "dimension 3d\nsize 2 2\ndepth 3\nrgba8 7 8 9 255\n", RenderTextureDimension::Texture3D, 3U, 1U, 48U },
+        TextureCase{ "dimension 2dArray\nsize 2 2\nlayers 3\nrgba8 10 11 12 255\n", RenderTextureDimension::Texture2DArray, 1U, 3U, 48U },
+    };
+
+    for (const TextureCase& textureCase : cases) {
+        std::istringstream input{ textureCase.text };
+        const std::optional<RenderTextureAssetData> loaded = RenderTextureAssetLoader::LoadTexture(input);
+        Require(loaded.has_value(), "Render texture text asset dimension fixture did not load");
+        Require(loaded->dimension == textureCase.dimension &&
+                loaded->depth == textureCase.depth &&
+                loaded->layers == textureCase.layers &&
+                loaded->mipCount == 1U,
+            "Render texture text asset did not preserve dimension metadata");
+        Require(loaded->rgba8.size() == textureCase.byteSize,
+            "Render texture text asset did not allocate every face/slice/layer");
+        const RenderTextureDesc desc = loaded->MakeDesc(nullptr);
+        Require(desc.dimension == textureCase.dimension && desc.depth == textureCase.depth &&
+                desc.layers == textureCase.layers && desc.mipCount == 1U,
+            "Render texture descriptor lost text asset dimension metadata");
+    }
+
+    std::istringstream invalidVolume{ "dimension 3d\nsize 2 2\ndepth 1\nrgba8 1 2 3 255\n" };
+    Require(!RenderTextureAssetLoader::LoadTexture(invalidVolume).has_value(),
+        "A depth-1 texture must not be accepted as Texture3D because bgfx classifies it as Texture2D");
+    RenderTextureDesc invalidVolumeDesc{};
+    invalidVolumeDesc.width = 2U;
+    invalidVolumeDesc.height = 2U;
+    invalidVolumeDesc.depth = 1U;
+    invalidVolumeDesc.dimension = RenderTextureDimension::Texture3D;
+    invalidVolumeDesc.format = bgfx::TextureFormat::RGBA8;
+    Require(!RenderTextureResourceBuilder::IsValidDesc(invalidVolumeDesc),
+        "Texture resource builder must reject a depth-1 Texture3D descriptor");
+
+    std::istringstream declaredMetadata{
+        "dimension 2d\nsize 1 1\nsemantic normal\ncolorSpace linear\nrgba8 128 128 255 255\n"
+    };
+    const std::optional<RenderTextureAssetData> declared = RenderTextureAssetLoader::LoadTexture(declaredMetadata);
+    Require(declared.has_value() &&
+            declared->semantic == RenderTextureAssetSemantic::Normal &&
+            declared->colorSpace == RenderTextureAssetColorSpace::Linear,
+        "P1.35: Texture loader did not preserve authoritative semantic/color-space metadata");
+
+    std::istringstream legacyMetadata{ "size 1 1\nrgba8 255 255 255 255\n" };
+    const std::optional<RenderTextureAssetData> legacy = RenderTextureAssetLoader::LoadTexture(legacyMetadata);
+    Require(legacy.has_value() &&
+            legacy->semantic == RenderTextureAssetSemantic::Unknown &&
+            legacy->colorSpace == RenderTextureAssetColorSpace::Unknown,
+        "P1.35: Legacy texture assets must load compatibly with explicit Unknown authoring metadata");
 }
 
 void RunMaterialHandlesAreGenerationalTest() {
@@ -321,6 +387,10 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset.has_value(), "OBJ importer failed to build a mesh asset");
     Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3T4UV2, "OBJ importer did not synthesize tangent vertex storage for the PBR shader");
     Require(asset->vertices.empty() && asset->tangentVertices.size() == asset->desc.vertexCount, "OBJ importer did not expose tangent vertices through RenderMeshDesc");
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : asset->tangentVertices) {
+        Require(NearlyEqual(vertex.tx, 1.0F) && NearlyEqual(vertex.ty, 0.0F) && NearlyEqual(vertex.tz, 0.0F) && vertex.tw > 0.0F,
+            "OBJ importer tangent fallback must use UV-derived +U tangents for normal maps");
+    }
     Require(asset->desc.indexFormat == RenderIndexFormat::Uint16, "OBJ importer did not compact small OBJ indices to uint16");
     Require(asset->desc.vertexCount == 4U, "OBJ importer did not deduplicate shared vertex tuples");
     Require(asset->desc.indexCount == 9U, "OBJ importer did not triangulate face indices");
@@ -337,6 +407,153 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->desc.gpuDriven.lodCount == asset->lods.size(), "OBJ importer did not expose LODs through RenderMeshDesc");
     Require(asset->materialSlots[asset->sections[0].materialSlot].defaultMaterialAssetId == 101U, "OBJ importer did not bind first material slot");
     Require(asset->materialSlots[asset->sections[1].materialSlot].defaultMaterialAssetId == 102U, "OBJ importer did not bind second material slot");
+}
+
+void AppendFbxU32(std::vector<std::byte>& output, std::uint32_t value) {
+    for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+        output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+    }
+}
+
+void AppendFbxU64(std::vector<std::byte>& output, std::uint64_t value) {
+    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
+        output.push_back(static_cast<std::byte>((value >> shift) & 0xFFU));
+    }
+}
+
+void PatchFbxU32(std::vector<std::byte>& output, std::size_t offset, std::uint32_t value) {
+    for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+        output[offset + (shift / 8U)] = static_cast<std::byte>((value >> shift) & 0xFFU);
+    }
+}
+
+void AppendFbxStringProperty(std::vector<std::byte>& output, std::string_view value) {
+    output.push_back(std::byte{ 'S' });
+    AppendFbxU32(output, static_cast<std::uint32_t>(value.size()));
+    for (const char character : value) {
+        output.push_back(static_cast<std::byte>(character));
+    }
+}
+
+void AppendFbxInt64Property(std::vector<std::byte>& output, std::uint64_t value) {
+    output.push_back(std::byte{ 'L' });
+    AppendFbxU64(output, value);
+}
+
+template <typename T>
+void AppendFbxArrayProperty(std::vector<std::byte>& output, char type, std::span<const T> values) {
+    output.push_back(static_cast<std::byte>(type));
+    AppendFbxU32(output, static_cast<std::uint32_t>(values.size()));
+    AppendFbxU32(output, 0U);
+    AppendFbxU32(output, static_cast<std::uint32_t>(values.size_bytes()));
+    const auto* bytes = reinterpret_cast<const std::byte*>(values.data());
+    output.insert(output.end(), bytes, bytes + static_cast<std::ptrdiff_t>(values.size_bytes()));
+}
+
+struct FbxFixtureNode {
+    std::string name;
+    std::vector<std::byte> properties;
+    std::uint32_t propertyCount = 0U;
+    std::vector<FbxFixtureNode> children;
+};
+
+void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& node) {
+    const std::size_t nodeOffset = output.size();
+    output.resize(output.size() + 13U);
+    output.insert(output.end(), reinterpret_cast<const std::byte*>(node.name.data()), reinterpret_cast<const std::byte*>(node.name.data()) + static_cast<std::ptrdiff_t>(node.name.size()));
+    output.insert(output.end(), node.properties.begin(), node.properties.end());
+    for (const FbxFixtureNode& child : node.children) {
+        AppendFbxFixtureNode(output, child);
+    }
+    output.insert(output.end(), 13U, std::byte{});
+    PatchFbxU32(output, nodeOffset, static_cast<std::uint32_t>(output.size()));
+    PatchFbxU32(output, nodeOffset + 4U, node.propertyCount);
+    PatchFbxU32(output, nodeOffset + 8U, static_cast<std::uint32_t>(node.properties.size()));
+    output[nodeOffset + 12U] = static_cast<std::byte>(node.name.size());
+}
+
+[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture() {
+    std::vector<std::byte> geometryProperties;
+    AppendFbxInt64Property(geometryProperties, 1U);
+    AppendFbxStringProperty(geometryProperties, "Geometry::TwoMaterialQuad");
+    AppendFbxStringProperty(geometryProperties, "Mesh");
+
+    const std::array<double, 12U> vertices{
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 1.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    std::vector<std::byte> verticesProperties;
+    AppendFbxArrayProperty(verticesProperties, 'd', std::span<const double>{ vertices });
+    const std::array<std::int32_t, 6U> polygonIndices{ 0, 1, -3, 0, 2, -4 };
+    std::vector<std::byte> polygonProperties;
+    AppendFbxArrayProperty(polygonProperties, 'i', std::span<const std::int32_t>{ polygonIndices });
+    const std::array<std::int32_t, 2U> materialIndices{ 0, 1 };
+    std::vector<std::byte> materialIndexProperties;
+    AppendFbxArrayProperty(materialIndexProperties, 'i', std::span<const std::int32_t>{ materialIndices });
+    std::vector<std::byte> byPolygonProperties;
+    AppendFbxStringProperty(byPolygonProperties, "ByPolygon");
+
+    std::vector<std::byte> firstMaterialProperties;
+    AppendFbxInt64Property(firstMaterialProperties, 10U);
+    AppendFbxStringProperty(firstMaterialProperties, "Material::Body");
+    AppendFbxStringProperty(firstMaterialProperties, "");
+    std::vector<std::byte> secondMaterialProperties;
+    AppendFbxInt64Property(secondMaterialProperties, 11U);
+    AppendFbxStringProperty(secondMaterialProperties, "Material::Trim");
+    AppendFbxStringProperty(secondMaterialProperties, "");
+
+    FbxFixtureNode objects{
+        .name = "Objects",
+        .children = {
+            FbxFixtureNode{
+                .name = "Geometry",
+                .properties = std::move(geometryProperties),
+                .propertyCount = 3U,
+                .children = {
+                    FbxFixtureNode{ .name = "Vertices", .properties = std::move(verticesProperties), .propertyCount = 1U },
+                    FbxFixtureNode{ .name = "PolygonVertexIndex", .properties = std::move(polygonProperties), .propertyCount = 1U },
+                    FbxFixtureNode{
+                        .name = "LayerElementMaterial",
+                        .children = {
+                            FbxFixtureNode{ .name = "MappingInformationType", .properties = std::move(byPolygonProperties), .propertyCount = 1U },
+                            FbxFixtureNode{ .name = "Materials", .properties = std::move(materialIndexProperties), .propertyCount = 1U },
+                        },
+                    },
+                },
+            },
+            FbxFixtureNode{ .name = "Material", .properties = std::move(firstMaterialProperties), .propertyCount = 3U },
+            FbxFixtureNode{ .name = "Material", .properties = std::move(secondMaterialProperties), .propertyCount = 3U },
+        },
+    };
+
+    std::vector<std::byte> output;
+    constexpr std::array<std::byte, 23U> magic{
+        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
+        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
+        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
+    };
+    output.insert(output.end(), magic.begin(), magic.end());
+    AppendFbxU32(output, 7400U);
+    AppendFbxFixtureNode(output, objects);
+    output.insert(output.end(), 13U, std::byte{});
+    return output;
+}
+
+void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
+    const std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ fixture });
+
+    Require(asset.has_value(), "FBX importer failed to load the multi-material fixture");
+    Require(asset->materialSlots.size() == 2U, "FBX importer did not preserve both material slots");
+    Require(asset->materialNames.size() == 2U && asset->materialNames[0] == "Body" && asset->materialNames[1] == "Trim",
+        "FBX importer did not preserve material object names");
+    Require(asset->sections.size() == 2U, "FBX importer did not create one section per used material slot");
+    Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U,
+        "FBX importer lost polygon-to-material-slot assignments");
+    Require(asset->sections[0].indexCount == 3U && asset->sections[1].indexCount == 3U,
+        "FBX importer created incorrect material section index ranges");
 }
 
 void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
@@ -1248,14 +1465,67 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root / "MaterialTypes", error);
     std::filesystem::create_directories(root / "Graphs", error);
+    std::filesystem::create_directories(root / "Functions", error);
+    std::filesystem::create_directories(root / "Collections", error);
     Require(!error, "KBMAT-GRAPH-0005: Material graph/type asset test could not create temp root");
+
+    const kb::assets::AssetId functionId = kb::assets::MakeAssetId(
+        "/Game/Functions/Tint.kbmatfn:" + std::string{ kRenderMaterialFunctionAssetType });
+    const kb::assets::AssetId collectionId = kb::assets::MakeAssetId(
+        "/Game/Collections/Globals.kbmpc:" + std::string{ kRenderMaterialParameterCollectionAssetType });
 
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.storageModel = "material-graph-asset";
     graph.lastGoodArtifact.assetId = 0xA771U;
     graph.lastGoodArtifact.contentHash = 0xBEEFU;
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = std::to_string(functionId.value) },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
     Require(RenderMaterialGraphAssetLoader::SaveGraph(root / "Graphs" / "Surface.kbmaterialgraph", graph),
         "KBMAT-GRAPH-0005: Material Graph asset writer failed");
+
+    RenderMaterialGraphDocument functionGraph{};
+    functionGraph.storageModel = "material-function-asset";
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 1U,
+        .kind = RenderMaterialGraphNodeKind::FunctionOutput,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "Output",
+            .defaultValueHint = "float4",
+        },
+    });
+    functionGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::CollectionParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "GlobalTint",
+            .defaultValueHint = std::to_string(collectionId.value),
+        },
+    });
+    Require(RenderMaterialFunctionAssetLoader::SaveFunction(
+            root / "Functions" / "Tint.kbmatfn",
+            RenderMaterialFunctionAssetData{ .graph = functionGraph }),
+        "P1.15: Material Function dependency fixture failed to save");
+    RenderMaterialParameterCollectionData collection{};
+    collection.displayName = "Globals";
+    collection.parameters.push_back(RenderMaterialParameterCollectionParameter{
+        .stableId = "GlobalTint",
+        .displayName = "Global Tint",
+        .type = RenderMaterialParameterCollectionValueType::Vector,
+        .defaultValue = { 1.0F, 1.0F, 1.0F, 1.0F },
+    });
+    Require(RenderMaterialParameterCollectionWriter::Save(root / "Collections" / "Globals.kbmpc", collection),
+        "P1.15: Material Parameter Collection dependency fixture failed to save");
 
     RenderMaterialTypeDocument type = GetBuiltInPbrMaterialTypeDocument();
     type.stableTypeId = "graph.surface";
@@ -1277,19 +1547,26 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
     kb::assets::AssetManager manager;
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material loader");
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material graph loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialFunctionAssetLoader>()), "P1.15: Could not register material function loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialParameterCollectionAssetLoader>()), "P1.15: Could not register parameter collection loader");
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialTypeAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material type loader");
     Require(manager.Mounts().Mount("Game", root), "KBMAT-GRAPH-0005: Could not mount graph/type asset root");
-    Require(manager.DiscoverMountedAssets() >= 3U, "KBMAT-GRAPH-0005: Asset discovery missed material graph/type/material files");
+    Require(manager.DiscoverMountedAssets() >= 5U, "KBMAT-GRAPH-0005: Asset discovery missed material graph/type/material dependency files");
 
     const kb::assets::AssetMetadata* graphMetadata = manager.Registry().FindByPath("/Game/Graphs/Surface.kbmaterialgraph");
     const kb::assets::AssetMetadata* typeMetadata = manager.Registry().FindByPath("/Game/MaterialTypes/GraphSurface.kbmaterialtype");
     const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/GraphBacked.kbmat");
+    const kb::assets::AssetMetadata* functionMetadata = manager.Registry().FindByPath("/Game/Functions/Tint.kbmatfn");
+    const kb::assets::AssetMetadata* collectionMetadata = manager.Registry().FindByPath("/Game/Collections/Globals.kbmpc");
     Require(graphMetadata != nullptr && graphMetadata->type == kRenderMaterialGraphAssetType,
         "KBMAT-GRAPH-0005: Material Graph metadata was not discovered");
     Require(typeMetadata != nullptr && typeMetadata->type == kRenderMaterialTypeAssetType,
         "KBMAT-GRAPH-0005: Material Type metadata was not discovered");
     Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
         "KBMAT-GRAPH-0005: Graph-backed material metadata was not discovered");
+    Require(functionMetadata != nullptr && functionMetadata->id == functionId &&
+            collectionMetadata != nullptr && collectionMetadata->id == collectionId,
+        "P1.15: Function/MPC dependency metadata was not discovered with stable identities");
 
     const kb::assets::AssetHandle<RenderMaterialGraphDocument> graphHandle =
         manager.Load<RenderMaterialGraphDocument>(graphMetadata->id);
@@ -1301,11 +1578,103 @@ void RunMaterialGraphAndTypeAssetDiscoveryTest() {
         "KBMAT-GRAPH-0005: Material Type asset should be runtime loadable with schema");
     Require(ContainsDependency(graphMetadata->dependencies, kb::assets::AssetId{ 0xA771U }),
         "KBMAT-GRAPH-0005: Material Graph dependency discovery should include last-good artifact asset id");
+    Require(ContainsDependency(graphMetadata->dependencies, functionId) &&
+            ContainsDependency(graphMetadata->dependencies, collectionId),
+        "P1.15: standalone Material Graph dependency discovery must include Function and MPC assets");
+    Require(ContainsDependency(functionMetadata->dependencies, collectionId),
+        "P1.15: Material Function dependency discovery must include nested MPC assets");
     Require(ContainsDependency(materialMetadata->dependencies, typeMetadata->id),
         "KBMAT-GRAPH-0005: .kbmat dependency discovery should link to referenced Material Type asset");
     Require(ContainsDependency(materialMetadata->dependencies, graphMetadata->id),
         "KBMAT-GRAPH-0304: .kbmat dependency discovery should link to source Material Graph asset");
 
+    std::filesystem::remove_all(root, error);
+}
+
+void RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest() {
+    const std::uint32_t fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true);
+    const std::uint32_t toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false);
+    RenderMaterialGraphLink canonicalLink{
+        .fromNodeId = 2U,
+        .fromPinId = fromPinId,
+        .toNodeId = 1U,
+        .toPinId = toPinId,
+    };
+    const std::uint32_t canonicalLinkId = MakeRenderMaterialGraphLinkId(canonicalLink);
+    const std::uint32_t staleLinkId = canonicalLinkId == 123U ? 124U : 123U;
+    std::ostringstream source;
+    source << "graphVersion 1\n"
+           << "graphShadingModel lit\n"
+           << "graphStorageModel material-graph-asset\n"
+           << "graphNode 1 MaterialOutput 640 240\n"
+           << "graphNode 2 TextureSample 240 180\n"
+           << "graphLink " << staleLinkId << " 2 " << fromPinId << " color 1 " << toPinId << " baseColor\n";
+
+    std::istringstream input{ source.str() };
+    const RenderMaterialAssetParseResult migrated = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(input);
+    Require(migrated.Succeeded() && migrated.HasWarnings() && !migrated.HasErrors() && migrated.asset.has_value(),
+        "P2.11: standalone graph migrations must keep a valid graph loadable with visible warnings");
+    Require(migrated.asset->graph.documentVersion == kRenderMaterialGraphDocumentVersion &&
+            migrated.asset->graph.shadingModel == "defaultLit" &&
+            migrated.asset->graph.links.size() == 1U &&
+            migrated.asset->graph.links.front().id == canonicalLinkId,
+        "P2.11: standalone graph codec must apply the same version and stable-link migrations as embedded graphs");
+
+    std::istringstream invalid{ "graphVersion 1\ngraphNode 1 MaterialOutput 640 240\nunknownGraphField value\n" };
+    const RenderMaterialAssetParseResult failed = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(invalid);
+    Require(!failed.Succeeded() && failed.HasErrors() && !failed.asset.has_value(),
+        "P2.11: standalone graph codec must keep error diagnostics fatal");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_standalone_graph_atomic_save";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const std::filesystem::path graphPath = root / "Nested" / "Surface.kbmaterialgraph";
+    Require(RenderMaterialGraphAssetLoader::SaveGraph(graphPath, migrated.asset->graph),
+        "P2.11: atomic standalone graph save must create its parent directory");
+    const RenderMaterialAssetParseResult reloaded = RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(graphPath);
+    Require(reloaded.Succeeded() && reloaded.asset.has_value() &&
+            reloaded.asset->graph.documentVersion == kRenderMaterialGraphDocumentVersion &&
+            reloaded.asset->graph.links.size() == 1U,
+        "P2.11: atomically saved standalone graph must round-trip through the production loader");
+    std::size_t fileCount = 0U;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(graphPath.parent_path())) {
+        if (entry.is_regular_file()) {
+            ++fileCount;
+        }
+    }
+    Require(fileCount == 1U, "P2.11: successful standalone graph save must not leave temporary files behind");
+
+    const std::filesystem::path legacyGraphPath = root / "LegacyRuntime.kbmaterialgraph";
+    {
+        std::ofstream legacyGraph{ legacyGraphPath, std::ios::trunc };
+        legacyGraph << "graphVersion 1\n"
+                    << "graphShadingModel lit\n"
+                    << "graphNode 1 MaterialOutput 640 240\n";
+    }
+    RenderMaterialAssetData graphBackedMaterial{};
+    graphBackedMaterial.graphSourceAssetPath = "/Game/LegacyRuntime.kbmaterialgraph";
+    graphBackedMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    const std::filesystem::path materialPath = root / "LegacyRuntimeMaterial.kbmat";
+    Require(RenderMaterialAssetWriter::Save(materialPath, graphBackedMaterial),
+        "P2.11: runtime warning propagation fixture material must save");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()) &&
+            manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 2U,
+        "P2.11: runtime warning propagation fixtures must be discoverable");
+    const kb::assets::AssetMetadata* materialMetadata =
+        manager.Registry().FindByPath("/Game/LegacyRuntimeMaterial.kbmat");
+    Require(materialMetadata != nullptr,
+        "P2.11: runtime warning propagation material metadata must resolve");
+    const ResolvedRuntimeMaterialAsset runtimeResolved =
+        RuntimeMaterialResolver{}.ResolveAsset(manager, *materialMetadata);
+    Require(runtimeResolved.status == RuntimeMaterialResolveStatus::Resolved &&
+            std::ranges::any_of(runtimeResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.severity == RuntimeMaterialResolveDiagnosticSeverity::Warning &&
+                    diagnostic.message.find("graph_migration") != std::string::npos;
+            }),
+        "P2.11: production runtime must keep migrated source graphs loadable and surface their warning diagnostics");
     std::filesystem::remove_all(root, error);
 }
 
@@ -1948,7 +2317,7 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "layerWeight 1\n"
         "decalBlendMode DISABLED\n"
         "layerBlendMode REPLACE\n"
-        "graphVersion 2\n"
+        "graphVersion 3\n"
         "graphMaterialDomain surface\n"
         "graphShadingModel defaultLit\n"
         "graphBlendMode opaque\n"
@@ -1994,6 +2363,24 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
     }
     {
         std::istringstream input{
+            "metallicFactor nan\n"
+            "tiling inf 1\n"
+            "baseColor 1 1 1 1 trailing\n"
+            "graphParameterValue unsafe Scalar 1 trailing\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.Succeeded() && result.HasErrors() && !result.asset.has_value(),
+            "P2.9: non-finite or non-exact material numeric fields must be fatal");
+        Require(result.diagnostics.size() == 4U,
+            "P2.9: parser must diagnose every non-finite, trailing or excess numeric field");
+        Require(result.diagnostics[0].field == "metallicFactor" &&
+                result.diagnostics[1].field == "tiling" &&
+                result.diagnostics[2].field == "baseColor" &&
+                result.diagnostics[3].field == "graphParameterValue",
+            "P2.9: numeric parser diagnostics must identify the rejected production fields");
+    }
+    {
+        std::istringstream input{
             "baseColor 1.2 0.5 0.5 1\n"
             "roughnessFactor -0.1\n"
             "normalScale 9\n"
@@ -2017,7 +2404,7 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
         };
         const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
         Require(result.asset.has_value(), "Unsupported advanced material field warnings should keep the parsed asset available");
-        Require(!result.Succeeded(), "Unsupported advanced material field warnings should keep diagnostics visible");
+        Require(result.Succeeded() && result.HasWarnings(), "Unsupported advanced material field warnings should keep the asset loadable and diagnostics visible");
         Require(result.diagnostics.size() == 3U, "Unsupported advanced material field diagnostics should report each active advanced field");
         Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost clearcoat code");
         Require(result.diagnostics[0].severity == RenderMaterialAssetParseDiagnosticSeverity::Warning, "Unsupported advanced material diagnostics should be warnings");
@@ -2026,7 +2413,7 @@ void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
         Require(result.diagnostics[1].field == "transmissionTexture", "Unsupported advanced material diagnostics lost transmission texture field");
         Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost decal code");
         Require(result.diagnostics[2].field == "decalBlendMode", "Unsupported advanced material diagnostics lost decal field");
-        Require(result.ErrorMessage().find("code unsupported_advanced_field") != std::string::npos, "Unsupported advanced material diagnostics did not include the warning code");
+        Require(result.DiagnosticMessage().find("code unsupported_advanced_field") != std::string::npos, "Unsupported advanced material diagnostics did not include the warning code");
     }
     {
         std::istringstream input{
@@ -2260,7 +2647,12 @@ void RunRenderTextureAssetLoaderLoadsImageThroughAssetManagerTest(
     const kb::assets::AssetHandle<RenderTextureAssetData> asset = manager.Load<RenderTextureAssetData>(metadata->id);
     Require(asset.IsLoaded(), "AssetManager did not load image through RenderTextureAssetLoader");
     Require(asset->width > 0U && asset->height > 0U, "Loaded image has invalid dimensions");
-    Require(asset->rgba8.size() == static_cast<std::size_t>(asset->width) * static_cast<std::size_t>(asset->height) * 4U, "Loaded image was not converted to RGBA8");
+    Require(asset->dimension == RenderTextureDimension::Texture2D && asset->depth == 1U && asset->layers == 1U,
+        "Legacy image asset must remain a 2D texture");
+    Require(asset->rgba8.size() == static_cast<std::size_t>(asset->width) * static_cast<std::size_t>(asset->height) * 4U,
+        "Loaded image did not preserve exactly the complete RGBA8 LOD0 payload");
+    Require(asset->mipCount == 1U,
+        "Legacy image loading must keep its release-safe LOD0-only runtime contract");
 }
 
 void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
@@ -2276,6 +2668,19 @@ void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
         "third_party/bgfx.cmake/bgfx/examples/runtime/textures/fieldstone-rgba.dds",
         "/Game/fieldstone-rgba.dds",
         "Render texture DDS fixture was not found");
+}
+
+void RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest() {
+    const std::filesystem::path cubePath = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/textures/uffizi.ktx");
+    Require(!cubePath.empty(), "Render texture cube KTX fixture was not found");
+    const std::optional<RenderTextureAssetData> cube = RenderTextureAssetLoader::LoadTexture(cubePath);
+    Require(cube.has_value(), "Render texture loader did not decode the cube KTX fixture");
+    Require(cube->dimension == RenderTextureDimension::TextureCube && cube->width == cube->height &&
+            cube->depth == 1U && cube->layers == 1U,
+        "Render texture loader did not derive TextureCube from bimg metadata");
+    Require(cube->mipCount == 1U &&
+            cube->rgba8.size() == static_cast<std::size_t>(cube->width) * cube->height * 6U * 4U,
+        "Render texture loader did not preserve exactly LOD0 for all cube faces");
 }
 
 void RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest() {
@@ -2323,6 +2728,7 @@ void RunRenderResourceRegistryTests() {
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
     RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
+    RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
@@ -2337,14 +2743,17 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
     RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest();
     RunMaterialGraphAndTypeAssetDiscoveryTest();
+    RunStandaloneMaterialGraphCodecParityAndAtomicSaveTest();
     RunMaterialTypeReferenceValidationDrivesRuntimeErrorMaterialTest();
     RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest();
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureColorSpaceDescTest();
+    RunRenderTextureTextAssetPreservesDimensionTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
+    RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();
 }

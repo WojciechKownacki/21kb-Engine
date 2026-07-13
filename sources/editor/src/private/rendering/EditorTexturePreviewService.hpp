@@ -8,6 +8,7 @@
 #include <Windows.h>
 #endif
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -21,6 +22,13 @@ struct EditorTexturePreviewImage {
     std::vector<std::uint32_t> bgra;
 };
 
+struct EditorTexturePreviewScaledCacheStats {
+    std::uint64_t hitCount = 0U;
+    std::uint64_t missCount = 0U;
+    std::size_t entryCount = 0U;
+    std::size_t byteCount = 0U;
+};
+
 class EditorTexturePreviewService {
 public:
     EditorTexturePreviewService() = delete;
@@ -28,6 +36,7 @@ public:
     [[nodiscard]] static bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static const EditorTexturePreviewImage* PreviewFor(const kb::assets::AssetMetadata& metadata);
     static void DrawContain(HDC dc, RECT target, const EditorTexturePreviewImage& image, bool border = true);
+    [[nodiscard]] static EditorTexturePreviewScaledCacheStats ScaledCacheStats();
 };
 
 #endif

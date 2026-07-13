@@ -86,6 +86,7 @@ bool SceneGBufferFormatSelection::IsSupported() const noexcept {
     return albedoFormat != bgfx::TextureFormat::Count &&
         normalFormat != bgfx::TextureFormat::Count &&
         materialFormat != bgfx::TextureFormat::Count &&
+        surfaceFormat != bgfx::TextureFormat::Count &&
         depth.IsSupported() &&
         status != SceneTargetFormatSelectionStatus::Unsupported;
 }
@@ -109,6 +110,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " valid=" << (IsValid() ? "true" : "false")
                 << " renderer=" << static_cast<int>(bgfx::getRendererType());
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
 
     width = std::max(1U, width);
@@ -118,15 +120,18 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
         std::ostringstream message;
         message << "Ensure unsupported extent " << width << 'x' << height;
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
         return false;
     }
 
     if (IsValid() && width_ == width && height_ == height) {
         WriteRendererDebugLog("gbuffer", "Ensure reuse existing targets");
+        WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure reuse existing targets");
         return true;
     }
 
     WriteRendererDebugLog("gbuffer", "Ensure recreate targets begin");
+    WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure recreate targets begin");
     Shutdown();
 
     selection_ = SelectSceneGBufferFormats(kGBufferColorTextureFlags, kGBufferDepthTextureFlags);
@@ -136,12 +141,15 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " albedo=" << TextureFormatName(selection_.albedoFormat)
                 << " normal=" << TextureFormatName(selection_.normalFormat)
                 << " material=" << TextureFormatName(selection_.materialFormat)
+                << " surface=" << TextureFormatName(selection_.surfaceFormat)
                 << " depth=" << TextureFormatName(selection_.depth.format)
                 << " depthStatus=" << static_cast<int>(selection_.depth.status);
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
     if (!selection_.IsSupported()) {
         WriteRendererDebugLog("gbuffer", "Ensure failed unsupported format selection");
+        WriteRendererMaterialGraphDebugLog("gbuffer", "Ensure failed unsupported format selection");
         return false;
     }
 
@@ -171,6 +179,14 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
     }
     bgfx::setName(materialTexture_, "KB GBuffer Material");
 
+    surfaceTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.surfaceFormat, kGBufferColorTextureFlags);
+    if (!bgfx::isValid(surfaceTexture_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create surface texture");
+        Shutdown();
+        return false;
+    }
+    bgfx::setName(surfaceTexture_, "KB GBuffer Surface");
+
     depthTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.depth.format, kGBufferDepthTextureFlags);
     if (!bgfx::isValid(depthTexture_)) {
         WriteRendererDebugLog("gbuffer", "Ensure failed create depth texture");
@@ -179,12 +195,13 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
     }
     bgfx::setName(depthTexture_, "KB GBuffer Depth");
 
-    bgfx::Attachment attachments[4]{};
+    bgfx::Attachment attachments[kSceneGBufferColorAttachmentCount + 1U]{};
     attachments[0].init(albedoTexture_);
     attachments[1].init(normalTexture_);
     attachments[2].init(materialTexture_);
-    attachments[3].init(depthTexture_);
-    frameBuffer_ = bgfx::createFrameBuffer(4, attachments, true);
+    attachments[3].init(surfaceTexture_);
+    attachments[4].init(depthTexture_);
+    frameBuffer_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(kSceneGBufferColorAttachmentCount + 1U), attachments, true);
     if (!bgfx::isValid(frameBuffer_)) {
         WriteRendererDebugLog("gbuffer", "Ensure failed create framebuffer");
         Shutdown();
@@ -199,21 +216,24 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
                 << " albedoTex=" << HandleValue(albedoTexture_)
                 << " normalTex=" << HandleValue(normalTexture_)
                 << " materialTex=" << HandleValue(materialTexture_)
+                << " surfaceTex=" << HandleValue(surfaceTexture_)
                 << " depthTex=" << HandleValue(depthTexture_)
                 << " extent=" << width_ << 'x' << height_;
         WriteRendererDebugLog("gbuffer", message.str());
+        WriteRendererMaterialGraphDebugLog("gbuffer", message.str());
     }
     return true;
 }
 
 void SceneGBuffer::Shutdown() {
     if (IsValid() || bgfx::isValid(frameBuffer_) || bgfx::isValid(albedoTexture_) || bgfx::isValid(normalTexture_) ||
-        bgfx::isValid(materialTexture_) || bgfx::isValid(depthTexture_)) {
+        bgfx::isValid(materialTexture_) || bgfx::isValid(surfaceTexture_) || bgfx::isValid(depthTexture_)) {
         std::ostringstream message;
         message << "Shutdown fb=" << HandleValue(frameBuffer_)
                 << " albedoTex=" << HandleValue(albedoTexture_)
                 << " normalTex=" << HandleValue(normalTexture_)
                 << " materialTex=" << HandleValue(materialTexture_)
+                << " surfaceTex=" << HandleValue(surfaceTexture_)
                 << " depthTex=" << HandleValue(depthTexture_);
         WriteRendererDebugLog("gbuffer", message.str());
     }
@@ -222,6 +242,9 @@ void SceneGBuffer::Shutdown() {
     } else {
         if (bgfx::isValid(depthTexture_)) {
             bgfx::destroy(depthTexture_);
+        }
+        if (bgfx::isValid(surfaceTexture_)) {
+            bgfx::destroy(surfaceTexture_);
         }
         if (bgfx::isValid(materialTexture_)) {
             bgfx::destroy(materialTexture_);
@@ -238,6 +261,7 @@ void SceneGBuffer::Shutdown() {
     albedoTexture_ = BGFX_INVALID_HANDLE;
     normalTexture_ = BGFX_INVALID_HANDLE;
     materialTexture_ = BGFX_INVALID_HANDLE;
+    surfaceTexture_ = BGFX_INVALID_HANDLE;
     depthTexture_ = BGFX_INVALID_HANDLE;
     selection_ = {};
     width_ = 0;
@@ -258,6 +282,10 @@ bgfx::TextureHandle SceneGBuffer::NormalTexture() const noexcept {
 
 bgfx::TextureHandle SceneGBuffer::MaterialTexture() const noexcept {
     return materialTexture_;
+}
+
+bgfx::TextureHandle SceneGBuffer::SurfaceTexture() const noexcept {
+    return surfaceTexture_;
 }
 
 bgfx::TextureHandle SceneGBuffer::DepthTexture() const noexcept {
@@ -284,6 +312,7 @@ bool SceneGBuffer::IsValid() const noexcept {
         bgfx::isValid(albedoTexture_) &&
         bgfx::isValid(normalTexture_) &&
         bgfx::isValid(materialTexture_) &&
+        bgfx::isValid(surfaceTexture_) &&
         bgfx::isValid(depthTexture_);
 }
 
@@ -321,6 +350,16 @@ RenderTargetDesc SceneGBuffer::MaterialTargetDesc() const noexcept {
     };
 }
 
+RenderTargetDesc SceneGBuffer::SurfaceTargetDesc() const noexcept {
+    return RenderTargetDesc{
+        .role = RenderTargetRole::GBufferSurface,
+        .format = ToRenderTargetFormat(selection_.surfaceFormat),
+        .extent = Extent(),
+        .renderable = true,
+        .sampled = true,
+    };
+}
+
 RenderTargetDesc SceneGBuffer::DepthTargetDesc() const noexcept {
     return RenderTargetDesc{
         .role = RenderTargetRole::GBufferDepth,
@@ -341,16 +380,25 @@ SceneGBufferFormatSelection SelectSceneGBufferFormats(std::uint64_t colorTexture
     const bgfx::TextureFormat::Enum materialFormat = SceneTextureFormatSupported(bgfx::TextureFormat::RGBA8, colorTextureFlags)
         ? bgfx::TextureFormat::RGBA8
         : (SceneTextureFormatSupported(bgfx::TextureFormat::BGRA8, colorTextureFlags) ? bgfx::TextureFormat::BGRA8 : bgfx::TextureFormat::Count);
+    const bgfx::TextureFormat::Enum surfaceFormat = SceneTextureFormatSupported(bgfx::TextureFormat::RGBA16F, colorTextureFlags)
+        ? bgfx::TextureFormat::RGBA16F
+        : bgfx::TextureFormat::Count;
     const SceneDepthFormatSelection depth = SelectSceneDepthFormat(depthTextureFlags);
+
+    const bgfx::Caps* caps = bgfx::getCaps();
+    const bool attachmentCountSupported = caps != nullptr && caps->limits.maxFBAttachments >= kSceneGBufferColorAttachmentCount;
 
     const bool supported = albedoFormat != bgfx::TextureFormat::Count &&
         normalFormat != bgfx::TextureFormat::Count &&
         materialFormat != bgfx::TextureFormat::Count &&
+        surfaceFormat != bgfx::TextureFormat::Count &&
+        attachmentCountSupported &&
         depth.IsSupported();
     return SceneGBufferFormatSelection{
         .albedoFormat = albedoFormat,
         .normalFormat = normalFormat,
         .materialFormat = materialFormat,
+        .surfaceFormat = surfaceFormat,
         .depth = depth,
         .status = supported ? SceneTargetFormatSelectionStatus::Selected : SceneTargetFormatSelectionStatus::Unsupported,
     };

@@ -380,6 +380,8 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/scene/material/EditorTextureAssetMetadataResolver.hpp
+    src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -454,6 +456,8 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
+    src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
+    src/private/rendering/material_graph/MaterialGraphCanvas.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
@@ -530,6 +534,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
+    src/private/scene/EditorSceneDocumentAssetLoaders.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
@@ -576,6 +581,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorMaterialColorPickerDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
@@ -642,6 +648,9 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/MaterialEditorPanelLayout.cpp
+    src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
+    src/rendering/material_graph/MaterialGraphCanvas.cpp
     src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
@@ -725,6 +734,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
@@ -924,6 +934,7 @@ if(BUILD_TESTING)
         tests/EditorProjectTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
+        tests/EditorMaterialGraphCanvasTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
@@ -931,6 +942,9 @@ if(BUILD_TESTING)
         tests/EditorTestSupport.hpp
         tests/ScriptEditorTests.cpp
         tests/SvgPathTests.cpp
+        src/rendering/MaterialEditorPanelLayout.cpp
+        src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
+        src/rendering/material_graph/MaterialGraphCanvas.cpp
         src/rendering/script_editor/LuaSyntaxHighlighter.cpp
         src/rendering/script_editor/ScriptEditorDocument.cpp
         src/docking/DefaultDockWorkspace.cpp
@@ -1076,4 +1090,30 @@ if(BUILD_TESTING)
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     kb_apply_quality_gates(kb_editor_tests)
+
+    add_executable(kb_editor_material_graph_canvas_tests
+        tests/EditorMaterialGraphCanvasRuntimeTests.cpp
+        tests/EditorMaterialGraphCanvasTests.cpp
+        tests/EditorTestSuites.hpp
+        tests/EditorTestSupport.hpp
+        src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
+        src/rendering/material_graph/MaterialGraphCanvas.cpp
+    )
+
+    target_include_directories(kb_editor_material_graph_canvas_tests
+        PRIVATE
+            include
+            src/private
+            tests
+    )
+
+    target_link_libraries(kb_editor_material_graph_canvas_tests
+        PRIVATE
+            kb_renderer
+    )
+
+    add_test(NAME kb_editor_material_graph_canvas_tests COMMAND $<TARGET_FILE:kb_editor_material_graph_canvas_tests>)
+    set_tests_properties(kb_editor_material_graph_canvas_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    kb_apply_quality_gates(kb_editor_material_graph_canvas_tests)
 endif()

@@ -16,7 +16,8 @@ public:
     [[nodiscard]] static AssetImportResult ImportFiles(
         AssetManager& manager,
         std::span<const std::filesystem::path> sourceFiles,
-        const std::filesystem::path& destinationVirtualFolder);
+        const std::filesystem::path& destinationVirtualFolder,
+        const AssetImportOptions& options = {});
 };
 
 } // namespace kb::assets

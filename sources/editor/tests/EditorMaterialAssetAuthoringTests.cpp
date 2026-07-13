@@ -34,6 +34,7 @@
 #include "scene/material/EditorEmbeddedMaterialAssetWriter.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorMaterialGraphSemanticAnalysis.hpp"
 #include "scene/material/EditorMaterialAssetEditCommand.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 #include "scene/material/EditorMaterialTextureSlotValidation.hpp"
@@ -41,6 +42,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -51,6 +53,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -171,12 +174,20 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     output << text;
 }
 
-void WriteTexture(const std::filesystem::path& path, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+void WriteTexture(
+    const std::filesystem::path& path,
+    std::uint8_t r,
+    std::uint8_t g,
+    std::uint8_t b,
+    std::string_view semantic = "unknown",
+    std::string_view colorSpace = "unknown") {
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
     std::ofstream output{ path, std::ios::trunc };
     output
         << "size 1 1\n"
+        << "semantic " << semantic << "\n"
+        << "colorSpace " << colorSpace << "\n"
         << "rgba8 "
         << static_cast<std::uint32_t>(r) << " "
         << static_cast<std::uint32_t>(g) << " "
@@ -586,8 +597,101 @@ void RunCreateMaterialFromGraphAndMaterialTypeThroughEditorAuthoringTest() {
     kb::editor::tests::Require(graphMaterial->graphSourceAssetId == sourceGraphId.value &&
             graphMaterial->graphSourceAssetPath == sourceGraphPath,
         "KBMAT-GRAPH-0304: Graph-backed Material did not persist source Material Graph asset reference");
-    kb::editor::tests::Require(graphMaterial->graph.storageModel == "inline-kbmat" && graphMaterial->graph.nodes.size() == graph.nodes.size() && graphMaterial->graph.links.size() == graph.links.size(),
-        "KBMAT-GRAPH-0301: Graph-backed Material did not inline the source graph document");
+    kb::editor::tests::Require(graphMaterial->graph.storageModel == "material-graph-asset" && graphMaterial->graph.nodes.size() == graph.nodes.size() && graphMaterial->graph.links.size() == graph.links.size(),
+        "P1.9: Graph-backed Material did not identify its authoritative source graph document");
+    const kb::render::ResolvedRuntimeMaterialDesc sourceBefore =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(scene.Assets().Manager(), *graphMaterialMetadata, *graphMaterial);
+    kb::render::RenderMaterialGraphDocument changedSourceGraph = graph;
+    changedSourceGraph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -80,
+        .positionY = 360,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.1 0.2 0.3 1" },
+    });
+    changedSourceGraph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        5U,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "emissive"));
+    kb::editor::tests::Require(kb::render::RenderMaterialGraphAssetLoader::SaveGraph(graphPath, changedSourceGraph),
+        "P1.9: Could not update authoritative source graph fixture");
+    const kb::render::ResolvedRuntimeMaterialDesc sourceAfter =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(scene.Assets().Manager(), *graphMaterialMetadata, *graphMaterial);
+    kb::editor::tests::Require(sourceBefore.graphProgram.active && sourceAfter.graphProgram.active &&
+            sourceBefore.graphProgram.graphSourceHash != sourceAfter.graphProgram.graphSourceHash,
+        "P1.9: Runtime compiled the stale inline graph instead of the changed sourceGraph asset");
+
+    kb::render::RenderMaterialAssetData synchronizedMaterial = *graphMaterial;
+    synchronizedMaterial.graph = changedSourceGraph;
+    synchronizedMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 6U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 40,
+        .positionY = 440,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "sourceSynchronizedScalar",
+            .displayName = "Source Synchronized Scalar",
+            .defaultValueHint = "0.5",
+        },
+    });
+    kb::editor::tests::Require(kb::editor::EditorMaterialAssetGateway::WriteExisting(scene, graphMaterialId, synchronizedMaterial),
+        "P1.9: Saving a graph-backed material did not synchronize its source graph and generated Material Type");
+    const std::optional<kb::render::RenderMaterialGraphDocument> synchronizedGraph =
+        kb::render::RenderMaterialGraphAssetLoader::LoadGraph(graphPath);
+    const std::optional<kb::render::RenderMaterialTypeDocument> synchronizedType =
+        kb::render::RenderMaterialTypeAssetLoader::LoadType(generatedTypePath);
+    kb::editor::tests::Require(synchronizedGraph.has_value() &&
+            kb::render::FindRenderMaterialGraphNode(*synchronizedGraph, 6U) != nullptr,
+        "P1.9: Material save did not persist graph edits to sourceGraph");
+    kb::editor::tests::Require(synchronizedType.has_value() && std::ranges::any_of(
+            synchronizedType->schema.parameters,
+            [](const kb::render::RenderMaterialParameterSchema& parameter) {
+                return parameter.name == "sourceSynchronizedScalar";
+            }),
+        "P1.9: Material save did not regenerate the source graph Material Type schema");
+
+    kb::render::RenderMaterialAssetData rejectedTransaction = synchronizedMaterial;
+    rejectedTransaction.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 7U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 160,
+        .positionY = 520,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "transactionShouldNotPersist",
+            .displayName = "Transaction Should Not Persist",
+            .defaultValueHint = "0.25",
+        },
+    });
+    rejectedTransaction.desc.roughnessFactor = std::numeric_limits<float>::quiet_NaN();
+    kb::editor::tests::Require(
+        !kb::editor::EditorMaterialAssetGateway::WriteExisting(scene, graphMaterialId, rejectedTransaction),
+        "P2.11: invalid staged material must reject the multi-document save transaction");
+    const std::optional<kb::render::RenderMaterialGraphDocument> graphAfterRejectedTransaction =
+        kb::render::RenderMaterialGraphAssetLoader::LoadGraph(graphPath);
+    const std::optional<kb::render::RenderMaterialTypeDocument> typeAfterRejectedTransaction =
+        kb::render::RenderMaterialTypeAssetLoader::LoadType(generatedTypePath);
+    const std::optional<kb::render::RenderMaterialAssetData> materialAfterRejectedTransaction =
+        kb::render::RenderMaterialAssetLoader::LoadMaterial(graphMaterialPath);
+    bool transactionFilesRemain = false;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(graphMaterialPath.parent_path())) {
+        transactionFilesRemain = transactionFilesRemain || entry.path().filename().string().find(".kbtxn.") != std::string::npos;
+    }
+    kb::editor::tests::Require(
+        graphAfterRejectedTransaction.has_value() &&
+            kb::render::FindRenderMaterialGraphNode(*graphAfterRejectedTransaction, 7U) == nullptr &&
+            typeAfterRejectedTransaction.has_value() &&
+            std::ranges::none_of(
+                typeAfterRejectedTransaction->schema.parameters,
+                [](const kb::render::RenderMaterialParameterSchema& parameter) {
+                    return parameter.name == "transactionShouldNotPersist";
+                }) &&
+            materialAfterRejectedTransaction.has_value() &&
+            std::isfinite(materialAfterRejectedTransaction->desc.roughnessFactor) &&
+            !transactionFilesRemain,
+        "P2.11: rejected graph/type/material save must preserve every target and remove all transaction files");
     kb::editor::tests::Require(kb::editor::tests::NearlyEqual(graphMaterial->desc.roughnessFactor, 0.42F),
         "KBMAT-GRAPH-0301: Graph-backed Material did not apply scalar schema defaults");
 
@@ -873,11 +977,23 @@ void RunMaterialTextureSlotAuthoringTest() {
 }
 
 void RunMaterialTextureSlotValidationTest() {
-    const kb::assets::AssetMetadata normal = Metadata("Stone_Normal", "RenderTexture", "/Game/Textures/Stone_Normal.png");
-    const kb::assets::AssetMetadata baseColor = Metadata("Stone_BaseColor", "RenderTexture", "/Game/Textures/Stone_BaseColor.png");
-    const kb::assets::AssetMetadata metallicRoughness = Metadata("Stone_MetallicRoughness", "RenderTexture", "/Game/Textures/Stone_MetallicRoughness.png");
-    const kb::assets::AssetMetadata occlusion = Metadata("Stone_AO", "RenderTexture", "/Game/Textures/Stone_AO.png");
-    const kb::assets::AssetMetadata custom = Metadata("StoneLayerA", "RenderTexture", "/Game/Textures/StoneLayerA.png");
+    const std::filesystem::path root = TempRoot() / "P135TextureMetadata";
+    WriteTextFile(root / "normal.kbtex", "size 1 1\nsemantic normal\ncolorSpace linear\nrgba8 128 128 255 255\n");
+    WriteTextFile(root / "base.kbtex", "size 1 1\nsemantic baseColor\ncolorSpace srgb\nrgba8 255 255 255 255\n");
+    WriteTextFile(root / "mr.kbtex", "size 1 1\nsemantic metallicRoughness\ncolorSpace linear\nrgba8 0 128 0 255\n");
+    WriteTextFile(root / "occlusion.kbtex", "size 1 1\nsemantic occlusion\ncolorSpace linear\nrgba8 255 255 255 255\n");
+    WriteTextFile(root / "legacy.kbtex", "size 1 1\nrgba8 255 255 255 255\n");
+
+    auto TextureMetadata = [&root](std::string name, std::string filename) {
+        kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderTexture", "/Game/Textures/" + filename);
+        metadata.physicalPath = root / filename;
+        return metadata;
+    };
+    const kb::assets::AssetMetadata normal = TextureMetadata("Misleading_Diffuse_Name", "normal.kbtex");
+    const kb::assets::AssetMetadata baseColor = TextureMetadata("Misleading_Normal_Name", "base.kbtex");
+    const kb::assets::AssetMetadata metallicRoughness = TextureMetadata("PlainTextureA", "mr.kbtex");
+    const kb::assets::AssetMetadata occlusion = TextureMetadata("PlainTextureB", "occlusion.kbtex");
+    const kb::assets::AssetMetadata legacy = TextureMetadata("StoneLayerA", "legacy.kbtex");
 
     const kb::editor::EditorMaterialTextureSlotValidationResult acceptedNormal =
         kb::editor::EditorMaterialTextureSlotValidation::Validate(normal, kb::editor::EditorMaterialTextureSlot::Normal);
@@ -889,7 +1005,7 @@ void RunMaterialTextureSlotValidationTest() {
     kb::editor::tests::Require(!rejectedNormalAsBaseColor.accepted, "Material texture validation should reject a normal map in the Base Color slot");
     kb::editor::tests::Require(rejectedNormalAsBaseColor.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Srgb, "Base Color texture slot should expect sRGB data");
     const std::string rejection = kb::editor::EditorMaterialTextureSlotValidation::RejectionMessage(normal, rejectedNormalAsBaseColor);
-    kb::editor::tests::Require(rejection.find("Stone_Normal") != std::string::npos &&
+    kb::editor::tests::Require(rejection.find("Misleading_Diffuse_Name") != std::string::npos &&
             rejection.find("Normal/linear") != std::string::npos &&
             rejection.find("Base Color") != std::string::npos &&
             rejection.find("sRGB") != std::string::npos,
@@ -921,10 +1037,148 @@ void RunMaterialTextureSlotValidationTest() {
     kb::editor::tests::Require(kb::editor::EditorMaterialTextureSlotValidation::Validate(occlusion, kb::editor::EditorMaterialTextureSlot::Occlusion).accepted,
         "KBMAT-UE-0014: Occlusion texture validation should accept AO textures");
 
-    const kb::editor::EditorMaterialTextureSlotValidationResult acceptedUnknown =
-        kb::editor::EditorMaterialTextureSlotValidation::Validate(custom, kb::editor::EditorMaterialTextureSlot::Occlusion);
-    kb::editor::tests::Require(acceptedUnknown.accepted, "Material texture validation should allow ambiguous texture names");
-    kb::editor::tests::Require(acceptedUnknown.inferredSemantic == kb::editor::EditorMaterialTextureSemantic::Unknown, "Ambiguous texture names should remain unclassified");
+    const kb::editor::EditorMaterialTextureSlotValidationResult rejectedUnknown =
+        kb::editor::EditorMaterialTextureSlotValidation::Validate(legacy, kb::editor::EditorMaterialTextureSlot::Occlusion);
+    kb::editor::tests::Require(!rejectedUnknown.accepted,
+        "P1.35: A legacy texture with unknown metadata must not be treated as the expected slot type");
+    kb::editor::tests::Require(
+        rejectedUnknown.inferredSemantic == kb::editor::EditorMaterialTextureSemantic::Unknown &&
+            rejectedUnknown.inferredColorSpace == kb::editor::EditorMaterialTextureColorSpace::Unknown &&
+            rejectedUnknown.metadataDiagnostic.find("Unknown") != std::string::npos,
+        "P1.35: Legacy unknown semantic/color-space metadata must produce an explicit diagnostic");
+}
+
+void RunMaterialEditorNormalSlotBuildsGraphNormalMapTest() {
+    kb::render::RenderMaterialAssetData clearOnly{};
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(clearOnly, {}),
+        "KBMAT-GRAPH-0102: Normal slot clear should succeed on a material without normal graph authoring");
+    kb::editor::tests::Require(clearOnly.graph.nodes.empty() && clearOnly.desc.normalTextureAssetId == 0U,
+        "KBMAT-GRAPH-0102: Normal slot clear should not create an empty normal graph");
+
+    kb::render::RenderMaterialAssetData working{};
+    working.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    const kb::assets::AssetId materialId{ 0x0102U };
+    const kb::assets::AssetId normalTextureId{ 0xBACE02U };
+
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(working, normalTextureId),
+        "KBMAT-GRAPH-0102: Normal slot graph authoring could not assign normal texture");
+    const kb::render::RenderMaterialGraphNode* outputNode = nullptr;
+    const kb::render::RenderMaterialGraphNode* normalUnpackNode = nullptr;
+    const kb::render::RenderMaterialGraphNode* textureSampleNode = nullptr;
+    for (const kb::render::RenderMaterialGraphNode& node : working.graph.nodes) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            outputNode = &node;
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::NormalUnpack) {
+            normalUnpackNode = &node;
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && node.parameter.textureRole == "normal") {
+            textureSampleNode = &node;
+        }
+    }
+    kb::editor::tests::Require(outputNode != nullptr && normalUnpackNode != nullptr && textureSampleNode != nullptr,
+        "KBMAT-GRAPH-0102: Normal slot assignment should create TextureSample -> NormalUnpack -> MaterialOutput.normal");
+
+    const auto hasLink = [&working](std::uint32_t fromNode, std::string_view fromPin, std::uint32_t toNode, std::string_view toPin) {
+        return std::ranges::any_of(working.graph.links, [fromNode, fromPin, toNode, toPin](const kb::render::RenderMaterialGraphLink& link) {
+            return link.fromNodeId == fromNode && link.fromPin == fromPin && link.toNodeId == toNode && link.toPin == toPin;
+        });
+    };
+    kb::editor::tests::Require(
+        hasLink(textureSampleNode->id, "color", normalUnpackNode->id, "color") &&
+            hasLink(normalUnpackNode->id, "normal", outputNode->id, "normal"),
+        "KBMAT-GRAPH-0102: Normal slot graph should wire the normal sample through NormalUnpack");
+
+    const kb::render::RenderMaterialGraphParameterValue* value = FindGraphParameterValue(working, textureSampleNode->parameter.stableId);
+    kb::editor::tests::Require(value != nullptr && value->type == kb::render::RenderMaterialParameterType::Texture && value->assetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Normal slot graph should store the assigned normal texture as a graph parameter value");
+
+    kb::assets::AssetManager manager;
+    kb::assets::AssetMetadata runtimeMetadata = Metadata("GraphNormalSlot", "RenderMaterial", "/Game/Materials/GraphNormalSlot.kbmat");
+    runtimeMetadata.id = materialId;
+    const kb::render::ResolvedRuntimeMaterialDesc resolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, runtimeMetadata, working);
+    const auto normalBinding = std::ranges::find_if(
+        resolved.graphProgram.textures,
+        [stableId = textureSampleNode->parameter.stableId](const kb::render::RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == stableId;
+        });
+    kb::editor::tests::Require(resolved.desc.normalTextureAssetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Normal slot graph should drive the runtime PBR normal texture fallback");
+    kb::editor::tests::Require(resolved.graphProgram.active &&
+            normalBinding != resolved.graphProgram.textures.end() &&
+            normalBinding->textureAssetId == normalTextureId.value &&
+            normalBinding->role == "normal" &&
+            normalBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
+        "KBMAT-GRAPH-0102: Normal slot graph should bind the normal sampler as role=normal linear");
+
+    kb::render::RenderMaterialAssetData objectBacked{};
+    objectBacked.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterTexture,
+        .positionX = -560,
+        .positionY = 96,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "normalObject",
+            .displayName = "Normal Object",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -320,
+        .positionY = 96,
+    });
+    objectBacked.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = -96,
+        .positionY = 96,
+    });
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ParameterTexture,
+        2U,
+        "texture",
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        3U,
+        "texture"));
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        3U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "color"));
+    objectBacked.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "normal",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "normal"));
+    kb::editor::tests::Require(
+        kb::editor::ApplyEditorMaterialOutputNormalTextureGraph(objectBacked, normalTextureId),
+        "KBMAT-GRAPH-0102: Normal slot graph authoring should update an object-backed normal sample");
+    const kb::render::RenderMaterialGraphParameterValue* objectValue = FindGraphParameterValue(objectBacked, "normalObject");
+    kb::editor::tests::Require(objectValue != nullptr && objectValue->assetId == normalTextureId.value,
+        "KBMAT-GRAPH-0102: Object-backed normal sample should update the upstream texture parameter");
+    const kb::render::ResolvedRuntimeMaterialDesc objectResolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, runtimeMetadata, objectBacked);
+    const auto objectNormalBinding = std::ranges::find_if(
+        objectResolved.graphProgram.textures,
+        [](const kb::render::RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == "normalObject";
+        });
+    kb::editor::tests::Require(objectResolved.desc.normalTextureAssetId == normalTextureId.value &&
+            objectNormalBinding != objectResolved.graphProgram.textures.end() &&
+            objectNormalBinding->textureAssetId == normalTextureId.value &&
+            objectNormalBinding->role == "normal" &&
+            objectNormalBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
+        "KBMAT-GRAPH-0102: Object-backed normal sample should bind the upstream texture as role=normal linear");
 }
 
 void RunMaterialAssetEditCommandUndoRedoTest() {
@@ -1058,6 +1312,96 @@ void RunMaterialEditorWorkingCopySaveRevertUndoRedoTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialEditorDocumentHistoryIsolationTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorCommandStack commandStack;
+    kb::editor::MaterialEditorState materialEditor;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"),
+        "P0.1: document history test could not mount project assets");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "P0.1: document history test could not register material loader");
+
+    const std::filesystem::path materialAPath = TempRoot() / "Project" / "Assets" / "Materials" / "HistoryA.kbmat";
+    const std::filesystem::path materialBPath = TempRoot() / "Project" / "Assets" / "Materials" / "HistoryB.kbmat";
+    kb::render::RenderMaterialAssetData materialA{};
+    materialA.desc.roughnessFactor = 0.2F;
+    kb::render::RenderMaterialAssetData materialB{};
+    materialB.desc.roughnessFactor = 0.6F;
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(materialAPath, materialA) &&
+            kb::render::RenderMaterialAssetWriter::Save(materialBPath, materialB),
+        "P0.1: document history test could not seed material files");
+    kb::editor::tests::Require(scene.Assets().Discover() >= 2U,
+        "P0.1: document history test could not discover material files");
+    const kb::assets::AssetMetadata* metadataA = manager.Registry().FindByPath("/Game/Materials/HistoryA.kbmat");
+    const kb::assets::AssetMetadata* metadataB = manager.Registry().FindByPath("/Game/Materials/HistoryB.kbmat");
+    kb::editor::tests::Require(metadataA != nullptr && metadataB != nullptr,
+        "P0.1: document history test could not resolve both AssetIds");
+    const kb::assets::AssetId materialAId = metadataA->id;
+    const kb::assets::AssetId materialBId = metadataB->id;
+    const kb::editor::EditorCommandHistoryKey historyA = kb::editor::EditorCommandHistoryKey::MaterialAsset(materialAId.value);
+    const kb::editor::EditorCommandHistoryKey historyB = kb::editor::EditorCommandHistoryKey::MaterialAsset(materialBId.value);
+
+    materialEditor.Open(materialAId, kb::editor::EditorMaterialAssetGateway::Read(scene, materialAId));
+    kb::render::RenderMaterialAssetData editedA = *materialEditor.WorkingCopy();
+    editedA.desc.roughnessFactor = 0.4F;
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+            materialEditor,
+            materialAId,
+            "Edit A",
+            *materialEditor.WorkingCopy(),
+            editedA,
+            0U,
+            0U)),
+        "P0.1: Material A working-copy command failed");
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(
+            scene,
+            materialAId,
+            "Save A",
+            materialA,
+            editedA)),
+        "P0.1: Material A source save command failed");
+    materialEditor.MarkSaved();
+    kb::editor::tests::Require(commandStack.LastCompletedCommandHistoryKey() == historyA,
+        "P0.1: source command did not retain Material A identity");
+
+    commandStack.Clear(historyA);
+    materialEditor.Open(materialBId, kb::editor::EditorMaterialAssetGateway::Read(scene, materialBId));
+    kb::render::RenderMaterialAssetData editedB = *materialEditor.WorkingCopy();
+    editedB.desc.roughnessFactor = 0.8F;
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+            materialEditor,
+            materialBId,
+            "Edit B",
+            *materialEditor.WorkingCopy(),
+            editedB,
+            0U,
+            0U)),
+        "P0.1: Material B working-copy command failed");
+
+    kb::editor::tests::Require(commandStack.Undo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.6F),
+        "P0.1: scoped undo did not restore Material B");
+    std::optional<kb::render::RenderMaterialAssetData> diskA = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialAPath);
+    kb::editor::tests::Require(diskA.has_value() && kb::editor::tests::NearlyEqual(diskA->desc.roughnessFactor, 0.4F),
+        "P0.1: Undo in Material B changed the saved Material A source");
+    kb::editor::tests::Require(commandStack.Redo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.8F),
+        "P0.1: scoped redo did not restore Material B");
+
+    kb::editor::tests::Require(commandStack.Undo(historyB), "P0.1: setup undo before Revert failed");
+    materialEditor.RevertToCleanSnapshot();
+    commandStack.Clear(historyB);
+    kb::editor::tests::Require(!commandStack.Redo(historyB) &&
+            kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.6F),
+        "P0.1: Redo resurrected a discarded Material B edit after Revert");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
 void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     CleanTempRoot();
 
@@ -1103,6 +1447,11 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -240, 64, &colorNodeId), "KBMAT-GRAPH-0101: Graph editor should recreate a color node before Save");
     kb::editor::tests::Require(materialEditor.MoveGraphNode(colorNodeId, -160, 96), "KBMAT-GRAPH-0101: Graph editor should move recreated node before Save");
     kb::editor::tests::Require(!materialEditor.SetGraphConstantValue(colorNodeId, "broken"), "KBMAT-GRAPH-0101: Constant Color should reject invalid authoring text");
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantValue(colorNodeId, "nan 0 0 1") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "inf 0 0 1") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "0 0 0 1 trailing") &&
+            !materialEditor.SetGraphConstantValue(colorNodeId, "0 0 0 1 2"),
+        "P2.9: graph constants must reject non-finite, trailing and excess components without mutation");
     kb::editor::tests::Require(materialEditor.SetGraphConstantValue(colorNodeId, "0.25, 0.5, 0.75, 1"), "KBMAT-GRAPH-0101: Constant Color should accept comma or space separated authoring text");
     kb::editor::tests::Require(materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "baseColor"), "KBMAT-GRAPH-0101: Graph editor should reconnect before Save");
     kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Save Material Graph", *materialEditor.CleanSnapshot(), *materialEditor.WorkingCopy())),
@@ -1139,6 +1488,101 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     kb::editor::tests::Require(commandStack.Redo() && commandStack.Redo(), "KBMAT-GRAPH-0101: Graph commands could not be redone");
     onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
     kb::editor::tests::Require(onDisk.has_value() && onDisk->graph.nodes.size() == 1U && onDisk->graph.links.empty(), "KBMAT-GRAPH-0101: Redo graph delete should restore deleted state");
+
+    kb::render::RenderMaterialAssetData normalGraph{};
+    normalGraph.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    normalGraph.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -360,
+        .positionY = -80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "albedoSample",
+            .displayName = "Albedo Sample",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    normalGraph.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -360,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "normalSample",
+            .displayName = "Normal Sample",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    normalGraph.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        .positionX = -80,
+        .positionY = 138,
+    });
+    normalGraph.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        2U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    normalGraph.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        3U,
+        "color",
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "color"));
+    normalGraph.graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack,
+        4U,
+        "normal",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "normal"));
+    normalGraph.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "albedoSample",
+        .type = kb::render::RenderMaterialParameterType::Texture,
+        .assetId = 0xBACE01U,
+    });
+    normalGraph.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "normalSample",
+        .type = kb::render::RenderMaterialParameterType::Texture,
+        .assetId = 0xBACE02U,
+    });
+    materialEditor.SetWorkingCopy(normalGraph);
+    kb::editor::tests::Require(materialEditor.Dirty(), "KBMAT-GRAPH-0101: Texture graph assignment should dirty the Material Editor working copy");
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Save Normal Texture Graph", *materialEditor.CleanSnapshot(), *materialEditor.WorkingCopy())),
+        "KBMAT-GRAPH-0101: Normal texture graph Save should execute through material command stack");
+    materialEditor.MarkSaved();
+    onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(onDisk.has_value() &&
+            onDisk->graph.nodes.size() == 4U &&
+            onDisk->graph.links.size() == 3U &&
+            FindGraphParameterValue(*onDisk, "albedoSample") != nullptr &&
+            FindGraphParameterValue(*onDisk, "normalSample") != nullptr,
+        "KBMAT-GRAPH-0101: Saved texture graph should persist Image Texture nodes, links and assigned texture values");
+    const kb::render::ResolvedRuntimeMaterialDesc resolvedNormalGraph =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, *metadata, *onDisk);
+    const auto normalTextureBinding = std::ranges::find_if(
+        resolvedNormalGraph.graphProgram.textures,
+        [](const kb::render::RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == "normalSample";
+        });
+    kb::editor::tests::Require(resolvedNormalGraph.desc.albedoTextureAssetId == 0xBACE01U,
+        "KBMAT-GRAPH-0101: Reloaded Image Texture should drive Material Output Base Color texture");
+    kb::editor::tests::Require(resolvedNormalGraph.desc.normalTextureAssetId == 0xBACE02U,
+        "KBMAT-GRAPH-0101: Reloaded Image Texture through Normal Map should drive Material Output Normal texture");
+    kb::editor::tests::Require(resolvedNormalGraph.graphProgram.active &&
+            normalTextureBinding != resolvedNormalGraph.graphProgram.textures.end() &&
+            normalTextureBinding->textureAssetId == 0xBACE02U &&
+            normalTextureBinding->role == "normal" &&
+            normalTextureBinding->colorSpace == kb::render::RenderTextureColorSpace::Linear,
+        "KBMAT-GRAPH-0101: Reloaded normal texture graph should bind the normal sample as role=normal linear graph texture");
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -1535,6 +1979,16 @@ void RunMaterialEditorGraphCommentBoxSerializationGroupMoveTest() {
         "KBMAT-MAT55: Group-move should carry nodes whose top-left starts inside the comment");
     kb::editor::tests::Require(movedOutside.has_value() && movedOutside->first == 460 && movedOutside->second == 420,
         "KBMAT-MAT55: Group-move should not move nodes outside the comment");
+
+    const std::vector<std::uint32_t> dragMembershipSnapshot = materialEditor.GraphNodeIdsInsideComment(commentId);
+    kb::editor::tests::Require(materialEditor.MoveGraphCommentGroup(commentId, 400, 380, dragMembershipSnapshot) &&
+            materialEditor.MoveGraphCommentGroup(commentId, 420, 400, dragMembershipSnapshot),
+        "P1.26: comment drag must accept a membership snapshot captured at drag begin");
+    const std::optional<std::pair<std::int32_t, std::int32_t>> encounteredOutside = materialEditor.GraphNodePosition(outsideNodeId);
+    kb::editor::tests::Require(encounteredOutside.has_value() && encounteredOutside->first == 460 && encounteredOutside->second == 420,
+        "P1.26: a node encountered after drag begin must not be added to the moving comment group");
+    kb::editor::tests::Require(materialEditor.MoveGraphCommentGroup(commentId, 32, 48, dragMembershipSnapshot),
+        "P1.26: comment snapshot test must restore the authored position before serialization");
 
     std::ostringstream serialized;
     kb::render::RenderMaterialAssetWriter::Write(serialized, *materialEditor.WorkingCopy());
@@ -3144,6 +3598,12 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     });
     kb::editor::tests::Require(colorProperty != colorProperties.end() && colorProperty->range.has_value(),
         "KBMAT-MAT58: Color constants should expose a typed color property with metadata range");
+    const std::string colorBeforeInvalidEdit = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint;
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantColorValue(
+            colorNodeId,
+            std::array<float, 4U>{ std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F, 1.0F }) &&
+            kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint == colorBeforeInvalidEdit,
+        "P2.9: direct color setter must reject NaN without changing the working copy");
     kb::editor::tests::Require(materialEditor.SetGraphConstantColorValue(colorNodeId, std::array<float, 4U>{ 1.4F, -0.25F, 0.5F, 2.0F }),
         "KBMAT-MAT58: Color picker result should update the selected color node");
     colorProperties = materialEditor.GraphNodeProperties(colorNodeId);
@@ -3164,6 +3624,13 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(scalarProperty != scalarProperties.end() && scalarProperty->range.has_value() &&
             scalarProperty->range->min == -2.0F && scalarProperty->range->max == 2.0F,
         "KBMAT-MAT58: Slider properties should read their min/max from graph metadata");
+    const std::optional<float> scalarBeforeInvalidEdit = materialEditor.GraphConstantComponentValue(scalarNodeId, 0U);
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantComponentValue(
+            scalarNodeId,
+            0U,
+            std::numeric_limits<float>::infinity()) &&
+            materialEditor.GraphConstantComponentValue(scalarNodeId, 0U) == scalarBeforeInvalidEdit,
+        "P2.9: direct numeric setter must reject infinity without changing the working copy");
     kb::editor::tests::Require(materialEditor.SetGraphConstantComponentValue(scalarNodeId, 0U, 7.5F),
         "KBMAT-MAT58: Slider setter should accept a numeric edit request");
     const std::optional<float> clampedScalar = materialEditor.GraphConstantComponentValue(scalarNodeId, 0U);
@@ -3622,8 +4089,8 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT82: Rotator-driven texture sample should route into Emissive");
     kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(bumpSampleNodeId, "a", 1U, "roughness"),
         "KBMAT-MAT82: BumpOffset-driven texture sample alpha should route into Roughness");
-    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "thinTranslucentOutput"),
-        "KBMAT-MAT82: ConstantBiasScale result should route into a color material output");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "alpha"),
+        "KBMAT-MAT82: ConstantBiasScale result should route into a scalar material output");
     kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(rotateAboutAxisNodeId, "result", 1U, "normal"),
         "KBMAT-MAT82: RotateAboutAxis result should route into a vector material output");
     const kb::render::RenderMaterialGraphCompileResult uvUtilityCompiled =
@@ -3868,6 +4335,30 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT87: ColorRamp should persist edited stops in the runtime hint format");
     kb::editor::tests::Require(colorRampEditor.ConnectGraphPins(colorRampNodeId, "value", 1U, "baseColor"),
         "KBMAT-MAT87: Edited ColorRamp should route into Base Color");
+    std::ostringstream colorRampSerialized;
+    kb::render::RenderMaterialAssetWriter::Write(colorRampSerialized, *colorRampEditor.WorkingCopy());
+    std::istringstream colorRampSerializedInput{ colorRampSerialized.str() };
+    const kb::render::RenderMaterialAssetParseResult colorRampParsed =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(colorRampSerializedInput);
+    const kb::render::RenderMaterialGraphNode* parsedColorRampNode =
+        colorRampParsed.asset.has_value()
+            ? kb::render::FindRenderMaterialGraphNode(colorRampParsed.asset->graph, colorRampNodeId)
+            : nullptr;
+    std::string colorRampParseDiagnostics;
+    for (const kb::render::RenderMaterialAssetParseDiagnostic& diagnostic : colorRampParsed.diagnostics) {
+        colorRampParseDiagnostics += " line=" + std::to_string(diagnostic.line) + " field=" + diagnostic.field + " msg=" + diagnostic.message;
+    }
+    const std::string colorRampRoundTripMessage =
+        "KBMAT-MAT87: ColorRamp graph metadata should round-trip through .kbmat writer/loader; asset=" +
+        std::string{ colorRampParsed.asset.has_value() ? "yes" : "no" } +
+        " diagnostics=" + std::to_string(colorRampParsed.diagnostics.size()) +
+        " node=" + std::string{ parsedColorRampNode != nullptr ? "yes" : "no" } +
+        " hint='" + (parsedColorRampNode != nullptr ? parsedColorRampNode->parameter.defaultValueHint : std::string{}) + "'" +
+        colorRampParseDiagnostics;
+    kb::editor::tests::Require(colorRampParsed.Succeeded() &&
+            parsedColorRampNode != nullptr &&
+            parsedColorRampNode->parameter.defaultValueHint == "0.25 0.1 0.2 0.3 0.75 0.8 0.6 0.4",
+        colorRampRoundTripMessage.c_str());
     const kb::render::RenderMaterialGraphCompileResult colorRampCompiled =
         kb::render::CompileRenderMaterialGraphToShaderSource(
             colorRampEditor.WorkingCopy()->graph,
@@ -4107,13 +4598,23 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         return property.stableId == "uvSet" && property.dropdownOpen;
     }),
         "KBMAT-MAT58: Details panel rows should be backed by typed node properties");
-    const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    const int optionY = layout.detailsPanel.top + 34 + 22 + (2 * kb::editor::MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight) + 6;
-    const std::optional<kb::editor::MaterialEditorGraphNodePropertyHit> optionHit =
-        kb::editor::MaterialEditorPanelRenderer::GraphNodePropertyAt(content, uvProperties, layout.detailsPanel.left + 44, optionY);
-    kb::editor::tests::Require(optionHit.has_value() &&
-            optionHit->kind == kb::editor::MaterialEditorGraphNodePropertyHitKind::EnumOption &&
-            optionHit->optionValue == "0",
+    const kb::editor::MaterialEditorDetailsLayout detailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, details, 0);
+    const auto optionItem = std::ranges::find_if(detailsLayout.items, [](const kb::editor::MaterialEditorDetailsLayoutItem& item) {
+        return item.kind == kb::editor::MaterialEditorDetailsItemKind::NodePropertyOptionRow;
+    });
+    kb::editor::tests::Require(optionItem != detailsLayout.items.end(),
+        "KBMAT-MAT58: Canonical Details layout should expose the open enum option rect");
+    const kb::editor::MaterialEditorDetailsHit optionHit = optionItem == detailsLayout.items.end()
+        ? kb::editor::MaterialEditorDetailsHit{}
+        : kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+              detailsLayout,
+              details,
+              (optionItem->clippedRect.left + optionItem->clippedRect.right) / 2,
+              (optionItem->clippedRect.top + optionItem->clippedRect.bottom) / 2);
+    kb::editor::tests::Require(optionHit.kind == kb::editor::MaterialEditorDetailsHitKind::NodeProperty &&
+            optionHit.nodeProperty.kind == kb::editor::MaterialEditorGraphNodePropertyHitKind::EnumOption &&
+            optionHit.nodeProperty.optionValue == "0",
         "KBMAT-MAT58: Details panel hit-test should resolve enum dropdown options");
 #endif
 
@@ -4145,6 +4646,54 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             textureObjectProperty->type == kb::render::RenderMaterialParameterType::Texture &&
             kb::render::RenderMaterialGraphPinDataType(*textureObjectNode, "texture", true) == kb::render::RenderMaterialGraphPinType::Texture2D,
         "KBMAT-MAT58: TextureObject must expose a texture picker property and typed Texture2D output");
+
+#if defined(_WIN32)
+    const std::filesystem::path textureMetadataRoot = TempRoot() / "P135PickerMetadata";
+    WriteTextFile(textureMetadataRoot / "cube_diffuse.kbtex", "dimension 2d\nsize 1 1\nrgba8 255 255 255 255\n");
+    WriteTextFile(textureMetadataRoot / "probe.kbtex", "dimension cube\nsize 1 1\nrgba8 255 255 255 255\n");
+    WriteTextFile(textureMetadataRoot / "fog.kbtex", "dimension 3d\nsize 1 1\ndepth 2\nrgba8 255 255 255 255\n");
+    WriteTextFile(textureMetadataRoot / "terrain.kbtex", "dimension 2dArray\nsize 1 1\nlayers 2\nrgba8 255 255 255 255\n");
+    const kb::assets::AssetMetadata texture2d{
+        .id = kb::assets::AssetId{ 0x5810U },
+        .type = "RenderTexture",
+        .name = "cube_diffuse",
+        .virtualPath = "/Game/Textures/cube_diffuse.kbtex",
+        .physicalPath = textureMetadataRoot / "cube_diffuse.kbtex",
+    };
+    const kb::assets::AssetMetadata textureCube{
+        .id = kb::assets::AssetId{ 0x5811U },
+        .type = "RenderTexture",
+        .name = "StudioProbe",
+        .virtualPath = "/Game/Textures/probe.kbtex",
+        .physicalPath = textureMetadataRoot / "probe.kbtex",
+    };
+    const kb::assets::AssetMetadata textureVolume{
+        .id = kb::assets::AssetId{ 0x5812U },
+        .type = "RenderTexture",
+        .name = "FogData",
+        .virtualPath = "/Game/Textures/fog.kbtex",
+        .physicalPath = textureMetadataRoot / "fog.kbtex",
+    };
+    const kb::assets::AssetMetadata textureArray{
+        .id = kb::assets::AssetId{ 0x5813U },
+        .type = "RenderTexture",
+        .name = "TerrainData",
+        .virtualPath = "/Game/Textures/terrain.kbtex",
+        .physicalPath = textureMetadataRoot / "terrain.kbtex",
+    };
+    kb::editor::tests::Require(
+        kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(texture2d, kb::editor::EditorTextureAssetPickerFilter::Texture2D) &&
+            !kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(texture2d, kb::editor::EditorTextureAssetPickerFilter::TextureCube),
+        "P1.35: Texture picker must use intrinsic 2D metadata even when the name contains cube");
+    kb::editor::tests::Require(
+        kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(textureCube, kb::editor::EditorTextureAssetPickerFilter::TextureCube) &&
+            !kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(textureCube, kb::editor::EditorTextureAssetPickerFilter::Texture2D),
+        "P1.35: Texture picker must find a cube from intrinsic metadata without a cube name token");
+    kb::editor::tests::Require(
+        kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(textureVolume, kb::editor::EditorTextureAssetPickerFilter::TextureVolume) &&
+            kb::editor::EditorTextureAssetPickerDialog::MatchesFilter(textureArray, kb::editor::EditorTextureAssetPickerFilter::Texture2DArray),
+        "KBMAT-MAT58: Texture picker must recognize volume and 2D-array texture asset filters");
+#endif
 }
 
 void RunMaterialEditorGraphPinTypeUiModelTest() {
@@ -4157,7 +4706,7 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
     std::uint32_t textureNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 220, 80, &colorNodeId),
         "KBMAT-MAT59: Material Editor should create a color node for pin compatibility tests");
-    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, 460, 80, &textureNodeId),
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, 560, 80, &textureNodeId),
         "KBMAT-MAT59: Material Editor should create a texture node for pin compatibility tests");
 
     const kb::render::RenderMaterialGraphDocument& graph = materialEditor.WorkingCopy()->graph;
@@ -4196,12 +4745,17 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
     const POINT colorAlphaPin = kb::editor::MaterialEditorPanelOutputPinPoint(*colorRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 4U, colorOutputPinCount);
     const std::optional<kb::editor::MaterialEditorGraphPinHit> colorAlphaHit =
         kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graphAfterConnect, colorAlphaPin.x, colorAlphaPin.y);
+    const std::string colorAlphaHitDetail = colorAlphaHit.has_value()
+        ? " actual pin=" + colorAlphaHit->pin + " type=" + std::to_string(static_cast<int>(colorAlphaHit->type))
+        : " actual pin=<none>";
+    const std::string colorAlphaHitMessage =
+        "KBMAT-MAT59: Graph pin hit-test should expose Constant Color's alpha channel output pin;" + colorAlphaHitDetail;
     kb::editor::tests::Require(colorAlphaHit.has_value() &&
             colorAlphaHit->nodeId == colorNodeId &&
             colorAlphaHit->direction == kb::editor::MaterialEditorGraphPinDirection::Output &&
             colorAlphaHit->pin == "a" &&
             colorAlphaHit->type == kb::render::RenderMaterialGraphPinType::Float,
-        "KBMAT-MAT59: Graph pin hit-test should expose Constant Color's alpha channel output pin");
+        colorAlphaHitMessage.c_str());
 
     const std::optional<RECT> textureRect = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graphAfterConnect, textureNodeId);
     kb::editor::tests::Require(textureRect.has_value(), "KBMAT-MAT59: Texture node rect should resolve for pin hit-test");
@@ -4216,6 +4770,253 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
         "KBMAT-MAT59: Graph pin hit-test should return the texture input pin and its type");
 #endif
 }
+
+#if defined(_WIN32)
+[[nodiscard]] bool PointInsideRectInclusive(const RECT& rect, POINT point) noexcept {
+    return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom;
+}
+
+[[nodiscard]] bool RectInsideRect(const RECT& outer, const RECT& inner) noexcept {
+    return inner.left >= outer.left && inner.top >= outer.top && inner.right <= outer.right && inner.bottom <= outer.bottom &&
+        inner.right > inner.left && inner.bottom > inner.top;
+}
+
+[[nodiscard]] bool IsAuditedTextureNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume ||
+        kind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
+}
+
+[[nodiscard]] bool IsAuditedColorNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterColor ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp;
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphNode MakeAuditNode(kb::render::RenderMaterialGraphNodeKind kind, std::uint32_t id) {
+    kb::render::RenderMaterialGraphNode node{
+        .id = id,
+        .kind = kind,
+        .positionX = 120,
+        .positionY = 90,
+    };
+    node.parameter = kb::render::RenderMaterialGraphParameterMetadata{
+        .stableId = "audit" + std::to_string(id),
+        .displayName = "Audit " + std::to_string(id),
+        .defaultValueHint = "0.2 0.4 0.8 1",
+        .textureRole = "baseColor",
+        .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+        .overrideSupported = true,
+    };
+    if (kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+        node.parameter.defaultValueHint = "0 0 0 0 0.5 0.1 0.6 1 1 1 1 1";
+    } else if (kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterScalar ||
+        kind == kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter) {
+        node.parameter.defaultValueHint = "0.5";
+    } else if (kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2) {
+        node.parameter.defaultValueHint = "0.25 0.75";
+    } else if (kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ParameterVector) {
+        node.parameter.defaultValueHint = "0.2 0.4 0.8";
+    }
+    if (kind == kb::render::RenderMaterialGraphNodeKind::CustomCode) {
+        node.customCode = kb::render::RenderMaterialGraphCustomCode{
+            .body = "return A + B + C + D + E + F;",
+            .outputType = kb::render::RenderMaterialGraphPinType::Float4,
+            .inputs = {
+                kb::render::RenderMaterialGraphCustomPin{ .name = "A", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "B", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "C", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "D", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "E", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "F", .type = kb::render::RenderMaterialGraphPinType::Float4 },
+            },
+            .outputs = {
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Color", .type = kb::render::RenderMaterialGraphPinType::Color },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Mask", .type = kb::render::RenderMaterialGraphPinType::Float },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Normal", .type = kb::render::RenderMaterialGraphPinType::Float3 },
+            },
+        };
+    } else if (kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        node.customCode = kb::render::RenderMaterialGraphCustomCode{
+            .body = {},
+            .outputType = kb::render::RenderMaterialGraphPinType::Float4,
+            .inputs = {
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Base", .type = kb::render::RenderMaterialGraphPinType::Color },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Tint", .type = kb::render::RenderMaterialGraphPinType::Color },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Roughness", .type = kb::render::RenderMaterialGraphPinType::Float },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Normal", .type = kb::render::RenderMaterialGraphPinType::Float3 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Mask", .type = kb::render::RenderMaterialGraphPinType::Float },
+            },
+            .outputs = {
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Color", .type = kb::render::RenderMaterialGraphPinType::Color },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "RoughnessOut", .type = kb::render::RenderMaterialGraphPinType::Float },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "NormalOut", .type = kb::render::RenderMaterialGraphPinType::Float3 },
+                kb::render::RenderMaterialGraphCustomPin{ .name = "Alpha", .type = kb::render::RenderMaterialGraphPinType::Float },
+            },
+        };
+    }
+    return node;
+}
+
+void RunMaterialEditorGraphProductGeometryAuditTest() {
+    const RECT content{ 0, 0, 1600, 1100 };
+
+    for (const kb::render::RenderMaterialGraphNodeKind kind : kb::render::AllRenderMaterialGraphNodeKinds()) {
+        kb::render::RenderMaterialGraphDocument graph{};
+        graph.nodes.push_back(MakeAuditNode(kind, 2U));
+        const kb::render::RenderMaterialGraphNode& node = graph.nodes.front();
+        const std::string nodeName{ kb::render::RenderMaterialGraphNodeKindName(kind) };
+        const std::optional<RECT> rect = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graph, node.id);
+        kb::editor::tests::Require(rect.has_value(), ("KBMAT-MAT90: node rect missing for " + nodeName).c_str());
+
+        const SIZE size = kb::editor::MaterialEditorPanelGraphNodeSize(node);
+        kb::editor::tests::Require(size.cx >= 64 && size.cy >= kb::editor::MaterialEditorPanelMetrics::GraphNodeHeaderHeight + 20,
+            ("KBMAT-MAT90: node is too small to be usable: " + nodeName).c_str());
+
+        const std::vector<std::string> inputPins = kb::editor::MaterialEditorPanelHitTestInputPins(node);
+        for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
+            const POINT pin = kb::editor::MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex);
+            kb::editor::tests::Require(PointInsideRectInclusive(*rect, pin),
+                ("KBMAT-MAT90: input pin outside node rect: " + nodeName + "." + inputPins[pinIndex]).c_str());
+            const std::optional<kb::editor::MaterialEditorGraphPinHit> hit =
+                kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graph, pin.x, pin.y);
+            kb::editor::tests::Require(hit.has_value() &&
+                    hit->nodeId == node.id &&
+                    hit->direction == kb::editor::MaterialEditorGraphPinDirection::Input &&
+                    hit->pin == inputPins[pinIndex],
+                ("KBMAT-MAT90: input pin hit-test mismatch: " + nodeName + "." + inputPins[pinIndex]).c_str());
+        }
+
+        const std::vector<std::string> outputPins = kb::editor::MaterialEditorPanelHitTestOutputPins(node);
+        for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
+            const POINT pin = kb::editor::MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex, outputPins.size());
+            kb::editor::tests::Require(PointInsideRectInclusive(*rect, pin),
+                ("KBMAT-MAT90: output pin outside node rect: " + nodeName + "." + outputPins[pinIndex]).c_str());
+            const std::optional<kb::editor::MaterialEditorGraphPinHit> hit =
+                kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graph, pin.x, pin.y);
+            kb::editor::tests::Require(hit.has_value() &&
+                    hit->nodeId == node.id &&
+                    hit->direction == kb::editor::MaterialEditorGraphPinDirection::Output &&
+                    hit->pin == outputPins[pinIndex],
+                ("KBMAT-MAT90: output pin hit-test mismatch: " + nodeName + "." + outputPins[pinIndex]).c_str());
+        }
+
+        if (IsAuditedTextureNode(kind)) {
+            if (kb::editor::MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
+                const RECT preview = kb::editor::MaterialEditorPanelTextureSamplePreviewRect(*rect);
+                const RECT picker = kb::editor::MaterialEditorPanelTextureSamplePickerRect(*rect);
+                kb::editor::tests::Require(RectInsideRect(*rect, preview) && RectInsideRect(*rect, picker),
+                    ("KBMAT-MAT90: texture sample image slot geometry is outside node: " + nodeName).c_str());
+                const int hitX = (picker.left + picker.right) / 2;
+                const int hitY = (picker.top + picker.bottom) / 2;
+                const std::optional<std::uint32_t> textureHit =
+                    kb::editor::MaterialEditorPanelRenderer::GraphTextureSampleAt(content, graph, hitX, hitY);
+                kb::editor::tests::Require(textureHit.has_value() && *textureHit == node.id,
+                    ("KBMAT-MAT90: texture sample image slot is not clickable: " + nodeName).c_str());
+            } else {
+                const RECT textureValue = kb::editor::MaterialEditorPanelTextureParameterRect(*rect);
+                kb::editor::tests::Require(RectInsideRect(*rect, textureValue),
+                    ("KBMAT-MAT90: texture object picker geometry is outside node: " + nodeName).c_str());
+                const int hitX = (textureValue.left + textureValue.right) / 2;
+                const int hitY = (textureValue.top + textureValue.bottom) / 2;
+                const std::optional<std::uint32_t> textureHit =
+                    kb::editor::MaterialEditorPanelRenderer::GraphTextureSampleAt(content, graph, hitX, hitY);
+                kb::editor::tests::Require(textureHit.has_value() && *textureHit == node.id,
+                    ("KBMAT-MAT90: texture object picker slot is not clickable: " + nodeName).c_str());
+            }
+        }
+
+        if (IsAuditedColorNode(kind)) {
+            kb::render::RenderMaterialAssetData material{};
+            material.graph = graph;
+            material.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+                .stableId = node.parameter.stableId,
+                .type = kb::render::RenderMaterialParameterType::Color,
+                .numbers = { 0.2F, 0.4F, 0.8F, 1.0F },
+            });
+
+            const RECT watcher = kb::editor::MaterialEditorPanelColorWatcherRect(*rect, kind);
+            kb::editor::tests::Require(RectInsideRect(*rect, watcher),
+                ("KBMAT-MAT90: color watcher geometry is outside node: " + nodeName).c_str());
+            if (kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+                const RECT gradient = kb::editor::MaterialEditorPanelColorRampGradientRect(*rect);
+                kb::editor::tests::Require(RectInsideRect(watcher, gradient),
+                    "KBMAT-MAT90: ColorRamp gradient must live inside its watcher panel");
+                const std::optional<kb::editor::MaterialEditorGraphColorWatcherHit> gradientHit =
+                    kb::editor::MaterialEditorPanelRenderer::GraphColorWatcherAt(
+                        content,
+                        material,
+                        (gradient.left + gradient.right) / 2,
+                        (gradient.top + gradient.bottom) / 2);
+                kb::editor::tests::Require(gradientHit.has_value() &&
+                        gradientHit->target == kb::editor::MaterialEditorGraphColorWatcherTarget::ColorRampStop,
+                    "KBMAT-MAT90: ColorRamp gradient should open a stop color picker");
+            } else {
+                const RECT swatch = kb::editor::MaterialEditorPanelColorWatcherSwatchRect(*rect, kind);
+                kb::editor::tests::Require(RectInsideRect(watcher, swatch),
+                    ("KBMAT-MAT90: color swatch geometry is outside watcher: " + nodeName).c_str());
+                const std::optional<kb::editor::MaterialEditorGraphColorWatcherHit> swatchHit =
+                    kb::editor::MaterialEditorPanelRenderer::GraphColorWatcherAt(
+                        content,
+                        material,
+                        (swatch.left + swatch.right) / 2,
+                        (swatch.top + swatch.bottom) / 2);
+                kb::editor::tests::Require(swatchHit.has_value() && swatchHit->nodeId == node.id && !swatchHit->applyImmediately,
+                    ("KBMAT-MAT90: color swatch should open custom color picker: " + nodeName).c_str());
+            }
+        }
+    }
+}
+#endif
+
+void RunMaterialEditorGraphSelectionSnapshotUndoRedoTest() {
+    kb::editor::EditorCommandStack commandStack;
+    kb::editor::MaterialEditorState materialEditor;
+    const kb::assets::AssetId materialId{ 0x0109U };
+    kb::render::RenderMaterialAssetData before{};
+    before.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    before.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+    });
+    before.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+    });
+    kb::render::RenderMaterialAssetData after = before;
+    after.desc.roughnessFactor = 0.25F;
+
+    materialEditor.Open(materialId, before);
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ 2U, 3U }, 2U),
+        "P1.37: selection snapshot setup must keep a primary node that is not vector.back()");
+    kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+            materialEditor,
+            materialId,
+            "Selection Snapshot Edit",
+            before,
+            after,
+            std::vector<std::uint32_t>{ 2U, 3U },
+            std::vector<std::uint32_t>{ 2U, 3U },
+            2U,
+            2U)),
+        "P1.37: full-selection working-copy command must execute");
+    kb::editor::tests::Require(materialEditor.SelectedNodeIds() == std::vector<std::uint32_t>({ 2U, 3U }) && materialEditor.SelectedNodeId() == 2U,
+        "P1.37: execute must restore the exact full selection and explicit primary node");
+    kb::editor::tests::Require(commandStack.Undo() && materialEditor.SelectedNodeIds() == std::vector<std::uint32_t>({ 2U, 3U }) && materialEditor.SelectedNodeId() == 2U,
+        "P1.37: undo must restore the exact full selection and explicit primary node");
+    kb::editor::tests::Require(commandStack.Redo() && materialEditor.SelectedNodeIds() == std::vector<std::uint32_t>({ 2U, 3U }) && materialEditor.SelectedNodeId() == 2U,
+        "P1.37: redo must restore the exact full selection and explicit primary node");
+}
+
 
 void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     CleanTempRoot();
@@ -4496,11 +5297,25 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
 
 #if defined(_WIN32)
     const RECT content{ 0, 0, 960, 720 };
-    const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    const int textureRowY = layout.detailsPanel.top + 34 + 22 + (2 * 18) + 6 + 22 + 9;
-    const std::optional<kb::editor::MaterialEditorPanelParameterHit> textureHit =
-        kb::editor::MaterialEditorPanelRenderer::TextureParameterAt(content, editor.Parameters(), {}, 0U, layout.detailsPanel.left + 20, textureRowY);
-    kb::editor::tests::Require(textureHit.has_value() && textureHit->stableId == "paint" && textureHit->type == kb::render::RenderMaterialParameterType::Texture,
+    const kb::editor::MaterialEditorDetailsLayout initialDetailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, instanceDetails, 0);
+    const kb::editor::MaterialEditorDetailsLayout scrolledDetailsLayout =
+        kb::editor::MaterialEditorPanelRenderer::ResolveDetailsLayout(content, instanceDetails, initialDetailsLayout.maxScroll);
+    const auto textureItem = std::ranges::find_if(scrolledDetailsLayout.items, [](const kb::editor::MaterialEditorDetailsLayoutItem& item) {
+        return item.kind == kb::editor::MaterialEditorDetailsItemKind::TextureParameterRow &&
+            item.clippedRect.right > item.clippedRect.left && item.clippedRect.bottom > item.clippedRect.top;
+    });
+    kb::editor::tests::Require(textureItem != scrolledDetailsLayout.items.end(),
+        "MAT-40 canonical instance Details layout should expose a visible texture row");
+    const kb::editor::MaterialEditorDetailsHit textureHit = textureItem == scrolledDetailsLayout.items.end()
+        ? kb::editor::MaterialEditorDetailsHit{}
+        : kb::editor::MaterialEditorPanelRenderer::DetailsHitAt(
+              scrolledDetailsLayout,
+              instanceDetails,
+              (textureItem->clippedRect.left + textureItem->clippedRect.right) / 2,
+              (textureItem->clippedRect.top + textureItem->clippedRect.bottom) / 2);
+    kb::editor::tests::Require(textureHit.kind == kb::editor::MaterialEditorDetailsHitKind::TextureParameter &&
+            textureHit.parameter.stableId == "paint" && textureHit.parameter.type == kb::render::RenderMaterialParameterType::Texture,
         "MAT-40 instance editor texture row should be hit-testable for the picker");
 #endif
 
@@ -4511,6 +5326,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     std::ifstream savedTextInput{ instancePath };
     std::ostringstream savedText;
     savedText << savedTextInput.rdbuf();
+    savedTextInput.close();
     kb::editor::tests::Require(saved.has_value() && saved->hasOverrides &&
             saved->staticParameterOverrides.size() == 1U &&
             saved->staticParameterOverrides[0].stableId == "useBlue" &&
@@ -4620,32 +5436,48 @@ void RunMaterialEditorMaterialStatsPanelModelTest() {
 
     kb::editor::MaterialEditorState editor;
     editor.Open(kb::assets::AssetId{ 0x6100U }, material);
+    kb::editor::tests::Require(!editor.MaterialStats().available &&
+            std::ranges::any_of(editor.MaterialStats().warnings, [](const std::string& warning) {
+                return warning.find("Awaiting cooked GPU") != std::string::npos;
+            }),
+        "P2.7: Material Stats must not present frontend source heuristics as GPU statistics");
+    editor.ApplyCookMaterialStats(
+        compile.shader.sourceHash,
+        "dxbc",
+        static_cast<std::uint32_t>(compile.shader.reflection.textures.size()),
+        static_cast<std::uint32_t>(compile.shader.reflection.uniforms.size()),
+        static_cast<std::uint32_t>(compile.shader.reflection.requiredVaryings.size()),
+        std::vector<kb::editor::MaterialEditorCookPassTelemetry>{
+            { .passName = "BaseOpaque", .succeeded = true, .cacheHit = false, .binaryByteSize = 1024U },
+            { .passName = "GBuffer", .succeeded = true, .cacheHit = true, .binaryByteSize = 1536U },
+            { .passName = "ShadowDepth", .succeeded = true, .cacheHit = false, .binaryByteSize = 768U },
+            { .passName = "BaseTransparent", .succeeded = true, .cacheHit = true, .binaryByteSize = 1280U },
+        });
     const kb::editor::MaterialEditorMaterialStatsModel& stats = editor.MaterialStats();
     kb::editor::tests::Require(stats.available &&
             stats.sourceHash == compile.shader.sourceHash &&
-            stats.passRows.size() == 2U,
-        "KBMAT-MAT61: Material Editor must expose current graph stats rows per pass");
+            stats.passRows.size() == 4U,
+        "P2.7: Material Editor must expose every actually cooked GPU pass including GBuffer and ShadowDepth");
     const kb::editor::MaterialEditorMaterialStatsPassRow& base = stats.passRows[0];
     kb::editor::tests::Require(base.passName == "BaseOpaque" &&
             base.graphProgram &&
-            base.instructionEstimate > 0U &&
-            base.textureSampleCount >= 1U &&
+            !base.instructionCountAvailable &&
+            base.instructionCount == 0U &&
+            base.binaryByteSize == 1024U &&
             base.samplerCount == compile.shader.reflection.textures.size() &&
             base.uniformCount == compile.shader.reflection.uniforms.size() &&
             base.varyingCount == compile.shader.reflection.requiredVaryings.size() &&
-            base.staticVariantCount == 32U,
-        "KBMAT-MAT61: Base pass stats must match graph reflection and variant estimate");
-    const kb::editor::MaterialEditorMaterialStatsPassRow& shadow = stats.passRows[1];
-    kb::editor::tests::Require(shadow.passName == "ShadowDepth" &&
-            !shadow.graphProgram &&
-            shadow.instructionEstimate == 0U &&
-            shadow.samplerCount == 0U &&
-            shadow.staticVariantCount == 32U,
-        "KBMAT-MAT61: ShadowDepth stats must identify builtin shadow when the graph has no WPO");
+            base.staticVariantCount == 1U,
+        "P2.7/P2.8: pass stats must report real binary/reflection telemetry and one materialized variant, never a source estimate");
+    const kb::editor::MaterialEditorMaterialStatsPassRow& gbuffer = stats.passRows[1];
+    kb::editor::tests::Require(gbuffer.passName == "GBuffer" && gbuffer.graphProgram && gbuffer.cacheHit &&
+            stats.passRows[2].passName == "ShadowDepth" && stats.passRows[2].graphProgram &&
+            stats.passRows[2].binaryByteSize == 768U,
+        "P2.7: GBuffer and ShadowDepth rows must reflect their real cooked graph programs, including fragment-only shadow paths");
     kb::editor::tests::Require(std::ranges::any_of(stats.warnings, [](const std::string& warning) {
-            return warning.find("Variant count high") != std::string::npos;
+            return warning.find("instruction count unavailable") != std::string::npos;
         }),
-        "KBMAT-MAT61: Material stats must surface budget warnings for variant explosion");
+        "P2.7: unavailable backend instruction telemetry must be explicit instead of fabricated");
 
     kb::editor::MaterialEditorPanelDetailsRows details =
         kb::editor::MaterialEditorPanelRenderer::DetailsRows(editor.Parameters(), editor.SelectedNodeId(), {});
@@ -5113,7 +5945,7 @@ void RunGraphMaterialCreateEditAssignRenderE2ETest() {
     std::filesystem::create_directories(texturePath.parent_path(), error);
     kb::editor::tests::Require(!error, "KBMAT-GRAPH-0501: E2E test could not create project folders");
     WriteTriangleObj(meshPath);
-    WriteTexture(texturePath, 220U, 80U, 40U);
+    WriteTexture(texturePath, 220U, 80U, 40U, "baseColor", "srgb");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     graph.storageModel = "material-graph-asset";
@@ -6055,8 +6887,11 @@ void RunMaterialEditorGraphRuntimeStateTest() {
 
     kb::editor::MaterialEditorState editor;
     editor.Open(kb::assets::AssetId{ 0x1401U }, valid);
-    kb::editor::tests::Require(!editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
-        "KBMAT-MAT14: A valid graph working copy must report the GPU graph runtime state");
+    kb::editor::tests::Require(!editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::Compiling,
+        "P1.4: validator/compiler success must not claim a GPU program before a real cook result");
+    editor.ApplyCookResult({}, true, true, false, false);
+    kb::editor::tests::Require(editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
+        "P1.4: a successful real cook must promote the editor to the GPU graph runtime state");
 
     // An invalid graph (Float -> Color type mismatch) with no last-good artifact falls back to the error material.
     kb::render::RenderMaterialAssetData invalid{};
@@ -6071,14 +6906,55 @@ void RunMaterialEditorGraphRuntimeStateTest() {
     kb::render::RenderMaterialAssetData invalidWithLastGood = invalid;
     invalidWithLastGood.graph.lastGoodArtifact = kb::render::RenderMaterialGraphLastGoodArtifact{ .assetId = 0x99U, .contentHash = 0xABU };
     editor.SetWorkingCopy(invalidWithLastGood);
+    editor.ApplyCookResult({ "shaderc rejected the current graph" }, false, true, true, true);
     kb::editor::tests::Require(editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingLastGood,
-        "KBMAT-MAT14: A broken graph edit must keep the last-good program active instead of crashing");
+        "P1.14: only a real stale cook result with a live program may report last-good");
+    kb::editor::tests::Require(std::ranges::any_of(editor.Diagnostics(), [](const std::string& row) {
+            return row.find("[cook]") != std::string::npos && row.find("shaderc rejected") != std::string::npos;
+        }),
+        "P1.5: a cook failure referenced by the banner must be present in merged diagnostics");
     kb::editor::tests::Require(!editor.Diagnostics().empty(), "KBMAT-MAT14: A broken graph must surface diagnostics, not a silent black state");
 
     // Fixing the graph hot-reloads back to the GPU graph state without reopening.
     editor.SetWorkingCopy(valid);
+    editor.ApplyCookResult({}, true, true, false, false);
     kb::editor::tests::Require(!editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
         "KBMAT-MAT14: Fixing a broken graph must hot-reload back to the GPU graph state");
+}
+
+void RunMaterialGraphTextureSemanticTraversalTest() {
+    kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 2U, .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 3U, .kind = kb::render::RenderMaterialGraphNodeKind::Reroute });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 4U, .kind = kb::render::RenderMaterialGraphNodeKind::Multiply });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 5U, .kind = kb::render::RenderMaterialGraphNodeKind::NormalUnpack });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 6U, .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample });
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample, 2U, "color",
+        kb::render::RenderMaterialGraphNodeKind::Reroute, 3U, "value"));
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::Reroute, 3U, "value",
+        kb::render::RenderMaterialGraphNodeKind::Multiply, 4U, "a"));
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::Multiply, 4U, "value",
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack, 5U, "color"));
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack, 5U, "normal",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::TextureSample, 6U, "color",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    kb::editor::tests::Require(kb::editor::EditorMaterialGraphNodeFeedsSurfaceNormal(graph, 2U),
+        "P1.36: normal-map semantic traversal stopped at an intermediate Reroute/Multiply chain");
+    kb::editor::tests::Require(!kb::editor::EditorMaterialGraphNodeFeedsSurfaceNormal(graph, 6U),
+        "P1.36: base-color-only texture was misclassified as a normal map");
+
+    graph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::NormalUnpack, 5U, "normal",
+        kb::render::RenderMaterialGraphNodeKind::Multiply, 4U, "b"));
+    kb::editor::tests::Require(kb::editor::EditorMaterialGraphNodeFeedsSurfaceNormal(graph, 2U),
+        "P1.36: cycle-safe dependency traversal lost the Material Output normal path");
 }
 
 } // namespace
@@ -6096,12 +6972,16 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunDuplicateMaterialAssetPreservesParametersTest();
     RunMaterialTextureSlotAuthoringTest();
     RunMaterialTextureSlotValidationTest();
+    RunMaterialEditorNormalSlotBuildsGraphNormalMapTest();
     RunMaterialAssetEditCommandUndoRedoTest();
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
+    RunMaterialEditorDocumentHistoryIsolationTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
     RunMaterialEditorVariantSwitchAuthoringTest();
     RunMaterialEditorGraphRuntimeStateTest();
+    RunMaterialGraphTextureSemanticTraversalTest();
     RunMaterialEditorGraphWorkingCopyCommandUndoRedoTest();
+    RunMaterialEditorGraphSelectionSnapshotUndoRedoTest();
     RunMaterialEditorGraphMultiSelectCopyPasteDuplicateTest();
     RunMaterialEditorGraphSelectionLayoutCommandsTest();
     RunMaterialEditorGraphPromoteToParameterTest();
@@ -6113,6 +6993,9 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorLayerStackNodeModelTest();
     RunMaterialEditorTypedNodePropertyModelTest();
     RunMaterialEditorGraphPinTypeUiModelTest();
+#if defined(_WIN32)
+    RunMaterialEditorGraphProductGeometryAuditTest();
+#endif
     RunMaterialInstanceEditorOverrideModelAndSaveTest();
     RunMaterialEditorMaterialStatsPanelModelTest();
     RunMaterialEditorShaderViewerReflectionModelTest();

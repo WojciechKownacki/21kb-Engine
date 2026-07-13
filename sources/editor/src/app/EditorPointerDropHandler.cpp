@@ -24,6 +24,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "inspection/InspectorPanelState.hpp"
+#include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
@@ -36,6 +37,22 @@ namespace {
 
 [[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] EditorTextureAssetPickerFilter TexturePickerFilterForNodeKind(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
+        return EditorTextureAssetPickerFilter::TextureCube;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return EditorTextureAssetPickerFilter::TextureVolume;
+    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return EditorTextureAssetPickerFilter::Texture2DArray;
+    default:
+        return EditorTextureAssetPickerFilter::Texture2D;
+    }
 }
 
 [[nodiscard]] bool DropTextureOnMaterialEditor(
@@ -61,9 +78,29 @@ namespace {
     if (material == nullptr || material->type != "RenderMaterial") {
         return false;
     }
-    const std::optional<kb::render::RenderMaterialAssetData> materialAsset = sceneContext.ReadMaterialAsset(materialId);
+    const std::optional<kb::render::RenderMaterialAssetData> materialAsset =
+        sceneContext.MaterialEditor().WorkingCopy().has_value()
+            ? sceneContext.MaterialEditor().WorkingCopy()
+            : sceneContext.ReadMaterialAsset(materialId);
     if (!materialAsset.has_value()) {
         return false;
+    }
+
+    if (const std::optional<std::uint32_t> textureNodeId =
+            MaterialEditorPanelRenderer::GraphTextureSampleAt(*materialEditor, materialAsset->graph, sceneContext, materialId, x, y)) {
+        const kb::render::RenderMaterialGraphNode* textureNode = kb::render::FindRenderMaterialGraphNode(materialAsset->graph, *textureNodeId);
+        const kb::assets::AssetMetadata* texture = sceneContext.Scene().Assets().Manager().Registry().Find(textureId);
+        if (texture == nullptr) {
+            return false;
+        }
+        const EditorTextureAssetPickerFilter filter = textureNode == nullptr
+            ? EditorTextureAssetPickerFilter::Texture2D
+            : TexturePickerFilterForNodeKind(textureNode->kind);
+        if (!EditorTextureAssetPickerDialog::MatchesFilter(*texture, filter)) {
+            sceneContext.Console().Error("Materials", "Texture asset type does not match this material graph node.");
+            return true;
+        }
+        return sceneContext.SetMaterialGraphTextureSampleAsset(materialId, *textureNodeId, textureId);
     }
 
     const std::optional<EditorMaterialTextureSlot> slot = MaterialEditorPanelRenderer::TextureSlotAt(*materialEditor, materialAsset->graph, sceneContext, materialId, x, y);
@@ -134,11 +171,20 @@ namespace {
     }
 
     sceneContext.SetMaterialGraphCanvasViewport(
+        layout.graphCanvas.left,
+        layout.graphCanvas.top,
         MaterialEditorPanelRectWidth(layout.graphCanvas),
         MaterialEditorPanelRectHeight(layout.graphCanvas));
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom);
     const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext.MaterialGraphPanY()) / zoom);
+    if (sceneContext.IsMaterialGraphContextMenuPinFiltered()) {
+        if (!sceneContext.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphX, graphY)) {
+            static_cast<void>(sceneContext.CancelMaterialGraphPinConnection());
+            return false;
+        }
+        return sceneContext.ExecuteMaterialGraphContextMenuCommand(command);
+    }
     static_cast<void>(sceneContext.OpenMaterialGraphContextMenu(materialId, x, y, graphX, graphY));
     return sceneContext.ExecuteMaterialGraphContextMenuCommand(command);
 }

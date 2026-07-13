@@ -1,7 +1,6 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
-#include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
@@ -15,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <ranges>
 #include <string>
 #include <span>
 #include <vector>
@@ -114,6 +114,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "missing texture binding";
     case render::SceneRenderDiagnosticKind::MissingTextureResource:
         return "missing texture resource";
+    case render::SceneRenderDiagnosticKind::TextureDimensionMismatch:
+        return "texture dimension mismatch";
     case render::SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath:
         return "unresolved material texture path";
     case render::SceneRenderDiagnosticKind::MissingMaterialAsset:
@@ -150,6 +152,14 @@ void EnsureParentChildClipping(HWND parent) noexcept {
     }
     if (event.materialAssetId != 0U) {
         detail += " materialAsset=" + std::to_string(event.materialAssetId);
+    }
+    if (event.textureAssetId != 0U) {
+        detail += " textureAsset=" + std::to_string(event.textureAssetId);
+    }
+    if (event.kind == render::SceneRenderDiagnosticKind::TextureDimensionMismatch) {
+        detail += " expected=" + std::string{ render::RenderTextureDimensionName(event.expectedTextureDimension) };
+        detail += " actual=" + std::string{ render::RenderTextureDimensionName(event.actualTextureDimension) };
+        detail += " fallback=" + std::string{ render::RenderTextureDimensionName(event.fallbackTextureDimension) };
     }
     if (event.instanceCount != 0U) {
         detail += " instances=" + std::to_string(event.instanceCount);
@@ -239,7 +249,7 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         return;
     }
 
-    hostSurfaceStore_.MarkHostNotPresented(parent);
+    TrackPaintHost(parent);
     for (const HostSurfaceLayout& layout : layouts) {
         const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
         if (RectWidth(layoutBounds) == 0U || RectHeight(layoutBounds) == 0U) {
@@ -313,6 +323,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     }
 
     paintParent_ = nullptr;
+    paintHosts_.clear();
     contextWindow_ = nullptr;
     backendSettings_ = nullptr;
     rendererBackendGeneration_ = 0;
@@ -331,11 +342,11 @@ void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
 
 void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
+    paintHosts_.clear();
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     failureDetail_.clear();
-    sessionStore_.MarkHostNotPresented(parent);
-    hostSurfaceStore_.MarkHostNotPresented(parent);
+    TrackPaintHost(parent);
 }
 
 void EditorSceneBgfxViewport::EndPaintLayout() {
@@ -343,10 +354,13 @@ void EditorSceneBgfxViewport::EndPaintLayout() {
         FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");
     }
 
-    hostSurfaceStore_.HideUnpresentedForHost(paintParent_);
+    for (const HWND host : paintHosts_) {
+        hostSurfaceStore_.HideUnpresentedForHost(host);
+    }
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     paintParent_ = nullptr;
+    paintHosts_.clear();
 }
 
 void EditorSceneBgfxViewport::Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme) {
@@ -469,10 +483,18 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits) {
-    if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& requestedRect, bool preserveBits) {
+    if (surface.host == nullptr || RectWidth(requestedRect) == 0U || RectHeight(requestedRect) == 0U || !EnsureWindowClass()) {
         return false;
     }
+
+    // The native child window and its swapchain-backed present target must always agree on size --
+    // holding one back while the other tracks the live panel rect showed up as either duplicated /
+    // stretched content (window ahead of swapchain) or a black flash (swapchain ahead of window, or a
+    // premature present with nothing submitted yet). So this always resizes to the live requested
+    // rect immediately; see EnsurePresentTarget for why recreation itself is now cheap enough to do
+    // on every call without a throttle.
+    const RECT rect = requestedRect;
 
     EnsureParentChildClipping(surface.host);
     preserveBits = preserveBits || ShouldPreserveHostSurfaceBits(surface.key);
@@ -605,11 +627,21 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
 }
 
 bool EditorSceneBgfxViewport::EnsureRenderer() {
+    bool hasPreservedExposure = false;
+    float preservedExposureLuminance = 0.0F;
     if (renderer_.IsInitialized()) {
         const std::uint64_t requestedGeneration = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
         if (rendererBackendGeneration_ == requestedGeneration) {
             return true;
         }
+        // A generation bump here (MSAA sample-count/mode change, backend switch) forces a full
+        // Shutdown()+Initialize() below purely because bgfx needs the device recreated -- it has
+        // nothing to do with the scene actually getting brighter or darker. Renderer::Shutdown()
+        // resets the auto-exposure meter, and its default metering mode reads back the actually
+        // rendered HDR frame; carrying the last adapted luminance across the reinit avoids the
+        // image visibly (and incorrectly) re-exposing from a neutral 0.18 baseline every time.
+        hasPreservedExposure = renderer_.HasExposureHistory();
+        preservedExposureLuminance = renderer_.CurrentExposureLuminance();
         ShutdownGpuResources();
     }
     if (!EnsureContextWindow()) {
@@ -632,6 +664,9 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
         SetFailureDetail("Renderer initialization failed for this viewport. Material preview and scene view cannot use separate bgfx renderer instances in the same process.");
         return false;
     }
+    if (hasPreservedExposure) {
+        renderer_.PrimeExposureAdaptation(preservedExposureLuminance);
+    }
 
     renderer_.SetRuntimeAssetDiscoveryEnabled(false);
     if (!graphShaderCacheRoot_.empty()) {
@@ -646,13 +681,22 @@ bool EditorSceneBgfxViewport::EnsurePresentTarget(HostSurface& surface, std::uin
         SetFailureDetail("Present target creation was requested before the viewport renderer or native child surface was ready.");
         return false;
     }
+
+    // flushBeforeRecreate used to force an explicit bgfx::frame() here, outside of and *before* this
+    // same paint's own BeginFrame()/EndFrame() pair (see SubmitPreparedSubmissions, called right after
+    // this). That stray frame boundary did two things wrong: it was a full synchronous GPU stall on
+    // every resize-driven repaint (the original stutter-to-10fps complaint), and it flushed a frame
+    // with nothing submitted yet to the just-recreated swapchain, which is what actually painted it
+    // black for an instant -- not a GDI erase issue. The destroy() this Ensure() call queues is
+    // deferred and gets processed by the *normal* end-of-frame bgfx::frame() a few lines down the
+    // call stack regardless, so no extra flush is needed for correctness here.
     if (!surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
         .nativeWindow = surface.window,
         .width = width,
         .height = height,
         .colorFormat = bgfx::TextureFormat::BGRA8,
         .depthFormat = bgfx::TextureFormat::Count,
-        .flushBeforeRecreate = true,
+        .flushBeforeRecreate = false,
     })) {
         SetFailureDetail("Native window framebuffer creation failed for the viewport present surface.");
         return false;
@@ -703,10 +747,8 @@ void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
 }
 
 bool EditorSceneBgfxViewport::SubmitPendingPaint() {
-    EditorCrashBreadcrumbs::WriteValue("viewport", "SubmitPendingPaint begin pending", pendingPresents_.size());
     pendingSubmissions_.clear();
     if (pendingPresents_.empty()) {
-        EditorCrashBreadcrumbs::Write("viewport", "SubmitPendingPaint no pending");
         return true;
     }
 
@@ -725,9 +767,7 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
     }
 
     PendingPaintSubmitter submitter(*this);
-    const bool submitted = submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
-    EditorCrashBreadcrumbs::Write("viewport", submitted ? "SubmitPendingPaint end ok" : "SubmitPendingPaint end failed");
-    return submitted;
+    return submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
 }
 
 void EditorSceneBgfxViewport::ReportAaTrace(std::string_view message, bool force) {
@@ -792,17 +832,21 @@ void EditorSceneBgfxViewport::SetFailureDetail(std::string detail) {
     }
 }
 
+void EditorSceneBgfxViewport::TrackPaintHost(HWND parent) noexcept {
+    if (parent == nullptr || std::ranges::find(paintHosts_, parent) != paintHosts_.end()) {
+        return;
+    }
+    paintHosts_.push_back(parent);
+    sessionStore_.MarkHostNotPresented(parent);
+    hostSurfaceStore_.MarkHostNotPresented(parent);
+}
+
 bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
     static_cast<void>(dc);
     return QueuePresent(rect, session, scene, settings);
 }
 
 bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
-    EditorCrashBreadcrumbs::Write(
-        "viewport",
-        "QueuePresent begin key=" + std::to_string(session.key) +
-            " render=" + std::to_string(settings.renderWidth) + "x" + std::to_string(settings.renderHeight) +
-            " post=" + (settings.postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     RECT requestedPanel = rect;
     if (HostSurface* surface = FindHostSurface(session.host, session.key); surface != nullptr && surface->hasLayoutBounds) {
         requestedPanel = ClipRectToBounds(surface->layoutBounds, requestedPanel);
@@ -811,7 +855,6 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     const std::uint32_t panelWidth = RectWidth(clippedPanel);
     const std::uint32_t panelHeight = RectHeight(clippedPanel);
     if (panelWidth == 0U || panelHeight == 0U) {
-        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent hide zero panel");
         HideSession(session.host, session.key);
         return true;
     }
@@ -821,12 +864,10 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     const std::uint32_t outputWidth = RectWidth(destination);
     const std::uint32_t outputHeight = RectHeight(destination);
     if (outputWidth == 0U || outputHeight == 0U) {
-        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent hide zero output");
         HideSession(session.host, session.key);
         return true;
     }
     if (!EnsureRenderer()) {
-        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent EnsureRenderer failed");
         return false;
     }
 
@@ -842,12 +883,20 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
         .outputWidth = outputWidth,
         .outputHeight = outputHeight,
     });
-    EditorCrashBreadcrumbs::WriteValue("viewport", "QueuePresent queued count", pendingPresents_.size());
     return true;
 }
 
 bool EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept {
-    return viewportKey == kInspectorMaterialPreviewViewportKey || viewportKey == kMaterialEditorPreviewViewportKey;
+    // Used to gate material-preview surfaces only; every other surface (the Scene viewport included)
+    // got SWP_NOCOPYBITS on resize/reshow plus an explicit WM_ERASEBKGND black fill. That forces a
+    // full black frame every single time the surface's native child window actually commits a resize
+    // -- harmless when resizes were effectively continuous, but once resize target recreation got
+    // throttled (see EnsureHostSurfaceWindow's interactive-resize throttle) each throttled commit now
+    // sits behind a visibly isolated black flash instead of blending into constant repaint noise.
+    // Preserving bits everywhere means a resize briefly shows the previous frame stretched/cropped
+    // instead of black, which is what a GPU-presented viewport should do regardless of surface kind.
+    static_cast<void>(viewportKey);
+    return true;
 }
 
 LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {

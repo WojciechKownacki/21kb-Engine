@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/SceneGBuffer.hpp"
+#include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -20,6 +21,7 @@ struct SceneDeferredLightingPassDesc {
     SceneRenderLightingConfig lightingConfig{};
     RenderExtent extent{};
     std::uint32_t clearRgba = 0x000000FFU;
+    const SceneRenderShadowMapBinding* shadowMap = nullptr;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -39,9 +41,11 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    FullscreenTexturePass debugNormalPresentPass_{};
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle surfaceSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
@@ -55,6 +59,10 @@ private:
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle shadowMapSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

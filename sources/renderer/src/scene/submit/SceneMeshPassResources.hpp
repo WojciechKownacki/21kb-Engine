@@ -11,6 +11,7 @@
 #include <array>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::render {
 
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
+    void EndFrame(std::uint64_t frameIndex) const;
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept;
@@ -63,19 +65,36 @@ public:
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
 
 private:
+    struct RetiredGraphUniform {
+        bgfx::UniformHandle handle = BGFX_INVALID_HANDLE;
+        std::uint64_t destroyFrame = 0U;
+    };
+
     [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
+    [[nodiscard]] bgfx::TextureHandle GraphFallbackTexture(
+        RenderTextureDimension dimension,
+        bool normal) const noexcept;
+    [[nodiscard]] bgfx::UniformHandle& AcquireGraphUniform(
+        std::string_view name,
+        bool sampler) const;
 
     std::string graphShaderCacheRoot_;
     mutable MaterialProgramRegistry programRegistry_;
+    mutable std::vector<MaterialProgramKey> residentProgramKeys_;
+    mutable std::vector<MaterialProgramKey> usedProgramKeys_;
+    mutable std::vector<std::string> usedGraphSamplerUniforms_;
+    mutable std::vector<std::string> usedGraphUniforms_;
     mutable SceneMeshProgramBindStats programBindStats_{};
     mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
     mutable SceneMeshPassProgramResolution lastProgramResolution_{};
     // MAT-78/#16: per-graph texture sampler uniforms, created lazily by name and reused across binds so the
     // scene actually binds a graph material's own textures (slot >= 6), not just the builtin PBR slots.
     mutable std::unordered_map<std::string, bgfx::UniformHandle> graphSamplerUniforms_;
+    mutable std::unordered_map<std::string, RetiredGraphUniform> retiredGraphSamplerUniforms_;
     // Numeric graph uniforms are created lazily by generated shader name. Collection-backed uniforms are
     // refreshed from the global runtime store at bind time so global parameter edits do not recompile graphs.
     mutable std::unordered_map<std::string, bgfx::UniformHandle> graphUniforms_;
+    mutable std::unordered_map<std::string, RetiredGraphUniform> retiredGraphUniforms_;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle gbufferProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
@@ -106,6 +125,12 @@ private:
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhiteCubeTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormalCubeTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhite3DTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormal3DTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackWhite2DArrayTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackNormal2DArrayTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

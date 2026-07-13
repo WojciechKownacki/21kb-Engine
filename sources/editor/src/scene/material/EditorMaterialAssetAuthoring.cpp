@@ -7,9 +7,11 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -98,16 +100,10 @@ namespace {
 }
 
 [[nodiscard]] std::optional<float> ParseDefaultFloat(std::string_view text) {
-    if (text.empty()) {
-        return std::nullopt;
-    }
-    std::string value{ text };
-    char* end = nullptr;
-    const float parsed = std::strtof(value.c_str(), &end);
-    if (end == value.c_str()) {
-        return std::nullopt;
-    }
-    return parsed;
+    float parsed = 0.0F;
+    return kb::render::ParseFiniteMaterialFloatToken(text, parsed)
+        ? std::optional<float>{ parsed }
+        : std::nullopt;
 }
 
 [[nodiscard]] kb::render::RenderMaterialGraphParameterMetadata FunctionEndpointMetadata(
@@ -292,15 +288,27 @@ bool EditorMaterialAssetAuthoring::CreateMaterialFromGraph(kb::assets::AssetId g
     }
     const kb::assets::AssetId sourceGraphId = graphMetadata->id;
     const std::string sourceGraphPath = graphMetadata->virtualPath.generic_string();
-    std::optional<kb::render::RenderMaterialGraphDocument> graph = kb::render::RenderMaterialGraphAssetLoader::LoadGraph(graphPath);
-    if (!graph.has_value()) {
+    kb::render::RenderMaterialAssetParseResult graphLoad =
+        kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(graphPath, graphAssetId);
+    for (const kb::render::RenderMaterialAssetParseDiagnostic& diagnostic : graphLoad.diagnostics) {
+        const std::string message =
+            std::string{ kb::render::RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) } +
+            ": " + diagnostic.message;
+        if (diagnostic.severity == kb::render::RenderMaterialAssetParseDiagnosticSeverity::Error) {
+            console_.Error("Materials", message);
+        } else {
+            console_.Warning("Materials", message);
+        }
+    }
+    if (!graphLoad.asset.has_value()) {
         console_.Error("Materials", "Material Graph could not be loaded: " + graphPath.generic_string());
         return false;
     }
+    const kb::render::RenderMaterialGraphDocument& graph = graphLoad.asset->graph;
 
     const std::string stableTypeId = StableTypeIdFromGraph(*graphMetadata);
     kb::render::RenderMaterialGraphMaterialTypeBuildResult typeResult = kb::render::BuildRenderMaterialGraphMaterialTypeDocument(
-        *graph,
+        graph,
         stableTypeId,
         1U,
         kb::render::RenderMaterialGraphBuildContext{
@@ -338,8 +346,8 @@ bool EditorMaterialAssetAuthoring::CreateMaterialFromGraph(kb::assets::AssetId g
     material.materialTypeAssetPath = typeMetadata->virtualPath.generic_string();
     material.graphSourceAssetId = sourceGraphId.value;
     material.graphSourceAssetPath = sourceGraphPath;
-    material.graph = *graph;
-    material.graph.storageModel = "inline-kbmat";
+    material.graph = graph;
+    material.graph.storageModel = "material-graph-asset";
     ApplySchemaDefaultsToMaterial(material, typeResult.document->schema);
 
     const std::filesystem::path materialPath = EditorMaterialAssetGateway::UniqueFilePath(folder, baseName + std::string{ "Material" });
@@ -392,7 +400,7 @@ std::optional<kb::render::RenderMaterialAssetData> EditorMaterialAssetAuthoring:
 }
 
 bool EditorMaterialAssetAuthoring::SetBaseColor(kb::assets::AssetId id, int channel, float value) {
-    if (channel < 0 || channel >= 4) {
+    if (channel < 0 || channel >= 4 || !std::isfinite(value)) {
         return false;
     }
     const bool saved = gateway_.Mutate(id, [channel, value](kb::render::RenderMaterialAssetData& asset) {
@@ -405,7 +413,7 @@ bool EditorMaterialAssetAuthoring::SetBaseColor(kb::assets::AssetId id, int chan
 }
 
 bool EditorMaterialAssetAuthoring::SetEmissiveColor(kb::assets::AssetId id, int channel, float value) {
-    if (channel < 0 || channel >= 3) {
+    if (channel < 0 || channel >= 3 || !std::isfinite(value)) {
         return false;
     }
     const bool saved = gateway_.Mutate(id, [channel, value](kb::render::RenderMaterialAssetData& asset) {
@@ -418,6 +426,9 @@ bool EditorMaterialAssetAuthoring::SetEmissiveColor(kb::assets::AssetId id, int 
 }
 
 bool EditorMaterialAssetAuthoring::SetMetallicFactor(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.metallicFactor = Clamp01(value);
     });
@@ -428,6 +439,9 @@ bool EditorMaterialAssetAuthoring::SetMetallicFactor(kb::assets::AssetId id, flo
 }
 
 bool EditorMaterialAssetAuthoring::SetRoughnessFactor(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.roughnessFactor = Clamp01(value);
     });
@@ -438,6 +452,9 @@ bool EditorMaterialAssetAuthoring::SetRoughnessFactor(kb::assets::AssetId id, fl
 }
 
 bool EditorMaterialAssetAuthoring::SetNormalScale(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.normalScale = ClampNonNegative(value);
     });
@@ -448,6 +465,9 @@ bool EditorMaterialAssetAuthoring::SetNormalScale(kb::assets::AssetId id, float 
 }
 
 bool EditorMaterialAssetAuthoring::SetOcclusionStrength(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.occlusionStrength = Clamp01(value);
     });
@@ -458,6 +478,9 @@ bool EditorMaterialAssetAuthoring::SetOcclusionStrength(kb::assets::AssetId id, 
 }
 
 bool EditorMaterialAssetAuthoring::SetEmissiveStrength(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.emissiveStrength = ClampNonNegative(value);
     });
@@ -468,6 +491,9 @@ bool EditorMaterialAssetAuthoring::SetEmissiveStrength(kb::assets::AssetId id, f
 }
 
 bool EditorMaterialAssetAuthoring::SetAlphaCutoff(kb::assets::AssetId id, float value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
     const bool saved = gateway_.Mutate(id, [value](kb::render::RenderMaterialAssetData& asset) {
         asset.desc.alphaCutoff = Clamp01(value);
     });

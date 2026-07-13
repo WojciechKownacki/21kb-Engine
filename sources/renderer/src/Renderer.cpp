@@ -65,6 +65,16 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     return "Unknown";
 }
 
+[[nodiscard]] const char* DebugViewName(SceneRenderDebugView view) noexcept {
+    switch (view) {
+    case SceneRenderDebugView::None:
+        return "None";
+    case SceneRenderDebugView::GBufferNormal:
+        return "GBufferNormal";
+    }
+    return "Unknown";
+}
+
 [[nodiscard]] const char* MeshPassModeName(SceneRenderMeshPassMode mode) noexcept {
     switch (mode) {
     case SceneRenderMeshPassMode::OpaqueOnly:
@@ -246,6 +256,11 @@ void Renderer::Shutdown() {
     frameReferences_.Clear();
     runtimeAssetDiscovery_.Clear();
     lastRuntimeMaterialLightingPath_.reset();
+    lastRuntimeMaterialDebugView_.reset();
+    lastRuntimeMaterialQualityLevel_.reset();
+    lastRuntimeMaterialFeatureLevel_.reset();
+    lastRuntimeMaterialShaderStage_.reset();
+    lastRuntimeMaterialVariantUsage_.reset();
     sceneExposureMeter_.ShutdownGpuResources();
     editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
@@ -597,18 +612,35 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
-    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
-    RenderMaterialGraphBuildContext runtimeGraphContext{};
+    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal;
+    RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
         : effectiveLightingConfig.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
             ? RenderMaterialGraphShadingPath::ForwardPlus
             : RenderMaterialGraphShadingPath::Forward;
     runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
-    if (!lastRuntimeMaterialLightingPath_.has_value() || *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath) {
+    if (!lastRuntimeMaterialLightingPath_.has_value() ||
+        *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
+        !lastRuntimeMaterialDebugView_.has_value() ||
+        *lastRuntimeMaterialDebugView_ != effectiveLightingConfig.debugView ||
+        !lastRuntimeMaterialQualityLevel_.has_value() ||
+        *lastRuntimeMaterialQualityLevel_ != runtimeGraphContext.qualityLevel ||
+        !lastRuntimeMaterialFeatureLevel_.has_value() ||
+        *lastRuntimeMaterialFeatureLevel_ != runtimeGraphContext.featureLevel ||
+        !lastRuntimeMaterialShaderStage_.has_value() ||
+        *lastRuntimeMaterialShaderStage_ != runtimeGraphContext.shaderStage ||
+        !lastRuntimeMaterialVariantUsage_.has_value() ||
+        *lastRuntimeMaterialVariantUsage_ != runtimeGraphContext.variantUsage) {
         runtimeResourceCache_.InvalidateMaterials(sceneRenderer_.get());
         lastRuntimeMaterialLightingPath_ = effectiveLightingConfig.lightingPath;
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path change");
+        lastRuntimeMaterialDebugView_ = effectiveLightingConfig.debugView;
+        lastRuntimeMaterialQualityLevel_ = runtimeGraphContext.qualityLevel;
+        lastRuntimeMaterialFeatureLevel_ = runtimeGraphContext.featureLevel;
+        lastRuntimeMaterialShaderStage_ = runtimeGraphContext.shaderStage;
+        lastRuntimeMaterialVariantUsage_ = runtimeGraphContext.variantUsage;
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path/debug view change");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
@@ -644,7 +676,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         std::ostringstream message;
         message << "SubmitSceneToViewport lighting resolved path=" << LightingPathName(effectiveLightingConfig.lightingPath)
                 << " deferred=" << BoolText(deferredLighting)
-                << " shadows=" << BoolText(effectiveLightingConfig.shadowsEnabled);
+                << " shadows=" << BoolText(effectiveLightingConfig.shadowsEnabled)
+                << " debugView=" << DebugViewName(effectiveLightingConfig.debugView);
         WriteRendererBreadcrumb("renderer", message.str());
     }
     if (deferredLighting && !defaultSceneGBuffer_.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
@@ -664,11 +697,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " albedoTex=" << HandleValue(defaultSceneGBuffer_.AlbedoTexture())
                 << " normalTex=" << HandleValue(defaultSceneGBuffer_.NormalTexture())
                 << " materialTex=" << HandleValue(defaultSceneGBuffer_.MaterialTexture())
+                << " surfaceTex=" << HandleValue(defaultSceneGBuffer_.SurfaceTexture())
                 << " depthTex=" << HandleValue(defaultSceneGBuffer_.DepthTexture())
                 << " extent=" << defaultSceneGBuffer_.Width() << 'x' << defaultSceneGBuffer_.Height()
                 << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
                 << ',' << SceneTextureFormatName(selection.normalFormat)
                 << ',' << SceneTextureFormatName(selection.materialFormat)
+                << ',' << SceneTextureFormatName(selection.surfaceFormat)
                 << ',' << SceneTextureFormatName(selection.depth.format) << ')'
                 << " targetFb=" << HandleValue(desc.target.frameBuffer)
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
@@ -676,13 +711,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
-        RendererViewConfigurator::ConfigureFramebufferClear(
+        RendererViewConfigurator::ConfigureGBufferClear(
             viewportPlan.viewIds.gbufferGeometry,
             defaultSceneGBuffer_.FrameBuffer(),
             desc.target.viewport.extent,
-            "KB GBuffer Geometry",
-            BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
-            desc.clearRgba,
             desc.clearDepth,
             desc.clearStencil);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
@@ -828,6 +860,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                     << " missingMaterialResource=" << stats.missingMaterialResourceCount
                     << " missingTextureBinding=" << stats.missingTextureBindingCount
                     << " missingTextureResource=" << stats.missingTextureResourceCount
+                    << " textureDimensionMismatch=" << stats.textureDimensionMismatchCount
                     << " diagnostics=" << lastSceneDiagnostics_.events.size();
             WriteRendererBreadcrumb("renderer", message.str());
 
@@ -854,6 +887,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .lightingConfig = effectiveLightingConfig,
                 .extent = desc.target.viewport.extent,
                 .clearRgba = desc.clearRgba,
+                .shadowMap = shadowBinding.IsValid() ? &shadowBinding : nullptr,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,
@@ -1028,7 +1062,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             lastSceneExposureStats_.push_back(RendererExposureSubmitter::Submit(
                 sceneExposureMeter_,
                 postProcessOutput,
-                desc,
+                sampledSceneDesc,
                 viewportPlan,
                 renderScene,
                 effectiveLightingConfig,
@@ -1216,6 +1250,18 @@ SceneRenderResourceMap* Renderer::SceneResourceMap() noexcept {
 
 const SceneRenderResourceMap* Renderer::SceneResourceMap() const noexcept {
     return sceneRenderer_ == nullptr ? nullptr : &sceneRenderer_->ResourceMap();
+}
+
+float Renderer::CurrentExposureLuminance() const noexcept {
+    return sceneExposureMeter_.CurrentLuminance();
+}
+
+bool Renderer::HasExposureHistory() const noexcept {
+    return sceneExposureMeter_.HasHistory();
+}
+
+void Renderer::PrimeExposureAdaptation(float luminance) noexcept {
+    sceneExposureMeter_.Prime(luminance);
 }
 
 SceneRenderSubmitStats Renderer::LastSceneSubmitStats() const noexcept {

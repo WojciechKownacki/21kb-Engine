@@ -163,6 +163,11 @@ struct SceneRenderDrawBudget {
     std::uint32_t maxDroppedInstances = 0;
 };
 
+enum class SceneRenderDebugView : std::uint8_t {
+    None,
+    GBufferNormal,
+};
+
 struct SceneRenderLightingConfig {
     std::uint32_t maxForwardLights = kMaxSceneForwardLights;
     SceneRenderLightingPath lightingPath = SceneRenderLightingPath::Forward;
@@ -192,6 +197,7 @@ struct SceneRenderLightingConfig {
     bool perLightShadowCaching = true;
     bool contactShadowsEnabled = false;
     bool volumetricLightingEnabled = false;
+    SceneRenderDebugView debugView = SceneRenderDebugView::None;
 };
 
 struct SceneRenderShadowMapBinding {
@@ -285,6 +291,7 @@ struct SceneRenderSubmitStats {
     std::uint32_t missingMaterialResourceCount = 0;
     std::uint32_t missingTextureBindingCount = 0;
     std::uint32_t missingTextureResourceCount = 0;
+    std::uint32_t textureDimensionMismatchCount = 0;
 
     [[nodiscard]] constexpr bool HasMissingResources() const noexcept {
         return missingMeshBindingCount != 0U ||
@@ -293,7 +300,8 @@ struct SceneRenderSubmitStats {
             missingMaterialBindingCount != 0U ||
             missingMaterialResourceCount != 0U ||
             missingTextureBindingCount != 0U ||
-            missingTextureResourceCount != 0U;
+            missingTextureResourceCount != 0U ||
+            textureDimensionMismatchCount != 0U;
     }
 };
 
@@ -348,6 +356,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     GraphMaterialProgramFallback,
     GraphMaterialProgramUnavailable,
     DeferredRendererUnavailable,
+    TextureDimensionMismatch,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -363,7 +372,11 @@ struct SceneRenderDiagnosticEvent {
     std::uint64_t entityId = 0;
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
+    std::uint64_t textureAssetId = 0;
     std::uint32_t instanceCount = 0;
+    RenderTextureDimension expectedTextureDimension = RenderTextureDimension::Texture2D;
+    RenderTextureDimension actualTextureDimension = RenderTextureDimension::Texture2D;
+    RenderTextureDimension fallbackTextureDimension = RenderTextureDimension::Texture2D;
     std::uint64_t materialTypeId = 0U;
     std::uint32_t materialTypeVersion = 0U;
     std::uint64_t graphSourceHash = 0U;
@@ -472,6 +485,7 @@ struct SceneRenderDiagnostics {
     lhs.missingMaterialResourceCount += rhs.missingMaterialResourceCount;
     lhs.missingTextureBindingCount += rhs.missingTextureBindingCount;
     lhs.missingTextureResourceCount += rhs.missingTextureResourceCount;
+    lhs.textureDimensionMismatchCount += rhs.textureDimensionMismatchCount;
     return lhs;
 }
 

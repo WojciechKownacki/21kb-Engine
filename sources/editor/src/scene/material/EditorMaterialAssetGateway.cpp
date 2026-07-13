@@ -13,15 +13,182 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace kb::editor {
 namespace {
 
 constexpr std::string_view kMaterialExtension = ".kbmat";
+
+void UpsertGraphParameterValue(
+    kb::render::RenderMaterialAssetData& material,
+    std::string_view stableId,
+    kb::render::RenderMaterialParameterType type,
+    std::array<float, 4U> numbers) {
+    const auto existing = std::ranges::find_if(material.graphParameterValues, [stableId](const kb::render::RenderMaterialGraphParameterValue& value) {
+        return value.stableId == stableId;
+    });
+    kb::render::RenderMaterialGraphParameterValue value{
+        .stableId = std::string{ stableId },
+        .type = type,
+        .numbers = numbers,
+    };
+    if (existing == material.graphParameterValues.end()) {
+        material.graphParameterValues.push_back(std::move(value));
+    } else {
+        *existing = std::move(value);
+    }
+}
+
+void SyncBuiltInGraphParameterOverrides(kb::render::RenderMaterialAssetData& material) {
+    for (const kb::render::RenderMaterialGraphNode& node : material.graph.nodes) {
+        const std::string& stableId = node.parameter.stableId;
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterColor &&
+            (stableId == "baseColor" || stableId == "baseColorFactor")) {
+            UpsertGraphParameterValue(material, stableId, kb::render::RenderMaterialParameterType::Color,
+                { material.desc.baseColor[0], material.desc.baseColor[1], material.desc.baseColor[2], material.desc.baseColor[3] });
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterScalar && stableId == "roughnessFactor") {
+            UpsertGraphParameterValue(material, stableId, kb::render::RenderMaterialParameterType::Scalar,
+                { material.desc.roughnessFactor, 0.0F, 0.0F, 0.0F });
+        } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterScalar && stableId == "metallicFactor") {
+            UpsertGraphParameterValue(material, stableId, kb::render::RenderMaterialParameterType::Scalar,
+                { material.desc.metallicFactor, 0.0F, 0.0F, 0.0F });
+        }
+    }
+}
+
+void WriteMaterialGatewayDebugLog(std::string_view message) {
+    static_cast<void>(message);
+}
+
+[[nodiscard]] bool GraphOutputHasNormalLink(const kb::render::RenderMaterialAssetData& asset) noexcept {
+    for (const kb::render::RenderMaterialGraphLink& link : asset.graph.links) {
+        if (link.toNodeId == 1U && link.toPin == "normal") {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct MaterialFileTransactionEntry {
+    std::filesystem::path target;
+    std::filesystem::path staged;
+    std::filesystem::path backup;
+    std::function<bool(const std::filesystem::path&)> writeStaged;
+    std::function<bool(const std::filesystem::path&)> validateStaged;
+    bool targetExisted = false;
+    bool committed = false;
+};
+
+[[nodiscard]] std::filesystem::path MaterialTransactionSiblingPath(
+    const std::filesystem::path& target,
+    std::string_view suffix) {
+    static std::atomic<std::uint64_t> counter{ 0U };
+    const std::uint64_t serial = counter.fetch_add(1U, std::memory_order_relaxed);
+    const std::uint64_t tick = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    std::filesystem::path result = target;
+    result += ".kbtxn." + std::to_string(tick) + "." + std::to_string(serial) + "." + std::string{ suffix };
+    return result;
+}
+
+void RemoveMaterialTransactionFile(const std::filesystem::path& path) noexcept {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+[[nodiscard]] bool ReplaceMaterialTransactionFile(
+    const std::filesystem::path& source,
+    const std::filesystem::path& target) noexcept {
+#if defined(_WIN32)
+    return MoveFileExW(
+               source.c_str(),
+               target.c_str(),
+               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+    std::error_code error;
+    std::filesystem::rename(source, target, error);
+    return !error;
+#endif
+}
+
+void CleanupMaterialTransaction(std::vector<MaterialFileTransactionEntry>& entries) noexcept {
+    for (MaterialFileTransactionEntry& entry : entries) {
+        RemoveMaterialTransactionFile(entry.staged);
+        RemoveMaterialTransactionFile(entry.backup);
+    }
+}
+
+[[nodiscard]] bool RollBackMaterialTransaction(std::vector<MaterialFileTransactionEntry>& entries) noexcept {
+    bool restored = true;
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+        MaterialFileTransactionEntry& entry = *it;
+        if (!entry.committed) {
+            continue;
+        }
+        if (entry.targetExisted) {
+            restored = ReplaceMaterialTransactionFile(entry.backup, entry.target) && restored;
+        } else {
+            std::error_code error;
+            std::filesystem::remove(entry.target, error);
+            restored = !error && restored;
+        }
+        entry.committed = false;
+    }
+    CleanupMaterialTransaction(entries);
+    return restored;
+}
+
+[[nodiscard]] bool ExecuteMaterialFileTransaction(std::vector<MaterialFileTransactionEntry>& entries) {
+    if (entries.empty()) {
+        return false;
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        entry.staged = MaterialTransactionSiblingPath(entry.target, "stage");
+        entry.backup = MaterialTransactionSiblingPath(entry.target, "backup");
+        if (!entry.writeStaged(entry.staged) || !entry.validateStaged(entry.staged)) {
+            CleanupMaterialTransaction(entries);
+            return false;
+        }
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        std::error_code error;
+        entry.targetExisted = std::filesystem::exists(entry.target, error);
+        if (error || (entry.targetExisted &&
+                !std::filesystem::copy_file(
+                    entry.target,
+                    entry.backup,
+                    std::filesystem::copy_options::overwrite_existing,
+                    error))) {
+            CleanupMaterialTransaction(entries);
+            return false;
+        }
+    }
+    for (MaterialFileTransactionEntry& entry : entries) {
+        if (!ReplaceMaterialTransactionFile(entry.staged, entry.target)) {
+            static_cast<void>(RollBackMaterialTransaction(entries));
+            return false;
+        }
+        entry.committed = true;
+    }
+    CleanupMaterialTransaction(entries);
+    return true;
+}
 
 } // namespace
 
@@ -90,12 +257,125 @@ std::optional<kb::render::RenderMaterialInstanceAssetData> EditorMaterialAssetGa
 }
 
 bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset) {
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(id);
     const std::optional<std::filesystem::path> path = ResolveFile(scene, id);
     if (!path.has_value()) {
+        std::ostringstream row;
+        row << "gateway-write-material-failed-resolve asset=" << id.value;
+        if (metadata != nullptr) {
+            row << " type=" << metadata->type
+                << " virtualPath=" << metadata->virtualPath.generic_string()
+                << " physicalPath=" << metadata->physicalPath.generic_string();
+        }
+        WriteMaterialGatewayDebugLog(row.str());
         return false;
     }
-    if (!kb::render::RenderMaterialAssetWriter::Save(*path, asset)) {
+    {
+        std::ostringstream row;
+        row << "gateway-write-material asset=" << id.value
+            << " path=" << path->generic_string()
+            << " nodes=" << asset.graph.nodes.size()
+            << " links=" << asset.graph.links.size()
+            << " outputNormalLinked=" << (GraphOutputHasNormalLink(asset) ? "true" : "false");
+        if (metadata != nullptr) {
+            row << " type=" << metadata->type
+                << " virtualPath=" << metadata->virtualPath.generic_string()
+                << " physicalPath=" << metadata->physicalPath.generic_string();
+        }
+        WriteMaterialGatewayDebugLog(row.str());
+    }
+    kb::render::RenderMaterialAssetData materialToWrite = asset;
+    SyncBuiltInGraphParameterOverrides(materialToWrite);
+    const auto resolveReferencedAsset = [&scene](std::uint64_t assetId, const std::string& virtualPath, std::string_view type) {
+        const kb::assets::AssetManager& manager = scene.Assets().Manager();
+        const kb::assets::AssetMetadata* referenced = assetId != 0U
+            ? manager.Registry().Find(kb::assets::AssetId{ assetId })
+            : nullptr;
+        if ((referenced == nullptr || referenced->type != type) && !virtualPath.empty()) {
+            referenced = manager.Registry().FindByPath(std::filesystem::path{ virtualPath });
+        }
+        return referenced != nullptr && referenced->type == type ? referenced : nullptr;
+    };
+    const auto physicalPath = [&scene](const kb::assets::AssetMetadata& referenced) {
+        return referenced.physicalPath.empty()
+            ? scene.Assets().Manager().Mounts().Resolve(referenced.virtualPath).value_or(std::filesystem::path{})
+            : referenced.physicalPath;
+    };
+    std::vector<MaterialFileTransactionEntry> pendingWrites;
+    if (materialToWrite.graphSourceAssetId != 0U || !materialToWrite.graphSourceAssetPath.empty()) {
+        const kb::assets::AssetMetadata* sourceGraph = resolveReferencedAsset(
+            materialToWrite.graphSourceAssetId,
+            materialToWrite.graphSourceAssetPath,
+            kb::render::kRenderMaterialGraphAssetType);
+        const std::filesystem::path sourceGraphPath = sourceGraph != nullptr ? physicalPath(*sourceGraph) : std::filesystem::path{};
+        if (sourceGraph == nullptr || sourceGraphPath.empty()) {
+            WriteMaterialGatewayDebugLog("gateway-write-material-source-graph-save-failed asset=" + std::to_string(id.value));
+            return false;
+        }
+        const kb::render::RenderMaterialGraphDocument sourceGraphDocument = materialToWrite.graph;
+        pendingWrites.push_back(MaterialFileTransactionEntry{
+            .target = sourceGraphPath,
+            .writeStaged = [sourceGraphDocument](const std::filesystem::path& staged) {
+                return kb::render::RenderMaterialGraphAssetLoader::SaveGraph(staged, sourceGraphDocument);
+            },
+            .validateStaged = [](const std::filesystem::path& staged) {
+                return kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(staged).Succeeded();
+            },
+        });
+        materialToWrite.graph.storageModel = "material-graph-asset";
+
+        const kb::assets::AssetMetadata* materialType = resolveReferencedAsset(
+            materialToWrite.materialTypeAssetId,
+            materialToWrite.materialTypeAssetPath,
+            kb::render::kRenderMaterialTypeAssetType);
+        if (materialType != nullptr) {
+            const kb::render::RenderMaterialGraphMaterialTypeBuildResult generatedType =
+                kb::render::BuildRenderMaterialGraphMaterialTypeDocument(
+                    materialToWrite.graph,
+                    materialToWrite.materialType,
+                    materialToWrite.materialTypeVersion == 0U ? 1U : materialToWrite.materialTypeVersion,
+                    kb::render::RenderMaterialGraphBuildContext{
+                        .assetId = sourceGraph->id.value,
+                        .sourcePath = sourceGraph->virtualPath.generic_string(),
+                    });
+            const std::filesystem::path materialTypePath = physicalPath(*materialType);
+            if (!generatedType.Succeeded() || !generatedType.document.has_value() || materialTypePath.empty()) {
+                WriteMaterialGatewayDebugLog("gateway-write-material-type-regeneration-failed asset=" + std::to_string(id.value));
+                return false;
+            }
+            const kb::render::RenderMaterialTypeDocument materialTypeDocument = *generatedType.document;
+            pendingWrites.push_back(MaterialFileTransactionEntry{
+                .target = materialTypePath,
+                .writeStaged = [materialTypeDocument](const std::filesystem::path& staged) {
+                    return kb::render::RenderMaterialTypeAssetLoader::SaveType(staged, materialTypeDocument);
+                },
+                .validateStaged = [](const std::filesystem::path& staged) {
+                    const kb::render::RenderMaterialTypeDocumentParseResult result =
+                        kb::render::RenderMaterialTypeAssetLoader::LoadTypeWithDiagnostics(staged);
+                    return result.document.has_value() && result.diagnostics.empty();
+                },
+            });
+        }
+    }
+    pendingWrites.push_back(MaterialFileTransactionEntry{
+        .target = *path,
+        .writeStaged = [materialToWrite](const std::filesystem::path& staged) {
+            return kb::render::RenderMaterialAssetWriter::Save(staged, materialToWrite);
+        },
+        .validateStaged = [](const std::filesystem::path& staged) {
+            return kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(staged).Succeeded();
+        },
+    });
+    if (!ExecuteMaterialFileTransaction(pendingWrites)) {
+        WriteMaterialGatewayDebugLog("gateway-write-material-save-failed asset=" + std::to_string(id.value) + " path=" + path->generic_string());
         return false;
+    }
+    {
+        std::ostringstream row;
+        row << "gateway-write-material-save-ok asset=" << id.value
+            << " path=" << path->generic_string()
+            << " exists=" << (std::filesystem::exists(*path) ? "true" : "false");
+        WriteMaterialGatewayDebugLog(row.str());
     }
     static_cast<void>(scene.Assets().Manager().Unload(id));
     static_cast<void>(scene.Assets().Discover());
