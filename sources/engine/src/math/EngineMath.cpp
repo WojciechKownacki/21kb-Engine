@@ -1,6 +1,7 @@
 #include "engine/math/EngineMath.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace kb::math {
@@ -573,6 +574,169 @@ float Evaluate(Easing easing, float t) noexcept {
         return t < 0.5F ? (1.0F - OutBounceImpl(1.0F - 2.0F * t)) / 2.0F : (1.0F + OutBounceImpl(2.0F * t - 1.0F)) / 2.0F;
     }
     return t;
+}
+
+float Evaluate(const Curve& curve, float t) noexcept {
+    if (curve.keyframes.empty()) {
+        return 0.0F;
+    }
+    if (curve.keyframes.size() == 1U || t <= curve.keyframes.front().time) {
+        return curve.keyframes.front().value;
+    }
+    if (t >= curve.keyframes.back().time) {
+        return curve.keyframes.back().value;
+    }
+    for (std::size_t i = 0U; i + 1U < curve.keyframes.size(); ++i) {
+        const CurveKeyframe& a = curve.keyframes[i];
+        const CurveKeyframe& b = curve.keyframes[i + 1U];
+        if (t <= b.time) {
+            const float localT = InverseLerp(a.time, b.time, t);
+            return Lerp(a.value, b.value, Evaluate(a.easing, localT));
+        }
+    }
+    return curve.keyframes.back().value;
+}
+
+Color Evaluate(const Gradient& gradient, float t) noexcept {
+    if (gradient.stops.empty()) {
+        return Color{};
+    }
+    if (gradient.stops.size() == 1U || t <= gradient.stops.front().time) {
+        return gradient.stops.front().color;
+    }
+    if (t >= gradient.stops.back().time) {
+        return gradient.stops.back().color;
+    }
+    for (std::size_t i = 0U; i + 1U < gradient.stops.size(); ++i) {
+        const GradientStop& a = gradient.stops[i];
+        const GradientStop& b = gradient.stops[i + 1U];
+        if (t <= b.time) {
+            const float localT = InverseLerp(a.time, b.time, t);
+            return Color{
+                Lerp(a.color.r, b.color.r, localT),
+                Lerp(a.color.g, b.color.g, localT),
+                Lerp(a.color.b, b.color.b, localT),
+                Lerp(a.color.a, b.color.a, localT),
+            };
+        }
+    }
+    return gradient.stops.back().color;
+}
+
+namespace {
+
+constexpr std::uint32_t kCurveMagic = 0x4B435256U; // "KCRV"
+constexpr std::uint32_t kGradientMagic = 0x4B475244U; // "KGRD"
+
+void AppendUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+    std::uint8_t buffer[4];
+    std::memcpy(buffer, &value, sizeof(buffer));
+    bytes.insert(bytes.end(), buffer, buffer + sizeof(buffer));
+}
+
+void AppendFloat(std::vector<std::uint8_t>& bytes, float value) {
+    std::uint8_t buffer[4];
+    std::memcpy(buffer, &value, sizeof(buffer));
+    bytes.insert(bytes.end(), buffer, buffer + sizeof(buffer));
+}
+
+[[nodiscard]] bool ReadUInt32(std::span<const std::uint8_t> bytes, std::size_t& offset, std::uint32_t& outValue) noexcept {
+    if (offset + sizeof(outValue) > bytes.size()) {
+        return false;
+    }
+    std::memcpy(&outValue, bytes.data() + offset, sizeof(outValue));
+    offset += sizeof(outValue);
+    return true;
+}
+
+[[nodiscard]] bool ReadFloat(std::span<const std::uint8_t> bytes, std::size_t& offset, float& outValue) noexcept {
+    if (offset + sizeof(outValue) > bytes.size()) {
+        return false;
+    }
+    std::memcpy(&outValue, bytes.data() + offset, sizeof(outValue));
+    offset += sizeof(outValue);
+    return true;
+}
+
+[[nodiscard]] bool ReadUInt8(std::span<const std::uint8_t> bytes, std::size_t& offset, std::uint8_t& outValue) noexcept {
+    if (offset >= bytes.size()) {
+        return false;
+    }
+    outValue = bytes[offset];
+    offset += 1U;
+    return true;
+}
+
+} // namespace
+
+std::vector<std::uint8_t> Serialize(const Curve& curve) {
+    std::vector<std::uint8_t> bytes;
+    AppendUInt32(bytes, kCurveMagic);
+    AppendUInt32(bytes, static_cast<std::uint32_t>(curve.keyframes.size()));
+    for (const CurveKeyframe& keyframe : curve.keyframes) {
+        AppendFloat(bytes, keyframe.time);
+        AppendFloat(bytes, keyframe.value);
+        bytes.push_back(static_cast<std::uint8_t>(keyframe.easing));
+    }
+    return bytes;
+}
+
+bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve) {
+    std::size_t offset = 0U;
+    std::uint32_t magic = 0U;
+    std::uint32_t count = 0U;
+    if (!ReadUInt32(bytes, offset, magic) || magic != kCurveMagic || !ReadUInt32(bytes, offset, count)) {
+        return false;
+    }
+    std::vector<CurveKeyframe> keyframes;
+    keyframes.reserve(count);
+    for (std::uint32_t i = 0U; i < count; ++i) {
+        CurveKeyframe keyframe;
+        std::uint8_t easingOrdinal = 0U;
+        if (!ReadFloat(bytes, offset, keyframe.time) || !ReadFloat(bytes, offset, keyframe.value) || !ReadUInt8(bytes, offset, easingOrdinal) ||
+            easingOrdinal > static_cast<std::uint8_t>(Easing::InOutBounce)) {
+            return false;
+        }
+        keyframe.easing = static_cast<Easing>(easingOrdinal);
+        keyframes.push_back(keyframe);
+    }
+    outCurve.keyframes = std::move(keyframes);
+    return true;
+}
+
+std::vector<std::uint8_t> Serialize(const Gradient& gradient) {
+    std::vector<std::uint8_t> bytes;
+    AppendUInt32(bytes, kGradientMagic);
+    AppendUInt32(bytes, static_cast<std::uint32_t>(gradient.stops.size()));
+    for (const GradientStop& stop : gradient.stops) {
+        AppendFloat(bytes, stop.time);
+        AppendFloat(bytes, stop.color.r);
+        AppendFloat(bytes, stop.color.g);
+        AppendFloat(bytes, stop.color.b);
+        AppendFloat(bytes, stop.color.a);
+    }
+    return bytes;
+}
+
+bool Deserialize(std::span<const std::uint8_t> bytes, Gradient& outGradient) {
+    std::size_t offset = 0U;
+    std::uint32_t magic = 0U;
+    std::uint32_t count = 0U;
+    if (!ReadUInt32(bytes, offset, magic) || magic != kGradientMagic || !ReadUInt32(bytes, offset, count)) {
+        return false;
+    }
+    std::vector<GradientStop> stops;
+    stops.reserve(count);
+    for (std::uint32_t i = 0U; i < count; ++i) {
+        GradientStop stop;
+        if (!ReadFloat(bytes, offset, stop.time) || !ReadFloat(bytes, offset, stop.color.r) || !ReadFloat(bytes, offset, stop.color.g) ||
+            !ReadFloat(bytes, offset, stop.color.b) || !ReadFloat(bytes, offset, stop.color.a)) {
+            return false;
+        }
+        stops.push_back(stop);
+    }
+    outGradient.stops = std::move(stops);
+    return true;
 }
 
 } // namespace kb::math
