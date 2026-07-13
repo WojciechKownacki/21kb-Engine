@@ -153,6 +153,22 @@ std::size_t SceneRuntimeService::LastFixedStepCount(const Scene& scene) noexcept
     return SceneAccess::State(scene).lastFixedStepCount;
 }
 
+std::uint64_t SceneRuntimeService::FrameIndex(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).frameIndex;
+}
+
+std::uint64_t SceneRuntimeService::FixedStepIndex(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).fixedStepIndex;
+}
+
+bool SceneRuntimeService::IsPlaying(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).isPlaying;
+}
+
+void SceneRuntimeService::SetPlaying(Scene& scene, bool playing) noexcept {
+    SceneAccess::State(scene).isPlaying = playing;
+}
+
 void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept {
     SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
 }
@@ -241,6 +257,10 @@ std::span<const SceneEntity> SceneRuntimeService::MeshRendererRenderProxyUpdateE
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    // LIB-065: counts every Update() call, unconditionally (including
+    // PrefabPrivate scenes below) — "how many times has this scene been
+    // stepped" is well-defined regardless of mode.
+    ++state.frameIndex;
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
@@ -288,6 +308,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             CaptureFixedStepEnd(scene, state);
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
             ++state.lastFixedStepCount;
+            ++state.fixedStepIndex;
         }
         if (state.lastFixedStepCount == fixed.maxFixedStepsPerFrame &&
             state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds) {

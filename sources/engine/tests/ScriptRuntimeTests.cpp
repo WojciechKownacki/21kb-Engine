@@ -2038,6 +2038,30 @@ void RunScriptWorldTimePhysicsApiTest() {
             && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.z, 4.0F),
         "World.Spawn did not apply direct spawn position");
 
+    // LIB-065: World.Current/IsPlaying/FrameIndex/FixedStepIndex, called
+    // the same way any other World.* function is (through the registry,
+    // not just the underlying kb::scene::Scene API directly).
+    const kb::script::ScriptFunctionCallResult currentResult = host.Functions().Call("World.Current", {}, context);
+    kb::tests::Require(currentResult.Succeeded() && currentResult.Output("world").has_value() && currentResult.Output("world")->AsUInt64() == scene.Id(),
+        "World.Current must return the calling scene's own runtime id");
+
+    const kb::script::ScriptFunctionCallResult playingResult = host.Functions().Call("World.IsPlaying", {}, context);
+    kb::tests::Require(playingResult.Succeeded() && playingResult.Output("playing").has_value() && playingResult.Output("playing")->AsBool(),
+        "World.IsPlaying must report true for a scene that has not been explicitly paused");
+    scene.Runtime().SetPlaying(false);
+    const kb::script::ScriptFunctionCallResult pausedResult = host.Functions().Call("World.IsPlaying", {}, context);
+    kb::tests::Require(pausedResult.Succeeded() && !pausedResult.Output("playing")->AsBool(), "World.IsPlaying must reflect Scene::Runtime().SetPlaying(false)");
+    scene.Runtime().SetPlaying(true);
+
+    const kb::script::ScriptFunctionCallResult frameBeforeUpdate = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(frameBeforeUpdate.Succeeded() && frameBeforeUpdate.Output("frame")->AsInt64() == 0, "World.FrameIndex must start at 0 before any Update()");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const kb::script::ScriptFunctionCallResult frameAfterUpdate = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(frameAfterUpdate.Succeeded() && frameAfterUpdate.Output("frame")->AsInt64() == 1, "World.FrameIndex must reflect Scene::Runtime().FrameIndex() after an Update()");
+
+    const kb::script::ScriptFunctionCallResult fixedStepResult = host.Functions().Call("World.FixedStepIndex", {}, context);
+    kb::tests::Require(fixedStepResult.Succeeded() && fixedStepResult.Output("step")->AsInt64() == 0, "World.FixedStepIndex must start at 0 for a scene with no fixed-step systems");
+
     const std::vector<kb::script::ScriptFunctionArgument> translateArgs{
         kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 1.0F } },
