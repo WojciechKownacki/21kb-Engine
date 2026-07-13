@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 #include <type_traits>
 
 namespace kb::tests {
@@ -471,6 +472,48 @@ void RunRandomStreamTest() {
     kb::tests::Require(sum == 15, "Shuffle must be a permutation: the shuffled elements must sum to the same total as the input (1+2+3+4+5)");
 }
 
+// LIB-052: Easing must not allocate (it's an enum + a pure switch, not a
+// std::function/callback table — nothing here to assert at runtime, but
+// the type itself proves it: static_assert that Easing is trivially
+// copyable, the same shape as ScriptValueType/LibraryOwnership) and every
+// curve must satisfy the universal Penner-easing boundary property:
+// Evaluate(easing, 0) == 0 and Evaluate(easing, 1) == 1, for ALL 31
+// curves, checked in a loop rather than one at a time.
+void RunEasingTest() {
+    static_assert(std::is_trivially_copyable_v<kb::math::Easing>, "Easing must be a plain value type (enum), not something that could own allocated state");
+
+    constexpr kb::math::Easing kAllEasings[]{
+        kb::math::Easing::Linear,
+        kb::math::Easing::InSine, kb::math::Easing::OutSine, kb::math::Easing::InOutSine,
+        kb::math::Easing::InQuad, kb::math::Easing::OutQuad, kb::math::Easing::InOutQuad,
+        kb::math::Easing::InCubic, kb::math::Easing::OutCubic, kb::math::Easing::InOutCubic,
+        kb::math::Easing::InQuart, kb::math::Easing::OutQuart, kb::math::Easing::InOutQuart,
+        kb::math::Easing::InQuint, kb::math::Easing::OutQuint, kb::math::Easing::InOutQuint,
+        kb::math::Easing::InExpo, kb::math::Easing::OutExpo, kb::math::Easing::InOutExpo,
+        kb::math::Easing::InCirc, kb::math::Easing::OutCirc, kb::math::Easing::InOutCirc,
+        kb::math::Easing::InBack, kb::math::Easing::OutBack, kb::math::Easing::InOutBack,
+        kb::math::Easing::InElastic, kb::math::Easing::OutElastic, kb::math::Easing::InOutElastic,
+        kb::math::Easing::InBounce, kb::math::Easing::OutBounce, kb::math::Easing::InOutBounce,
+    };
+    for (const kb::math::Easing easing : kAllEasings) {
+        const std::string startMessage = std::string{ "Easing " } + kb::math::ToString(easing) + " must evaluate to exactly 0 at t=0";
+        kb::tests::Require(kb::math::Evaluate(easing, 0.0F) == 0.0F, startMessage.c_str());
+        const std::string endMessage = std::string{ "Easing " } + kb::math::ToString(easing) + " must evaluate to exactly 1 at t=1";
+        kb::tests::Require(std::abs(kb::math::Evaluate(easing, 1.0F) - 1.0F) < 0.0001F, endMessage.c_str());
+    }
+
+    kb::tests::Require(kb::math::Evaluate(kb::math::Easing::Linear, 0.5F) == 0.5F, "Linear easing must be the identity function");
+    kb::tests::Require(std::abs(kb::math::Evaluate(kb::math::Easing::InQuad, 0.5F) - 0.25F) < 0.0001F, "InQuad(0.5) must be 0.25 (t*t)");
+
+    // Input t must be clamped (matches Lerp's convention), but the OUTPUT
+    // is intentionally NOT clamped for curves designed to overshoot.
+    kb::tests::Require(kb::math::Evaluate(kb::math::Easing::Linear, 2.0F) == 1.0F, "Evaluate must clamp t above 1");
+    kb::tests::Require(kb::math::Evaluate(kb::math::Easing::Linear, -1.0F) == 0.0F, "Evaluate must clamp t below 0");
+    kb::tests::Require(kb::math::Evaluate(kb::math::Easing::OutBack, 0.9F) > 1.0F, "OutBack must overshoot above 1 before settling (its defining visual characteristic) rather than being silently clamped");
+
+    kb::tests::Require(std::string{ kb::math::ToString(kb::math::Easing::InOutElastic) } == "InOutElastic", "Easing::ToString must format the enumerator name");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -486,6 +529,7 @@ void RunEngineMathTests() {
     RunRotationFunctionsTest();
     RunNoiseAndRandomTest();
     RunRandomStreamTest();
+    RunEasingTest();
 }
 
 } // namespace kb::tests

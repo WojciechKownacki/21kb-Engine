@@ -653,4 +653,62 @@ template <typename T>
     return stream;
 }
 
+// LIB-052: Easing is a value-type enum + a pure evaluation function
+// (kb::script::ScriptValueType, kb::input::InputActionValueType, and
+// kb::library::LibraryOwnership are the same pattern already used
+// throughout this codebase) — deliberately NOT std::function/a callback
+// table, which would allocate on the heap the moment a caller captured
+// any state, and is exactly what the plan's "bez allocacji callbacków w
+// hot path" forbids. Selecting a curve is a plain enum comparison/switch,
+// zero allocation, the same cost as any other enum dispatch already used
+// here (ScriptValueType's ToString, etc).
+//
+// The standard "Robert Penner" easing catalog (widely reproduced under
+// that name; https://easings.net is the commonly cited reference) — the
+// plan does not name a specific subset, and this is the conventional
+// complete set every game engine/animation library of this kind exposes.
+enum class Easing : std::uint8_t {
+    Linear,
+    InSine,
+    OutSine,
+    InOutSine,
+    InQuad,
+    OutQuad,
+    InOutQuad,
+    InCubic,
+    OutCubic,
+    InOutCubic,
+    InQuart,
+    OutQuart,
+    InOutQuart,
+    InQuint,
+    OutQuint,
+    InOutQuint,
+    InExpo,
+    OutExpo,
+    InOutExpo,
+    InCirc,
+    OutCirc,
+    InOutCirc,
+    InBack,
+    OutBack,
+    InOutBack,
+    InElastic,
+    OutElastic,
+    InOutElastic,
+    InBounce,
+    OutBounce,
+    InOutBounce,
+};
+
+[[nodiscard]] const char* ToString(Easing easing) noexcept;
+
+// Evaluates `easing` at `t` (clamped to [0,1] before evaluation, matching
+// Lerp's convention — LIB-045). The OUTPUT is intentionally NOT clamped:
+// InBack/OutBack/InOutBack and the Elastic family are specifically
+// designed to overshoot outside [0,1] (that's the visual "anticipation"/
+// "overshoot" effect that makes them useful), so clamping the result
+// would silently break the curve's defining characteristic.
+[[nodiscard]] float Evaluate(Easing easing, float t) noexcept;
+
 } // namespace kb::math

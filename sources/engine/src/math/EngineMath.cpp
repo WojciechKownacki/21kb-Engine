@@ -364,4 +364,215 @@ RandomStreamIntRangeResult NextIntRange(RandomStream stream, std::int32_t min, s
     return RandomStreamIntRangeResult{ min + static_cast<std::int32_t>(raw.value % span), raw.stream };
 }
 
+const char* ToString(Easing easing) noexcept {
+    switch (easing) {
+    case Easing::Linear:
+        return "Linear";
+    case Easing::InSine:
+        return "InSine";
+    case Easing::OutSine:
+        return "OutSine";
+    case Easing::InOutSine:
+        return "InOutSine";
+    case Easing::InQuad:
+        return "InQuad";
+    case Easing::OutQuad:
+        return "OutQuad";
+    case Easing::InOutQuad:
+        return "InOutQuad";
+    case Easing::InCubic:
+        return "InCubic";
+    case Easing::OutCubic:
+        return "OutCubic";
+    case Easing::InOutCubic:
+        return "InOutCubic";
+    case Easing::InQuart:
+        return "InQuart";
+    case Easing::OutQuart:
+        return "OutQuart";
+    case Easing::InOutQuart:
+        return "InOutQuart";
+    case Easing::InQuint:
+        return "InQuint";
+    case Easing::OutQuint:
+        return "OutQuint";
+    case Easing::InOutQuint:
+        return "InOutQuint";
+    case Easing::InExpo:
+        return "InExpo";
+    case Easing::OutExpo:
+        return "OutExpo";
+    case Easing::InOutExpo:
+        return "InOutExpo";
+    case Easing::InCirc:
+        return "InCirc";
+    case Easing::OutCirc:
+        return "OutCirc";
+    case Easing::InOutCirc:
+        return "InOutCirc";
+    case Easing::InBack:
+        return "InBack";
+    case Easing::OutBack:
+        return "OutBack";
+    case Easing::InOutBack:
+        return "InOutBack";
+    case Easing::InElastic:
+        return "InElastic";
+    case Easing::OutElastic:
+        return "OutElastic";
+    case Easing::InOutElastic:
+        return "InOutElastic";
+    case Easing::InBounce:
+        return "InBounce";
+    case Easing::OutBounce:
+        return "OutBounce";
+    case Easing::InOutBounce:
+        return "InOutBounce";
+    }
+    return "Linear";
+}
+
+namespace {
+
+// The "Robert Penner" easing formulas, widely reproduced under that name
+// (https://easings.net is the commonly cited reference implementation).
+
+[[nodiscard]] float OutBounceImpl(float t) noexcept {
+    constexpr float n1 = 7.5625F;
+    constexpr float d1 = 2.75F;
+    if (t < 1.0F / d1) {
+        return n1 * t * t;
+    }
+    if (t < 2.0F / d1) {
+        t -= 1.5F / d1;
+        return n1 * t * t + 0.75F;
+    }
+    if (t < 2.5F / d1) {
+        t -= 2.25F / d1;
+        return n1 * t * t + 0.9375F;
+    }
+    t -= 2.625F / d1;
+    return n1 * t * t + 0.984375F;
+}
+
+[[nodiscard]] float InBounceImpl(float t) noexcept {
+    return 1.0F - OutBounceImpl(1.0F - t);
+}
+
+} // namespace
+
+float Evaluate(Easing easing, float t) noexcept {
+    t = Clamp(t, 0.0F, 1.0F);
+    switch (easing) {
+    case Easing::Linear:
+        return t;
+    case Easing::InSine:
+        return 1.0F - std::cos(t * kPi / 2.0F);
+    case Easing::OutSine:
+        return std::sin(t * kPi / 2.0F);
+    case Easing::InOutSine:
+        return -(std::cos(kPi * t) - 1.0F) / 2.0F;
+    case Easing::InQuad:
+        return t * t;
+    case Easing::OutQuad:
+        return 1.0F - (1.0F - t) * (1.0F - t);
+    case Easing::InOutQuad:
+        return t < 0.5F ? 2.0F * t * t : 1.0F - std::pow(-2.0F * t + 2.0F, 2.0F) / 2.0F;
+    case Easing::InCubic:
+        return t * t * t;
+    case Easing::OutCubic:
+        return 1.0F - std::pow(1.0F - t, 3.0F);
+    case Easing::InOutCubic:
+        return t < 0.5F ? 4.0F * t * t * t : 1.0F - std::pow(-2.0F * t + 2.0F, 3.0F) / 2.0F;
+    case Easing::InQuart:
+        return t * t * t * t;
+    case Easing::OutQuart:
+        return 1.0F - std::pow(1.0F - t, 4.0F);
+    case Easing::InOutQuart:
+        return t < 0.5F ? 8.0F * t * t * t * t : 1.0F - std::pow(-2.0F * t + 2.0F, 4.0F) / 2.0F;
+    case Easing::InQuint:
+        return t * t * t * t * t;
+    case Easing::OutQuint:
+        return 1.0F - std::pow(1.0F - t, 5.0F);
+    case Easing::InOutQuint:
+        return t < 0.5F ? 16.0F * t * t * t * t * t : 1.0F - std::pow(-2.0F * t + 2.0F, 5.0F) / 2.0F;
+    case Easing::InExpo:
+        return t <= 0.0F ? 0.0F : std::pow(2.0F, 10.0F * t - 10.0F);
+    case Easing::OutExpo:
+        return t >= 1.0F ? 1.0F : 1.0F - std::pow(2.0F, -10.0F * t);
+    case Easing::InOutExpo:
+        if (t <= 0.0F) {
+            return 0.0F;
+        }
+        if (t >= 1.0F) {
+            return 1.0F;
+        }
+        return t < 0.5F ? std::pow(2.0F, 20.0F * t - 10.0F) / 2.0F : (2.0F - std::pow(2.0F, -20.0F * t + 10.0F)) / 2.0F;
+    case Easing::InCirc:
+        return 1.0F - std::sqrt(1.0F - t * t);
+    case Easing::OutCirc:
+        return std::sqrt(1.0F - (t - 1.0F) * (t - 1.0F));
+    case Easing::InOutCirc:
+        return t < 0.5F
+            ? (1.0F - std::sqrt(1.0F - std::pow(2.0F * t, 2.0F))) / 2.0F
+            : (std::sqrt(1.0F - std::pow(-2.0F * t + 2.0F, 2.0F)) + 1.0F) / 2.0F;
+    case Easing::InBack: {
+        constexpr float c1 = 1.70158F;
+        constexpr float c3 = c1 + 1.0F;
+        return c3 * t * t * t - c1 * t * t;
+    }
+    case Easing::OutBack: {
+        constexpr float c1 = 1.70158F;
+        constexpr float c3 = c1 + 1.0F;
+        return 1.0F + c3 * std::pow(t - 1.0F, 3.0F) + c1 * std::pow(t - 1.0F, 2.0F);
+    }
+    case Easing::InOutBack: {
+        constexpr float c1 = 1.70158F;
+        constexpr float c2 = c1 * 1.525F;
+        return t < 0.5F
+            ? (std::pow(2.0F * t, 2.0F) * ((c2 + 1.0F) * 2.0F * t - c2)) / 2.0F
+            : (std::pow(2.0F * t - 2.0F, 2.0F) * ((c2 + 1.0F) * (t * 2.0F - 2.0F) + c2) + 2.0F) / 2.0F;
+    }
+    case Easing::InElastic: {
+        constexpr float c4 = (2.0F * kPi) / 3.0F;
+        if (t <= 0.0F) {
+            return 0.0F;
+        }
+        if (t >= 1.0F) {
+            return 1.0F;
+        }
+        return -std::pow(2.0F, 10.0F * t - 10.0F) * std::sin((t * 10.0F - 10.75F) * c4);
+    }
+    case Easing::OutElastic: {
+        constexpr float c4 = (2.0F * kPi) / 3.0F;
+        if (t <= 0.0F) {
+            return 0.0F;
+        }
+        if (t >= 1.0F) {
+            return 1.0F;
+        }
+        return std::pow(2.0F, -10.0F * t) * std::sin((t * 10.0F - 0.75F) * c4) + 1.0F;
+    }
+    case Easing::InOutElastic: {
+        constexpr float c5 = (2.0F * kPi) / 4.5F;
+        if (t <= 0.0F) {
+            return 0.0F;
+        }
+        if (t >= 1.0F) {
+            return 1.0F;
+        }
+        return t < 0.5F
+            ? -(std::pow(2.0F, 20.0F * t - 10.0F) * std::sin((20.0F * t - 11.125F) * c5)) / 2.0F
+            : (std::pow(2.0F, -20.0F * t + 10.0F) * std::sin((20.0F * t - 11.125F) * c5)) / 2.0F + 1.0F;
+    }
+    case Easing::InBounce:
+        return InBounceImpl(t);
+    case Easing::OutBounce:
+        return OutBounceImpl(t);
+    case Easing::InOutBounce:
+        return t < 0.5F ? (1.0F - OutBounceImpl(1.0F - 2.0F * t)) / 2.0F : (1.0F + OutBounceImpl(2.0F * t - 1.0F)) / 2.0F;
+    }
+    return t;
+}
+
 } // namespace kb::math
