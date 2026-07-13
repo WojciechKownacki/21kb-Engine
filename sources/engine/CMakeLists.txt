@@ -181,6 +181,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
@@ -623,6 +624,7 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptMathApi.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
