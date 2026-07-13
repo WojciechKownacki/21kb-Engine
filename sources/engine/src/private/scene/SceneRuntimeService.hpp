@@ -29,6 +29,10 @@ public:
     [[nodiscard]] static SceneTransformPropagationBudget TransformPropagationBudget(const Scene& scene) noexcept;
     [[nodiscard]] static float FixedInterpolationAlpha(const Scene& scene) noexcept;
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t FrameIndex(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t FixedStepIndex(const Scene& scene) noexcept;
+    [[nodiscard]] static bool IsPlaying(const Scene& scene) noexcept;
+    static void SetPlaying(Scene& scene, bool playing) noexcept;
     static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;
     [[nodiscard]] static bool EcsProfilerEnabled(const Scene& scene) noexcept;
     [[nodiscard]] static const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace(const Scene& scene) noexcept;
