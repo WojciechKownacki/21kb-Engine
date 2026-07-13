@@ -1,6 +1,7 @@
 #include "engine/math/EngineMath.hpp"
 
 #include <cmath>
+#include <limits>
 
 namespace kb::math {
 
@@ -267,6 +268,81 @@ Radians Atan(float value) noexcept {
 
 Radians Atan2(float y, float x) noexcept {
     return Radians{ std::atan2(y, x) };
+}
+
+namespace {
+
+[[nodiscard]] constexpr std::uint32_t CornerHash(std::int32_t x, std::int32_t y, std::int32_t z, std::uint32_t seed) noexcept {
+    std::uint32_t h = Hash32(x, seed);
+    h = Hash32(y, h);
+    h = Hash32(z, h);
+    return h;
+}
+
+// Ken Perlin's "improved noise" (2002) gradient selection: the low 4 bits
+// of the hash pick one of 12 gradient directions (edge midpoints of a
+// cube), and the dot product with the distance vector is computed without
+// ever materializing the gradient vector itself.
+[[nodiscard]] constexpr float Grad(std::uint32_t hash, float x, float y, float z) noexcept {
+    const std::uint32_t h = hash & 15U;
+    const float u = h < 8U ? x : y;
+    const float v = h < 4U ? y : ((h == 12U || h == 14U) ? x : z);
+    return ((h & 1U) != 0U ? -u : u) + ((h & 2U) != 0U ? -v : v);
+}
+
+[[nodiscard]] constexpr float Fade(float t) noexcept {
+    return t * t * t * (t * (t * 6.0F - 15.0F) + 10.0F);
+}
+
+} // namespace
+
+float Random01(std::uint32_t seed, std::uint32_t index) noexcept {
+    const std::uint32_t h = Hash32(static_cast<std::int32_t>(index), seed);
+    return static_cast<float>(h) / static_cast<float>(std::numeric_limits<std::uint32_t>::max());
+}
+
+float Noise3D(float x, float y, float z, std::uint32_t seed) noexcept {
+    const float floorX = Floor(x);
+    const float floorY = Floor(y);
+    const float floorZ = Floor(z);
+    const std::int32_t xi = static_cast<std::int32_t>(floorX);
+    const std::int32_t yi = static_cast<std::int32_t>(floorY);
+    const std::int32_t zi = static_cast<std::int32_t>(floorZ);
+    const float fx = x - floorX;
+    const float fy = y - floorY;
+    const float fz = z - floorZ;
+    const float u = Fade(fx);
+    const float v = Fade(fy);
+    const float w = Fade(fz);
+
+    const float x00 = Lerp(
+        Grad(CornerHash(xi, yi, zi, seed), fx, fy, fz),
+        Grad(CornerHash(xi + 1, yi, zi, seed), fx - 1.0F, fy, fz),
+        u);
+    const float x10 = Lerp(
+        Grad(CornerHash(xi, yi + 1, zi, seed), fx, fy - 1.0F, fz),
+        Grad(CornerHash(xi + 1, yi + 1, zi, seed), fx - 1.0F, fy - 1.0F, fz),
+        u);
+    const float x01 = Lerp(
+        Grad(CornerHash(xi, yi, zi + 1, seed), fx, fy, fz - 1.0F),
+        Grad(CornerHash(xi + 1, yi, zi + 1, seed), fx - 1.0F, fy, fz - 1.0F),
+        u);
+    const float x11 = Lerp(
+        Grad(CornerHash(xi, yi + 1, zi + 1, seed), fx, fy - 1.0F, fz - 1.0F),
+        Grad(CornerHash(xi + 1, yi + 1, zi + 1, seed), fx - 1.0F, fy - 1.0F, fz - 1.0F),
+        u);
+
+    const float y0 = Lerp(x00, x10, v);
+    const float y1 = Lerp(x01, x11, v);
+    return Lerp(y0, y1, w);
+}
+
+float Noise2D(float x, float y, std::uint32_t seed) noexcept {
+    return Noise3D(x, y, 0.0F, seed);
+}
+
+float Noise1D(float x, std::uint32_t seed) noexcept {
+    return Noise3D(x, 0.0F, 0.0F, seed);
 }
 
 } // namespace kb::math

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace kb::math {
 
 // LIB-042: the single canonical math value-type family for the engine.
@@ -529,5 +531,46 @@ struct DampResult {
 // of both y and x (unlike Atan(y/x), which cannot distinguish (1,1) from
 // (-1,-1)). Atan2(0, 0) is conventionally 0, not an error.
 [[nodiscard]] Radians Atan2(float y, float x) noexcept;
+
+// LIB-050: deterministic, seed-parameterized noise and random — every
+// function here is a PURE function of its explicit `seed` (and, for
+// Random01, `index`) argument. There is no hidden global generator to
+// advance or reset: calling the same function with the same arguments
+// twice always returns the same result, and the caller owns the seed the
+// same way Damp's caller owns `velocity` — no implicit call-order
+// dependency the way a global rand()-style stream would have.
+
+// 32-bit integer hash (a standard bit-mixing finalizer, not
+// cryptographic) — the shared building block Noise/Random01 use instead
+// of each reimplementing their own scrambling.
+[[nodiscard]] constexpr std::uint32_t Hash32(std::int32_t value, std::uint32_t seed) noexcept {
+    std::uint32_t h = static_cast<std::uint32_t>(value) ^ seed;
+    h ^= h >> 16;
+    h *= 0x85ebca6bU;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35U;
+    h ^= h >> 16;
+    return h;
+}
+
+// Deterministic pseudo-random value in [0, 1], purely a function of
+// (seed, index) — call it with a different `index` each time (e.g. a
+// counter the caller owns) to get a sequence, exactly like Damp's caller
+// owns `velocity` between calls.
+[[nodiscard]] float Random01(std::uint32_t seed, std::uint32_t index) noexcept;
+
+// Perlin-style gradient (not value) noise: zero at every integer lattice
+// point (Noise3D(n,m,k,seed) == 0 for any integers n,m,k, any seed — the
+// distance vector from a lattice point to itself is zero, so every
+// corner's gradient contributes nothing there), smooth (C2-continuous
+// fade curve) in between. Noise1D/Noise2D reuse Noise3D with the unused
+// axes pinned to 0 rather than duplicating the algorithm — the fade
+// curve's u=v=w=0 term on a pinned-zero axis makes that axis' corners
+// collapse to a single value with no contribution from the "next" lattice
+// cell along it, i.e. genuinely reduces to lower-dimensional noise, not
+// an approximation of it.
+[[nodiscard]] float Noise3D(float x, float y, float z, std::uint32_t seed) noexcept;
+[[nodiscard]] float Noise2D(float x, float y, std::uint32_t seed) noexcept;
+[[nodiscard]] float Noise1D(float x, std::uint32_t seed) noexcept;
 
 } // namespace kb::math
