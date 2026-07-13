@@ -2062,6 +2062,38 @@ void RunScriptWorldTimePhysicsApiTest() {
     const kb::script::ScriptFunctionCallResult fixedStepResult = host.Functions().Call("World.FixedStepIndex", {}, context);
     kb::tests::Require(fixedStepResult.Succeeded() && fixedStepResult.Output("step")->AsInt64() == 0, "World.FixedStepIndex must start at 0 for a scene with no fixed-step systems");
 
+    // LIB-066: World.Spawn(prefab, pose, parent?) — the prefab branch,
+    // exercising a full pose (position AND rotation, not just position)
+    // and an explicit parent, reusing the same "/Game/Prefabs/
+    // RuntimePrefab.kbprefab" fixture World.InstantiatePrefab uses below.
+    const std::vector<kb::script::ScriptFunctionArgument> spawnFromPrefabArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+        kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rotW", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult spawnedFromPrefab = host.Functions().Call("World.Spawn", spawnFromPrefabArgs, context);
+    kb::tests::Require(spawnedFromPrefab.Succeeded(), "World.Spawn(prefab=...) direct call failed");
+    const kb::scene::SceneEntity spawnedPrefabRoot{ spawnedFromPrefab.Output("entity")->AsUInt64() };
+    kb::tests::Require(spawnedPrefabRoot.IsValid() && scene.Entities().Name(spawnedPrefabRoot) == "Prefab Root", "World.Spawn(prefab=...) did not return the prefab's root entity");
+    const kb::scene::TagsComponent* spawnedPrefabTags = scene.Components().Tags().TryGet(spawnedPrefabRoot);
+    kb::tests::Require(spawnedPrefabTags != nullptr && kb::scene::TagsText(*spawnedPrefabTags) == "Prefab, Runtime", "World.Spawn(prefab=...) did not preserve the prefab's own component data");
+    kb::tests::Require(scene.Hierarchy().Parent(spawnedPrefabRoot) == enemy, "World.Spawn(prefab=...) did not apply the requested parent");
+    const kb::scene::TransformComponent spawnedPrefabTransform = scene.Transforms().Get(spawnedPrefabRoot);
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.localPosition.x, 5.0F), "World.Spawn(prefab=...) did not apply the requested local position");
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.localRotation.w, 1.0F), "World.Spawn(prefab=...) did not apply the requested rotation pose");
+    // The "defined flush": world position must already reflect the parent
+    // (enemy at x=2) plus the local offset (x=5) = 7, immediately after
+    // World.Spawn returns — no separate Update()/SynchronizeTransforms()
+    // call from the test should be required.
+    kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.worldPosition.x, 7.0F),
+        "World.Spawn(prefab=...) must return a handle whose WORLD position already reflects the parent hierarchy, not just local position, without a further flush from the caller");
+
     const std::vector<kb::script::ScriptFunctionArgument> translateArgs{
         kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 1.0F } },
