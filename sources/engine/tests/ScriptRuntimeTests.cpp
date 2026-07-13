@@ -13,6 +13,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -2527,6 +2528,124 @@ void RunWorldInstantiatePrefabOwnershipTest() {
         "World.Destroy on the prefab instance's root must cascade to destroy its child too — the caller that owns the returned handle owns the WHOLE instantiated hierarchy, not just the root");
 }
 
+// LIB-071: Scene.Load/Unload/SetActive/GetActive/Find/LoadProgress — proves
+// additive loading genuinely preserves prior content (not merely
+// non-destructive in name), selective Unload only removes its own record's
+// entities, non-additive Load still replaces the whole scene (matching
+// SceneDocumentService::LoadIntoScene's pre-existing ClearSceneRoots
+// behaviour), and Progress honestly reports 1.0/0.0 rather than a
+// fabricated in-between value. Own fresh Scene/host — same isolated-scene
+// pattern as the LIB-067/068/069/070 tests above.
+void RunSceneLoadedContentApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneAFile = TestRoot() / "SceneLoadedContentProject" / "SceneA.21kbscene";
+    const std::filesystem::path sceneBFile = TestRoot() / "SceneLoadedContentProject" / "SceneB.21kbscene";
+    {
+        kb::scene::Scene sourceA;
+        static_cast<void>(sourceA.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RootA" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceA, sceneAFile, "SceneA"), "Scene.Load test fixture SceneA was not saved");
+    }
+    {
+        kb::scene::Scene sourceB;
+        static_cast<void>(sourceB.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RootB" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceB, sceneBFile, "SceneB"), "Scene.Load test fixture SceneB was not saved");
+    }
+
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "PreexistingRoot" }));
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene.Load test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneAFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadAResult = host.Functions().Call("Scene.Load", loadAArgs, context);
+    kb::tests::Require(loadAResult.Succeeded(), "Scene.Load (non-additive) direct call failed");
+    const std::uint64_t idA = loadAResult.Output("id")->AsUInt64();
+    kb::tests::Require(idA != 0U, "Scene.Load must return a nonzero id for a successful load");
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "RootA",
+            "Scene.Load(additive=false) must replace the scene's entire prior content with the newly loaded document");
+    }
+
+    const kb::script::ScriptFunctionCallResult getActiveAfterA = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterA.Succeeded() && getActiveAfterA.Output("id")->AsUInt64() == idA, "Scene.GetActive must report the just-loaded scene as active");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SceneA" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findAResult = host.Functions().Call("Scene.Find", findAArgs, context);
+    kb::tests::Require(findAResult.Succeeded() && findAResult.Output("id")->AsUInt64() == idA, "Scene.Find must resolve the loaded document's own name back to its id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneBFile.string() } },
+        kb::script::ScriptFunctionArgument{ .name = "additive", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult loadBResult = host.Functions().Call("Scene.Load", loadBArgs, context);
+    kb::tests::Require(loadBResult.Succeeded(), "Scene.Load (additive) direct call failed");
+    const std::uint64_t idB = loadBResult.Output("id")->AsUInt64();
+    kb::tests::Require(idB != 0U && idB != idA, "Scene.Load(additive=true) must return a distinct nonzero id from the earlier load");
+
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 2U, "Scene.Load(additive=true) must instantiate alongside SceneA's content, not replace it");
+        const bool hasRootA = std::any_of(roots.begin(), roots.end(), [&scene](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "RootA"; });
+        const bool hasRootB = std::any_of(roots.begin(), roots.end(), [&scene](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "RootB"; });
+        kb::tests::Require(hasRootA && hasRootB, "Scene.Load(additive=true) must leave SceneA's root alive alongside the newly loaded SceneB's root");
+    }
+
+    const kb::script::ScriptFunctionCallResult getActiveAfterB = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterB.Succeeded() && getActiveAfterB.Output("id")->AsUInt64() == idA,
+        "Scene.GetActive must remain SceneA's id after an additive load onto an already-active scene — additive Load only sets the active id when nothing was active yet");
+
+    const std::vector<kb::script::ScriptFunctionArgument> progressBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idB, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult progressBResult = host.Functions().Call("Scene.LoadProgress", progressBArgs, context);
+    kb::tests::Require(progressBResult.Succeeded() && kb::tests::NearlyEqual(progressBResult.Output("progress")->AsFloat(), 1.0F), "Scene.LoadProgress must report 1.0 for a currently-loaded id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> progressUnknownArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult progressUnknownResult = host.Functions().Call("Scene.LoadProgress", progressUnknownArgs, context);
+    kb::tests::Require(progressUnknownResult.Succeeded() && kb::tests::NearlyEqual(progressUnknownResult.Output("progress")->AsFloat(), 0.0F), "Scene.LoadProgress must report 0.0 for an unknown id");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setActiveBArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idB, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult setActiveBResult = host.Functions().Call("Scene.SetActive", setActiveBArgs, context);
+    kb::tests::Require(setActiveBResult.Succeeded() && setActiveBResult.Output("set")->AsBool(), "Scene.SetActive must succeed for a currently-loaded id");
+    const kb::script::ScriptFunctionCallResult getActiveAfterSet = host.Functions().Call("Scene.GetActive", {}, context);
+    kb::tests::Require(getActiveAfterSet.Succeeded() && getActiveAfterSet.Output("id")->AsUInt64() == idB, "Scene.GetActive must reflect SetActive's new selection");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadAArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ idA, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadAResult = host.Functions().Call("Scene.Unload", unloadAArgs, context);
+    kb::tests::Require(unloadAResult.Succeeded() && unloadAResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for a currently-loaded id");
+    {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "RootB",
+            "Scene.Unload(idA) must destroy only SceneA's root, leaving SceneB's content untouched");
+    }
+
+    const kb::script::ScriptFunctionCallResult progressAfterUnloadResult = host.Functions().Call("Scene.LoadProgress", unloadAArgs, context);
+    kb::tests::Require(progressAfterUnloadResult.Succeeded() && kb::tests::NearlyEqual(progressAfterUnloadResult.Output("progress")->AsFloat(), 0.0F),
+        "Scene.LoadProgress must report 0.0 for an id that was just Unloaded");
+
+    const kb::script::ScriptFunctionCallResult doubleUnloadResult = host.Functions().Call("Scene.Unload", unloadAArgs, context);
+    kb::tests::Require(doubleUnloadResult.Succeeded() && !doubleUnloadResult.Output("unloaded")->AsBool(),
+        "Scene.Unload on an already-unloaded id must report unloaded=false, not error or crash");
+
+    const std::vector<kb::script::ScriptFunctionArgument> missingPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "SceneLoadedContentProject" / "NoSuchScene.21kbscene").string() } },
+    };
+    const kb::script::ScriptFunctionCallResult missingPathResult = host.Functions().Call("Scene.Load", missingPathArgs, context);
+    kb::tests::Require(!missingPathResult.Succeeded(), "Scene.Load must fail (not fabricate an id) for a nonexistent path");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4230,6 +4349,7 @@ void RunScriptRuntimeTests() {
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();
     RunWorldInstantiatePrefabOwnershipTest();
+    RunSceneLoadedContentApiTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();

@@ -6,6 +6,7 @@
 #include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptSceneApi.hpp"
 #include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
@@ -81,6 +82,14 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Math",
             .ownerRuntime = "kb::math (stateless — pure functions, no backing runtime subsystem)",
             .Register = &kb::script::ScriptMathApi::Register,
+        },
+        // LIB-071: added after the original seven — Scene.* tracks
+        // loaded-document content (SceneState::loadedScenes) inside the
+        // one live kb::scene::Scene, via SceneLoadedContentService.
+        LibraryModuleDesc{
+            .name = "Scene",
+            .ownerRuntime = "kb::scene::SceneLoadedContentService",
+            .Register = &kb::script::ScriptSceneApi::Register,
         },
     };
     return kCatalog;
