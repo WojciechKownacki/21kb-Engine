@@ -141,6 +141,20 @@ public:
     std::vector<LoadedSceneRecord> loadedScenes;
     std::uint64_t nextLoadedSceneId = 1U;
     std::uint64_t activeLoadedSceneId = 0U;
+    // LIB-073: scene lifecycle notifications (SceneLoading/SceneLoaded/
+    // SceneActivated/SceneUnloading/SceneUnloaded) queued by
+    // SceneLoadedContentService — an "unambiguous command deferred to a
+    // queue" (Engine21kbLibrary.md's own invariant #3), not a second
+    // source of truth: kb::scene never interprets these itself. Drained
+    // once per frame by kb::script::ScriptRuntimeSceneSystem via the
+    // public SceneLoadedContent::DrainPendingLifecycleEvents() facade and
+    // turned into real ScriptEvent broadcasts.
+    struct PendingSceneLifecycleEvent {
+        std::string name;
+        std::uint64_t sceneId = 0U;
+        std::string sceneName;
+    };
+    std::vector<PendingSceneLifecycleEvent> pendingSceneLifecycleEvents;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
