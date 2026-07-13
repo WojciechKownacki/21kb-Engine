@@ -15,6 +15,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -552,6 +553,73 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
     return BoolResult("parented", parented);
 }
 
+// LIB-070 ("data overrides"): researched before implementing — the ONLY
+// existing generic property setter reachable from script (Self.SetProperty,
+// PucLuaSelfApi.cpp) is hand-wired Lua-only sugar hardcoded to the calling
+// behaviour's own Self entity, not through ScriptFunctionRegistry, and
+// cannot target an arbitrary entity (like a freshly instantiated prefab's
+// root, which is never the caller's own Self). kb::scene::ScenePrefabs::
+// Instantiate() itself has no override-value parameter, and the separate
+// ScenePrefabOverride* system is editor authoring-time divergence
+// tracking (diff a live instance against its source prefab template for
+// revert support) — it takes no VALUE to apply, only a property PATH, so
+// it cannot inject an override either. kb::script::ScriptSceneComponentApi
+// ::SetProperty IS already fully generic (any entity, not just Self) at
+// the C++ level — the gap is purely that no script-callable wrapper
+// exposes it for an explicit entity. World.SetPropertyBool/Int/Float/
+// String/Entity below close that gap, through the same ScriptFunctionRegistry
+// path every other World.* function uses (Native+Lua+Visual Graph
+// uniformly, unlike Self.SetProperty's Lua-only wiring).
+//
+// Overrides are therefore applied by COMPOSITION, not as a single atomic
+// InstantiatePrefab call: World.InstantiatePrefab(...) to get the entity,
+// then World.SetPropertyFloat(entity, "Camera", "verticalFovDegrees", ...)
+// per override. A single call taking an override LIST would need a
+// collection value crossing the script boundary — the same architecture
+// LIB-058 deferred (kb::script::ScriptValue is purely scalar) — not
+// invented here either.
+[[nodiscard]] std::string ComponentArg(std::span<const ScriptFunctionArgument> arguments) {
+    return StringArg(arguments, "component");
+}
+
+[[nodiscard]] std::string PropertyArg(std::span<const ScriptFunctionArgument> arguments) {
+    return StringArg(arguments, "property");
+}
+
+template <typename ValueGetter>
+ScriptFunctionCallResult SetEntityProperty(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, ValueGetter&& valueGetter) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return BoolResult("set", false);
+    }
+    const ScriptSceneComponentMutationResult result =
+        ScriptSceneComponentApi::SetProperty(*context.scene, entity, ComponentArg(arguments), PropertyArg(arguments), valueGetter());
+    return BoolResult("set", result.succeeded);
+}
+
+ScriptFunctionCallResult SetPropertyBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ FindArg(arguments, "value") != nullptr && FindArg(arguments, "value")->AsBool(false) }; });
+}
+
+ScriptFunctionCallResult SetPropertyInt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ IntArg(arguments, "value", 0) }; });
+}
+
+ScriptFunctionCallResult SetPropertyFloat(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ FloatArg(arguments, "value", 0.0F) }; });
+}
+
+ScriptFunctionCallResult SetPropertyString(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ StringArg(arguments, "value") }; });
+}
+
+ScriptFunctionCallResult SetPropertyEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetEntityProperty(context, arguments, [&] { return ScriptValue{ EntityArg(arguments, "value").Id(), ScriptValueType::Entity }; });
+}
+
 ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -683,6 +751,37 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
         &InstantiatePrefab) && ok;
+    // LIB-070: data-override family — set a property on ANY entity (unlike
+    // the pre-existing Self.SetProperty Lua sugar, hardcoded to the
+    // calling behaviour's own entity), reachable from Native/Lua/Visual
+    // Graph alike since these go through the standard ScriptFunctionRegistry
+    // path, not Self.SetProperty's separate hand-wired VisualGraph
+    // SetProperty-node-kind machinery.
+    ok = RegisterFunction(host, "World.SetPropertyBool",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Bool, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyBool) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyInt",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Int, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyInt) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyFloat",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyFloat) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyString",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyString) && ok;
+    ok = RegisterFunction(host, "World.SetPropertyEntity",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "component", ScriptValueType::String, true },
+            ScriptFunctionPin{ "property", ScriptValueType::String, true }, ScriptFunctionPin{ "value", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPropertyEntity) && ok;
     return ok;
 }
 
