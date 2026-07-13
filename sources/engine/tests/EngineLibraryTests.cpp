@@ -830,6 +830,95 @@ void RunCollectionsScriptValueTest() {
     kb::tests::Require(undo.Pop(poppedValue) && poppedValue.AsFloat() == 2.5F, "Stack<ScriptValue>::Pop must preserve LIFO order for ScriptValue elements");
 }
 
+// LIB-059: proves the "single upfront allocation, zero reallocation up to
+// capacity" claim documented in EngineLibraryCollections.hpp — not just
+// asserting it in a comment. AllocatedCapacity() (the backing
+// std::vector's real capacity()) is captured right after construction and
+// must never change as the collection fills up to its declared Capacity().
+void RunCollectionsAllocationCostTest() {
+    kb::library::Array<int> numbers{ 16U };
+    const std::size_t allocatedAfterConstruction = numbers.AllocatedCapacity();
+    kb::tests::Require(allocatedAfterConstruction >= 16U, "Array must reserve at least its declared capacity at construction time");
+    for (int i = 0; i < 16; ++i) {
+        kb::tests::Require(numbers.PushBack(i), "Array::PushBack must succeed while filling up to the reserved capacity");
+        kb::tests::Require(numbers.AllocatedCapacity() == allocatedAfterConstruction, "Array must never reallocate its backing storage while growing up to the capacity reserved at construction");
+    }
+
+    kb::library::Set<int> tags{ 8U };
+    const std::size_t setAllocated = tags.AllocatedCapacity();
+    for (int i = 0; i < 8; ++i) {
+        kb::tests::Require(tags.Insert(i), "Set::Insert must succeed while filling up to the reserved capacity");
+        kb::tests::Require(tags.AllocatedCapacity() == setAllocated, "Set must never reallocate its backing storage while growing up to the capacity reserved at construction");
+    }
+
+    kb::library::Map<int, int> map{ 8U };
+    const std::size_t mapAllocated = map.AllocatedCapacity();
+    for (int i = 0; i < 8; ++i) {
+        kb::tests::Require(map.Set(i, i * 2), "Map::Set must succeed while filling up to the reserved capacity");
+        kb::tests::Require(map.AllocatedCapacity() == mapAllocated, "Map must never reallocate its backing storage while growing up to the capacity reserved at construction");
+    }
+
+    kb::library::Stack<int> stack{ 8U };
+    const std::size_t stackAllocated = stack.AllocatedCapacity();
+    for (int i = 0; i < 8; ++i) {
+        kb::tests::Require(stack.Push(i), "Stack::Push must succeed while filling up to the reserved capacity");
+        kb::tests::Require(stack.AllocatedCapacity() == stackAllocated, "Stack must never reallocate its backing storage while growing up to the capacity reserved at construction");
+    }
+}
+
+// LIB-059: NonAlloc variants operate entirely over caller-provided storage
+// (here, plain stack std::array buffers standing in for a frame arena) and
+// never own or allocate memory themselves — the defining property for hot
+// path use. Semantics are checked to match the owning counterparts.
+void RunCollectionsNonAllocTest() {
+    std::array<int, 3> arrayStorage{};
+    kb::library::ArrayNonAlloc<int> numbers{ arrayStorage };
+    kb::tests::Require(numbers.Capacity() == 3U, "ArrayNonAlloc::Capacity must equal the caller-provided storage size");
+    kb::tests::Require(numbers.PushBack(10) && numbers.PushBack(20) && numbers.PushBack(30), "ArrayNonAlloc::PushBack must succeed while under capacity");
+    kb::tests::Require(!numbers.PushBack(40), "ArrayNonAlloc::PushBack must fail once the caller-provided storage is full");
+    kb::tests::Require(*numbers.GetAt(1) == 20, "ArrayNonAlloc::GetAt must return the element actually stored at that index");
+    kb::tests::Require(numbers.RemoveAt(0) && numbers.Count() == 2U && *numbers.GetAt(0) == 20, "ArrayNonAlloc::RemoveAt must shift later elements down");
+    kb::tests::Require(arrayStorage[0] == 20, "ArrayNonAlloc must write directly into the caller-provided storage, not a hidden internal copy");
+
+    std::array<int, 2> setStorage{};
+    kb::library::SetNonAlloc<int> tags{ setStorage };
+    kb::tests::Require(tags.Insert(7) && tags.Insert(7) && tags.Count() == 1U, "SetNonAlloc::Insert of a duplicate must be a no-op that still returns true");
+    kb::tests::Require(tags.Insert(8), "SetNonAlloc::Insert must succeed while under capacity");
+    kb::tests::Require(!tags.Insert(9), "SetNonAlloc::Insert of a genuinely new value must fail once at capacity");
+    kb::tests::Require(tags.Remove(7) && !tags.Contains(7), "SetNonAlloc::Remove must remove exactly the requested element");
+
+    std::array<kb::library::MapEntry<int, int>, 2> mapStorage{};
+    kb::library::MapNonAlloc<int, int> doubled{ mapStorage };
+    kb::tests::Require(doubled.Set(1, 10) && doubled.Set(2, 20), "MapNonAlloc::Set must succeed for new keys while under capacity");
+    kb::tests::Require(!doubled.Set(3, 30), "MapNonAlloc::Set of a genuinely new key must fail once at capacity");
+    kb::tests::Require(doubled.Set(1, 100) && *doubled.Find(1) == 100, "MapNonAlloc::Set of an existing key must update in place, not fail as if new");
+
+    std::array<int, 2> queueStorage{};
+    kb::library::QueueNonAlloc<int> fifo{ queueStorage };
+    kb::tests::Require(fifo.Enqueue(1) && fifo.Enqueue(2), "QueueNonAlloc::Enqueue must succeed while under capacity");
+    kb::tests::Require(!fifo.Enqueue(3), "QueueNonAlloc::Enqueue must fail once at capacity");
+    int dequeuedFirst = 0;
+    int dequeuedSecond = 0;
+    kb::tests::Require(fifo.Dequeue(dequeuedFirst) && dequeuedFirst == 1, "QueueNonAlloc::Dequeue must return items in FIFO order");
+    // Ring-buffer wraparound: enqueue again right after a dequeue so the
+    // write index wraps past the end of the fixed storage, proving this is
+    // a real ring buffer and not just a plain array that happens to work
+    // for the first pass through the storage.
+    kb::tests::Require(fifo.Enqueue(3), "QueueNonAlloc::Enqueue must succeed again once Dequeue freed a slot, even when the write index must wrap around the end of the storage");
+    kb::tests::Require(fifo.Dequeue(dequeuedSecond) && dequeuedSecond == 2, "QueueNonAlloc::Dequeue must continue in FIFO order across a wraparound");
+    int dequeuedThird = 0;
+    kb::tests::Require(fifo.Dequeue(dequeuedThird) && dequeuedThird == 3, "QueueNonAlloc::Dequeue must return the wrapped-around item correctly");
+    kb::tests::Require(fifo.Empty(), "QueueNonAlloc must be empty after draining every enqueued item");
+
+    std::array<int, 2> stackStorage{};
+    kb::library::StackNonAlloc<int> lifo{ stackStorage };
+    kb::tests::Require(lifo.Push(1) && lifo.Push(2), "StackNonAlloc::Push must succeed while under capacity");
+    kb::tests::Require(!lifo.Push(3), "StackNonAlloc::Push must fail once at capacity");
+    int poppedFirst = 0;
+    kb::tests::Require(lifo.Pop(poppedFirst) && poppedFirst == 2, "StackNonAlloc::Pop must return items in LIFO order");
+    kb::tests::Require(stackStorage[1] == 2, "StackNonAlloc must write directly into the caller-provided storage, not a hidden internal copy");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1365,6 +1454,8 @@ void RunEngineLibraryTests() {
     RunArrayViewTest();
     RunCollectionsScalarTest();
     RunCollectionsScriptValueTest();
+    RunCollectionsAllocationCostTest();
+    RunCollectionsNonAllocTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();

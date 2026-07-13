@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -24,23 +25,49 @@ namespace kb::library {
 // lookup via operator==, not hash-backed: this keeps them generic over any
 // T with operator== (no std::hash<T> specialization required — ScriptValue
 // has none today) and makes iteration order equal to insertion order as an
-// incidental property of the representation. LIB-059 (allocation cost /
-// NonAlloc variants) and LIB-060 (deterministic map/set iteration) revisit
-// both the performance and the iteration-order guarantee formally; this is
-// the honest MVP shape those tasks build on, not a hidden shortcut.
+// incidental property of the representation. LIB-060 (deterministic
+// map/set iteration) revisits that iteration-order guarantee formally.
+//
+// LIB-059 (allocation cost): Array/Set/Map/Stack reserve() their backing
+// std::vector to `capacity_` once, in the constructor — after that, every
+// mutation up to Capacity() is guaranteed not to trigger a further
+// reallocation (verified by AllocatedCapacity() staying constant; see
+// RunCollectionsAllocationCostTest). Exactly one allocation, sized to the
+// declared capacity, is the whole allocation cost of these four types.
+// Queue<T> is the one exception: it is std::deque-backed for O(1)
+// push/pop at both ends, and std::deque has no reserve() — its allocation
+// cost is inherently a sequence of fixed-size block allocations as it
+// grows, not one upfront allocation. This is a real, documented trade-off
+// (deque's chunked structure is what gives it O(1) at both ends), not an
+// oversight; a caller on a genuine allocation-free hot path should use
+// QueueNonAlloc instead (below), which is a proper O(1) ring buffer over
+// caller-provided storage and never allocates at all.
 [[nodiscard]] constexpr std::size_t ClampCollectionCapacity(std::size_t requested) noexcept {
     return requested < kDefaultLibraryInputLimits.maxCollectionSize ? requested
                                                                      : kDefaultLibraryInputLimits.maxCollectionSize;
 }
 
+template <typename K, typename V>
+struct MapEntry {
+    K key;
+    V value;
+};
+
 template <typename T>
 class Array {
 public:
     explicit Array(std::size_t capacity = kDefaultLibraryInputLimits.maxCollectionSize)
-        : capacity_(ClampCollectionCapacity(capacity)) {}
+        : capacity_(ClampCollectionCapacity(capacity)) {
+        items_.reserve(capacity_);
+    }
 
     [[nodiscard]] std::size_t Count() const noexcept { return items_.size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
+    // The backing std::vector's actual reserved capacity — always >=
+    // Capacity() after construction and never grows past it, proving the
+    // "single upfront allocation" claim (LIB-059) rather than just
+    // asserting it in a comment.
+    [[nodiscard]] std::size_t AllocatedCapacity() const noexcept { return items_.capacity(); }
     [[nodiscard]] bool Empty() const noexcept { return items_.empty(); }
     [[nodiscard]] bool Full() const noexcept { return items_.size() >= capacity_; }
 
@@ -86,10 +113,13 @@ template <typename T>
 class Set {
 public:
     explicit Set(std::size_t capacity = kDefaultLibraryInputLimits.maxCollectionSize)
-        : capacity_(ClampCollectionCapacity(capacity)) {}
+        : capacity_(ClampCollectionCapacity(capacity)) {
+        items_.reserve(capacity_);
+    }
 
     [[nodiscard]] std::size_t Count() const noexcept { return items_.size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
+    [[nodiscard]] std::size_t AllocatedCapacity() const noexcept { return items_.capacity(); }
     [[nodiscard]] bool Empty() const noexcept { return items_.empty(); }
 
     [[nodiscard]] bool Contains(const T& value) const noexcept {
@@ -134,16 +164,16 @@ private:
 template <typename K, typename V>
 class Map {
 public:
-    struct Entry {
-        K key;
-        V value;
-    };
+    using Entry = MapEntry<K, V>;
 
     explicit Map(std::size_t capacity = kDefaultLibraryInputLimits.maxCollectionSize)
-        : capacity_(ClampCollectionCapacity(capacity)) {}
+        : capacity_(ClampCollectionCapacity(capacity)) {
+        entries_.reserve(capacity_);
+    }
 
     [[nodiscard]] std::size_t Count() const noexcept { return entries_.size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
+    [[nodiscard]] std::size_t AllocatedCapacity() const noexcept { return entries_.capacity(); }
     [[nodiscard]] bool Empty() const noexcept { return entries_.empty(); }
 
     [[nodiscard]] const V* Find(const K& key) const noexcept {
@@ -169,7 +199,7 @@ public:
         if (entries_.size() >= capacity_) {
             return false;
         }
-        entries_.push_back(Entry{std::move(key), std::move(value)});
+        entries_.push_back(Entry{ std::move(key), std::move(value) });
         return true;
     }
 
@@ -235,10 +265,13 @@ template <typename T>
 class Stack {
 public:
     explicit Stack(std::size_t capacity = kDefaultLibraryInputLimits.maxCollectionSize)
-        : capacity_(ClampCollectionCapacity(capacity)) {}
+        : capacity_(ClampCollectionCapacity(capacity)) {
+        items_.reserve(capacity_);
+    }
 
     [[nodiscard]] std::size_t Count() const noexcept { return items_.size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
+    [[nodiscard]] std::size_t AllocatedCapacity() const noexcept { return items_.capacity(); }
     [[nodiscard]] bool Empty() const noexcept { return items_.empty(); }
 
     [[nodiscard]] bool Push(T value) {
@@ -268,6 +301,261 @@ public:
 private:
     std::vector<T> items_;
     std::size_t capacity_;
+};
+
+// LIB-059: NonAlloc variants for the hot path (e.g. per-frame scratch data)
+// — every one of these operates entirely over a std::span<T> the caller
+// already owns (a stack array, a thread_local buffer, a frame arena slice)
+// and never allocates memory itself. Capacity is fixed at construction to
+// the supplied span's size; there is no separate capacity parameter to
+// clamp against kDefaultLibraryInputLimits.maxCollectionSize because the
+// caller-owned storage IS the bound, chosen by the caller. Semantics
+// otherwise match the owning counterparts above (same bool-returning
+// mutation contract, same FIFO/LIFO ordering for Queue/Stack).
+template <typename T>
+class ArrayNonAlloc {
+public:
+    explicit ArrayNonAlloc(std::span<T> storage) noexcept
+        : storage_(storage) {}
+
+    [[nodiscard]] std::size_t Count() const noexcept { return count_; }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return storage_.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return count_ == 0U; }
+    [[nodiscard]] bool Full() const noexcept { return count_ >= storage_.size(); }
+
+    [[nodiscard]] bool PushBack(T value) {
+        if (Full()) {
+            return false;
+        }
+        storage_[count_] = std::move(value);
+        ++count_;
+        return true;
+    }
+
+    [[nodiscard]] bool RemoveAt(std::size_t index) {
+        if (index >= count_) {
+            return false;
+        }
+        for (std::size_t i = index; i + 1U < count_; ++i) {
+            storage_[i] = std::move(storage_[i + 1U]);
+        }
+        --count_;
+        return true;
+    }
+
+    [[nodiscard]] bool SetAt(std::size_t index, T value) {
+        if (index >= count_) {
+            return false;
+        }
+        storage_[index] = std::move(value);
+        return true;
+    }
+
+    [[nodiscard]] const T* GetAt(std::size_t index) const noexcept { return index < count_ ? &storage_[index] : nullptr; }
+
+    void Clear() noexcept { count_ = 0U; }
+
+    [[nodiscard]] auto begin() const noexcept { return storage_.begin(); }
+    [[nodiscard]] auto end() const noexcept { return storage_.begin() + static_cast<std::ptrdiff_t>(count_); }
+
+private:
+    std::span<T> storage_;
+    std::size_t count_ = 0U;
+};
+
+template <typename T>
+class SetNonAlloc {
+public:
+    explicit SetNonAlloc(std::span<T> storage) noexcept
+        : storage_(storage) {}
+
+    [[nodiscard]] std::size_t Count() const noexcept { return count_; }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return storage_.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return count_ == 0U; }
+
+    [[nodiscard]] bool Contains(const T& value) const noexcept {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (storage_[i] == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool Insert(T value) {
+        if (Contains(value)) {
+            return true;
+        }
+        if (count_ >= storage_.size()) {
+            return false;
+        }
+        storage_[count_] = std::move(value);
+        ++count_;
+        return true;
+    }
+
+    bool Remove(const T& value) {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (storage_[i] == value) {
+                for (std::size_t j = i; j + 1U < count_; ++j) {
+                    storage_[j] = std::move(storage_[j + 1U]);
+                }
+                --count_;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Clear() noexcept { count_ = 0U; }
+
+    [[nodiscard]] auto begin() const noexcept { return storage_.begin(); }
+    [[nodiscard]] auto end() const noexcept { return storage_.begin() + static_cast<std::ptrdiff_t>(count_); }
+
+private:
+    std::span<T> storage_;
+    std::size_t count_ = 0U;
+};
+
+template <typename K, typename V>
+class MapNonAlloc {
+public:
+    explicit MapNonAlloc(std::span<MapEntry<K, V>> storage) noexcept
+        : storage_(storage) {}
+
+    [[nodiscard]] std::size_t Count() const noexcept { return count_; }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return storage_.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return count_ == 0U; }
+
+    [[nodiscard]] const V* Find(const K& key) const noexcept {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (storage_[i].key == key) {
+                return &storage_[i].value;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool ContainsKey(const K& key) const noexcept { return Find(key) != nullptr; }
+
+    [[nodiscard]] bool Set(K key, V value) {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (storage_[i].key == key) {
+                storage_[i].value = std::move(value);
+                return true;
+            }
+        }
+        if (count_ >= storage_.size()) {
+            return false;
+        }
+        storage_[count_] = MapEntry<K, V>{ std::move(key), std::move(value) };
+        ++count_;
+        return true;
+    }
+
+    bool Remove(const K& key) {
+        for (std::size_t i = 0; i < count_; ++i) {
+            if (storage_[i].key == key) {
+                for (std::size_t j = i; j + 1U < count_; ++j) {
+                    storage_[j] = std::move(storage_[j + 1U]);
+                }
+                --count_;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Clear() noexcept { count_ = 0U; }
+
+    [[nodiscard]] auto begin() const noexcept { return storage_.begin(); }
+    [[nodiscard]] auto end() const noexcept { return storage_.begin() + static_cast<std::ptrdiff_t>(count_); }
+
+private:
+    std::span<MapEntry<K, V>> storage_;
+    std::size_t count_ = 0U;
+};
+
+// A proper O(1)-enqueue/O(1)-dequeue ring buffer over caller-provided
+// storage — strictly better for the hot path than the owning Queue<T>
+// above, which is std::deque-backed and therefore not allocation-free.
+template <typename T>
+class QueueNonAlloc {
+public:
+    explicit QueueNonAlloc(std::span<T> storage) noexcept
+        : storage_(storage) {}
+
+    [[nodiscard]] std::size_t Count() const noexcept { return count_; }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return storage_.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return count_ == 0U; }
+
+    [[nodiscard]] bool Enqueue(T value) {
+        if (count_ >= storage_.size()) {
+            return false;
+        }
+        storage_[(head_ + count_) % storage_.size()] = std::move(value);
+        ++count_;
+        return true;
+    }
+
+    [[nodiscard]] bool Dequeue(T& outValue) {
+        if (count_ == 0U) {
+            return false;
+        }
+        outValue = std::move(storage_[head_]);
+        head_ = (head_ + 1U) % storage_.size();
+        --count_;
+        return true;
+    }
+
+    [[nodiscard]] const T* Peek() const noexcept { return count_ == 0U ? nullptr : &storage_[head_]; }
+
+    void Clear() noexcept {
+        head_ = 0U;
+        count_ = 0U;
+    }
+
+private:
+    std::span<T> storage_;
+    std::size_t head_ = 0U;
+    std::size_t count_ = 0U;
+};
+
+template <typename T>
+class StackNonAlloc {
+public:
+    explicit StackNonAlloc(std::span<T> storage) noexcept
+        : storage_(storage) {}
+
+    [[nodiscard]] std::size_t Count() const noexcept { return count_; }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return storage_.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return count_ == 0U; }
+
+    [[nodiscard]] bool Push(T value) {
+        if (count_ >= storage_.size()) {
+            return false;
+        }
+        storage_[count_] = std::move(value);
+        ++count_;
+        return true;
+    }
+
+    [[nodiscard]] bool Pop(T& outValue) {
+        if (count_ == 0U) {
+            return false;
+        }
+        --count_;
+        outValue = std::move(storage_[count_]);
+        return true;
+    }
+
+    [[nodiscard]] const T* Top() const noexcept { return count_ == 0U ? nullptr : &storage_[count_ - 1U]; }
+
+    void Clear() noexcept { count_ = 0U; }
+
+private:
+    std::span<T> storage_;
+    std::size_t count_ = 0U;
 };
 
 } // namespace kb::library
