@@ -357,6 +357,46 @@ void RunRotationFunctionsTest() {
     kb::tests::Require(std::abs(partialStep.w - rotated90Y.w) > 0.0001F, "RotateTowards must not overshoot to the target when maxDelta is smaller than the angle between the two rotations");
 }
 
+// LIB-050: Random01/Noise1D/Noise2D/Noise3D must be pure, deterministic
+// functions of their explicit arguments — no hidden global generator, so
+// the primary property to prove is "same inputs -> same output" and
+// "different seed -> (almost certainly) different output", plus gradient
+// noise's defining mathematical property (exactly zero at every integer
+// lattice point, for any seed).
+void RunNoiseAndRandomTest() {
+    kb::tests::Require(kb::math::Random01(42U, 7U) == kb::math::Random01(42U, 7U), "Random01 must be deterministic: the same (seed, index) must always produce the same value");
+    kb::tests::Require(kb::math::Random01(42U, 7U) != kb::math::Random01(42U, 8U), "Random01 must (in practice) differ for a different index with the same seed");
+    kb::tests::Require(kb::math::Random01(42U, 7U) != kb::math::Random01(43U, 7U), "Random01 must (in practice) differ for a different seed with the same index");
+    const float randomValue = kb::math::Random01(1U, 1U);
+    kb::tests::Require(randomValue >= 0.0F && randomValue <= 1.0F, "Random01 must stay within [0, 1]");
+
+    // Deliberately non-symmetric fractional offsets (not exactly 0.5 in
+    // any axis): at the exact midpoint of a cell, Grad(hash, 0.5, 0.5,
+    // 0.5) only has 3 possible outputs regardless of hash, which makes a
+    // "different seed must differ" check flaky at that specific point —
+    // not a property of the noise function, just a bad sample point.
+    kb::tests::Require(kb::math::Noise3D(1.37F, 2.91F, 3.14F, 42U) == kb::math::Noise3D(1.37F, 2.91F, 3.14F, 42U), "Noise3D must be deterministic: the same (position, seed) must always produce the same value");
+    kb::tests::Require(kb::math::Noise3D(1.37F, 2.91F, 3.14F, 42U) != kb::math::Noise3D(1.37F, 2.91F, 3.14F, 43U), "Noise3D must (in practice) differ for a different seed at the same position");
+
+    // The defining property of gradient noise: exactly zero at every
+    // integer lattice point (the distance vector from a lattice point to
+    // itself is zero, so every corner's gradient·distance term is zero
+    // there), for any seed.
+    kb::tests::Require(kb::math::Noise3D(3.0F, -2.0F, 5.0F, 42U) == 0.0F, "Noise3D must be exactly zero at an integer lattice point");
+    kb::tests::Require(kb::math::Noise3D(0.0F, 0.0F, 0.0F, 999U) == 0.0F, "Noise3D must be exactly zero at the origin for any seed");
+    kb::tests::Require(kb::math::Noise2D(4.0F, -1.0F, 42U) == 0.0F, "Noise2D must be exactly zero at an integer lattice point");
+    kb::tests::Require(kb::math::Noise1D(7.0F, 42U) == 0.0F, "Noise1D must be exactly zero at an integer lattice point");
+
+    // Off-lattice, the noise must actually vary (not collapse to zero
+    // everywhere) and stay within gradient noise's expected rough range.
+    const float midCellNoise = kb::math::Noise3D(0.37F, 0.61F, 0.24F, 42U);
+    kb::tests::Require(midCellNoise != 0.0F, "Noise3D must be non-zero away from a lattice point");
+    kb::tests::Require(midCellNoise > -2.0F && midCellNoise < 2.0F, "Noise3D must stay within gradient noise's expected rough amplitude range");
+
+    kb::tests::Require(kb::math::Noise1D(0.37F, 42U) == kb::math::Noise2D(0.37F, 0.0F, 42U), "Noise1D must exactly match Noise2D/Noise3D with the unused axes pinned to 0 (same underlying implementation, not a second one)");
+    kb::tests::Require(kb::math::Noise2D(0.37F, 0.61F, 42U) == kb::math::Noise3D(0.37F, 0.61F, 0.0F, 42U), "Noise2D must exactly match Noise3D with the unused axis pinned to 0");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -370,6 +410,7 @@ void RunEngineMathTests() {
     RunTrigFunctionsTest();
     RunVec3DistanceProjectReflectRefractTest();
     RunRotationFunctionsTest();
+    RunNoiseAndRandomTest();
 }
 
 } // namespace kb::tests
