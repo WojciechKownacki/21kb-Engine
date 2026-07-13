@@ -33,6 +33,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunInputTests();
     } else if (suite == "engine-module") {
         kb::tests::RunEngineModuleTests();
+    } else if (suite == "engine-library") {
+        kb::tests::RunEngineLibraryTests();
     } else {
         return false;
     }
@@ -51,6 +53,7 @@ void RunAllSuites() {
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();
     kb::tests::RunEngineModuleTests();
+    kb::tests::RunEngineLibraryTests();
 }
 
 } // namespace

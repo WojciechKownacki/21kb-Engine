@@ -1,5 +1,6 @@
 #include "engine/script/ScriptRuntime.hpp"
 
+#include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 
@@ -28,15 +29,7 @@ struct DispatchContext {
 };
 
 [[nodiscard]] bool ComesBefore(const BehaviourDispatchRecord& lhs, const BehaviourDispatchRecord& rhs) noexcept {
-    const auto lhsGroup = static_cast<std::uint8_t>(lhs.behaviour.tickGroup);
-    const auto rhsGroup = static_cast<std::uint8_t>(rhs.behaviour.tickGroup);
-    if (lhsGroup != rhsGroup) {
-        return lhsGroup < rhsGroup;
-    }
-    if (lhs.behaviour.executionOrder != rhs.behaviour.executionOrder) {
-        return lhs.behaviour.executionOrder < rhs.behaviour.executionOrder;
-    }
-    return lhs.entity.Id() < rhs.entity.Id();
+    return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
 }
 
 void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
@@ -163,6 +156,11 @@ const ScriptFunctionRegistry& ScriptRuntime::Functions() const noexcept {
 }
 
 ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycle(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
+    // LIB-021: the first lifecycle dispatch locks the function registry —
+    // once the world is running, a new function could be visible to some
+    // already-running dispatch paths (Lua sugar, compiled Visual Graph
+    // bindings) but not others.
+    functions_.Lock();
     ScriptRuntimeExecutionResult result{};
     DispatchContext context{
         .scene = &scene,
@@ -183,6 +181,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleForBehaviour(
     const kb::scene::BehaviourComponent& behaviour,
     ScriptLifecycleEvent event,
     float deltaSeconds) {
+    functions_.Lock();
     ScriptRuntimeExecutionResult result{};
     DispatchContext context{
         .scene = &scene,
@@ -211,6 +210,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleForBehaviourAndDispa
 }
 
 ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scene, const ScriptEvent& event, float deltaSeconds) {
+    functions_.Lock();
     ScriptRuntimeExecutionResult result{};
     if (event.name.empty()) {
         result.diagnostics.push_back(ScriptDiagnostic{
