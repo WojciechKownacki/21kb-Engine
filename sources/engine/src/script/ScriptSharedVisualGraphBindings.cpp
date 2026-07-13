@@ -59,7 +59,17 @@ constexpr std::array kSharedBindingTypes{
         return ScriptValue{ context.ReadString(input.sourceNodeId, input.sourcePin) };
     case ScriptValueType::Entity:
     case ScriptValueType::Component:
+    case ScriptValueType::Hash:
         return ScriptValue{ context.ReadUInt64(input.sourceNodeId, input.sourcePin), type };
+    case ScriptValueType::UInt32:
+        return ScriptValue{ static_cast<std::uint32_t>(context.ReadUInt64(input.sourceNodeId, input.sourcePin)) };
+    case ScriptValueType::Int64:
+        return ScriptValue{ context.ReadInt64(input.sourceNodeId, input.sourcePin) };
+    case ScriptValueType::Double:
+        return ScriptValue{ context.ReadDouble(input.sourceNodeId, input.sourcePin) };
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return ScriptValue{ context.ReadString(input.sourceNodeId, input.sourcePin), type };
     case ScriptValueType::Void:
         break;
     }

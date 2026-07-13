@@ -73,6 +73,18 @@ constexpr std::array kPropertyBindingTypes{
         return ScriptValue{ context.ReadUInt64(input.sourceNodeId, input.sourcePin), ScriptValueType::Entity };
     case kb::visual::VisualGraphValueType::Component:
         return ScriptValue{ context.ReadUInt64(input.sourceNodeId, input.sourcePin), ScriptValueType::Component };
+    case kb::visual::VisualGraphValueType::UInt32:
+        return ScriptValue{ static_cast<std::uint32_t>(context.ReadUInt64(input.sourceNodeId, input.sourcePin)) };
+    case kb::visual::VisualGraphValueType::Hash:
+        return ScriptValue{ context.ReadUInt64(input.sourceNodeId, input.sourcePin), ScriptValueType::Hash };
+    case kb::visual::VisualGraphValueType::Int64:
+        return ScriptValue{ context.ReadInt64(input.sourceNodeId, input.sourcePin) };
+    case kb::visual::VisualGraphValueType::Double:
+        return ScriptValue{ context.ReadDouble(input.sourceNodeId, input.sourcePin) };
+    case kb::visual::VisualGraphValueType::Name:
+        return ScriptValue{ context.ReadString(input.sourceNodeId, input.sourcePin), ScriptValueType::Name };
+    case kb::visual::VisualGraphValueType::Guid:
+        return ScriptValue{ context.ReadString(input.sourceNodeId, input.sourcePin), ScriptValueType::Guid };
     case kb::visual::VisualGraphValueType::Void:
         break;
     }

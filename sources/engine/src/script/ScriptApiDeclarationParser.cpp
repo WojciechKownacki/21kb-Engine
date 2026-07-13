@@ -41,6 +41,30 @@ namespace {
         output = ScriptValueType::Component;
         return true;
     }
+    if (text == "Int64" || text == "int64") {
+        output = ScriptValueType::Int64;
+        return true;
+    }
+    if (text == "UInt32" || text == "uint32") {
+        output = ScriptValueType::UInt32;
+        return true;
+    }
+    if (text == "Double" || text == "double") {
+        output = ScriptValueType::Double;
+        return true;
+    }
+    if (text == "Name" || text == "name") {
+        output = ScriptValueType::Name;
+        return true;
+    }
+    if (text == "Guid" || text == "guid") {
+        output = ScriptValueType::Guid;
+        return true;
+    }
+    if (text == "Hash" || text == "hash") {
+        output = ScriptValueType::Hash;
+        return true;
+    }
     return false;
 }
 

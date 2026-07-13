@@ -51,7 +51,19 @@ void PucLuaValueBridge::Push(lua_State* state, const ScriptValue& value) {
         break;
     case ScriptValueType::Entity:
     case ScriptValueType::Component:
+    case ScriptValueType::Hash:
+    case ScriptValueType::UInt32:
         lua_pushinteger(state, static_cast<lua_Integer>(value.AsUInt64()));
+        break;
+    case ScriptValueType::Int64:
+        lua_pushinteger(state, static_cast<lua_Integer>(value.AsInt64()));
+        break;
+    case ScriptValueType::Double:
+        lua_pushnumber(state, static_cast<lua_Number>(value.AsDouble()));
+        break;
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        lua_pushlstring(state, value.AsString().data(), value.AsString().size());
         break;
     case ScriptValueType::Void:
         lua_pushnil(state);
@@ -73,6 +85,18 @@ ScriptValue PucLuaValueBridge::DefaultFor(ScriptValueType type) {
         return ScriptValue{ 0U, ScriptValueType::Entity };
     case ScriptValueType::Component:
         return ScriptValue{ 0U, ScriptValueType::Component };
+    case ScriptValueType::Hash:
+        return ScriptValue{ 0U, ScriptValueType::Hash };
+    case ScriptValueType::UInt32:
+        return ScriptValue{ std::uint32_t{ 0U } };
+    case ScriptValueType::Int64:
+        return ScriptValue{ std::int64_t{ 0 } };
+    case ScriptValueType::Double:
+        return ScriptValue{ 0.0 };
+    case ScriptValueType::Name:
+        return ScriptValue{ std::string{}, ScriptValueType::Name };
+    case ScriptValueType::Guid:
+        return ScriptValue{ std::string{}, ScriptValueType::Guid };
     case ScriptValueType::Void:
         break;
     }
