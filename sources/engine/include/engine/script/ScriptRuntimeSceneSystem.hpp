@@ -59,6 +59,7 @@ private:
     void PrepareScene(kb::scene::Scene& scene);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
+    void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);
     void ExecuteBehaviourPhase(
         kb::scene::Scene& scene,
         kb::scene::SceneEntity entity,

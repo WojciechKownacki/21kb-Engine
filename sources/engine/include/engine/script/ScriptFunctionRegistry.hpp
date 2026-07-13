@@ -63,6 +63,13 @@ struct ScriptFunctionDesc {
 
 class ScriptFunctionRegistry final {
 public:
+    // Rejects the registration (returns false) once Lock() has been
+    // called. A function registered after the world has started running
+    // could be visible to some already-running dispatch paths but not
+    // others (Lua sugar tables and compiled Visual Graph bindings are
+    // generated/snapshotted at setup time, not re-derived per call), so
+    // LIB-021 blocks it outright rather than allowing a partially-visible
+    // function.
     [[nodiscard]] bool Register(ScriptFunctionDesc function);
     [[nodiscard]] const ScriptFunctionSignature* FindSignature(std::string_view name) const noexcept;
     [[nodiscard]] const std::vector<ScriptFunctionDesc>& Functions() const noexcept;
@@ -70,6 +77,13 @@ public:
         std::string_view name,
         std::span<const ScriptFunctionArgument> arguments,
         const ScriptFunctionCallContext& context) const;
+
+    // Called once the owning ScriptRuntime dispatches its first lifecycle
+    // phase or event (see ScriptRuntime::ExecuteLifecycle/
+    // ExecuteLifecycleForBehaviour/DispatchEvent) — idempotent, safe to
+    // call every dispatch.
+    void Lock() noexcept;
+    [[nodiscard]] bool IsLocked() const noexcept;
 
 private:
     [[nodiscard]] static bool HasValidPins(const std::vector<ScriptFunctionPin>& pins);
@@ -88,6 +102,7 @@ private:
         std::vector<std::string>& errors);
 
     std::vector<ScriptFunctionDesc> functions_;
+    bool locked_ = false;
 };
 
 } // namespace kb::script

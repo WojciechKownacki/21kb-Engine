@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -200,6 +201,84 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 }
 
+void PreparePlayerControllerTemplateProject() {
+    ResetTestRoot();
+    const std::filesystem::path root = TestRoot();
+    WriteTextFile(root / "Assets" / "Logic" / "PlayerController.lua", R"(
+local speed = 2.0
+
+function Ready(self, dt)
+    Log("player ready")
+end
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    local dx = (move.x or 0.0) * speed * dt
+    local dy = (move.y or 0.0) * speed * dt
+    Transform.Translate(self.entity, dx, dy, 0.0)
+    Log("player tick")
+    Emit("PlayerMoved", {})
+end
+)");
+
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" }));
+    std::error_code error;
+    std::filesystem::create_directories(root / "Assets" / "Scenes", error);
+    Require(!error, "player controller template scene directory could not be created");
+    Require(
+        kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+        "player controller template scene could not be saved");
+}
+
+// LIB-013: a minimal PlayerController template must actually run end to end
+// in Play Mode without any editor dependency. `kb_cli run` is the only
+// editor-independent Play Mode surface the engine has today: it loads a
+// project + scene and drives a real ScriptRuntimeHost/ScriptRuntimeSceneSystem
+// frame loop headless, with zero bgfx/window/editor involvement. This test
+// exercises the exact workflow ScriptAgentProjectFiles' generated AGENTS.md
+// documents (scene-attach -> validate -> run) against a PlayerController.lua
+// that reads Input.Vector2 and drives Transform.Translate, then runs several
+// simulated frames through the real CLI commands, in-process.
+void RunPlayerControllerTemplateTests() {
+    PreparePlayerControllerTemplateProject();
+    const std::string root = TestRoot().string();
+
+    const CommandRun validate = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/PlayerController.lua" });
+    Require(validate.exitCode == 0, "player controller template script did not validate");
+    Require(Contains(validate.output, "OK"), "player controller template validate did not report OK");
+
+    const CommandRun attach = Run(&kb::cli::RunSceneAttachCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player",
+        "--script", "/Game/Logic/PlayerController.lua",
+    });
+    Require(attach.exitCode == 0, "player controller template could not attach to the scene");
+
+    constexpr int kFrames = 5;
+    const CommandRun run = Run(&kb::cli::RunRunCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--frames", std::to_string(kFrames),
+    });
+    Require(run.exitCode == 0, "player controller template run reported diagnostics");
+    Require(Contains(run.output, "[log] player ready"), "player controller template did not run Ready");
+    Require(Contains(run.output, "PlayerMoved"), "player controller template did not emit its movement event");
+    Require(Contains(run.output, "0 diagnostics"), "player controller template run was not clean");
+
+    std::size_t tickCount = 0;
+    for (std::size_t searchPosition = 0;;) {
+        const std::size_t found = run.output.find("[log] player tick", searchPosition);
+        if (found == std::string::npos) {
+            break;
+        }
+        ++tickCount;
+        searchPosition = found + 1;
+    }
+    Require(tickCount == static_cast<std::size_t>(kFrames), "player controller template did not tick exactly once per simulated frame");
+}
+
 void RunApiCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -213,6 +292,22 @@ void RunApiCommandTests() {
     Require(std::filesystem::exists(TestRoot() / "AGENTS.md"), "init-agent did not write AGENTS.md");
     Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "kb.lua"), "init-agent did not write Lua stubs");
     Require(std::filesystem::exists(TestRoot() / ".luarc.json"), "init-agent did not write .luarc.json");
+
+    // LIB-023: init-agent must also write a manifest with an API hash, and
+    // that hash must be stable across two builds of the identical project
+    // (no source/asset change between them).
+    const std::filesystem::path manifestPath = TestRoot() / ".kb" / "api" / "manifest.json";
+    Require(std::filesystem::exists(manifestPath), "init-agent did not write manifest.json");
+    std::ifstream manifestStream{ manifestPath, std::ios::binary };
+    const std::string manifestContent{ std::istreambuf_iterator<char>{ manifestStream }, std::istreambuf_iterator<char>{} };
+    Require(Contains(manifestContent, "\"version\":"), "manifest.json is missing the version field");
+    Require(Contains(manifestContent, "\"hash\":"), "manifest.json is missing the hash field");
+
+    const CommandRun initAgentAgain = Run(&kb::cli::RunInitAgentCommand, { "--project", root });
+    Require(initAgentAgain.exitCode == 0, "init-agent second run failed");
+    std::ifstream manifestStreamAgain{ manifestPath, std::ios::binary };
+    const std::string manifestContentAgain{ std::istreambuf_iterator<char>{ manifestStreamAgain }, std::istreambuf_iterator<char>{} };
+    Require(manifestContent == manifestContentAgain, "manifest.json hash must be stable across repeated builds of an unchanged project");
 }
 
 void RunMcpCommandTests() {
@@ -269,6 +364,7 @@ int main() {
     RunValidateCommandTests();
     RunSceneCommandTests();
     RunRunCommandTests();
+    RunPlayerControllerTemplateTests();
     RunApiCommandTests();
     RunMcpCommandTests();
     return EXIT_SUCCESS;
