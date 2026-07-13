@@ -21,9 +21,21 @@ VisualGraphRuntimeValue::VisualGraphRuntimeValue(float value)
     : value_(value)
     , type_(VisualGraphValueType::Float) {}
 
+VisualGraphRuntimeValue::VisualGraphRuntimeValue(double value)
+    : value_(value)
+    , type_(VisualGraphValueType::Double) {}
+
+VisualGraphRuntimeValue::VisualGraphRuntimeValue(std::int64_t value)
+    : value_(value)
+    , type_(VisualGraphValueType::Int64) {}
+
 VisualGraphRuntimeValue::VisualGraphRuntimeValue(std::string value)
     : value_(std::move(value))
     , type_(VisualGraphValueType::String) {}
+
+VisualGraphRuntimeValue::VisualGraphRuntimeValue(std::string value, VisualGraphValueType type)
+    : value_(std::move(value))
+    , type_(type == VisualGraphValueType::Name || type == VisualGraphValueType::Guid ? type : VisualGraphValueType::String) {}
 
 VisualGraphRuntimeValue::VisualGraphRuntimeValue(std::uint64_t value, VisualGraphValueType type)
     : value_(value)
@@ -45,6 +57,16 @@ int VisualGraphRuntimeValue::AsInt(int fallback) const noexcept {
 
 float VisualGraphRuntimeValue::AsFloat(float fallback) const noexcept {
     const float* value = std::get_if<float>(&value_);
+    return value == nullptr ? fallback : *value;
+}
+
+double VisualGraphRuntimeValue::AsDouble(double fallback) const noexcept {
+    const double* value = std::get_if<double>(&value_);
+    return value == nullptr ? fallback : *value;
+}
+
+std::int64_t VisualGraphRuntimeValue::AsInt64(std::int64_t fallback) const noexcept {
+    const std::int64_t* value = std::get_if<std::int64_t>(&value_);
     return value == nullptr ? fallback : *value;
 }
 

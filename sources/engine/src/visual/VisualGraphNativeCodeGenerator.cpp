@@ -177,6 +177,18 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
         return "ReadEntity";
     case VisualGraphValueType::Component:
         return "ReadComponent";
+    case VisualGraphValueType::Int64:
+        return "ReadInt64";
+    case VisualGraphValueType::UInt32:
+        return "ReadUInt32";
+    case VisualGraphValueType::Double:
+        return "ReadDouble";
+    case VisualGraphValueType::Name:
+        return "ReadName";
+    case VisualGraphValueType::Guid:
+        return "ReadGuid";
+    case VisualGraphValueType::Hash:
+        return "ReadHash";
     case VisualGraphValueType::Void:
         break;
     }
@@ -197,6 +209,18 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
         return "StoreEntity";
     case VisualGraphValueType::Component:
         return "StoreComponent";
+    case VisualGraphValueType::Int64:
+        return "StoreInt64";
+    case VisualGraphValueType::UInt32:
+        return "StoreUInt32";
+    case VisualGraphValueType::Double:
+        return "StoreDouble";
+    case VisualGraphValueType::Name:
+        return "StoreName";
+    case VisualGraphValueType::Guid:
+        return "StoreGuid";
+    case VisualGraphValueType::Hash:
+        return "StoreHash";
     case VisualGraphValueType::Void:
         break;
     }
@@ -217,6 +241,18 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
         return "ReadEntity";
     case VisualGraphValueType::Component:
         return "ReadComponent";
+    case VisualGraphValueType::Int64:
+        return "ReadInt64";
+    case VisualGraphValueType::UInt32:
+        return "ReadUInt32";
+    case VisualGraphValueType::Double:
+        return "ReadDouble";
+    case VisualGraphValueType::Name:
+        return "ReadName";
+    case VisualGraphValueType::Guid:
+        return "ReadGuid";
+    case VisualGraphValueType::Hash:
+        return "ReadHash";
     case VisualGraphValueType::Void:
         break;
     }
@@ -237,6 +273,18 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
         return "VisualGraphNativeValueType::Entity";
     case VisualGraphValueType::Component:
         return "VisualGraphNativeValueType::Component";
+    case VisualGraphValueType::Int64:
+        return "VisualGraphNativeValueType::Int64";
+    case VisualGraphValueType::UInt32:
+        return "VisualGraphNativeValueType::UInt32";
+    case VisualGraphValueType::Double:
+        return "VisualGraphNativeValueType::Double";
+    case VisualGraphValueType::Name:
+        return "VisualGraphNativeValueType::Name";
+    case VisualGraphValueType::Guid:
+        return "VisualGraphNativeValueType::Guid";
+    case VisualGraphValueType::Hash:
+        return "VisualGraphNativeValueType::Hash";
     case VisualGraphValueType::Void:
         break;
     }
@@ -608,8 +656,14 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    String,\n";
     header << "    Entity,\n";
     header << "    Component,\n";
+    header << "    Int64,\n";
+    header << "    UInt32,\n";
+    header << "    Double,\n";
+    header << "    Name,\n";
+    header << "    Guid,\n";
+    header << "    Hash,\n";
     header << "};\n\n";
-    header << "using VisualGraphNativeEventValue = std::variant<std::monostate, bool, int, float, std::string_view, std::uint64_t>;\n\n";
+    header << "using VisualGraphNativeEventValue = std::variant<std::monostate, bool, int, float, std::string_view, std::uint64_t, std::int64_t, double>;\n\n";
     header << "struct VisualGraphNativeEventArgument {\n";
     header << "    std::string_view name;\n";
     header << "    VisualGraphNativeValueType type = VisualGraphNativeValueType::Void;\n";
@@ -623,6 +677,12 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    std::string_view ReadString(std::string_view name) const;\n";
     header << "    std::uint64_t ReadEntity(std::string_view name) const;\n";
     header << "    std::uint64_t ReadComponent(std::string_view name) const;\n";
+    header << "    std::int64_t ReadInt64(std::string_view name) const;\n";
+    header << "    std::uint32_t ReadUInt32(std::string_view name) const;\n";
+    header << "    double ReadDouble(std::string_view name) const;\n";
+    header << "    std::string_view ReadName(std::string_view name) const;\n";
+    header << "    std::string_view ReadGuid(std::string_view name) const;\n";
+    header << "    std::uint64_t ReadHash(std::string_view name) const;\n";
     header << "};\n\n";
     header << "class VisualGraphNativeExecutionContext {\n";
     header << "public:\n";
@@ -646,6 +706,18 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    void StoreString(std::uint32_t sourceNodeId, std::string_view sourcePin, std::string_view value);\n";
     header << "    void StoreEntity(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint64_t value);\n";
     header << "    void StoreComponent(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint64_t value);\n";
+    header << "    std::int64_t ReadInt64(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    std::uint32_t ReadUInt32(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    double ReadDouble(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    std::string_view ReadName(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    std::string_view ReadGuid(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    std::uint64_t ReadHash(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
+    header << "    void StoreInt64(std::uint32_t sourceNodeId, std::string_view sourcePin, std::int64_t value);\n";
+    header << "    void StoreUInt32(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint32_t value);\n";
+    header << "    void StoreDouble(std::uint32_t sourceNodeId, std::string_view sourcePin, double value);\n";
+    header << "    void StoreName(std::uint32_t sourceNodeId, std::string_view sourcePin, std::string_view value);\n";
+    header << "    void StoreGuid(std::uint32_t sourceNodeId, std::string_view sourcePin, std::string_view value);\n";
+    header << "    void StoreHash(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint64_t value);\n";
     header << "    bool SelfHasComponent(std::string_view component);\n";
     header << "    bool SelfGetPropertyBool(std::string_view component, std::string_view property);\n";
     header << "    int SelfGetPropertyInt(std::string_view component, std::string_view property);\n";
