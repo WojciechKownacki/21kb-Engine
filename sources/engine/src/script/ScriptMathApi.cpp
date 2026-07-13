@@ -87,6 +87,58 @@ ScriptFunctionCallResult Damp(const ScriptFunctionCallContext&, std::span<const 
     };
 }
 
+ScriptFunctionCallResult Min(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Min(FloatArg(arguments, "a"), FloatArg(arguments, "b")));
+}
+
+ScriptFunctionCallResult Max(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Max(FloatArg(arguments, "a"), FloatArg(arguments, "b")));
+}
+
+ScriptFunctionCallResult Abs(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Abs(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Sign(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Sign(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Floor(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Floor(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Ceil(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Ceil(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Round(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Round(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Frac(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Frac(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Mod(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Mod(FloatArg(arguments, "value"), FloatArg(arguments, "divisor")));
+}
+
+ScriptFunctionCallResult Sqrt(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Sqrt(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Pow(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Pow(FloatArg(arguments, "base"), FloatArg(arguments, "exponent")));
+}
+
+ScriptFunctionCallResult Exp(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Exp(FloatArg(arguments, "value")));
+}
+
+ScriptFunctionCallResult Log(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Log(FloatArg(arguments, "value")));
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -169,6 +221,70 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
             ScriptFunctionPin{ "velocity", ScriptValueType::Float, true },
         },
         &Damp) && ok;
+    ok = RegisterFunction(host, "Math.Min",
+        {
+            ScriptFunctionPin{ "a", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "b", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Min) && ok;
+    ok = RegisterFunction(host, "Math.Max",
+        {
+            ScriptFunctionPin{ "a", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "b", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Max) && ok;
+    ok = RegisterFunction(host, "Math.Abs",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Abs) && ok;
+    ok = RegisterFunction(host, "Math.Sign",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Sign) && ok;
+    ok = RegisterFunction(host, "Math.Floor",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Floor) && ok;
+    ok = RegisterFunction(host, "Math.Ceil",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Ceil) && ok;
+    ok = RegisterFunction(host, "Math.Round",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Round) && ok;
+    ok = RegisterFunction(host, "Math.Frac",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Frac) && ok;
+    ok = RegisterFunction(host, "Math.Mod",
+        {
+            ScriptFunctionPin{ "value", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "divisor", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Mod) && ok;
+    ok = RegisterFunction(host, "Math.Sqrt",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Sqrt) && ok;
+    ok = RegisterFunction(host, "Math.Pow",
+        {
+            ScriptFunctionPin{ "base", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "exponent", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Pow) && ok;
+    ok = RegisterFunction(host, "Math.Exp",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Exp) && ok;
+    ok = RegisterFunction(host, "Math.Log",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Log) && ok;
     return ok;
 }
 
