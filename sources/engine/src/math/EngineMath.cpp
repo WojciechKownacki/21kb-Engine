@@ -103,4 +103,32 @@ float Log(float value) noexcept {
     return std::log(value);
 }
 
+float Sin(Radians angle) noexcept {
+    return std::sin(angle.Value());
+}
+
+float Cos(Radians angle) noexcept {
+    return std::cos(angle.Value());
+}
+
+float Tan(Radians angle) noexcept {
+    return std::tan(angle.Value());
+}
+
+Radians Asin(float value) noexcept {
+    return Radians{ std::asin(value) };
+}
+
+Radians Acos(float value) noexcept {
+    return Radians{ std::acos(value) };
+}
+
+Radians Atan(float value) noexcept {
+    return Radians{ std::atan(value) };
+}
+
+Radians Atan2(float y, float x) noexcept {
+    return Radians{ std::atan2(y, x) };
+}
+
 } // namespace kb::math

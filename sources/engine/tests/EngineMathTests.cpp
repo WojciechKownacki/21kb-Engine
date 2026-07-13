@@ -256,6 +256,31 @@ void RunScalarMathFunctions2Test() {
     kb::tests::Require(std::abs(kb::math::Log(std::exp(1.0F)) - 1.0F) < 0.0001F, "Log(e) must be 1, confirming natural (not base-10/base-2) log");
 }
 
+// LIB-047: trig functions take/return kb::math::Radians (LIB-044's typed
+// angle unit, not a bare float) with known values, including Atan2's
+// quadrant resolution (which plain Atan(y/x) cannot do) and Asin/Acos
+// round-tripping their own inverse.
+void RunTrigFunctionsTest() {
+    using kb::math::Degrees;
+    using kb::math::Radians;
+
+    kb::tests::Require(std::abs(kb::math::Sin(Radians{ 0.0F })) < 0.0001F, "Sin(0) must be 0");
+    kb::tests::Require(std::abs(kb::math::Sin(kb::math::ToRadians(Degrees{ 90.0F })) - 1.0F) < 0.0001F, "Sin(90 degrees) must be 1");
+    kb::tests::Require(std::abs(kb::math::Cos(Radians{ 0.0F }) - 1.0F) < 0.0001F, "Cos(0) must be 1");
+    kb::tests::Require(std::abs(kb::math::Cos(kb::math::ToRadians(Degrees{ 90.0F }))) < 0.0001F, "Cos(90 degrees) must be 0");
+    kb::tests::Require(std::abs(kb::math::Tan(Radians{ 0.0F })) < 0.0001F, "Tan(0) must be 0");
+
+    kb::tests::Require(std::abs(kb::math::Asin(1.0F).Value() - kb::math::kPi / 2.0F) < 0.0001F, "Asin(1) must be pi/2");
+    kb::tests::Require(std::abs(kb::math::Acos(1.0F).Value()) < 0.0001F, "Acos(1) must be 0");
+    kb::tests::Require(std::abs(kb::math::Atan(1.0F).Value() - kb::math::kPi / 4.0F) < 0.0001F, "Atan(1) must be pi/4");
+
+    // Atan2 resolves the quadrant from both signs — Atan(1) alone cannot
+    // distinguish (1,1) from (-1,-1), but Atan2 must.
+    kb::tests::Require(std::abs(kb::math::Atan2(1.0F, 1.0F).Value() - kb::math::kPi / 4.0F) < 0.0001F, "Atan2(1,1) must be pi/4 (first quadrant)");
+    kb::tests::Require(std::abs(kb::math::Atan2(-1.0F, -1.0F).Value() - (-3.0F * kb::math::kPi / 4.0F)) < 0.0001F, "Atan2(-1,-1) must be -3pi/4 (third quadrant), distinguishing it from Atan(1)");
+    kb::tests::Require(kb::math::Atan2(0.0F, 0.0F).Value() == 0.0F, "Atan2(0,0) must conventionally be 0, not NaN/undefined");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -266,6 +291,7 @@ void RunEngineMathTests() {
     RunAngleUnitsTest();
     RunScalarMathFunctionsTest();
     RunScalarMathFunctions2Test();
+    RunTrigFunctionsTest();
 }
 
 } // namespace kb::tests

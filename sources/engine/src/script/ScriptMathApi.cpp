@@ -139,6 +139,57 @@ ScriptFunctionCallResult Log(const ScriptFunctionCallContext&, std::span<const S
     return FloatResult("result", kb::math::Log(FloatArg(arguments, "value")));
 }
 
+[[nodiscard]] ScriptFunctionCallResult DomainError(std::string_view functionName, std::string_view detail) {
+    return ScriptFunctionCallResult{
+        .executed = false,
+        .outputs = {},
+        .errors = { std::string{ functionName } + ": " + std::string{ detail } },
+    };
+}
+
+ScriptFunctionCallResult Sin(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Sin(kb::math::Radians{ FloatArg(arguments, "angle") }));
+}
+
+ScriptFunctionCallResult Cos(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Cos(kb::math::Radians{ FloatArg(arguments, "angle") }));
+}
+
+ScriptFunctionCallResult Tan(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Tan(kb::math::Radians{ FloatArg(arguments, "angle") }));
+}
+
+// LIB-047: Asin/Acos have a genuinely restricted input domain ([-1,1]).
+// Unlike every other Math.* function so far, an out-of-domain call here
+// reports a real ScriptFunctionCallResult error (executed=false) instead
+// of letting std::asin/std::asin's IEEE-754 NaN silently flow into a
+// script graph, where it could reach e.g. Transform.SetRotation many
+// nodes later with no indication of where the invalid value came from —
+// exactly what "zdefiniowana domena błędu" (LIB-047) requires.
+ScriptFunctionCallResult Asin(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const float value = FloatArg(arguments, "value");
+    if (value < -1.0F || value > 1.0F) {
+        return DomainError("Math.Asin", "value must be in [-1, 1]");
+    }
+    return FloatResult("result", kb::math::Asin(value).Value());
+}
+
+ScriptFunctionCallResult Acos(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const float value = FloatArg(arguments, "value");
+    if (value < -1.0F || value > 1.0F) {
+        return DomainError("Math.Acos", "value must be in [-1, 1]");
+    }
+    return FloatResult("result", kb::math::Acos(value).Value());
+}
+
+ScriptFunctionCallResult Atan(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Atan(FloatArg(arguments, "value")).Value());
+}
+
+ScriptFunctionCallResult Atan2(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::Atan2(FloatArg(arguments, "y"), FloatArg(arguments, "x")).Value());
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -285,6 +336,37 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
         { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
         &Log) && ok;
+    ok = RegisterFunction(host, "Math.Sin",
+        { ScriptFunctionPin{ "angle", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Sin) && ok;
+    ok = RegisterFunction(host, "Math.Cos",
+        { ScriptFunctionPin{ "angle", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Cos) && ok;
+    ok = RegisterFunction(host, "Math.Tan",
+        { ScriptFunctionPin{ "angle", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Tan) && ok;
+    ok = RegisterFunction(host, "Math.Asin",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Asin) && ok;
+    ok = RegisterFunction(host, "Math.Acos",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Acos) && ok;
+    ok = RegisterFunction(host, "Math.Atan",
+        { ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Atan) && ok;
+    ok = RegisterFunction(host, "Math.Atan2",
+        {
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &Atan2) && ok;
     return ok;
 }
 
