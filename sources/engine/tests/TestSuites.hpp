@@ -14,5 +14,6 @@ void RunVisualGraphTests();
 void RunInputTests();
 void RunEngineModuleTests();
 void RunEngineLibraryTests();
+void RunEngineMathTests();
 
 } // namespace kb::tests

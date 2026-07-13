@@ -18,6 +18,7 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
+    include/engine/math/EngineMath.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
@@ -588,6 +589,7 @@ add_library(kb_engine STATIC
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
+    src/math/EngineMath.cpp
     src/scene/transform/QuatMath.cpp
     src/scene/transform/TransformMath.cpp
     src/scene/transform/Vec3Math.cpp
@@ -1070,6 +1072,7 @@ if(BUILD_TESTING)
         tests/InputTests.cpp
         tests/EngineModuleTests.cpp
         tests/EngineLibraryTests.cpp
+        tests/EngineMathTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

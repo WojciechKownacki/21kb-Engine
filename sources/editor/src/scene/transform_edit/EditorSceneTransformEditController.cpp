@@ -1,5 +1,6 @@
 #include "scene/transform_edit/EditorSceneTransformEditController.hpp"
 
+#include "engine/math/EngineMath.hpp"
 #include "scene/transform_edit/EditorSceneTransformMath.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
 
@@ -13,14 +14,6 @@ namespace {
         lhs.x - rhs.x,
         lhs.y - rhs.y,
         lhs.z - rhs.z,
-    };
-}
-
-[[nodiscard]] kb::scene::Vec3 Add(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return kb::scene::Vec3{
-        lhs.x + rhs.x,
-        lhs.y + rhs.y,
-        lhs.z + rhs.z,
     };
 }
 
@@ -44,7 +37,7 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPri
     const kb::scene::Vec3 delta = Difference(position, session_.TargetStart());
     return EditorSceneTransformEditApplier::Apply(scene_, session_, [delta](const EditorSceneObjectTransformChange& change) {
         kb::scene::TransformComponent next = change.before;
-        next.localPosition = Add(change.before.localPosition, delta);
+        next.localPosition = change.before.localPosition + delta;
         return next;
     });
 }
