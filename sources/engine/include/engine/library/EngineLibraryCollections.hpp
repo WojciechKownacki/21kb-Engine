@@ -24,9 +24,26 @@ namespace kb::library {
 // Set<T>/Map<K,V> are vector-backed with linear (O(n)) membership/key
 // lookup via operator==, not hash-backed: this keeps them generic over any
 // T with operator== (no std::hash<T> specialization required — ScriptValue
-// has none today) and makes iteration order equal to insertion order as an
-// incidental property of the representation. LIB-060 (deterministic
-// map/set iteration) revisits that iteration-order guarantee formally.
+// has none today).
+//
+// LIB-060 (deterministic iteration): Set<T>/Map<K,V> (and their NonAlloc
+// counterparts below) formally GUARANTEE their iteration order — this is a
+// contract callers may depend on (e.g. deterministic replay, snapshot
+// diffing across two runs with the same input sequence), not an
+// unspecified implementation detail. The exact rule: currently-present
+// members/keys appear in the order they were most recently (re-)inserted.
+// Insert/Set always appends a genuinely new member/key at the end; it
+// never reorders existing members even when it updates one (Map::Set on
+// an existing key updates its value in place, at its existing position).
+// Remove always erases in place (shifting later elements down), never a
+// swap-with-back, so removing one member never reorders the rest. The one
+// subtlety: removing a member and then re-inserting the same value/key
+// does NOT restore its old position — it reappears at the end, like any
+// other new insertion, since by the time it is re-inserted it is, from
+// the collection's point of view, simply absent and then newly added.
+// RunCollectionsDeterministicIterationTest exercises exactly this
+// insert/remove/re-insert sequence for both Set and Map, alloc and
+// NonAlloc, to prove the guarantee is real and not just documented.
 //
 // LIB-059 (allocation cost): Array/Set/Map/Stack reserve() their backing
 // std::vector to `capacity_` once, in the constructor — after that, every
