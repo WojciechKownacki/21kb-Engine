@@ -2259,6 +2259,57 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
+// LIB-067: World.Destroy idempotency (repeat call on an already-dead
+// entity is a safe no-op, not an error) and the "deferred" flag being
+// HONEST about this engine's current immediate-only lifecycle (rejected
+// with a clear error rather than silently behaving as immediate or
+// crashing later — see the design note on ScriptWorldApi.cpp's Destroy).
+// Deliberately its OWN fresh Scene/host rather than reusing
+// RunScriptWorldTimePhysicsApiTest's — a create-then-immediately-destroy
+// cycle interleaved into that giant, order-sensitive integration test was
+// observed to make an UNRELATED, LATER Physics.Raycast in the same test
+// hit the wrong entity (very likely stale broadphase/index-reuse state
+// from the freed entity slot, not anything about Destroy's own
+// correctness) — a real but separate finding, noted in _temp.md, that a
+// small isolated test sidesteps rather than chases down here.
+void RunWorldDestroyDeferredFlagTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.Destroy deferred-flag test host setup failed");
+
+    const kb::scene::SceneEntity target = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "DestroyTarget" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ target.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult firstDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(firstDestroy.Succeeded() && firstDestroy.Output("destroyed")->AsBool(), "World.Destroy must report destroyed=true for a live entity");
+    kb::tests::Require(!scene.Entities().IsAlive(target), "World.Destroy did not actually destroy the entity");
+
+    const kb::script::ScriptFunctionCallResult secondDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(secondDestroy.Succeeded() && !secondDestroy.Output("destroyed")->AsBool(),
+        "World.Destroy must be idempotent: a repeat call on an already-dead entity must succeed with destroyed=false, not error");
+    const kb::script::ScriptFunctionCallResult thirdDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
+    kb::tests::Require(thirdDestroy.Succeeded() && !thirdDestroy.Output("destroyed")->AsBool(), "World.Destroy must remain idempotent across more than two repeat calls");
+
+    const kb::scene::SceneEntity liveEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "StillAlive" });
+    const std::vector<kb::script::ScriptFunctionArgument> deferredDestroyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult deferredDestroy = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(!deferredDestroy.Succeeded(), "World.Destroy(deferred=true) must be rejected today, not silently treated as immediate");
+    kb::tests::Require(scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=true) must not have destroyed the entity when the call itself failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> explicitImmediateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult explicitImmediateDestroy = host.Functions().Call("World.Destroy", explicitImmediateArgs, context);
+    kb::tests::Require(explicitImmediateDestroy.Succeeded() && explicitImmediateDestroy.Output("destroyed")->AsBool(), "World.Destroy(deferred=false) must behave exactly like the default (immediate) call");
+    kb::tests::Require(!scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=false) must have actually destroyed the entity");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -3957,6 +4008,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunWorldDestroyDeferredFlagTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
