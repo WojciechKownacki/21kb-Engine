@@ -231,6 +231,32 @@ ScriptFunctionCallResult SetActive(const ScriptFunctionCallContext& context, std
     return BoolResult("set", alive);
 }
 
+// LIB-072: the persistent/gameplay scene boundary — an entity marked
+// persistent survives a non-additive Scene.Load (SceneDocumentService::
+// ClearSceneRoots skips persistent roots and, by cascade, their whole
+// hierarchy). Only meaningful on ROOT entities — see
+// kb::scene::SceneState::persistentEntities' comment for why marking a
+// non-root child persistent has no protective effect on its own.
+ScriptFunctionCallResult IsPersistent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return BoolResult("persistent", context.scene->Entities().IsPersistent(EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult SetPersistent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    const bool alive = entity.IsValid() && context.scene->Entities().IsAlive(entity);
+    if (alive) {
+        const ScriptValue* persistentValue = FindArg(arguments, "persistent");
+        context.scene->Entities().SetPersistent(entity, persistentValue == nullptr || persistentValue->AsBool(true));
+    }
+    return BoolResult("set", alive);
+}
+
 ScriptFunctionCallResult Name(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -699,6 +725,14 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "active", ScriptValueType::Bool, false } },
         { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
         &SetActive) && ok;
+    ok = RegisterFunction(host, "World.IsPersistent",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "persistent", ScriptValueType::Bool, true } },
+        &IsPersistent) && ok;
+    ok = RegisterFunction(host, "World.SetPersistent",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "persistent", ScriptValueType::Bool, false } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        &SetPersistent) && ok;
     ok = RegisterFunction(host, "World.Name",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },

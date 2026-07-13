@@ -43,4 +43,30 @@ void SceneEntityService::SetActive(Scene& scene, SceneEntity entity, bool active
     }
 }
 
+bool SceneEntityService::IsPersistent(const Scene& scene, SceneObject object) noexcept {
+    return SceneAccess::BelongsTo(scene, object) && IsPersistent(scene, object.Entity());
+}
+
+bool SceneEntityService::IsPersistent(const Scene& scene, SceneEntity entity) noexcept {
+    return IsAlive(scene, entity) && SceneAccess::State(scene).persistentEntities.contains(entity.Id());
+}
+
+void SceneEntityService::SetPersistent(Scene& scene, SceneObject object, bool persistent) noexcept {
+    if (SceneAccess::BelongsTo(scene, object)) {
+        SetPersistent(scene, object.Entity(), persistent);
+    }
+}
+
+void SceneEntityService::SetPersistent(Scene& scene, SceneEntity entity, bool persistent) noexcept {
+    if (!IsAlive(scene, entity)) {
+        return;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    if (persistent) {
+        state.persistentEntities.insert(entity.Id());
+    } else {
+        state.persistentEntities.erase(entity.Id());
+    }
+}
+
 } // namespace kb::scene

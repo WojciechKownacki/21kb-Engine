@@ -44,6 +44,12 @@ public:
     [[nodiscard]] static bool IsActive(const Scene& scene, SceneEntity entity) noexcept;
     static void SetActive(Scene& scene, SceneObject object, bool active) noexcept;
     static void SetActive(Scene& scene, SceneEntity entity, bool active) noexcept;
+    // LIB-072: same "dead means not queryable" contract as IsActive — a
+    // destroyed/never-existed entity reports false rather than throwing.
+    [[nodiscard]] static bool IsPersistent(const Scene& scene, SceneObject object) noexcept;
+    [[nodiscard]] static bool IsPersistent(const Scene& scene, SceneEntity entity) noexcept;
+    static void SetPersistent(Scene& scene, SceneObject object, bool persistent) noexcept;
+    static void SetPersistent(Scene& scene, SceneEntity entity, bool persistent) noexcept;
     [[nodiscard]] static std::size_t Count(const Scene& scene);
 };
 
