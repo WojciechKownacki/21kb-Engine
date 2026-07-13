@@ -1304,8 +1304,13 @@ void RunVisualGraphNodeDefinitionRegistryTest() {
         .kind = kb::visual::VisualGraphNodeKind::CallNative,
         .symbol = "DoWork",
     });
-    kb::tests::Require(callPins.size() == 2U, "Visual graph node registry did not create pins for CallNative");
+    kb::tests::Require(callPins.size() == 3U, "Visual graph node registry did not create pins for CallNative");
     kb::tests::Require(callPins[0].nodeId == 77U, "Visual graph node registry created pins for the wrong node");
+    bool hasFailedPin = false;
+    for (const kb::visual::VisualGraphPin& pin : callPins) {
+        hasFailedPin = hasFailedPin || (pin.name == "failed" && pin.direction == kb::visual::VisualGraphPinDirection::Output);
+    }
+    kb::tests::Require(hasFailedPin, "LIB-061: CallNative must expose a \"failed\" exec output pin alongside \"then\"");
 }
 
 void RunVisualGraphNodeCatalogTest() {
