@@ -36,6 +36,14 @@ public:
     [[nodiscard]] static std::string Name(const Scene& scene, SceneEntity entity);
     static void SetName(Scene& scene, SceneObject object, std::string_view name);
     static void SetName(Scene& scene, SceneEntity entity, std::string_view name);
+    // LIB-068: an entity not currently alive is reported inactive (false)
+    // rather than throwing/asserting — same "dead means not queryable as
+    // active" contract IsAlive already establishes for every other status
+    // check in this class.
+    [[nodiscard]] static bool IsActive(const Scene& scene, SceneObject object) noexcept;
+    [[nodiscard]] static bool IsActive(const Scene& scene, SceneEntity entity) noexcept;
+    static void SetActive(Scene& scene, SceneObject object, bool active) noexcept;
+    static void SetActive(Scene& scene, SceneEntity entity, bool active) noexcept;
     [[nodiscard]] static std::size_t Count(const Scene& scene);
 };
 

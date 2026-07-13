@@ -2310,6 +2310,48 @@ void RunWorldDestroyDeferredFlagTest() {
     kb::tests::Require(!scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=false) must have actually destroyed the entity");
 }
 
+// LIB-068: World.IsActive/SetActive — an entity's own fresh Scene/host,
+// same reasoning as RunWorldDestroyDeferredFlagTest (keep create/destroy/
+// mutate cycles out of the large shared integration test).
+void RunWorldActiveStateTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World active-state test host setup failed");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "ActiveStateEntity" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const std::vector<kb::script::ScriptFunctionArgument> queryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult initiallyActive = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(initiallyActive.Succeeded() && initiallyActive.Output("active")->AsBool(), "World.IsActive must report true by default for a freshly created entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deactivateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "active", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult deactivated = host.Functions().Call("World.SetActive", deactivateArgs, context);
+    kb::tests::Require(deactivated.Succeeded() && deactivated.Output("set")->AsBool(), "World.SetActive must report set=true for a live entity");
+    kb::tests::Require(!scene.Entities().IsActive(entity), "World.SetActive(active=false) must be reflected by kb::scene::SceneEntities::IsActive");
+    const kb::script::ScriptFunctionCallResult nowInactive = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(nowInactive.Succeeded() && !nowInactive.Output("active")->AsBool(), "World.IsActive must reflect a prior World.SetActive(active=false)");
+    kb::tests::Require(scene.Entities().IsAlive(entity), "World.SetActive(active=false) must not destroy the entity — deactivation is not destruction");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reactivateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "active", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult reactivated = host.Functions().Call("World.SetActive", reactivateArgs, context);
+    kb::tests::Require(reactivated.Succeeded() && reactivated.Output("set")->AsBool(), "World.SetActive must report set=true when reactivating");
+    kb::tests::Require(scene.Entities().IsActive(entity), "World.SetActive(active=true) must reactivate the entity");
+
+    scene.Entities().Destroy(entity);
+    const kb::script::ScriptFunctionCallResult deadEntityQuery = host.Functions().Call("World.IsActive", queryArgs, context);
+    kb::tests::Require(deadEntityQuery.Succeeded() && !deadEntityQuery.Output("active")->AsBool(), "World.IsActive must report false (not throw) for a destroyed entity");
+    const kb::script::ScriptFunctionCallResult deadEntitySet = host.Functions().Call("World.SetActive", deactivateArgs, context);
+    kb::tests::Require(deadEntitySet.Succeeded() && !deadEntitySet.Output("set")->AsBool(), "World.SetActive must report set=false (not throw) when targeting a destroyed entity");
+}
+
 // LIB-045: Math.Clamp/Lerp/InverseLerp/Remap/SmoothStep/MoveTowards/Damp
 // must be real, callable script functions (not just native kb::math
 // helpers) — reachable through ScriptFunctionRegistry::Call, the single
@@ -4009,6 +4051,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunWorldDestroyDeferredFlagTest();
+    RunWorldActiveStateTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();

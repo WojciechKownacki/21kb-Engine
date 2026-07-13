@@ -17,4 +17,30 @@ SceneObject SceneEntityService::Object(Scene& scene, SceneEntity entity) noexcep
     return IsAlive(scene, entity) ? SceneAccess::MakeObject(scene, entity) : SceneObject{};
 }
 
+bool SceneEntityService::IsActive(const Scene& scene, SceneObject object) noexcept {
+    return SceneAccess::BelongsTo(scene, object) && IsActive(scene, object.Entity());
+}
+
+bool SceneEntityService::IsActive(const Scene& scene, SceneEntity entity) noexcept {
+    return IsAlive(scene, entity) && !SceneAccess::State(scene).inactiveEntities.contains(entity.Id());
+}
+
+void SceneEntityService::SetActive(Scene& scene, SceneObject object, bool active) noexcept {
+    if (SceneAccess::BelongsTo(scene, object)) {
+        SetActive(scene, object.Entity(), active);
+    }
+}
+
+void SceneEntityService::SetActive(Scene& scene, SceneEntity entity, bool active) noexcept {
+    if (!IsAlive(scene, entity)) {
+        return;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    if (active) {
+        state.inactiveEntities.erase(entity.Id());
+    } else {
+        state.inactiveEntities.insert(entity.Id());
+    }
+}
+
 } // namespace kb::scene
