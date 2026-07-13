@@ -1249,6 +1249,169 @@ end
     kb::tests::Require(sawFunctionError, "Visual script function call did not surface the registry error diagnostic");
 }
 
+// LIB-061: a CallNative node whose "failed" exec output IS wired must run
+// the wired handler instead of the whole Tick halting at the point of
+// failure — the "idiomatic Visual Graph adapter" for a fallible function
+// call, mirroring the Branch node's "true"/"false" pair. The overall Tick
+// still reports Succeeded() == false (a real failure genuinely happened,
+// and ScriptDiagnostic carries no severity to distinguish "handled" from
+// "fatal" — see the design note in VisualGraphRuntimeExecutor::ExecuteNode)
+// but, unlike an unwired failure, the success branch must NOT also run.
+void RunVisualGraphCallNativeFailureBranchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "CallNative failure branch host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFails" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{ .errors = { "deliberate LIB-061 test failure" } };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.AlwaysFails");
+
+    bool successPathRan = false;
+    bool failurePathRan = false;
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkSuccessPath" },
+                           .callback = [&successPathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               successPathRan = true;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.MarkSuccessPath");
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkFailurePath" },
+                           .callback = [&failurePathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               failurePathRan = true;
+                               return kb::script::ScriptFunctionCallResult{ .executed = true };
+                           },
+                       }),
+        "CallNative failure branch did not register Tests.MarkFailurePath");
+
+    constexpr kb::assets::AssetId kAsset{ 5015U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CallNativeFailureBranch" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "CallNativeFailureBranch";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.AlwaysFails" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.MarkSuccessPath" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.MarkFailurePath" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "failed", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "then", .toNode = 3U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "failed", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "CallNative failure branch graph did not compile");
+
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(!result.Succeeded(), "LIB-061: a genuinely failed function call must still report Succeeded() == false, handled or not");
+    kb::tests::Require(!successPathRan, "LIB-061: the \"then\" (success) branch must NOT run after the call failed");
+    kb::tests::Require(failurePathRan, "LIB-061: a wired \"failed\" exec output must run its handler instead of the Tick simply halting");
+    bool sawFailureMessage = false;
+    for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
+        sawFailureMessage = sawFailureMessage || diagnostic.message.find("deliberate LIB-061 test failure") != std::string::npos;
+    }
+    kb::tests::Require(sawFailureMessage, "LIB-061: a handled call failure must still be recorded as a diagnostic, not silently dropped");
+}
+
+// LIB-061: formalizes and tests, from REAL executed Lua script text (not
+// just the C++ marshalling code in isolation), the idiomatic Lua Result
+// adapter this codebase already implements for a fallible CallFunction:
+// `value, err = CallFunction(...)` — nil plus an error string on failure,
+// the plain value (or a table, for multi-output) on success. This is
+// Lua's own idiom for "Result<T,E>" (Lua has no Option/Result type, but
+// this dual-return-plus-nil-check pattern is the idiomatic equivalent —
+// see PucLuaFunctionApi.cpp::LuaCallFunction), exercised end-to-end here
+// for the first time.
+void RunLuaCallFunctionResultAdapterTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua Result adapter host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFailsForLua" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{ .errors = { "lua adapter test failure" } };
+                           },
+                       }),
+        "Lua Result adapter did not register Tests.AlwaysFailsForLua");
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{
+                               .name = "Tests.SucceedsForLua",
+                               .outputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = kb::script::ScriptValueType::Int } },
+                           },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                               return kb::script::ScriptFunctionCallResult{
+                                   .executed = true,
+                                   .outputs = { kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 42 } } },
+                               };
+                           },
+                       }),
+        "Lua Result adapter did not register Tests.SucceedsForLua");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5016U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaResultAdapter" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local failedValue, failedError = CallFunction("Tests.AlwaysFailsForLua", {})
+    SetShared("luaSawNilOnFailure", failedValue == nil)
+    SetShared("luaSawErrorString", type(failedError) == "string")
+    SetShared("luaErrorMessage", failedError)
+
+    local succeededValue, succeededError = CallFunction("Tests.SucceedsForLua", {})
+    SetShared("luaSawValueOnSuccess", succeededValue)
+    SetShared("luaSawNilErrorOnSuccess", succeededError == nil)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua Result adapter script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Lua Result adapter Tick produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> sawNilOnFailure = host.SharedState().Get("luaSawNilOnFailure");
+    kb::tests::Require(sawNilOnFailure.has_value() && sawNilOnFailure->AsBool(), "Lua CallFunction must return nil as its first value when the call fails");
+    const std::optional<kb::script::ScriptValue> sawErrorString = host.SharedState().Get("luaSawErrorString");
+    kb::tests::Require(sawErrorString.has_value() && sawErrorString->AsBool(), "Lua CallFunction must return a string as its second value when the call fails");
+    const std::optional<kb::script::ScriptValue> errorMessage = host.SharedState().Get("luaErrorMessage");
+    kb::tests::Require(errorMessage.has_value() && errorMessage->AsString() == "lua adapter test failure", "Lua CallFunction's error string must be the real registry error message, not a generic placeholder");
+
+    const std::optional<kb::script::ScriptValue> sawValueOnSuccess = host.SharedState().Get("luaSawValueOnSuccess");
+    kb::tests::Require(sawValueOnSuccess.has_value() && sawValueOnSuccess->AsInt() == 42, "Lua CallFunction must return the real value as its first result when the call succeeds");
+    const std::optional<kb::script::ScriptValue> sawNilErrorOnSuccess = host.SharedState().Get("luaSawNilErrorOnSuccess");
+    kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
+}
+
 // LIB-010: a registered callback throwing a C++ exception must become a
 // ScriptFunctionCallResult error, not propagate. This is the single choke
 // point every caller (Native direct call, Lua's CallFunction, the future
@@ -3725,6 +3888,8 @@ void RunScriptRuntimeTests() {
     RunTargetedEventDispatchTest();
     RunCrossBackendSharedStateTest();
     RunScriptFunctionRegistryCrossBackendTest();
+    RunVisualGraphCallNativeFailureBranchTest();
+    RunLuaCallFunctionResultAdapterTest();
     RunScriptFunctionRegistryExceptionSafetyTest();
     RunNativeScriptBackendExceptionSafetyTest();
     RunUnexposedFunctionCannotBeCalledTest();
