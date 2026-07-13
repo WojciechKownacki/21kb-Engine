@@ -21,6 +21,7 @@
 #include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
+#include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -975,6 +976,49 @@ void RunCollectionsDeterministicIterationTest() {
     kb::tests::Require((nonAllocKeys == std::vector<int>{ 2, 3, 1 }), "MapNonAlloc must obey the same deterministic-iteration guarantee as the allocating Map<K,V>");
 }
 
+// LIB-062: TextFormatBuffer must build text entirely inside caller-provided
+// storage — no growth, no partial writes on overflow, numeric conversions
+// exact.
+void RunTextFormatBufferTest() {
+    std::array<char, 16> storage{};
+    kb::library::TextFormatBuffer buffer{ storage };
+    kb::tests::Require(buffer.Capacity() == 16U && buffer.Empty(), "TextFormatBuffer::Capacity must equal the caller-provided storage size and start Empty");
+
+    kb::tests::Require(buffer.Append("HP:"), "TextFormatBuffer::Append must succeed while under capacity");
+    kb::tests::Require(buffer.AppendChar(' '), "TextFormatBuffer::AppendChar must succeed while under capacity");
+    kb::tests::Require(buffer.AppendInt(-42), "TextFormatBuffer::AppendInt must succeed for a negative value");
+    kb::tests::Require(buffer.View() == "HP: -42", "TextFormatBuffer must accumulate appends in order with exact formatting");
+
+    buffer.Clear();
+    kb::tests::Require(buffer.Empty() && buffer.Length() == 0U, "TextFormatBuffer::Clear must reset Length to zero");
+    kb::tests::Require(buffer.AppendUInt(4000000000ULL), "TextFormatBuffer::AppendUInt must succeed for a value beyond int32 range");
+    kb::tests::Require(buffer.View() == "4000000000", "TextFormatBuffer::AppendUInt must format the exact unsigned value");
+
+    buffer.Clear();
+    kb::tests::Require(buffer.AppendBool(true) && buffer.AppendChar('/') && buffer.AppendBool(false), "TextFormatBuffer::AppendBool must succeed for both values");
+    kb::tests::Require(buffer.View() == "true/false", "TextFormatBuffer::AppendBool must format the canonical Lua-style literal spelling");
+
+    buffer.Clear();
+    kb::tests::Require(buffer.AppendFloat(3.5, 2), "TextFormatBuffer::AppendFloat must succeed while under capacity");
+    kb::tests::Require(buffer.View() == "3.50", "TextFormatBuffer::AppendFloat must respect the requested fixed precision");
+
+    // Overflow: a std::string_view Append that would not fit must fail
+    // WITHOUT writing anything (not a partial/truncated write) and without
+    // advancing Length — the "no uncontrolled allocation OR corruption"
+    // contract from the task's own wording.
+    std::array<char, 4> smallStorage{ 'X', 'X', 'X', 'X' };
+    kb::library::TextFormatBuffer small{ smallStorage };
+    kb::tests::Require(small.Append("ab"), "TextFormatBuffer::Append must succeed when it fits exactly within remaining capacity");
+    kb::tests::Require(!small.Append("xyz"), "TextFormatBuffer::Append must fail (return false) when the text does not fit in the remaining capacity");
+    kb::tests::Require(small.Length() == 2U && small.View() == "ab", "TextFormatBuffer::Append must leave Length and View() unchanged after a rejected (would-not-fit) append, not a truncated one");
+    kb::tests::Require(smallStorage[2] == 'X' && smallStorage[3] == 'X', "TextFormatBuffer must not write into caller storage past Length() when an append is rejected");
+
+    std::array<char, 1> tinyStorage{};
+    kb::library::TextFormatBuffer tiny{ tinyStorage };
+    kb::tests::Require(!tiny.AppendInt(123), "TextFormatBuffer::AppendInt must fail cleanly when the formatted number cannot fit");
+    kb::tests::Require(tiny.Length() == 0U, "TextFormatBuffer::AppendInt must not advance Length after a failed conversion");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1513,6 +1557,7 @@ void RunEngineLibraryTests() {
     RunCollectionsAllocationCostTest();
     RunCollectionsNonAllocTest();
     RunCollectionsDeterministicIterationTest();
+    RunTextFormatBufferTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
