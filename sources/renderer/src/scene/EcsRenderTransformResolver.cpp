@@ -11,57 +11,18 @@
 namespace kb::render {
 namespace {
 
-// LIB-042: kb::scene::Vec3 is now an alias to kb::math::Vec3 (see
-// TransformComponent.hpp), which already provides Add (operator+) and
-// Dot — this file's own copies used to be a second definition and would
-// now be an ambiguous overload via ADL against kb::math's. Multiply/
-// Cross/Scale have no kb::math equivalent yet, so they stay local.
-using kb::math::Dot;
+// LIB-042/LIB-043: kb::scene::Vec3/Quat are now aliases to kb::math::Vec3/
+// Quat (see TransformComponent.hpp), which already provides Add
+// (operator+), Dot, Cross, Normalize(Quat), quaternion composition
+// (operator*), and Rotate — this file's own copies used to be a second
+// definition (Rotate's formula is now also exactly kb::math::Rotate's)
+// and would be ambiguous overloads via ADL against kb::math's. Only the
+// component-wise Vec3*Vec3 Multiply has no kb::math equivalent, so it
+// stays local.
+using kb::math::Rotate;
 
 [[nodiscard]] kb::scene::Vec3 Multiply(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
     return kb::scene::Vec3{ lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z };
-}
-
-[[nodiscard]] kb::scene::Vec3 Cross(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return kb::scene::Vec3{
-        lhs.y * rhs.z - lhs.z * rhs.y,
-        lhs.z * rhs.x - lhs.x * rhs.z,
-        lhs.x * rhs.y - lhs.y * rhs.x,
-    };
-}
-
-[[nodiscard]] kb::scene::Vec3 Scale(kb::scene::Vec3 value, float scale) noexcept {
-    return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
-}
-
-[[nodiscard]] kb::scene::Quat Normalize(kb::scene::Quat value) noexcept {
-    const float lengthSquared = value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
-    if (lengthSquared <= 0.0F) {
-        return kb::scene::Quat{};
-    }
-
-    const float invLength = 1.0F / std::sqrt(lengthSquared);
-    return kb::scene::Quat{
-        value.x * invLength,
-        value.y * invLength,
-        value.z * invLength,
-        value.w * invLength,
-    };
-}
-
-[[nodiscard]] kb::scene::Quat Multiply(kb::scene::Quat lhs, kb::scene::Quat rhs) noexcept {
-    return kb::scene::Quat{
-        lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y,
-        lhs.w * rhs.y - lhs.x * rhs.z + lhs.y * rhs.w + lhs.z * rhs.x,
-        lhs.w * rhs.z + lhs.x * rhs.y - lhs.y * rhs.x + lhs.z * rhs.w,
-        lhs.w * rhs.w - lhs.x * rhs.x - lhs.y * rhs.y - lhs.z * rhs.z,
-    };
-}
-
-[[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
-    const kb::scene::Vec3 u{ rotation.x, rotation.y, rotation.z };
-    const float s = rotation.w;
-    return Scale(u, 2.0F * Dot(u, value)) + Scale(value, s * s - Dot(u, u)) + Scale(Cross(u, value), 2.0F * s);
 }
 
 } // namespace
@@ -118,7 +79,7 @@ kb::scene::TransformComponent EcsRenderTransformResolver::Compose(
     const kb::scene::TransformComponent& local) noexcept {
     kb::scene::TransformComponent result = local;
     result.worldScale = Multiply(parent.worldScale, local.localScale);
-    result.worldRotation = Normalize(Multiply(parent.worldRotation, local.localRotation));
+    result.worldRotation = Normalize(parent.worldRotation * local.localRotation);
     result.worldPosition = parent.worldPosition + Rotate(parent.worldRotation, Multiply(parent.worldScale, local.localPosition));
     result.parentVersion = parent.worldVersion;
     result.worldVersion = local.worldVersion + 1U;
