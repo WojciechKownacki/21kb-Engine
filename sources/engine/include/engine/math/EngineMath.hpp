@@ -256,6 +256,11 @@ struct Pose {
 [[nodiscard]] constexpr Vec3 Abs(Vec3 value) noexcept;
 [[nodiscard]] constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept;
 [[nodiscard]] float Length(Vec3 value) noexcept;
+// LIB-054: a vector shorter than 0.000001 (including the exact zero
+// vector) has no well-defined direction, so this returns the zero vector
+// instead of a NaN-filled one from dividing by a near-zero length — every
+// caller of Normalize (Angle, SignedAngle, FromToRotation, ...) inherits
+// this guard rather than needing its own.
 [[nodiscard]] Vec3 Normalize(Vec3 value) noexcept;
 
 constexpr Vec3 Abs(Vec3 value) noexcept {
@@ -319,6 +324,13 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // SCRIPT CALLER supplied), this clamp corrects float round-off in an
 // internal computation that is mathematically guaranteed to be in
 // [-1,1] for genuine unit vectors; it is not hiding a caller error.
+//
+// LIB-054: a zero-length `a` or `b` inherits Normalize's zero-vector
+// guard (Normalize(zero) == zero), so Dot(normalizedA, normalizedB) == 0
+// and Angle returns exactly pi/2 (90 degrees) — a defined, non-NaN result,
+// not a meaningful geometric answer (a zero vector has no direction to
+// measure an angle from). Callers that pass a genuinely zero vector should
+// not rely on this value beyond "it's a real number, not NaN".
 [[nodiscard]] Radians Angle(Vec3 a, Vec3 b) noexcept;
 // Signed angle from a to b around the given reference axis (positive when
 // the rotation from a to b is counterclockwise looking down -axis, the
@@ -337,6 +349,10 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
     };
 }
 
+// LIB-054: same zero-length guard as Vec3's Normalize — a quaternion
+// shorter than 0.000001 (including the exact zero quaternion, which is
+// not a valid rotation) returns the identity rotation rather than a
+// NaN-filled result from dividing by a near-zero length.
 [[nodiscard]] Quat Normalize(Quat value) noexcept;
 
 // Rotates `value` by `rotation` (Rodrigues' rotation formula generalized
@@ -353,7 +369,9 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // when the quaternions are more than 90 degrees apart as 4D points, since
 // q and -q represent the same rotation) and falls back to a plain linear
 // interpolation when a and b are nearly identical, to avoid dividing by
-// a near-zero sin(omega).
+// a near-zero sin(omega). LIB-054: the result also always passes through
+// Normalize before returning, a second safety net that absorbs even a
+// literal zero quaternion input into a defined (identity) result.
 [[nodiscard]] Quat Slerp(Quat a, Quat b, float t) noexcept;
 
 // Builds the rotation that points local +Z (this file's forward
@@ -405,6 +423,26 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // build on. These are the same functions `sources/script/ScriptMathApi`
 // registers as `Math.Clamp`/`Math.Lerp`/etc for Native/Lua/Visual Graph;
 // this header is their native implementation, not a second copy of it.
+//
+// LIB-054's NaN/infinity/zero-length contract for this whole file:
+// - NaN/Infinity INPUT is, by default, allowed to flow through untouched
+//   (Clamp/Lerp/InverseLerp/Remap/SmoothStep/Frac/Floor/Ceil/Round/Sqrt/
+//   Pow/Exp/Log/Mat4 arithmetic/Easing::Evaluate/Curve-Gradient::Evaluate
+//   all do this) — this is the honest, standard IEEE-754 contract, the
+//   same "NaN is the documented result of invalid input, not a silent
+//   fallback" precedent Asin/Acos already establish for their real
+//   restricted domain. A function that does something DIFFERENT (returns
+//   a defined non-NaN value instead) documents that choice at its own
+//   declaration — see Normalize, Project, Refract, InverseLerp, Mod,
+//   Sign, MoveTowards, Damp, Slerp, LookRotation, FromToRotation,
+//   NextIntRange below.
+// - Zero-length vectors/quaternions and other structurally-degenerate
+//   inputs (a zero `onto` in Project, a==b in InverseLerp, divisor==0 in
+//   Mod, an empty Curve/Gradient) always return a REAL, defined value —
+//   never NaN, never a crash/out-of-bounds read — because these are
+//   reachable, unexceptional runtime states (an uninitialized Vec3, an
+//   empty authored curve), not caller mistakes to reject the way
+//   Asin/Acos reject an out-of-[-1,1] value at the script boundary.
 
 [[nodiscard]] constexpr float Clamp(float value, float min, float max) noexcept {
     return value < min ? min : (value > max ? max : value);
@@ -446,9 +484,17 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 
 // Moves current toward target by at most maxDelta, without overshooting
 // past target (Unity's Mathf.MoveTowards) — unlike Lerp, this is
-// frame-rate-independent when maxDelta = speed * deltaTime.
+// frame-rate-independent when maxDelta = speed * deltaTime. LIB-054: a NaN
+// `target` (or `current`) is checked and propagated explicitly — without
+// that check, `difference < 0.0F` is false for a NaN difference, so the
+// unguarded arithmetic below would silently return `current + maxDelta`,
+// a concrete, deceptively valid-looking result instead of surfacing the
+// invalid input.
 [[nodiscard]] constexpr float MoveTowards(float current, float target, float maxDelta) noexcept {
     const float difference = target - current;
+    if (difference != difference) {
+        return difference;
+    }
     if (difference <= maxDelta && difference >= -maxDelta) {
         return target;
     }
@@ -488,8 +534,19 @@ struct DampResult {
 
 // -1 for negative, 1 for positive, 0 for exactly zero (not "0 counts as
 // positive" — a caller multiplying by Sign(0) should get 0, not flip
-// direction).
+// direction). LIB-054: propagates NaN rather than silently reporting 0 —
+// `value != value` is true only for NaN (a well-known IEEE-754 property),
+// checked directly instead of via std::isnan so this stays constexpr; a
+// naive `value > 0 ? 1 : (value < 0 ? -1 : 0)` would answer "0" for NaN,
+// which looks like a valid, deliberate result instead of the honest "this
+// input was invalid" signal every other function in this file gives NaN
+// input (Clamp/Lerp/Mat4 math/Frac/Floor/Ceil/Round all let NaN flow
+// through unchanged, matching Asin/Acos's "NaN is the native IEEE-754
+// contract for invalid input" precedent).
 [[nodiscard]] constexpr float Sign(float value) noexcept {
+    if (value != value) {
+        return value;
+    }
     return value > 0.0F ? 1.0F : (value < 0.0F ? -1.0F : 0.0F);
 }
 
@@ -504,7 +561,10 @@ struct DampResult {
 // the same sign as `divisor` and stays in [0, divisor) for divisor > 0 —
 // the convention that makes wrapping an angle or a repeating coordinate
 // well-defined for a negative dividend, which C's truncation-based fmod
-// is not (fmod(-1, 4) is -1, not 3).
+// is not (fmod(-1, 4) is -1, not 3). LIB-054: divisor == 0 returns value
+// unchanged ("no wrap is possible") instead of letting value/0 -> inf and
+// 0*inf -> NaN propagate silently — the same "a real, defined result for
+// a degenerate divisor" choice InverseLerp already makes for a==b.
 [[nodiscard]] float Mod(float value, float divisor) noexcept;
 [[nodiscard]] float Sqrt(float value) noexcept;
 [[nodiscard]] float Pow(float base, float exponent) noexcept;
