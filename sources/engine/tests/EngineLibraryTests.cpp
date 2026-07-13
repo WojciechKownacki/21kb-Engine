@@ -4,6 +4,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/library/EngineLibraryArrayView.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
+#include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
@@ -728,6 +729,107 @@ void RunArrayViewTest() {
     kb::tests::Require(sawRootA && sawRootB, "ArrayView over SceneHierarchyAccess::RootEntities() must see the same entities the runtime query actually returned");
 }
 
+// LIB-058: capacity/mutation contract for kb::library::Array/Set/Map/Queue/
+// Stack, exercised with a plain scalar T (int) — the everyday native-C++
+// use case, independent of anything script-related.
+void RunCollectionsScalarTest() {
+    kb::library::Array<int> numbers{ 3U };
+    kb::tests::Require(numbers.Capacity() == 3U, "Array capacity must equal the requested value when under the shared policy limit");
+    kb::tests::Require(numbers.PushBack(10) && numbers.PushBack(20) && numbers.PushBack(30), "Array::PushBack must succeed while under capacity");
+    kb::tests::Require(!numbers.PushBack(40), "Array::PushBack must fail (return false), not grow past its declared capacity");
+    kb::tests::Require(numbers.Count() == 3U && numbers.Full(), "Array must report Full() once Count() reaches Capacity()");
+    kb::tests::Require(*numbers.GetAt(1) == 20, "Array::GetAt must return the element actually stored at that index");
+    kb::tests::Require(numbers.GetAt(3) == nullptr, "Array::GetAt must return nullptr for an out-of-range index, not read out of bounds");
+    kb::tests::Require(numbers.SetAt(1, 99) && *numbers.GetAt(1) == 99, "Array::SetAt must overwrite the element in place");
+    kb::tests::Require(numbers.RemoveAt(0) && numbers.Count() == 2U && *numbers.GetAt(0) == 99, "Array::RemoveAt must shift later elements down and shrink Count");
+    numbers.Clear();
+    kb::tests::Require(numbers.Empty() && numbers.Count() == 0U, "Array::Clear must empty the array");
+
+    kb::library::Set<int> tags{ 2U };
+    kb::tests::Require(tags.Insert(7) && tags.Insert(7), "Set::Insert of an already-present value must be a no-op that still returns true");
+    kb::tests::Require(tags.Count() == 1U, "Set must not store duplicate elements");
+    kb::tests::Require(tags.Insert(8), "Set::Insert must succeed while under capacity");
+    kb::tests::Require(!tags.Insert(9), "Set::Insert of a genuinely new value must fail once the set is at capacity");
+    kb::tests::Require(tags.Contains(7) && tags.Contains(8) && !tags.Contains(9), "Set::Contains must reflect exactly the inserted membership");
+    kb::tests::Require(tags.Remove(7) && !tags.Contains(7) && tags.Count() == 1U, "Set::Remove must remove exactly the requested element");
+    kb::tests::Require(!tags.Remove(123), "Set::Remove of an absent value must return false");
+
+    kb::library::Map<int, std::string> names{ 2U };
+    kb::tests::Require(names.Set(1, "one") && names.Set(2, "two"), "Map::Set must succeed for new keys while under capacity");
+    kb::tests::Require(!names.Set(3, "three"), "Map::Set of a genuinely new key must fail once the map is at capacity");
+    kb::tests::Require(names.Set(1, "ONE"), "Map::Set of an already-present key must always succeed (update, not insert)");
+    kb::tests::Require(*names.Find(1) == "ONE", "Map::Find must return the most recently Set value for that key");
+    kb::tests::Require(names.Find(3) == nullptr, "Map::Find must return nullptr for a key never inserted");
+    kb::tests::Require(names.ContainsKey(2) && !names.ContainsKey(3), "Map::ContainsKey must reflect exactly the inserted keys");
+    kb::tests::Require(names.Remove(2) && !names.ContainsKey(2) && names.Count() == 1U, "Map::Remove must remove exactly the requested key");
+
+    kb::library::Queue<int> fifo{ 2U };
+    kb::tests::Require(fifo.Enqueue(1) && fifo.Enqueue(2), "Queue::Enqueue must succeed while under capacity");
+    kb::tests::Require(!fifo.Enqueue(3), "Queue::Enqueue must fail once the queue is at capacity");
+    kb::tests::Require(*fifo.Peek() == 1, "Queue::Peek must report the oldest enqueued item without removing it");
+    int dequeued = 0;
+    kb::tests::Require(fifo.Dequeue(dequeued) && dequeued == 1, "Queue::Dequeue must remove and return items in FIFO order");
+    kb::tests::Require(fifo.Dequeue(dequeued) && dequeued == 2, "Queue::Dequeue must continue draining in FIFO order");
+    kb::tests::Require(!fifo.Dequeue(dequeued), "Queue::Dequeue on an empty queue must return false and leave the queue empty");
+
+    kb::library::Stack<int> lifo{ 2U };
+    kb::tests::Require(lifo.Push(1) && lifo.Push(2), "Stack::Push must succeed while under capacity");
+    kb::tests::Require(!lifo.Push(3), "Stack::Push must fail once the stack is at capacity");
+    kb::tests::Require(*lifo.Top() == 2, "Stack::Top must report the most recently pushed item without removing it");
+    int popped = 0;
+    kb::tests::Require(lifo.Pop(popped) && popped == 2, "Stack::Pop must remove and return items in LIFO order");
+    kb::tests::Require(lifo.Pop(popped) && popped == 1, "Stack::Pop must continue unwinding in LIFO order");
+    kb::tests::Require(!lifo.Pop(popped), "Stack::Pop on an empty stack must return false and leave the stack empty");
+
+    kb::library::Array<int> overRequested{ kb::library::kDefaultLibraryInputLimits.maxCollectionSize + 1000U };
+    kb::tests::Require(
+        overRequested.Capacity() == kb::library::kDefaultLibraryInputLimits.maxCollectionSize,
+        "A capacity request above the shared policy limit (LIB-037's maxCollectionSize) must be clamped down, never honored as-is");
+}
+
+// LIB-058: the same collection templates instantiated with
+// kb::script::ScriptValue as the element/key/value type — proving they
+// genuinely hold "script data" (ScriptValue is the one channel through
+// which data crosses the Lua/Visual Graph boundary, LIB-032), not just
+// plain native scalars. ScriptValue has operator== but no std::hash, which
+// is exactly why Set/Map are linear-scan rather than hash-backed.
+void RunCollectionsScriptValueTest() {
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+
+    kb::library::Array<ScriptValue> events{ 4U };
+    kb::tests::Require(events.PushBack(ScriptValue{ 1 }), "Array<ScriptValue>::PushBack must accept a ScriptValue element");
+    kb::tests::Require(events.PushBack(ScriptValue{ std::string{ "PlayerTag" }, ScriptValueType::Name }), "Array<ScriptValue> must hold heterogeneously-typed ScriptValues (Int then Name) since ScriptValue is itself self-describing");
+    kb::tests::Require(events.GetAt(0)->Type() == ScriptValueType::Int && events.GetAt(0)->AsInt() == 1, "Array<ScriptValue>::GetAt must preserve both the type and value of the stored ScriptValue");
+    kb::tests::Require(events.GetAt(1)->Type() == ScriptValueType::Name && events.GetAt(1)->AsString() == "PlayerTag", "Array<ScriptValue>::GetAt must preserve a second, differently-typed ScriptValue in the same array");
+
+    kb::library::Set<ScriptValue> uniqueHashes{ 4U };
+    const ScriptValue hashA{ 0xAAULL, ScriptValueType::Hash };
+    const ScriptValue hashAAsEntity{ 0xAAULL, ScriptValueType::Entity };
+    kb::tests::Require(uniqueHashes.Insert(hashA), "Set<ScriptValue>::Insert must accept a Hash-typed ScriptValue");
+    kb::tests::Require(uniqueHashes.Insert(hashAAsEntity), "Set<ScriptValue> must treat a ScriptValue with the same raw id but a different ScriptValueType as a distinct element, matching ScriptValue::operator=='s structural-equality contract");
+    kb::tests::Require(uniqueHashes.Count() == 2U, "Set<ScriptValue> must have stored both the Hash and the Entity ScriptValue as distinct members");
+    kb::tests::Require(
+        uniqueHashes.Insert(ScriptValue{ 0xAAULL, ScriptValueType::Hash }) && uniqueHashes.Count() == 2U,
+        "Set<ScriptValue>::Insert of a value structurally equal to an existing member must be a no-op that still returns true and does not grow Count");
+
+    kb::library::Map<ScriptValue, ScriptValue> properties{ 4U };
+    const ScriptValue key{ std::string{ "health" }, ScriptValueType::Name };
+    kb::tests::Require(properties.Set(key, ScriptValue{ 100 }), "Map<ScriptValue, ScriptValue>::Set must accept ScriptValue keys and values");
+    kb::tests::Require(properties.Find(key)->AsInt() == 100, "Map<ScriptValue, ScriptValue>::Find must look up by ScriptValue structural equality");
+    kb::tests::Require(properties.Set(key, ScriptValue{ 50 }) && properties.Find(key)->AsInt() == 50, "Map<ScriptValue, ScriptValue>::Set on an existing key must update, not duplicate, the entry");
+
+    kb::library::Queue<ScriptValue> pending{ 2U };
+    kb::tests::Require(pending.Enqueue(ScriptValue{ true }) && pending.Enqueue(ScriptValue{ false }), "Queue<ScriptValue>::Enqueue must accept Bool ScriptValues");
+    ScriptValue dequeuedValue;
+    kb::tests::Require(pending.Dequeue(dequeuedValue) && dequeuedValue.AsBool() == true, "Queue<ScriptValue>::Dequeue must preserve FIFO order for ScriptValue elements");
+
+    kb::library::Stack<ScriptValue> undo{ 2U };
+    kb::tests::Require(undo.Push(ScriptValue{ 1.5F }) && undo.Push(ScriptValue{ 2.5F }), "Stack<ScriptValue>::Push must accept Float ScriptValues");
+    ScriptValue poppedValue;
+    kb::tests::Require(undo.Pop(poppedValue) && poppedValue.AsFloat() == 2.5F, "Stack<ScriptValue>::Pop must preserve LIFO order for ScriptValue elements");
+}
+
 void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
@@ -1261,6 +1363,8 @@ void RunEngineLibraryTests() {
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunEntityHandleTest();
     RunArrayViewTest();
+    RunCollectionsScalarTest();
+    RunCollectionsScriptValueTest();
     RunAssetRefTest();
     RunResultTest();
     RunApiManifestTest();
