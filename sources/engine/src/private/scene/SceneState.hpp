@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct ecs_query_t;
@@ -104,6 +105,13 @@ public:
     std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
+    // LIB-068: entities are active by default (absent from this set); an
+    // entity is only ever added here by an explicit SetActive(false) —
+    // same "presence means non-default" shape already used by
+    // hierarchyParents/hierarchyChildren for the (much more common)
+    // default-empty case, so a scene with no deactivated entities pays no
+    // per-entity storage cost.
+    std::unordered_set<SceneEntity::IdType> inactiveEntities;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
