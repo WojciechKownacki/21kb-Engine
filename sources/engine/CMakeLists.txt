@@ -199,12 +199,14 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibrary.hpp
     include/engine/library/EngineLibraryAssetRef.hpp
     include/engine/library/EngineLibraryCommandApplication.hpp
+    include/engine/library/EngineLibraryDeprecation.hpp
     include/engine/library/EngineLibraryContext.hpp
     include/engine/library/EngineLibraryEntityHandle.hpp
     include/engine/library/EngineLibraryError.hpp
     include/engine/library/EngineLibraryResult.hpp
     include/engine/library/EngineLibraryExecutionOrder.hpp
     include/engine/library/EngineLibraryFunctionDesc.hpp
+    include/engine/library/EngineLibraryFunctionId.hpp
     include/engine/library/EngineLibraryLifecycle.hpp
     include/engine/library/EngineLibraryManifest.hpp
     include/engine/library/EngineLibraryManifestComparison.hpp
@@ -634,7 +636,9 @@ add_library(kb_engine STATIC
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
     src/library/EngineLibrary.cpp
+    src/library/EngineLibraryDeprecation.cpp
     src/library/EngineLibraryEntityHandle.cpp
+    src/library/EngineLibraryFunctionId.cpp
     src/library/EngineLibraryError.cpp
     src/library/EngineLibraryLifecycle.cpp
     src/library/EngineLibraryManifest.cpp
