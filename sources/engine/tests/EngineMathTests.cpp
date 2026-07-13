@@ -153,6 +153,41 @@ void RunQuatAndMatrixMathTest() {
         "Mat4 identity * M must equal M (Mat4 operator* identity)");
 }
 
+// LIB-044: Radians/Degrees must convert correctly against known values,
+// must NOT implicitly convert into each other or from a bare float (that
+// is the whole point — every construction site must name its unit), and
+// same-unit arithmetic/comparison must work for accumulation/clamping use
+// cases (e.g. camera yaw/pitch).
+void RunAngleUnitsTest() {
+    using kb::math::Degrees;
+    using kb::math::Radians;
+
+    kb::tests::Require(std::abs(kb::math::ToRadians(Degrees{ 180.0F }).Value() - kb::math::kPi) < 0.0001F, "ToRadians(180 degrees) must equal pi radians");
+    kb::tests::Require(std::abs(kb::math::ToDegrees(Radians{ kb::math::kPi }).Value() - 180.0F) < 0.0001F, "ToDegrees(pi radians) must equal 180 degrees");
+    kb::tests::Require(kb::math::ToRadians(Degrees{ 0.0F }).Value() == 0.0F, "ToRadians(0 degrees) must be exactly zero");
+
+    // Round-trip: converting degrees -> radians -> degrees must recover the
+    // original value (within float precision).
+    const Degrees original{ 47.5F };
+    const Degrees roundTripped = kb::math::ToDegrees(kb::math::ToRadians(original));
+    kb::tests::Require(std::abs(roundTripped.Value() - original.Value()) < 0.001F, "Degrees -> Radians -> Degrees must round-trip");
+
+    static_assert(!std::is_convertible_v<float, Radians>, "a bare float must not implicitly convert to Radians — every call site must name its unit");
+    static_assert(!std::is_convertible_v<float, Degrees>, "a bare float must not implicitly convert to Degrees — every call site must name its unit");
+    static_assert(!std::is_convertible_v<Degrees, Radians>, "Degrees must not implicitly convert to Radians — ToRadians must be called explicitly");
+    static_assert(!std::is_convertible_v<Radians, Degrees>, "Radians must not implicitly convert to Degrees — ToDegrees must be called explicitly");
+
+    const Degrees yaw = Degrees{ 10.0F } + Degrees{ 5.0F };
+    kb::tests::Require(yaw.Value() == 15.0F, "Degrees operator+ must add same-unit values");
+    kb::tests::Require((Degrees{ 20.0F } - Degrees{ 5.0F }).Value() == 15.0F, "Degrees operator- must subtract same-unit values");
+    kb::tests::Require((Degrees{ 10.0F } * 3.0F).Value() == 30.0F, "Degrees operator* must scale by a plain float");
+    kb::tests::Require(Degrees{ 90.0F } < Degrees{ 91.0F }, "Degrees operator< must compare same-unit values");
+    kb::tests::Require(Degrees{ 90.0F } == Degrees{ 90.0F } && Degrees{ 90.0F } != Degrees{ 91.0F }, "Degrees operator==/!= must compare same-unit values");
+
+    kb::tests::Require((Radians{ 1.0F } + Radians{ 0.5F }).Value() == 1.5F, "Radians operator+ must add same-unit values");
+    kb::tests::Require(Radians{ 1.0F } < Radians{ 2.0F }, "Radians operator< must compare same-unit values");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -160,6 +195,7 @@ void RunEngineMathTests() {
     RunDefaultValueConventionsTest();
     RunVec3MathTest();
     RunQuatAndMatrixMathTest();
+    RunAngleUnitsTest();
 }
 
 } // namespace kb::tests

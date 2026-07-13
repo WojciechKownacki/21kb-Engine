@@ -2,6 +2,8 @@
 
 #include "scene/lighting/SceneForwardLightSelector.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -16,8 +18,10 @@ struct Basis {
     float zz = 1.0F;
 };
 
+// LIB-044: delegates to the single canonical kb::math::ToRadians instead
+// of an independently-rederived degrees-to-radians constant.
 [[nodiscard]] float DegreesToRadians(float degrees) noexcept {
-    return degrees * 0.017453292519943295769F;
+    return kb::math::ToRadians(kb::math::Degrees{ degrees }).Value();
 }
 
 [[nodiscard]] Basis BasisFromQuat(const std::array<float, 4>& q) noexcept {
