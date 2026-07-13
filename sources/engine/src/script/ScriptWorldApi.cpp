@@ -75,6 +75,26 @@ void ApplyPositionArgs(kb::scene::TransformComponent& transform, std::span<const
     }
 }
 
+// LIB-066: the rotation half of a World.Spawn "pose" (position from
+// ApplyPositionArgs above, rotation here) — same per-component-optional
+// idiom, defaulting to whatever is already in transform.localRotation
+// (identity, kb::math::Quat{}'s default, for a freshly constructed
+// TransformComponent).
+void ApplyRotationArgs(kb::scene::TransformComponent& transform, std::span<const ScriptFunctionArgument> arguments) noexcept {
+    if (HasArg(arguments, "rotX")) {
+        transform.localRotation.x = FloatArg(arguments, "rotX", transform.localRotation.x);
+    }
+    if (HasArg(arguments, "rotY")) {
+        transform.localRotation.y = FloatArg(arguments, "rotY", transform.localRotation.y);
+    }
+    if (HasArg(arguments, "rotZ")) {
+        transform.localRotation.z = FloatArg(arguments, "rotZ", transform.localRotation.z);
+    }
+    if (HasArg(arguments, "rotW")) {
+        transform.localRotation.w = FloatArg(arguments, "rotW", transform.localRotation.w);
+    }
+}
+
 ScriptFunctionCallResult EntityResult(std::string_view pin, kb::scene::SceneEntity entity) {
     return ScriptFunctionCallResult{
         .executed = true,
@@ -233,18 +253,57 @@ ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context
     };
 }
 
+// LIB-066: World.Spawn(prefab?, pose, parent?) — "prefab" is optional
+// (empty means "spawn a blank entity", the pre-LIB-066 behavior, kept
+// byte-for-byte via its own branch below so existing callers are
+// unaffected); "pose" decomposes into the existing x/y/z position pins
+// plus new rotX/rotY/rotZ/rotW rotation pins (kb::math::Pose{position,
+// rotation}, LIB-042's decomposition idiom already established for
+// Vec3/Quat elsewhere in this codebase). Ends with SynchronizeTransforms()
+// so the returned handle's WORLD position/rotation — not just local — is
+// guaranteed correct immediately, rather than stale until the next
+// scheduled hierarchy sync: the "defined flush" the task asks for.
 ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
-    kb::scene::SceneObjectDesc desc;
-    desc.name = StringArg(arguments, "name", "Entity");
-    ApplyPositionArgs(desc.transform, arguments);
-    const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
-    if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
-        desc.parent = context.scene->Entities().Object(parent);
+    const std::string prefabPath = StringArg(arguments, "prefab");
+    kb::scene::SceneEntity entity{};
+    if (prefabPath.empty()) {
+        kb::scene::SceneObjectDesc desc;
+        desc.name = StringArg(arguments, "name", "Entity");
+        ApplyPositionArgs(desc.transform, arguments);
+        ApplyRotationArgs(desc.transform, arguments);
+        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
+            desc.parent = context.scene->Entities().Object(parent);
+        }
+        entity = context.scene->Entities().CreateEntity(std::move(desc));
+    } else {
+        kb::assets::AssetHandle<kb::scene::ScenePrefab> prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
+        if (!prefab.IsLoaded()) {
+            return Error("prefab asset could not be loaded");
+        }
+        const kb::scene::ScenePrefabInstance instance = context.scene->Prefabs().Instantiate(*prefab.Get());
+        entity = instance.Empty() ? kb::scene::SceneEntity{} : instance.ObjectAt(0).Entity();
+        if (!entity.IsValid()) {
+            return Error("prefab instantiation produced no root entity");
+        }
+        if (HasArg(arguments, "x") || HasArg(arguments, "y") || HasArg(arguments, "z") || HasArg(arguments, "rotX") || HasArg(arguments, "rotY") ||
+            HasArg(arguments, "rotZ") || HasArg(arguments, "rotW")) {
+            kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+            ApplyPositionArgs(transform, arguments);
+            ApplyRotationArgs(transform, arguments);
+            context.scene->Transforms().Set(entity, transform);
+        }
+        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
+            // Matches the blank-entity path above, which also has no
+            // separate failure signal for a rejected parent assignment.
+            static_cast<void>(context.scene->Hierarchy().SetParent(entity, parent));
+        }
     }
-    const kb::scene::SceneEntity entity = context.scene->Entities().CreateEntity(std::move(desc));
+    context.scene->Runtime().SynchronizeTransforms();
     return EntityResult("entity", entity);
 }
 
@@ -430,10 +489,15 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "World.Spawn",
         {
             ScriptFunctionPin{ "name", ScriptValueType::String, false },
+            ScriptFunctionPin{ "prefab", ScriptValueType::String, false },
             ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
             ScriptFunctionPin{ "x", ScriptValueType::Float, false },
             ScriptFunctionPin{ "y", ScriptValueType::Float, false },
             ScriptFunctionPin{ "z", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotZ", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotW", ScriptValueType::Float, false },
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &Spawn) && ok;
