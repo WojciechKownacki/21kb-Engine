@@ -435,4 +435,28 @@ struct DampResult {
 // Natural logarithm (base e), not base-10 or base-2.
 [[nodiscard]] float Log(float value) noexcept;
 
+// LIB-047: trigonometric functions take/return kb::math::Radians (not a
+// bare float) — angle unit confusion (passing degrees to a function that
+// expects radians) is exactly the bug class LIB-044 exists to prevent,
+// and a trig function is the most common place that mistake happens.
+// Sin/Cos/Tan accept any angle (their domain is all real radian values,
+// including magnitudes past a full turn); Asin/Acos have a genuinely
+// restricted input DOMAIN ([-1,1]) — that domain error is defined at the
+// script boundary (ScriptMathApi.cpp's Math.Asin/Math.Acos return a real
+// ScriptFunctionCallResult error for |value|>1) rather than here, where
+// letting std::asin/std::acos's standard IEEE-754 NaN-on-out-of-domain
+// behavior through is the honest, well-understood native C++ contract —
+// not a silent fallback, since NaN is the documented result of this
+// exact input, and every native caller already knows to check for it.
+[[nodiscard]] float Sin(Radians angle) noexcept;
+[[nodiscard]] float Cos(Radians angle) noexcept;
+[[nodiscard]] float Tan(Radians angle) noexcept;
+[[nodiscard]] Radians Asin(float value) noexcept;
+[[nodiscard]] Radians Acos(float value) noexcept;
+[[nodiscard]] Radians Atan(float value) noexcept;
+// Two-argument arctangent: resolves the correct quadrant from the signs
+// of both y and x (unlike Atan(y/x), which cannot distinguish (1,1) from
+// (-1,-1)). Atan2(0, 0) is conventionally 0, not an error.
+[[nodiscard]] Radians Atan2(float y, float x) noexcept;
+
 } // namespace kb::math
