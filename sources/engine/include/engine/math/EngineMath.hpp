@@ -276,6 +276,35 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
     };
 }
 
+// LIB-048: Distance/Project/Reflect/Refract — built on the Dot/Cross/
+// Length/Normalize this file already defines (LIB-042), not a second,
+// independently-derived set of vector formulas.
+
+[[nodiscard]] float Distance(Vec3 a, Vec3 b) noexcept;
+
+// The component of `value` parallel to `onto` (vector projection, not
+// scalar projection). Returns the zero vector if `onto` is the zero
+// vector, the same zero-length guard Normalize already uses, rather than
+// dividing by zero.
+[[nodiscard]] Vec3 Project(Vec3 value, Vec3 onto) noexcept;
+
+// Reflects `incident` off a surface with the given `normal` (GLSL's
+// `reflect` convention). `normal` is expected unit-length, the same
+// convention kb::math::Plane already documents for its own normal field.
+[[nodiscard]] constexpr Vec3 Reflect(Vec3 incident, Vec3 normal) noexcept {
+    return incident - normal * (2.0F * Dot(incident, normal));
+}
+
+// Refracts `incident` through a surface with the given unit `normal` and
+// `eta` (ratio of the incident medium's index of refraction to the
+// transmitted medium's — GLSL's `refract` convention). Returns the zero
+// vector on total internal reflection (when the refraction angle would
+// exceed 90 degrees) rather than a NaN-producing sqrt of a negative
+// number — mirroring LIB-047's "a real, defined result for the boundary
+// case" rule, here at the native level since total internal reflection is
+// a legitimate physical outcome, not an invalid input to reject.
+[[nodiscard]] Vec3 Refract(Vec3 incident, Vec3 normal, float eta) noexcept;
+
 // Hamilton product. lhs*rhs applies rhs first, then lhs — i.e. matches the
 // existing parent-composes-child convention (a world rotation is
 // `worldRotation = parentRotation * localRotation`, not the reverse).
