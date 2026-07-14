@@ -106,6 +106,15 @@ public:
     // mode" to distinguish from) — an editor sets this false while the
     // scene is being edited rather than simulated, via SetPlaying.
     bool isPlaying = true;
+    // LIB-094: script-visible time multiplier, applied ONLY at the
+    // Time.Delta boundary (ScriptTimeApi.cpp), never to the raw deltaSeconds
+    // threaded through SceneRuntimeService::Update/ScriptRuntimeSceneSystem
+    // — physics/ECS/elapsedSeconds/frameIndex are all deliberately
+    // untouched by this field, so slowing or pausing script-visible time
+    // never distorts the engine's own notion of simulated time. Always
+    // >= 0 (SetTimeScale rejects negative values rather than clamping them
+    // away silently). Default 1.0 = unscaled, matching today's behavior.
+    float timeScale = 1.0F;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
