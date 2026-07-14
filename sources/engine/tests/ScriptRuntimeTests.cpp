@@ -2625,6 +2625,175 @@ void RunTransformApiChildIterationTest() {
     kb::tests::Require(deadFindChild.Succeeded() && !deadFindChild.Output("found")->AsBool(), "Transform.FindChild on a dead entity must report found=false, not throw");
 }
 
+// LIB-088: Transform.Rotate/LookAt/TransformPoint/InverseTransformPoint.
+// Transform.Translate is deliberately NOT re-tested here — it already has
+// coverage in RunScriptWorldTimePhysicsApiTest above and LIB-088 makes no
+// change to it. Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: Rotate genuinely COMPOSES (two calls produce
+// the mathematically composed quaternion, not the last delta verbatim);
+// LookAt on both a root AND a child of a non-trivially transformed parent
+// produces a WORLD rotation whose forward vector actually points at the
+// target (the real round-trip proof, mirroring LIB-085/086's own
+// round-trip tests, not just "it compiles"); TransformPoint/
+// InverseTransformPoint round-trip a point through both directions on a
+// child of a translated+rotated+scaled parent.
+void RunTransformApiRotateLookAtAndPointConversionTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API rotate/lookAt/point conversion test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.Rotate") != nullptr, "Transform.Rotate was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LookAt") != nullptr, "Transform.LookAt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.TransformPoint") != nullptr, "Transform.TransformPoint was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.InverseTransformPoint") != nullptr, "Transform.InverseTransformPoint was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // (1) Rotate: two applications of the SAME 90-degree-around-Z delta
+    // must genuinely COMPOSE to the mathematically expected 180-degree
+    // result — not just apply the delta once, and not overwrite the
+    // previous rotation with the delta verbatim.
+    const kb::scene::SceneObject rotateSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RotateSubject" });
+    const kb::script::ScriptFunctionArgument rotateEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ rotateSubject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::scene::Quat rotateDelta{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    const std::vector<kb::script::ScriptFunctionArgument> rotateArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ rotateDelta.x } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ rotateDelta.y } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ rotateDelta.z } },
+        kb::script::ScriptFunctionArgument{ "w", kb::script::ScriptValue{ rotateDelta.w } },
+    };
+    const kb::script::ScriptFunctionCallResult firstRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(firstRotate.Succeeded() && firstRotate.Output("moved")->AsBool(), "Transform.Rotate direct call failed");
+    const kb::script::ScriptFunctionCallResult secondRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(secondRotate.Succeeded() && secondRotate.Output("moved")->AsBool(), "Transform.Rotate second direct call failed");
+    const kb::scene::Quat expectedComposedRotation = kb::math::Normalize(rotateDelta * rotateDelta);
+    const kb::scene::Quat actualComposedRotation = scene.Transforms().Get(rotateSubject.Entity()).localRotation;
+    kb::tests::Require(kb::tests::NearlyEqual(std::fabs(actualComposedRotation.z), std::fabs(expectedComposedRotation.z))
+            && kb::tests::NearlyEqual(std::fabs(actualComposedRotation.w), std::fabs(expectedComposedRotation.w)),
+        "Transform.Rotate must genuinely COMPOSE two deltas (local = local * delta), not overwrite with the delta verbatim");
+
+    // (2) LookAt on a ROOT entity: the resulting rotation's forward vector
+    // (local +Z rotated by the result) must actually point toward the
+    // requested world-space target.
+    const kb::scene::SceneObject lookAtRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtRoot" });
+    const kb::script::ScriptFunctionArgument lookAtRootEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtRoot.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> lookAtRootArgs{
+        lookAtRootEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult lookAtRootResult = host.Functions().Call("Transform.LookAt", lookAtRootArgs, context);
+    kb::tests::Require(lookAtRootResult.Succeeded() && lookAtRootResult.Output("moved")->AsBool(), "Transform.LookAt (root) direct call failed");
+    const kb::scene::Quat rootLocalRotationAfterLookAt = scene.Transforms().Get(lookAtRoot.Entity()).localRotation;
+    const kb::math::Vec3 rootForwardAfterLookAt = kb::math::Rotate(rootLocalRotationAfterLookAt, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(kb::tests::NearlyEqual(rootForwardAfterLookAt.x, 1.0F) && std::fabs(rootForwardAfterLookAt.y) < 0.001F && std::fabs(rootForwardAfterLookAt.z) < 0.001F,
+        "Transform.LookAt (root) must produce a rotation whose forward vector points toward the requested target");
+
+    // (3) LookAt on a CHILD of a non-trivially transformed (translated AND
+    // rotated) parent: the resulting WORLD rotation's forward vector must
+    // STILL point at the target — proving the back-solve through
+    // WorldPoseToLocal correctly undoes the parent's own rotation.
+    const kb::scene::SceneObject lookAtParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtParent" });
+    kb::scene::TransformComponent lookAtParentTransform = scene.Transforms().Get(lookAtParent.Entity());
+    lookAtParentTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    lookAtParentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F }; // 90 degrees around +Y.
+    scene.Transforms().Set(lookAtParent.Entity(), lookAtParentTransform);
+    const kb::scene::SceneObject lookAtChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(lookAtChild.Entity(), lookAtParent.Entity()), "LookAt child fixture could not be parented");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::scene::Vec3 lookAtChildWorldPositionBefore = scene.Transforms().Get(lookAtChild.Entity()).worldPosition;
+    const kb::script::ScriptFunctionArgument lookAtChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> lookAtChildArgs{
+        lookAtChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.x } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.y + 5.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.z } },
+    };
+    const kb::script::ScriptFunctionCallResult lookAtChildResult = host.Functions().Call("Transform.LookAt", lookAtChildArgs, context);
+    kb::tests::Require(lookAtChildResult.Succeeded() && lookAtChildResult.Output("moved")->AsBool(), "Transform.LookAt (child) direct call failed");
+    const kb::scene::TransformComponent lookAtChildTransformAfter = scene.Transforms().Get(lookAtChild.Entity());
+    kb::tests::Require(kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.x, lookAtChildWorldPositionBefore.x)
+            && kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.y, lookAtChildWorldPositionBefore.y)
+            && kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.z, lookAtChildWorldPositionBefore.z),
+        "Transform.LookAt must not move the entity — only its rotation changes");
+    const kb::math::Vec3 childForwardAfterLookAt = kb::math::Rotate(lookAtChildTransformAfter.worldRotation, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(std::fabs(childForwardAfterLookAt.x) < 0.001F && kb::tests::NearlyEqual(childForwardAfterLookAt.y, 1.0F) && std::fabs(childForwardAfterLookAt.z) < 0.001F,
+        "Transform.LookAt on a child of a rotated parent must still produce a WORLD forward vector pointing at the target — the back-solve must undo the parent's own rotation");
+
+    // (4) TransformPoint/InverseTransformPoint round trip on a child of a
+    // translated+rotated+scaled parent.
+    const kb::scene::SceneObject pointParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PointConversionParent" });
+    kb::scene::TransformComponent pointParentTransform = scene.Transforms().Get(pointParent.Entity());
+    pointParentTransform.localPosition = kb::scene::Vec3{ 3.0F, 4.0F, 5.0F };
+    pointParentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    pointParentTransform.localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F };
+    scene.Transforms().Set(pointParent.Entity(), pointParentTransform);
+    const kb::scene::SceneObject pointChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PointConversionChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(pointChild.Entity(), pointParent.Entity()), "Point conversion child fixture could not be parented");
+    kb::scene::TransformComponent pointChildTransform = scene.Transforms().Get(pointChild.Entity());
+    pointChildTransform.localPosition = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F };
+    pointChildTransform.localRotation = kb::scene::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F }; // 90 degrees around +Y.
+    scene.Transforms().Set(pointChild.Entity(), pointChildTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+
+    const kb::script::ScriptFunctionArgument pointChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ pointChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> transformPointArgs{
+        pointChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 4.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult transformPointResult = host.Functions().Call("Transform.TransformPoint", transformPointArgs, context);
+    kb::tests::Require(transformPointResult.Succeeded() && transformPointResult.Output("found")->AsBool(), "Transform.TransformPoint direct call failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> inverseTransformPointArgs{
+        pointChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ transformPointResult.Output("x")->AsFloat() } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ transformPointResult.Output("y")->AsFloat() } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ transformPointResult.Output("z")->AsFloat() } },
+    };
+    const kb::script::ScriptFunctionCallResult inverseTransformPointResult = host.Functions().Call("Transform.InverseTransformPoint", inverseTransformPointArgs, context);
+    kb::tests::Require(inverseTransformPointResult.Succeeded() && inverseTransformPointResult.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("x")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("y")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("z")->AsFloat(), 4.0F),
+        "Transform.TransformPoint followed by Transform.InverseTransformPoint must round-trip the exact original local point, through a translated+rotated+scaled parent");
+
+    // Also prove TransformPoint actually did something non-trivial — the
+    // world point must differ from the input local point, given the
+    // non-identity parent chain.
+    kb::tests::Require(!kb::tests::NearlyEqual(transformPointResult.Output("x")->AsFloat(), 2.0F)
+            || !kb::tests::NearlyEqual(transformPointResult.Output("y")->AsFloat(), 3.0F)
+            || !kb::tests::NearlyEqual(transformPointResult.Output("z")->AsFloat(), 4.0F),
+        "Transform.TransformPoint must produce a genuinely different WORLD point for a non-trivial parent chain, not just echo the local input");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(rotateSubject.Entity());
+    const kb::script::ScriptFunctionCallResult deadRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(deadRotate.Succeeded() && !deadRotate.Output("moved")->AsBool(), "Transform.Rotate on a dead entity must report moved=false, not throw");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deadLookAtArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadLookAt = host.Functions().Call("Transform.LookAt", deadLookAtArgs, context);
+    kb::tests::Require(deadLookAt.Succeeded() && !deadLookAt.Output("moved")->AsBool(), "Transform.LookAt on a dead entity must report moved=false, not throw");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deadTransformPointArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadTransformPoint = host.Functions().Call("Transform.TransformPoint", deadTransformPointArgs, context);
+    kb::tests::Require(deadTransformPoint.Succeeded() && !deadTransformPoint.Output("found")->AsBool(), "Transform.TransformPoint on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadInverseTransformPoint = host.Functions().Call("Transform.InverseTransformPoint", deadTransformPointArgs, context);
+    kb::tests::Require(deadInverseTransformPoint.Succeeded() && !deadInverseTransformPoint.Output("found")->AsBool(), "Transform.InverseTransformPoint on a dead entity must report found=false, not throw");
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -5046,6 +5215,7 @@ void RunScriptRuntimeTests() {
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
+    RunTransformApiRotateLookAtAndPointConversionTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
