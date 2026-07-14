@@ -68,6 +68,10 @@ constexpr std::array<InputKeyName, 20> kGamepadKeyNames{{
     {InputKey::GamepadRightTrigger, "GamepadRightTrigger"},
 }};
 
+constexpr std::array<InputKeyName, 1> kTouchKeyNames{{
+    {InputKey::TouchDown, "TouchDown"},
+}};
+
 } // namespace
 
 std::string_view ToString(InputKey key) noexcept {
@@ -77,6 +81,11 @@ std::string_view ToString(InputKey key) noexcept {
         }
     }
     for (const InputKeyName& entry : kGamepadKeyNames) {
+        if (entry.key == key) {
+            return entry.name;
+        }
+    }
+    for (const InputKeyName& entry : kTouchKeyNames) {
         if (entry.key == key) {
             return entry.name;
         }
@@ -91,6 +100,11 @@ InputKey ParseInputKey(std::string_view text) noexcept {
         }
     }
     for (const InputKeyName& entry : kGamepadKeyNames) {
+        if (entry.name == text) {
+            return entry.key;
+        }
+    }
+    for (const InputKeyName& entry : kTouchKeyNames) {
         if (entry.name == text) {
             return entry.key;
         }

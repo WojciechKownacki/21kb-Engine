@@ -85,9 +85,40 @@ enum class InputKey : std::uint16_t {
     GamepadLeftTrigger,
     GamepadRightTrigger,
 
+    // --- Touch (400..) ---
+    // Normalized digital signal: true while at least one touch point is active.
+    // Mirrors how a single mouse button stands in for "the pointer is down";
+    // per-point position/id/phase live in InputDeviceState::TouchPoints, not as
+    // individual InputKeys (there is no fixed number of "the 3rd finger" keys).
+    TouchDown = 400,
+
     // Upper bound for storage sizing; must stay above the largest value above.
     Count = 512,
 };
+
+// Which physical device family a key belongs to - the normalized taxonomy
+// LIB-116 introduces so device kinds are a real, named concept instead of an
+// implicit numeric-range convention.
+enum class InputDeviceKind : std::uint8_t {
+    Keyboard,
+    Mouse,
+    Gamepad,
+    Touch,
+};
+
+[[nodiscard]] constexpr InputDeviceKind DeviceKindOf(InputKey key) noexcept {
+    const auto raw = static_cast<std::uint16_t>(key);
+    if (raw >= static_cast<std::uint16_t>(InputKey::GamepadFaceBottom) && raw < static_cast<std::uint16_t>(InputKey::TouchDown)) {
+        return InputDeviceKind::Gamepad;
+    }
+    if (raw == static_cast<std::uint16_t>(InputKey::TouchDown)) {
+        return InputDeviceKind::Touch;
+    }
+    if (raw >= static_cast<std::uint16_t>(InputKey::MouseLeft) && raw < static_cast<std::uint16_t>(InputKey::GamepadFaceBottom)) {
+        return InputDeviceKind::Mouse;
+    }
+    return InputDeviceKind::Keyboard;
+}
 
 // Analog keys report a continuous value rather than a pressed/released edge.
 [[nodiscard]] constexpr bool IsAnalogKey(InputKey key) noexcept {

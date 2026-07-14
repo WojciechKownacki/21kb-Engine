@@ -8,6 +8,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputTriggers.hpp"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -187,6 +188,7 @@ void TestAssetRoundTrip() {
     mapping.bindingId = 99U;
     mapping.actionId = 42U;
     mapping.key = InputKey::Space;
+    mapping.gamepadIndex = 3U;
     mapping.modifiers.push_back(InputModifierDesc{.type = InputModifierType::Negate, .params = {1.0F, 0.0F, 0.0F}});
     mapping.triggers.push_back(InputTriggerDesc{.type = InputTriggerType::Hold,
                                                 .params = {0.5F, 1.0F, 0.0F},
@@ -196,7 +198,7 @@ void TestAssetRoundTrip() {
     InputCompositeBinding composite;
     composite.bindingId = 100U;
     composite.actionId = 43U;
-    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F, .gamepadIndex = 2U});
     composite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F});
     composite.modifiers.push_back(InputModifierDesc{.type = InputModifierType::DeadZone, .params = {0.2F, 1.0F, 0.0F}});
     context.composites.push_back(std::move(composite));
@@ -208,6 +210,7 @@ void TestAssetRoundTrip() {
     const InputKeyMapping& roundTripped = decodedContext.asset.mappings.front();
     Require(roundTripped.bindingId == 99U && roundTripped.actionId == 42U && roundTripped.key == InputKey::Space,
             "Mapping basics should round-trip, including the stable binding id");
+    Require(roundTripped.gamepadIndex == 3U, "Mapping gamepadIndex should round-trip");
     Require(roundTripped.modifiers.size() == 1U && roundTripped.triggers.size() == 1U,
             "Modifier/trigger stacks should round-trip");
     Require(roundTripped.triggers.front().type == InputTriggerType::Hold &&
@@ -220,8 +223,8 @@ void TestAssetRoundTrip() {
             "Composite basics should round-trip");
     Require(roundTrippedComposite.slots.size() == 2U, "Composite slot count should round-trip");
     Require(roundTrippedComposite.slots[0].key == InputKey::D && roundTrippedComposite.slots[0].axis == 0U &&
-                NearlyEqual(roundTrippedComposite.slots[0].scale, 1.0F),
-            "Composite slot 0 should round-trip");
+                NearlyEqual(roundTrippedComposite.slots[0].scale, 1.0F) && roundTrippedComposite.slots[0].gamepadIndex == 2U,
+            "Composite slot 0 should round-trip, including gamepadIndex");
     Require(roundTrippedComposite.slots[1].key == InputKey::A && NearlyEqual(roundTrippedComposite.slots[1].scale, -1.0F),
             "Composite slot 1 should round-trip");
     Require(roundTrippedComposite.modifiers.size() == 1U, "Composite modifier stack should round-trip");
@@ -393,6 +396,98 @@ void TestAssetDiscoveryAndResolve() {
     std::filesystem::remove_all(root, error);
 }
 
+// LIB-116: two gamepad slots must be fully independent storage, and slot 0 must
+// be byte-for-byte the same storage the pre-LIB-116 no-index API always used
+// (proving zero behavior change for every existing single-gamepad caller).
+void TestMultiGamepadDeviceState() {
+    InputDeviceState device;
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true); // implicit slot 0
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    device.SetAnalog(InputKey::GamepadLeftStickX, 0.5F);
+    device.SetAnalog(InputKey::GamepadLeftStickX, -0.75F, 1U);
+
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom), "Implicit slot 0 should read back true");
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom, 0U), "Explicit slot 0 should match the implicit no-index API");
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom, 1U), "Slot 1 should independently read true");
+    Require(!device.IsKeyDown(InputKey::GamepadFaceBottom, 2U), "Slot 2 must not alias slot 0 or 1");
+    Require(NearlyEqual(device.GetValue(InputKey::GamepadLeftStickX), 0.5F), "Slot 0 stick value should read back unchanged");
+    Require(NearlyEqual(device.GetValue(InputKey::GamepadLeftStickX, 1U), -0.75F), "Slot 1 stick value should be independent of slot 0");
+
+    // Keyboard/mouse keys ignore the gamepad index entirely - passing one must
+    // not misroute into per-slot storage that only exists for gamepad keys.
+    device.SetKeyDown(InputKey::W, true, 3U);
+    Require(device.IsKeyDown(InputKey::W), "A non-gamepad key must ignore any gamepad index argument");
+
+    device.Reset();
+    Require(!device.IsKeyDown(InputKey::GamepadFaceBottom, 1U), "Reset should clear every gamepad slot, not just slot 0");
+}
+
+// LIB-116: touch has no fixed key identity, so it is exposed as a raw contact
+// list plus one derived digital key (TouchDown) usable through the same
+// action-binding system as keyboard/mouse/gamepad.
+void TestTouchPoints() {
+    InputDeviceState device;
+    Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should be false with no active contacts");
+    Require(device.TouchPoints().empty(), "TouchPoints should start empty");
+
+    const std::array<InputTouchPoint, 2> points{{
+        InputTouchPoint{.id = 1U, .x = 10.0F, .y = 20.0F, .phase = InputTouchPhase::Began},
+        InputTouchPoint{.id = 2U, .x = 30.0F, .y = 40.0F, .phase = InputTouchPhase::Moved},
+    }};
+    device.SetTouchPoints(points);
+    Require(device.IsKeyDown(InputKey::TouchDown), "TouchDown should be true while any contact is active");
+    Require(NearlyEqual(device.GetValue(InputKey::TouchDown), 1.0F), "TouchDown value should be 1.0 while active");
+    Require(device.TouchPoints().size() == 2U, "TouchPoints should report both active contacts");
+    Require(device.TouchPoints()[0].id == 1U && NearlyEqual(device.TouchPoints()[0].x, 10.0F),
+            "First touch point should round-trip its id/position");
+    Require(device.TouchPoints()[1].phase == InputTouchPhase::Moved, "Second touch point should round-trip its phase");
+
+    device.SetTouchPoints({});
+    Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should go false once every contact ends");
+    Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
+}
+
+// LIB-116: the same physical button (GamepadFaceBottom) on two different
+// gamepad slots must resolve to two independently controllable actions - proving
+// gamepadIndex flows through InputKeyMapping -> ResolvedMapping -> evaluation,
+// and that consume-gating keys by (InputKey, gamepadIndex) rather than InputKey
+// alone (two controllers pressing "the same button enum" must not collide).
+void TestMultiGamepadMapping() {
+    auto jump0 = MakeAction("Jump0", InputActionValueType::Bool, true);
+    auto jump1 = MakeAction("Jump1", InputActionValueType::Bool, true);
+
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 0U});
+    context->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 1U});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump0}, {2U, jump1}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Multi-gamepad context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 0U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump0"), "Gamepad 0's button press should trigger Jump0");
+    Require(!subsystem.IsActionPressed("Jump1"), "Gamepad 0's button press must not trigger Jump1 (gamepad 1)");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump1"), "Gamepad 1's button press should trigger Jump1");
+    Require(!subsystem.IsActionPressed("Jump0"), "Gamepad 1's button press must not trigger Jump0 (gamepad 0)");
+}
+
 } // namespace
 
 void RunInputTests() {
@@ -404,6 +499,9 @@ void RunInputTests() {
     TestAssetDiscoveryAndResolve();
     TestCompositeBinding();
     TestBindingIdStableAcrossRebind();
+    TestMultiGamepadDeviceState();
+    TestTouchPoints();
+    TestMultiGamepadMapping();
 }
 
 } // namespace kb::tests
