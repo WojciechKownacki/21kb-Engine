@@ -3,7 +3,10 @@
 #include "engine/audio/AudioClipAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
+#include "engine/input/InputLocalUser.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -112,6 +115,50 @@ kb::input::InputSubsystem& Scene::Input() noexcept {
 
 const kb::input::InputSubsystem& Scene::Input() const noexcept {
     return state_->inputSubsystem;
+}
+
+kb::input::InputSubsystem& Scene::Input(kb::input::LocalUserId user) noexcept {
+    if (user == kb::input::kPrimaryLocalUser) {
+        return state_->inputSubsystem;
+    }
+    const auto [iterator, inserted] = state_->secondaryInputSubsystems.try_emplace(user.value);
+    if (inserted) {
+        // Mirrors InputModule::OnSceneAttach's resolver wiring for the primary
+        // subsystem - a fresh secondary subsystem needs the same asset resolvers
+        // before any InputComponent targeting it can push a mapping context.
+        kb::assets::AssetManager& assetManager = state_->assets;
+        iterator->second.SetResolvers(
+            [&assetManager](std::uint64_t id) {
+                return assetManager.Load<kb::input::InputActionAsset>(kb::assets::AssetId{ id }).Shared();
+            },
+            [&assetManager](std::uint64_t id) {
+                return assetManager.Load<kb::input::InputMappingContextAsset>(kb::assets::AssetId{ id }).Shared();
+            });
+    }
+    return iterator->second;
+}
+
+const kb::input::InputSubsystem* Scene::TryGetInput(kb::input::LocalUserId user) const noexcept {
+    if (user == kb::input::kPrimaryLocalUser) {
+        return &state_->inputSubsystem;
+    }
+    const auto iterator = state_->secondaryInputSubsystems.find(user.value);
+    return iterator != state_->secondaryInputSubsystems.end() ? &iterator->second : nullptr;
+}
+
+void Scene::EvaluateAllLocalUserInput(float deltaSeconds) {
+    state_->inputSubsystem.Evaluate(deltaSeconds);
+    const kb::input::InputDeviceState& sharedDevice = state_->inputSubsystem.DeviceState();
+    for (auto& [id, subsystem] : state_->secondaryInputSubsystems) {
+        subsystem.EvaluateWithDeviceState(sharedDevice, deltaSeconds);
+    }
+}
+
+void Scene::ClearAllLocalUserInputMappingContexts() noexcept {
+    state_->inputSubsystem.ClearMappingContexts();
+    for (auto& [id, subsystem] : state_->secondaryInputSubsystems) {
+        subsystem.ClearMappingContexts();
+    }
 }
 
 void Scene::ReloadModules() {
