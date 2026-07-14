@@ -27,6 +27,12 @@ struct ScenePrefabAssetFormat {
     static constexpr std::string_view OverridePropertyPathKey = "propertyPath";
     static constexpr std::string_view OverrideValueKey = "value";
     static constexpr std::string_view OverrideObjectReferenceKey = "objectReference";
+    // LIB-092: the stable, within-instance node id of a "parent" override's
+    // new-parent target — the portable counterpart to
+    // OverrideObjectReferenceKey (a raw runtime entity id, which does not
+    // survive a save/load round trip and is written only for
+    // debugging/back-compat, never read back).
+    static constexpr std::string_view OverrideObjectReferenceNodeIdKey = "objectReferenceNodeId";
     static constexpr std::string_view OverrideFlagKey = "flag";
     static constexpr std::string_view NestedPrefabGuidKey = "nestedPrefabGuid";
     static constexpr std::string_view NestedOverrideCountKey = "nestedOverrideCount";

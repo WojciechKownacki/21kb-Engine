@@ -5,6 +5,7 @@
 #include "engine/scene/ScenePrefabOverrides.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace kb::scene {
@@ -23,8 +24,17 @@ public:
         std::string value,
         ScenePrefabOverrideFlag flag,
         SceneObject objectReference = {},
-        std::uint64_t nodeId = 0);
-    static void AppendChangedProperties(Scene& scene, const ScenePrefabNodeDesc& node, SceneObject expectedParent, std::uint32_t nodeIndex, SceneObject object, ScenePrefabOverrideReport& report);
+        std::uint64_t nodeId = 0,
+        std::uint64_t objectReferenceNodeId = 0);
+    static void AppendChangedProperties(
+        Scene& scene,
+        const ScenePrefabNodeDesc& node,
+        SceneObject expectedParent,
+        std::uint32_t nodeIndex,
+        SceneObject object,
+        ScenePrefabOverrideReport& report,
+        std::span<const SceneObject> instanceObjects,
+        std::span<const ScenePrefabNodeDesc> instanceNodes);
 };
 
 } // namespace kb::scene

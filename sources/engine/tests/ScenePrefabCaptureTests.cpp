@@ -347,6 +347,78 @@ void RunPrefabVariantAssetRoundTripTest() {
     std::filesystem::remove(variantPath, removeError);
 }
 
+// LIB-092: the missing counterpart to RunPrefabVariantAssetRoundTripTest —
+// proves a HIERARCHY override (reparenting a node WITHIN the same prefab
+// instance) survives a real save+load round trip, not just an in-memory
+// detect/revert cycle. Before this fix, ScenePrefabAssetVariantWriter wrote
+// a raw runtime entity id for a "parent" override's new-parent target, and
+// ScenePrefabAssetOverrideReader never read it back at all — a loaded
+// "parent" override silently failed to reproduce the reparent. The fix
+// resolves the new parent via a stable, within-instance node id (the same
+// mechanism nodeId/ResolveNodeIndex already use for the override's own
+// target), which — unlike a raw entity id — survives the round trip.
+void RunPrefabParentOverrideAssetRoundTripTest() {
+    const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_parent_override_base.kbprefab";
+    const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_parent_override_variant.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab basePrefab;
+    const std::uint32_t rootNode = basePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Parent Override Root" });
+    const std::uint32_t siblingA = basePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Parent Override Sibling A", .parentNode = rootNode });
+    const std::uint32_t siblingB = basePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Parent Override Sibling B", .parentNode = rootNode });
+    const kb::scene::ScenePrefabHandle baseHandle = source.Prefabs().Register("ParentOverrideBase", std::move(basePrefab));
+    kb::tests::Require(baseHandle.IsValid(), "Parent override base registration failed");
+
+    // Instantiate, then reparent siblingB under siblingA — BOTH within this
+    // same instance, the exact scenario this fix addresses (the new parent
+    // is resolvable via a stable node id, unlike an entity outside the
+    // instance, which stays honestly unresolved — see
+    // RunPrefabApplyRejectsDetachedTrackedChildTest for that boundary).
+    const kb::scene::ScenePrefabInstance instance = source.Prefabs().Instantiate(baseHandle);
+    const kb::scene::ScenePrefabInstanceHandle instanceHandle = instance.Handle();
+    kb::tests::Require(source.Hierarchy().SetParent(instance.ObjectAt(siblingB), instance.ObjectAt(siblingA)), "Parent override fixture could not reparent siblingB under siblingA");
+
+    const kb::scene::ScenePrefabOverrideReport report = source.Prefabs().Overrides(instanceHandle);
+    kb::tests::Require(report.nodes.size() == 1, "Parent override fixture should report exactly one structural override");
+    kb::tests::Require(kb::scene::HasPrefabOverride(report.nodes[0].flags, kb::scene::ScenePrefabOverrideFlag::Parent), "Parent override fixture did not report a parent override");
+
+    const kb::scene::ScenePrefabPropertyOverride* parentProperty = nullptr;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : report.properties) {
+        if (property.propertyPath == "parent") {
+            parentProperty = &property;
+            break;
+        }
+    }
+    kb::tests::Require(parentProperty != nullptr, "Parent override fixture report did not include a 'parent' property override");
+    kb::tests::Require(parentProperty->objectReferenceNodeId != kb::scene::ScenePrefabNodeDesc::InvalidStableId,
+        "LIB-092: a 'parent' override whose new parent is another node WITHIN the same instance must resolve to a stable, non-zero node id, not stay unresolved");
+
+    const kb::scene::ScenePrefabHandle variantHandle = source.Prefabs().RegisterVariant("ParentOverrideVariant", baseHandle, report.properties);
+    kb::tests::Require(variantHandle.IsValid(), "Parent override variant registration failed");
+    kb::tests::Require(source.Prefabs().Save(baseHandle, basePath), "Parent override base asset save failed");
+    kb::tests::Require(source.Prefabs().Save(variantHandle, variantPath), "Parent override variant asset save failed");
+
+    // Fresh target Scene: the real round trip — load both files, instantiate,
+    // and confirm the reparent survived.
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabHandle loadedBase = target.Prefabs().Load(basePath);
+    const kb::scene::ScenePrefabHandle loadedVariant = target.Prefabs().Load(variantPath);
+    kb::tests::Require(loadedBase.IsValid(), "Parent override base asset load failed");
+    kb::tests::Require(loadedVariant.IsValid(), "Parent override variant asset load failed");
+
+    const kb::scene::ScenePrefabInstance loadedInstance = target.Prefabs().Instantiate(loadedVariant);
+    kb::tests::Require(loadedInstance.ObjectCount() == 3, "Loaded parent-override variant did not instantiate all 3 nodes");
+    const kb::scene::SceneEntity loadedSiblingBParent = target.Hierarchy().Parent(loadedInstance.ObjectAt(siblingB).Entity());
+    kb::tests::Require(loadedSiblingBParent == loadedInstance.ObjectAt(siblingA).Entity(),
+        "LIB-092: a 'parent' override reparenting a node WITHIN the same instance must survive save+load — siblingB must be parented under siblingA, not left under root (or unresolved)");
+
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+}
+
 void RunNestedPrefabAssetRoundTripTest() {
     const std::filesystem::path innerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_inner.kbprefab";
     const std::filesystem::path outerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_outer.kbprefab";
@@ -398,6 +470,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
+    run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunNestedPrefabAssetRoundTripTest", RunNestedPrefabAssetRoundTripTest);
 }
 

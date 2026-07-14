@@ -41,8 +41,19 @@ namespace {
                 *missingOverrideNodeIds = true;
             }
 
+            // LIB-092: optional, absent from files written before this —
+            // absence just means "unresolvable/out-of-instance," the same
+            // honest fallback ApplyStoredProperty already uses for that
+            // case, not a parse error.
+            std::uint64_t objectReferenceNodeId = 0;
+            const auto objectReferenceNode = fields.find(std::string{ ScenePrefabAssetFormat::OverrideObjectReferenceNodeIdKey });
+            if (objectReferenceNode != fields.end() && !ScenePrefabAssetFieldParser::ParseNumber(objectReferenceNode->second, objectReferenceNodeId)) {
+                return false;
+            }
+
             property.nodeIndex = static_cast<std::uint32_t>(nodeIndex);
             property.nodeId = nodeId;
+            property.objectReferenceNodeId = objectReferenceNodeId;
             property.flag = static_cast<ScenePrefabOverrideFlag>(static_cast<std::uint32_t>(flag));
             return true;
         }
