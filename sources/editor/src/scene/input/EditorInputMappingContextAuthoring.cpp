@@ -3,6 +3,8 @@
 #include "console/EditorConsoleState.hpp"
 #include "engine/input/InputAssetIO.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <vector>
 
 namespace kb::editor {
@@ -29,9 +31,31 @@ bool EditorInputMappingContextAuthoring::Create(const std::filesystem::path& vir
     return true;
 }
 
+namespace {
+
+// A binding's id must stay unique and non-zero within its asset for the whole
+// asset's lifetime (0 means "unassigned"; a rebind API addresses bindings by this
+// id). One past the highest id already used is enough to keep that true across
+// repeated Add/Remove without ever reusing an id still referenced elsewhere
+// (e.g. serialized user rebind settings, once LIB-119 exists).
+[[nodiscard]] std::uint64_t NextBindingId(const kb::input::InputMappingContextAsset& asset) noexcept {
+    std::uint64_t next = 1U;
+    for (const kb::input::InputKeyMapping& mapping : asset.mappings) {
+        next = std::max(next, mapping.bindingId + 1U);
+    }
+    for (const kb::input::InputCompositeBinding& composite : asset.composites) {
+        next = std::max(next, composite.bindingId + 1U);
+    }
+    return next;
+}
+
+} // namespace
+
 bool EditorInputMappingContextAuthoring::AddMapping(kb::assets::AssetId id) {
     return gateway_.MutateContext(id, [](kb::input::InputMappingContextAsset& asset) {
-        asset.mappings.push_back(kb::input::InputKeyMapping{});
+        kb::input::InputKeyMapping mapping;
+        mapping.bindingId = NextBindingId(asset);
+        asset.mappings.push_back(mapping);
     });
 }
 

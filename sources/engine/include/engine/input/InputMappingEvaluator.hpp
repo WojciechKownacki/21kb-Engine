@@ -19,7 +19,10 @@ namespace kb::input {
 // in isolation.
 struct MappingEvaluationInput {
     InputActionValueType valueType = InputActionValueType::Bool;
-    float rawValue = 0.0F;                              // raw device value for the bound key
+    // Raw, pre-modifier value: a single-key mapping puts its scaled device value in
+    // x; a composite binding puts its already-combined per-axis vector here so the
+    // modifier/trigger stack below runs once against the full resultant direction.
+    InputValue raw{};
     std::span<const InputModifierDesc> modifiers;       // modifier stack (applied in order)
     std::span<const InputTriggerDesc> triggers;         // trigger stack (explicit + implicit)
     std::span<const std::string> chordActionNames;      // parallel to triggers; name per Chorded trigger
