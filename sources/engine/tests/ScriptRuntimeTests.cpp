@@ -5765,6 +5765,54 @@ void RunScriptTimerApiFiringOwnerAndPauseTest() {
     kb::tests::Require(scene.Timers().Cancel(repeatId), "SceneTimers::Cancel must be able to stop a still-alive repeating timer");
 }
 
+// LIB-096: same-time ordering (multiple timers due within one Advance()
+// call fire in CREATION order) and long-frame catch-up (a heavily-overdue
+// Timer.Repeat fires a BOUNDED number of times in one Advance() call rather
+// than silently dropping all its backlog to a single fire, LIB-095's
+// original behavior). Tested directly against kb::scene::SceneTimers'
+// native facade — no script layer needed, this is purely a kb::scene-level
+// contract.
+void RunSceneTimerAdvanceOrderingAndCatchUpTest() {
+    kb::scene::Scene scene;
+
+    // Same-time ordering: create three one-shot timers with DIFFERENT
+    // delays (deliberately NOT in delay-magnitude order) and advance by
+    // enough for all three to be overdue in a single call — `fired` must
+    // list them in the order they were CREATED, not by remaining-time size.
+    const std::uint64_t first = scene.Timers().Once(0.05F, kb::scene::SceneEntity{});
+    const std::uint64_t second = scene.Timers().Once(0.02F, kb::scene::SceneEntity{});
+    const std::uint64_t third = scene.Timers().Once(0.08F, kb::scene::SceneEntity{});
+    kb::tests::Require(first != 0U && second != 0U && third != 0U, "Ordering test fixture timers must all be created successfully");
+    const std::vector<kb::scene::TimerFiredRecord> sameTimeFired = scene.Timers().Advance(0.1F);
+    kb::tests::Require(sameTimeFired.size() == 3U, "All three timers due within the same Advance() call must all be reported as fired");
+    kb::tests::Require(sameTimeFired[0].id == first && sameTimeFired[1].id == second && sameTimeFired[2].id == third,
+        "Timers due within the same Advance() call must fire in CREATION order, not by remaining-time magnitude (LIB-096)");
+
+    // Long-frame catch-up: a repeating timer with a tiny interval, hit with
+    // a single huge deltaSeconds (100 intervals' worth of backlog), must
+    // fire MORE THAN ONCE (proving debt isn't silently dropped, LIB-095's
+    // original flat-reset behavior) but still a BOUNDED number of times
+    // (proving no unbounded spiral-of-death burst either) — exactly
+    // kMaxCatchUpFiresPerAdvance (8, SceneTimerService.cpp), the rest of
+    // the backlog is honestly dropped.
+    const std::uint64_t repeating = scene.Timers().Repeat(0.01F, kb::scene::SceneEntity{});
+    kb::tests::Require(repeating != 0U, "Catch-up test fixture timer must be created successfully");
+    const std::vector<kb::scene::TimerFiredRecord> caughtUp = scene.Timers().Advance(1.0F);
+    kb::tests::Require(caughtUp.size() == 8U, "A heavily-overdue Timer.Repeat must fire exactly kMaxCatchUpFiresPerAdvance times in one Advance() call, not once and not unboundedly");
+    for (const kb::scene::TimerFiredRecord& record : caughtUp) {
+        kb::tests::Require(record.id == repeating, "Every catch-up fire must report the SAME timer id it belongs to");
+    }
+    kb::tests::Require(scene.Timers().Exists(repeating), "A repeating timer must remain alive after a catch-up burst, ready for its next interval");
+
+    // After a capped catch-up burst, the timer must behave completely
+    // normally again — exactly one fire for exactly one interval's worth
+    // of time, no lingering debt or drift from the dropped backlog.
+    const std::vector<kb::scene::TimerFiredRecord> normalAfterCatchUp = scene.Timers().Advance(0.01F);
+    kb::tests::Require(normalAfterCatchUp.size() == 1U && normalAfterCatchUp[0].id == repeating, "A repeating timer must resume firing exactly once per interval after a catch-up burst, with no leftover debt");
+    const std::vector<kb::scene::TimerFiredRecord> stillNormal = scene.Timers().Advance(0.005F);
+    kb::tests::Require(stillNormal.empty(), "A repeating timer must NOT fire before its next full interval has elapsed post-catch-up");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5800,6 +5848,7 @@ void RunScriptRuntimeTests() {
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();
     RunScriptTimerApiFiringOwnerAndPauseTest();
+    RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
