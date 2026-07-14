@@ -7,6 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -5962,6 +5963,103 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
     kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
 }
 
+// LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
+// std::function objects — no scene needed, these are pure closures.
+void RunEngineLibraryTaskFactoriesTest() {
+    std::function<kb::scene::TaskPollResult(float)> waitSeconds = kb::library::MakeWaitSecondsTask(1.0F);
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Running, "MakeWaitSecondsTask must report Running before its duration has elapsed");
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Running, "MakeWaitSecondsTask must keep accumulating across multiple polls");
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Completed, "MakeWaitSecondsTask must report Completed once its total duration has elapsed (0.4+0.4+0.4=1.2 >= 1.0)");
+
+    std::function<kb::scene::TaskPollResult(float)> waitZeroSeconds = kb::library::MakeWaitSecondsTask(0.0F);
+    kb::tests::Require(waitZeroSeconds(0.001F) == kb::scene::TaskPollResult::Completed, "MakeWaitSecondsTask(0) must complete on its very first poll");
+
+    std::function<kb::scene::TaskPollResult(float)> waitSteps = kb::library::MakeWaitFixedStepsTask(3U);
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must report Running before its step count has elapsed (1/3)");
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must keep accumulating across multiple polls (2/3)");
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitFixedStepsTask must report Completed once its total step count has elapsed (3/3)");
+
+    std::function<kb::scene::TaskPollResult(float)> waitStepsBurst = kb::library::MakeWaitFixedStepsTask(5U);
+    kb::tests::Require(waitStepsBurst(2.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must correctly accumulate a multi-step poll (2/5)");
+    kb::tests::Require(waitStepsBurst(10.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitFixedStepsTask must complete when a single poll's step count overshoots the remaining total");
+}
+
+// LIB-098: SceneTasks::StartFixedStep/AdvanceFixedSteps end-to-end through
+// the real ScriptRuntimeSceneSystem — proves the FixedTick-domain plumbing
+// is genuinely independent of the Frame-domain (Advance) path LIB-097
+// already covers: a fixed-step task only completes after real FixedTick
+// steps occur (not wall-clock seconds), pause freezes it via the fixed-step
+// accumulator itself producing zero steps (not a separate pause check),
+// and it coexists correctly with a Frame-domain task driven by the same
+// ExecuteFrame calls.
+void RunSceneTaskFixedStepDomainTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1240U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Fixed Step Task Owner" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t completedCount = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&completedCount](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++completedCount;
+                        }),
+        "Fixed step task TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Fixed step task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    const float fixedStep = system.FrameSettings().fixedDeltaSeconds;
+
+    // A Frame-domain task started alongside the fixed-step one, driven by
+    // the SAME ExecuteFrame calls — proves the two domains don't interfere.
+    int framePollCount = 0;
+    const std::uint64_t frameTaskId = scene.Tasks().Start([&framePollCount](float) {
+                                           ++framePollCount;
+                                           return kb::scene::TaskPollResult::Running;
+                                       },
+        kb::scene::SceneEntity{});
+    kb::tests::Require(frameTaskId != 0U, "Frame-domain fixture task must be created successfully");
+
+    const std::uint64_t fixedTaskId = scene.Tasks().StartFixedStep(kb::library::MakeWaitFixedStepsTask(2U), ownerObject.Entity());
+    kb::tests::Require(fixedTaskId != 0U, "SceneTasks::StartFixedStep must succeed");
+
+    // A frame worth of exactly HALF a fixed step: zero FixedTick steps
+    // occur, so the fixed-step task must not be polled at all yet, even
+    // though wall-clock time (and the Frame-domain task) DID advance.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 0.5F));
+    kb::tests::Require(scene.Tasks().Exists(fixedTaskId), "A fixed-step task must not complete before any real FixedTick step has occurred");
+    kb::tests::Require(framePollCount == 1, "The Frame-domain task must still be polled normally regardless of the fixed-step task's state");
+
+    // The remaining half plus a full step = exactly 1 FixedTick step this
+    // frame — task needs 2, so it must still be Running.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(scene.Tasks().Exists(fixedTaskId), "A fixed-step task waiting for 2 steps must not complete after only 1 real FixedTick step");
+    kb::tests::Require(completedCount == 0U, "TaskCompleted must not fire before the fixed-step task has genuinely finished");
+
+    // One more full step => 2 total => Completed.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(!scene.Tasks().Exists(fixedTaskId), "A fixed-step task must be removed once its required step count has genuinely elapsed");
+    kb::tests::Require(completedCount == 1U, "TaskCompleted must fire exactly once the fixed-step task's real FixedTick count is satisfied");
+
+    kb::tests::Require(scene.Tasks().Exists(frameTaskId), "The Frame-domain fixture task must still be alive and unaffected throughout");
+    kb::tests::Require(scene.Tasks().Cancel(frameTaskId), "Cleaning up the Frame-domain fixture task must succeed");
+
+    // Pause: the fixed-step accumulator itself freezes during scene pause
+    // (LIB-094), so a huge deltaSeconds while paused produces ZERO fixed
+    // steps, meaning a fixed-step task is silently untouched — no separate
+    // pause check needed in AdvanceFixedSteps itself, this proves it.
+    const std::uint64_t pausedFixedTaskId = scene.Tasks().StartFixedStep(kb::library::MakeWaitFixedStepsTask(1U), ownerObject.Entity());
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 10.0F));
+    kb::tests::Require(scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must not complete while the scene is paused, no matter how much wall-clock time elapses");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(!scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must resume completing normally once the scene is unpaused");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6000,6 +6098,8 @@ void RunScriptRuntimeTests() {
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunEngineLibraryTaskFactoriesTest();
+    RunSceneTaskFixedStepDomainTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
