@@ -8,6 +8,7 @@
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/library/EngineLibraryAsyncResult.hpp"
+#include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -7216,6 +7217,121 @@ void RunScriptEventBusDispatchModeContractTest() {
     kb::tests::Require(secondDrain.delivered == 1U && reQueuedFired == 1, "The re-queued-during-drain event must deliver on the FOLLOWING DrainDeferred call, exactly once");
 }
 
+// LIB-108: proves kMaxScriptEventArguments (ScriptEvent.hpp) is genuinely
+// enforced, honestly (via a real error/diagnostic, never silent truncation
+// or silent success), at BOTH real dispatch entry points — ScriptEventBus::
+// Emit (LIB-105's bus) and ScriptRuntime::DispatchEvent (the older context.
+// Emit/EmitTo/Visual Graph path, LIB-103's confirmed single mechanism for
+// everything else). A payload at exactly the limit must still succeed —
+// only a payload that EXCEEDS it is rejected.
+void RunScriptEventPayloadSizeLimitTest() {
+    std::vector<kb::script::ScriptEventArgument> atLimit;
+    std::vector<kb::script::ScriptEventArgument> overLimit;
+    for (std::size_t i = 0; i < kb::script::kMaxScriptEventArguments; ++i) {
+        atLimit.push_back(kb::script::ScriptEventArgument{ .name = "arg", .value = kb::script::ScriptValue{ static_cast<int>(i) } });
+    }
+    overLimit = atLimit;
+    overLimit.push_back(kb::script::ScriptEventArgument{ .name = "oneTooMany", .value = kb::script::ScriptValue{ 0 } });
+    kb::tests::Require(overLimit.size() == kb::script::kMaxScriptEventArguments + 1U, "Test fixture must construct exactly one argument beyond the limit");
+
+    // --- ScriptEventBus::Emit ---
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptEventBus bus;
+        int fired = 0;
+        static_cast<void>(bus.Subscribe("SizeLimit", [&fired](const kb::script::ScriptEvent&) { ++fired; }));
+
+        const kb::script::ScriptEventDeliveryResult atLimitResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = atLimit });
+        kb::tests::Require(atLimitResult.delivered == 1U && atLimitResult.errors.empty() && fired == 1, "An event payload with EXACTLY kMaxScriptEventArguments must still deliver normally, not be rejected");
+
+        const kb::script::ScriptEventDeliveryResult overLimitResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = overLimit });
+        kb::tests::Require(overLimitResult.delivered == 0U && overLimitResult.errors.size() == 1U && fired == 1, "ScriptEventBus::Emit must honestly reject (0 delivered, a real error, no partial delivery) a payload exceeding kMaxScriptEventArguments — not silently truncate arguments or silently deliver anyway");
+    }
+
+    // --- ScriptRuntime::DispatchEvent (the older context.Emit/EmitTo path) ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kAsset{ 9010U };
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Size Limit Dispatch Subject" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        int fired = 0;
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "SizeLimit", [&fired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++fired; }),
+            "Size limit dispatch fixture registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Size limit dispatch backend registration failed");
+
+        const kb::script::ScriptRuntimeExecutionResult atLimitResult = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = atLimit }, 0.0F);
+        kb::tests::Require(atLimitResult.Succeeded() && fired == 1, "DispatchEvent must still dispatch normally for a payload with EXACTLY kMaxScriptEventArguments");
+
+        const kb::script::ScriptRuntimeExecutionResult overLimitResult = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = overLimit }, 0.0F);
+        kb::tests::Require(!overLimitResult.Succeeded() && overLimitResult.diagnostics.size() == 1U && fired == 1, "DispatchEvent must honestly report a diagnostic and skip dispatch entirely for a payload exceeding kMaxScriptEventArguments — not silently truncate or silently dispatch anyway");
+    }
+}
+
+// LIB-108: cross-checks kb::library::EngineLibraryEventRegistry's cataloged
+// schema against a REAL dispatched event's actual arguments (not just the
+// static assertions RunEngineLibraryEventSchemaRegistryTest already makes
+// against the catalog in isolation) — a TimerFired fired through a genuine
+// SceneTimers + ScriptRuntimeSceneSystem::ExecuteFrame pipeline, and a
+// SceneLoaded fired through a genuine Scene.Load call.
+void RunEngineLibraryEventSchemaMatchesRealDispatchTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 9011U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Event Schema Dispatch Subject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::vector<kb::script::ScriptEventArgument> capturedTimerArgs;
+    std::vector<kb::script::ScriptEventArgument> capturedSceneLoadedArgs;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "TimerFired", [&capturedTimerArgs](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            capturedTimerArgs = event.arguments;
+                        }),
+        "Event schema dispatch fixture TimerFired registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "SceneLoaded", [&capturedSceneLoadedArgs](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            capturedSceneLoadedArgs = event.arguments;
+                        }),
+        "Event schema dispatch fixture SceneLoaded registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Event schema dispatch fixture backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(scene.Timers().Once(0.05F, object.Entity()));
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(!capturedTimerArgs.empty(), "The TimerFired fixture must actually have fired through the real pipeline");
+
+    const kb::library::LibraryEventDesc* timerDesc = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
+    kb::tests::Require(timerDesc != nullptr, "TimerFired must be cataloged");
+    kb::tests::Require(capturedTimerArgs.size() == timerDesc->arguments.size(), "A REAL dispatched TimerFired must carry exactly as many arguments as the catalog declares");
+    for (std::size_t i = 0; i < capturedTimerArgs.size(); ++i) {
+        kb::tests::Require(capturedTimerArgs[i].name == timerDesc->arguments[i].name, "A REAL dispatched TimerFired argument's name must match the catalog's declared argument name, in order");
+        kb::tests::Require(capturedTimerArgs[i].value.Type() == timerDesc->arguments[i].type, "A REAL dispatched TimerFired argument's ScriptValueType must match the catalog's declared type");
+    }
+
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "EventSchemaProject" / "SchemaCheckScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "SchemaCheckRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "SchemaCheckScene"), "Event schema SceneLoaded fixture scene was not saved");
+    }
+    // additive=true: a non-additive Load would ClearSceneRoots, destroying
+    // the fixture's own behaviour-holding `object` before it could ever
+    // receive the SceneLoaded broadcast this test needs to observe.
+    static_cast<void>(scene.LoadedContent().Load(sceneFile, true));
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(!capturedSceneLoadedArgs.empty(), "The SceneLoaded fixture must actually have fired through a real Scene.Load + ExecuteFrame drain");
+
+    const kb::library::LibraryEventDesc* sceneLoadedDesc = kb::library::EngineLibraryEventRegistry::Find("SceneLoaded");
+    kb::tests::Require(sceneLoadedDesc != nullptr, "SceneLoaded must be cataloged");
+    kb::tests::Require(capturedSceneLoadedArgs.size() == sceneLoadedDesc->arguments.size(), "A REAL dispatched SceneLoaded must carry exactly as many arguments as the catalog declares");
+    for (std::size_t i = 0; i < capturedSceneLoadedArgs.size(); ++i) {
+        kb::tests::Require(capturedSceneLoadedArgs[i].name == sceneLoadedDesc->arguments[i].name, "A REAL dispatched SceneLoaded argument's name must match the catalog's declared argument name, in order");
+        kb::tests::Require(capturedSceneLoadedArgs[i].value.Type() == sceneLoadedDesc->arguments[i].type, "A REAL dispatched SceneLoaded argument's ScriptValueType must match the catalog's declared type");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -7273,6 +7389,8 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusRecipientFilterTest();
     RunPucLuaEventsRecipientFilterTest();
     RunScriptEventBusDispatchModeContractTest();
+    RunScriptEventPayloadSizeLimitTest();
+    RunEngineLibraryEventSchemaMatchesRealDispatchTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
