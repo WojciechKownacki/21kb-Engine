@@ -59,7 +59,7 @@ ScriptFunctionCallResult Once(const ScriptFunctionCallContext& context, std::spa
     if (delaySeconds <= 0.0F) {
         return Error("Timer.Once requires delay > 0");
     }
-    const std::uint64_t id = context.scene->Timers().Once(delaySeconds, OwnerArg(arguments));
+    const std::uint64_t id = context.scene->Timers().Once(delaySeconds, OwnerArg(arguments), context.caller);
     if (id == 0U) {
         return Error("Timer.Once failed — scene is already holding its maximum number of live timers");
     }
@@ -78,7 +78,7 @@ ScriptFunctionCallResult Repeat(const ScriptFunctionCallContext& context, std::s
     if (intervalSeconds <= 0.0F) {
         return Error("Timer.Repeat requires interval > 0");
     }
-    const std::uint64_t id = context.scene->Timers().Repeat(intervalSeconds, OwnerArg(arguments));
+    const std::uint64_t id = context.scene->Timers().Repeat(intervalSeconds, OwnerArg(arguments), context.caller);
     if (id == 0U) {
         return Error("Timer.Repeat failed — scene is already holding its maximum number of live timers");
     }
@@ -125,6 +125,22 @@ ScriptFunctionCallResult Resume(const ScriptFunctionCallContext& context, std::s
     };
 }
 
+// LIB-101: creation-site diagnostics — returns the entity that CALLED
+// Timer.Once/Repeat (invalid if unknown, e.g. a native-only
+// SceneTimers::Once/Repeat call that didn't supply one, or an unknown/gone
+// handle) — lets a hung/leaked timer be traced back to whatever created it.
+ScriptFunctionCallResult Creator(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity creator = context.scene->Timers().Creator(HashArg(arguments, "timer"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "creator", ScriptValue{ creator.Id(), ScriptValueType::Entity } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -157,6 +173,10 @@ bool ScriptTimerApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Timer.Resume",
               { ScriptFunctionPin{ "timer", ScriptValueType::Hash, true } },
               { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &Resume)
+        && ok;
+    ok = RegisterFunction(host, "Timer.Creator",
+              { ScriptFunctionPin{ "timer", ScriptValueType::Hash, true } },
+              { ScriptFunctionPin{ "creator", ScriptValueType::Entity, true } }, &Creator)
         && ok;
     return ok;
 }

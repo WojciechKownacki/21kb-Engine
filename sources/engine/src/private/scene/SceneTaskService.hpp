@@ -18,12 +18,13 @@ class SceneTaskService {
 public:
     SceneTaskService() = delete;
 
-    [[nodiscard]] static std::uint64_t Start(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner);
+    [[nodiscard]] static std::uint64_t Start(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator = {});
     // LIB-098: identical to Start, but marks the record fixedStepDomain —
     // see SceneTasks.hpp's StartFixedStep doc comment.
-    [[nodiscard]] static std::uint64_t StartFixedStep(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner);
+    [[nodiscard]] static std::uint64_t StartFixedStep(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator = {});
     [[nodiscard]] static bool Cancel(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool Exists(const Scene& scene, std::uint64_t id) noexcept;
+    [[nodiscard]] static SceneEntity Creator(const Scene& scene, std::uint64_t id) noexcept;
     // Only polls Frame-domain (Start) tasks.
     [[nodiscard]] static std::vector<TaskCompletionRecord> Advance(Scene& scene, float deltaSeconds);
     // LIB-098: only polls FixedTick-domain (StartFixedStep) tasks.
