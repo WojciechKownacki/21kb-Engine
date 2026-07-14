@@ -22,6 +22,14 @@ std::vector<SceneEntity> SceneHierarchyService::ChildEntities(const Scene& scene
     return SceneHierarchyChildrenService::ChildEntities(scene, entity);
 }
 
+std::size_t SceneHierarchyService::ChildCount(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneHierarchyChildrenService::ChildCount(scene, entity);
+}
+
+SceneEntity SceneHierarchyService::ChildAt(const Scene& scene, SceneEntity entity, std::size_t index) noexcept {
+    return SceneHierarchyChildrenService::ChildAt(scene, entity, index);
+}
+
 std::vector<SceneObject> SceneHierarchyService::RootObjects(Scene& scene) {
     return SceneHierarchyRootsService::RootObjects(scene);
 }
