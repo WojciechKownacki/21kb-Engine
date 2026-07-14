@@ -21,23 +21,32 @@ ScriptFunctionCallResult NoScene() {
     return Error("time api requires an active scene");
 }
 
+// LIB-094: Delta is the SCALED, pause-aware value — scale = 0 whenever the
+// scene is paused (Runtime().IsPlaying()==false), regardless of the
+// configured Time.Scale, and otherwise scale = Runtime().TimeScale().
+// Deliberately scoped to ONLY this script-visible value: the raw
+// deltaSeconds threaded through SceneRuntimeService::Update/
+// ScriptRuntimeSceneSystem is never touched, so physics/ECS/elapsedSeconds/
+// frameIndex all keep advancing at real wall-clock rate even while
+// gameplay code driven by Time.Delta is frozen or slowed. A missing scene
+// (context.scene == nullptr) is treated as scale=1 (unscaled), preserving
+// the pre-LIB-094 "Time.Delta works without a scene" behavior rather than
+// making scale-awareness a new hard requirement.
 ScriptFunctionCallResult Delta(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    const float scale = context.scene == nullptr ? 1.0F : (context.scene->Runtime().IsPlaying() ? context.scene->Runtime().TimeScale() : 0.0F);
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ context.deltaSeconds } } },
+        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ context.deltaSeconds * scale } } },
         .errors = {},
     };
 }
 
-// LIB-093: no time-scale/pause-multiplier concept exists ANYWHERE in this
-// engine (confirmed by research before writing this — grepped timeScale/
-// TimeScale/UnscaledDelta/unscaled across kb::scene/kb::script, zero
-// hits). UnscaledDelta is therefore HONESTLY identical to Delta today —
-// the same "real API surface for a future capability, not a fabricated
-// distinct value" precedent LIB-071's Scene.LoadProgress already
-// established (always 1.0/0.0 because loading is synchronous today) —
-// once a real time-scale multiplier exists, ONLY this function's body
-// needs to change; the two names are already distinct at the call site.
+// LIB-094: UnscaledDelta is the RAW wall-clock deltaSeconds — deliberately
+// NEVER multiplied by Time.Scale and NEVER zeroed by pause, so a real-time
+// UI countdown or a pause-menu animation can keep advancing at true
+// wall-clock rate even while Time.Delta reads 0. Before LIB-094 this was a
+// literal duplicate of Delta (no scale/pause concept existed yet, LIB-093);
+// now that Time.Scale/pause exist, the two genuinely diverge.
 ScriptFunctionCallResult UnscaledDelta(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
     return ScriptFunctionCallResult{
         .executed = true,
@@ -98,13 +107,57 @@ ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context
     };
 }
 
-bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
+// LIB-094: Scale getter — always succeeds with a scene (no domain to
+// validate on read), defaults to 1.0 for a missing scene, mirroring the
+// same "unscaled" fallback Delta above uses.
+ScriptFunctionCallResult Scale(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    const float scale = context.scene == nullptr ? 1.0F : context.scene->Runtime().TimeScale();
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "scale", ScriptValue{ scale } } },
+        .errors = {},
+    };
+}
+
+// LIB-094: SetScale is the actual validation boundary (LIB-064's
+// validate-at-the-boundary precedent, also used by Math.Asin/Acos's domain
+// check, LIB-047) — a negative scale is UNCONDITIONALLY rejected with an
+// honest error rather than silently clamped to 0, since a negative time
+// scale is not a meaningful "slow motion," it's invalid input.
+ScriptFunctionCallResult SetScale(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const ScriptValue* scaleValue = nullptr;
+    for (const ScriptFunctionArgument& argument : arguments) {
+        if (argument.name == "scale") {
+            scaleValue = &argument.value;
+            break;
+        }
+    }
+    const float scale = scaleValue == nullptr ? 1.0F : scaleValue->AsFloat(1.0F);
+    if (scale < 0.0F) {
+        return Error("Time.SetScale rejects a negative scale");
+    }
+    context.scene->Runtime().SetTimeScale(scale);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {};
+    desc.signature.inputs = std::move(inputs);
     desc.signature.outputs = std::move(outputs);
     desc.callback = std::move(callback);
     return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
+    return RegisterFunction(host, std::move(name), {}, std::move(outputs), std::move(callback));
 }
 
 } // namespace
@@ -117,6 +170,8 @@ bool ScriptTimeApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Time.Elapsed", { ScriptFunctionPin{ "elapsed", ScriptValueType::Float, true } }, &Elapsed) && ok;
     ok = RegisterFunction(host, "Time.FrameIndex", { ScriptFunctionPin{ "frame", ScriptValueType::Int64, true } }, &FrameIndex) && ok;
     ok = RegisterFunction(host, "Time.FixedStepIndex", { ScriptFunctionPin{ "step", ScriptValueType::Int64, true } }, &FixedStepIndex) && ok;
+    ok = RegisterFunction(host, "Time.Scale", { ScriptFunctionPin{ "scale", ScriptValueType::Float, true } }, &Scale) && ok;
+    ok = RegisterFunction(host, "Time.SetScale", { ScriptFunctionPin{ "scale", ScriptValueType::Float, false } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetScale) && ok;
     return ok;
 }
 

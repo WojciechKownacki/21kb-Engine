@@ -79,6 +79,10 @@ bool SceneRuntimeQueries::IsPlaying() const noexcept {
     return SceneRuntimeService::IsPlaying(scene_);
 }
 
+float SceneRuntimeQueries::TimeScale() const noexcept {
+    return SceneRuntimeService::TimeScale(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -184,6 +188,14 @@ bool SceneRuntime::IsPlaying() const noexcept {
 
 void SceneRuntime::SetPlaying(bool playing) noexcept {
     SceneRuntimeService::SetPlaying(scene_, playing);
+}
+
+float SceneRuntime::TimeScale() const noexcept {
+    return SceneRuntimeService::TimeScale(scene_);
+}
+
+void SceneRuntime::SetTimeScale(float scale) noexcept {
+    SceneRuntimeService::SetTimeScale(scene_, scale);
 }
 
 } // namespace kb::scene
