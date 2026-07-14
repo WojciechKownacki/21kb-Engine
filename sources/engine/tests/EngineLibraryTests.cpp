@@ -6,6 +6,7 @@
 #include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
+#include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/library/EngineLibraryComponentDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
@@ -1762,6 +1763,98 @@ void RunLibraryQueryFilterAndOrderTest() {
     kb::tests::Require(visibilityIterated && visibilityVisited == 4, "Engine21kbLibrary Query<VisibilityComponent> must now work (LIB-079 regression fix) — every entity has a Visibility component from creation");
 }
 
+// LIB-080: kb::library::CommandBatch — proves Spawn/Destroy/Add<T>/
+// Remove<T>/AddTag/RemoveTag all genuinely defer (zero effect on the live
+// world before Flush()), that Flush() actually applies them (including
+// resolving a freshly-Spawned BatchEntity to a real, live entity), that
+// recording commands from INSIDE an open Query<T>::ForEach never throws
+// (the whole reason this type exists), and that Flush() itself DOES throw
+// if called while that same iteration is still open — CommandBatch defers
+// the structural change, it does not bypass the ban on applying one
+// mid-iteration.
+void RunLibraryCommandBatchTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject existingObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchExisting" });
+    const kb::library::EntityHandle existingHandle{ existingObject.Entity(), scene.Id() };
+    const kb::scene::SceneObject toDestroyObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchToDestroy" });
+    const kb::library::EntityHandle toDestroyHandle{ toDestroyObject.Entity(), scene.Id() };
+
+    kb::library::CommandBatch batch{ scene };
+    const kb::library::BatchEntity spawned = batch.Spawn("CommandBatchSpawned");
+    kb::tests::Require(spawned.IsValid(), "Engine21kbLibrary CommandBatch::Spawn must return a valid (though not-yet-real) BatchEntity");
+
+    batch.Add<kb::scene::CameraComponent>(spawned, kb::scene::CameraComponent{ .verticalFovDegrees = 45.0F });
+    batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F });
+    batch.Destroy(toDestroyHandle);
+    kb::tests::Require(batch.AddTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::AddTag must succeed for a live handle");
+
+    // Nothing must have applied yet — the whole point of a command batch.
+    kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Add<T> must not apply anything before Flush()");
+    kb::tests::Require(scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must not apply anything before Flush()");
+    kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::AddTag must not apply anything before Flush()");
+
+    const kb::ecs::CommandBufferPlaybackResult result = batch.Flush();
+    kb::tests::Require(result.CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
+    const kb::ecs::Entity resolvedSpawned = result.Resolve(spawned.Raw());
+    kb::tests::Require(resolvedSpawned.IsValid() && scene.Entities().IsAlive(resolvedSpawned), "Engine21kbLibrary CommandBatch::Flush must resolve Spawn's BatchEntity to a real, live entity");
+    const kb::scene::CameraComponent* spawnedCamera = scene.Components().Cameras().TryGet(resolvedSpawned);
+    kb::tests::Require(spawnedCamera != nullptr && kb::tests::NearlyEqual(spawnedCamera->verticalFovDegrees, 45.0F), "Engine21kbLibrary CommandBatch::Add<T> on a BatchEntity must apply to the resolved real entity after Flush()");
+    const kb::scene::CameraComponent* existingCamera = scene.Components().Cameras().TryGet(existingObject.Entity());
+    kb::tests::Require(existingCamera != nullptr && kb::tests::NearlyEqual(existingCamera->verticalFovDegrees, 77.0F), "Engine21kbLibrary CommandBatch::Add<T> on an EntityHandle must apply after Flush()");
+    kb::tests::Require(!scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must apply after Flush()");
+    const kb::scene::TagsComponent* tagsAfterAdd = scene.Components().Tags().TryGet(existingObject.Entity());
+    kb::tests::Require(tagsAfterAdd != nullptr && kb::scene::TagsText(*tagsAfterAdd) == "Enemy", "Engine21kbLibrary CommandBatch::AddTag must apply after Flush()");
+
+    kb::library::CommandBatch removeTagBatch{ scene };
+    kb::tests::Require(removeTagBatch.RemoveTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::RemoveTag must succeed for a live handle with that tag");
+    static_cast<void>(removeTagBatch.Flush());
+    kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::RemoveTag removing the only tag must leave no TagsComponent, matching World.SetTag's existing convention");
+
+    kb::library::CommandBatch removeComponentBatch{ scene };
+    removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle);
+    static_cast<void>(removeComponentBatch.Flush());
+    kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Remove<T> must apply after Flush()");
+
+    kb::library::CommandBatch deadHandleBatch{ scene };
+    kb::tests::Require(!deadHandleBatch.AddTag(toDestroyHandle, "X"), "Engine21kbLibrary CommandBatch::AddTag on a destroyed entity must report false, not throw or queue a command");
+
+    // Recording from inside an open Query<T>::ForEach must never throw —
+    // this IS the mechanism LIB-078/079's structural-change ban expects a
+    // script to use instead of an immediate, rejected mutation.
+    const kb::scene::SceneObject queryTargetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchQueryTarget" });
+    scene.Components().Cameras().Set(queryTargetObject.Entity(), kb::scene::CameraComponent{});
+    kb::library::CommandBatch recordDuringQueryBatch{ scene };
+    int recordedInsideLoop = 0;
+    kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+                            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+                                recordDuringQueryBatch.Destroy(entity);
+                                ++recordedInsideLoop;
+                            }),
+        "Engine21kbLibrary CommandBatch test's Query<T>::ForEach must actually iterate");
+    kb::tests::Require(recordedInsideLoop > 0, "Engine21kbLibrary CommandBatch recording from inside a Query<T>::ForEach visitor must not be silently skipped");
+    kb::tests::Require(scene.Entities().IsAlive(queryTargetObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy recorded inside a Query loop must not apply until Flush() is called");
+    static_cast<void>(recordDuringQueryBatch.Flush());
+    kb::tests::Require(!scene.Entities().IsAlive(queryTargetObject.Entity()), "Engine21kbLibrary CommandBatch::Flush() called AFTER the Query loop has closed must apply the recorded Destroy");
+
+    // Flush() itself, called WHILE the iteration is still open, must throw
+    // — CommandBatch defers the change, it does not bypass the ban on
+    // applying one mid-iteration.
+    const kb::scene::SceneObject secondQueryTargetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchFlushInsideTarget" });
+    scene.Components().Cameras().Set(secondQueryTargetObject.Entity(), kb::scene::CameraComponent{});
+    kb::library::CommandBatch flushInsideQueryBatch{ scene };
+    bool flushInsideQueryThrew = false;
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+            flushInsideQueryBatch.Destroy(entity);
+            try {
+                static_cast<void>(flushInsideQueryBatch.Flush());
+            } catch (const std::logic_error&) {
+                flushInsideQueryThrew = true;
+            }
+        }));
+    kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -2053,6 +2146,7 @@ void RunEngineLibraryTests() {
     RunEngineLibraryComponentRegistryTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
+    RunLibraryCommandBatchTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
