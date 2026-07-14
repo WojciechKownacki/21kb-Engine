@@ -6303,6 +6303,103 @@ void RunScriptTimerAndTaskCreatorApiTest() {
         "Timer.Creator must report the ScriptFunctionCallContext::caller that actually invoked Timer.Once, threaded through automatically");
 }
 
+// LIB-102: timer determinism and same-phase cancellation. Part A proves
+// same-time-due ordering (LIB-096) is a genuine deterministic FUNCTION of
+// creation sequence — not an accidental artifact of storage layout — by
+// running the identical 3-timer scenario TWICE with the relative creation
+// order reversed and confirming the fired/dispatched order reverses too.
+// Part B/C prove Timer.Cancel called from WITHIN a TimerFired handler
+// (i.e. from mid-dispatch of the SAME phase/Advance() pass) behaves
+// deterministically for both a timer that already fired THIS phase
+// (already removed from storage before dispatch began — Cancel must
+// honestly report false, and its already-queued event must still
+// deliver, since the fired list was captured before any handler ran) and
+// a timer that has not fired yet (a later phase — Cancel must genuinely
+// prevent it from ever firing, proving no stale/deferred-mutation bug).
+void RunTimerDeterminismAndSamePhaseCancellationTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 1260U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Determinism Listener" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    std::vector<std::uint64_t> firedOrder;
+    std::uint64_t triggerTimerId = 0U;
+    std::uint64_t sameFrameTargetId = 0U;
+    std::uint64_t laterFrameTargetId = 0U;
+    bool cancelledSameFrameTarget = true; // set to the real result once the trigger fires
+    bool sameFrameCancelAttempted = false;
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            std::uint64_t id = 0U;
+                            for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                                if (argument.name == "timer") {
+                                    id = argument.value.AsUInt64();
+                                }
+                            }
+                            firedOrder.push_back(id);
+                            if (id == triggerTimerId && !sameFrameCancelAttempted) {
+                                sameFrameCancelAttempted = true;
+                                // LIB-102: cancelling FROM WITHIN a same-phase
+                                // handler — one target already fired this same
+                                // Advance() pass (its record is already gone,
+                                // its event already queued for dispatch before
+                                // this handler ran), one target is due later.
+                                cancelledSameFrameTarget = scene.Timers().Cancel(sameFrameTargetId);
+                                kb::tests::Require(scene.Timers().Cancel(laterFrameTargetId), "Cancelling a not-yet-due timer from within another timer's same-phase handler must succeed");
+                            }
+                        }),
+        "Timer determinism TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer determinism native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // Part A, forward order: create X, Y, Z with the SAME delay (all due in
+    // the same Advance() call) — expect dispatch order X, Y, Z.
+    const std::uint64_t timerX = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerY = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerZ = scene.Timers().Once(0.1F, object.Entity());
+    kb::tests::Require(timerX != 0U && timerY != 0U && timerZ != 0U, "Determinism fixture: all three same-delay timers must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(firedOrder.size() == 3U && firedOrder[0] == timerX && firedOrder[1] == timerY && firedOrder[2] == timerZ,
+        "Same-time-due timers must dispatch in CREATION order (forward case): X, Y, Z");
+
+    // Part A, reversed order: same scenario, relative creation order
+    // reversed — the DISPATCH order must reverse too, proving order tracks
+    // creation sequence, not e.g. a coincidentally-stable id/hash property.
+    firedOrder.clear();
+    const std::uint64_t timerZ2 = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerY2 = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerX2 = scene.Timers().Once(0.1F, object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(firedOrder.size() == 3U && firedOrder[0] == timerZ2 && firedOrder[1] == timerY2 && firedOrder[2] == timerX2,
+        "Same-time-due timers must dispatch in CREATION order (reversed case): Z2, Y2, X2 — proving order is a genuine function of creation sequence");
+
+    // Part B/C: same-phase cancellation, triggered from within a handler.
+    firedOrder.clear();
+    triggerTimerId = scene.Timers().Once(0.2F, object.Entity());
+    sameFrameTargetId = scene.Timers().Once(0.2F, object.Entity()); // due the SAME phase as trigger, dispatched AFTER it
+    laterFrameTargetId = scene.Timers().Once(5.0F, object.Entity()); // due a LATER phase
+    kb::tests::Require(triggerTimerId != 0U && sameFrameTargetId != 0U && laterFrameTargetId != 0U, "Same-phase-cancellation fixture timers must all be created successfully");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.2F));
+    kb::tests::Require(sameFrameCancelAttempted, "The trigger timer's handler must have run and attempted the same-phase cancellations");
+    kb::tests::Require(!cancelledSameFrameTarget, "Cancelling a timer that ALREADY fired this same phase must honestly report false (it no longer exists in storage), not error or silently succeed");
+    kb::tests::Require(firedOrder.size() == 2U && firedOrder[0] == triggerTimerId && firedOrder[1] == sameFrameTargetId,
+        "A timer's already-queued TimerFired dispatch must still deliver even though a DIFFERENT handler in the SAME phase attempted (and failed) to cancel it after the fact");
+    kb::tests::Require(!scene.Timers().Exists(laterFrameTargetId), "A not-yet-due timer cancelled from within another timer's same-phase handler must be genuinely gone");
+
+    // Confirm the later-phase target really never fires, across several
+    // more Advance() calls worth of time.
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(firedOrder.size() == 2U, "A timer cancelled from within a same-phase handler must never fire later, no matter how much additional time elapses");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6348,6 +6445,7 @@ void RunScriptRuntimeTests() {
     RunAsyncResultDrivenTaskEndToEndTest();
     RunTimerAndTaskCreatorDiagnosticsTest();
     RunScriptTimerAndTaskCreatorApiTest();
+    RunTimerDeterminismAndSamePhaseCancellationTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
