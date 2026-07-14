@@ -32,6 +32,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
+#include "engine/script/ScriptEventTaxonomy.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -6400,6 +6401,70 @@ void RunTimerDeterminismAndSamePhaseCancellationTest() {
     kb::tests::Require(firedOrder.size() == 2U, "A timer cancelled from within a same-phase handler must never fire later, no matter how much additional time elapses");
 }
 
+// LIB-103: IsEntityLocalEvent/IsWorldEvent — the canonical, named
+// classifier over ScriptEvent::target, mutually exclusive and exhaustive
+// over the two REAL delivery categories (entity-local, world); verified
+// directly against the actual TimerFired events real Timer.Once/owner-less
+// Timer.Once produce through the real dispatch pipeline, not synthetic
+// ScriptEvent construction, so the test also proves the classifier agrees
+// with what ScriptRuntimeSceneSystem::DispatchFiredTimers ACTUALLY builds.
+void RunScriptEventTaxonomyTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1270U };
+    constexpr kb::assets::AssetId kBroadcastAsset{ 1271U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Taxonomy Owner" });
+    const kb::scene::SceneObject broadcastListener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Taxonomy Broadcast Listener" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(broadcastListener.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kBroadcastAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    bool sawEntityLocal = false;
+    bool sawWorldOnOwnerBehaviour = false;
+    bool sawWorldOnBroadcastBehaviour = false;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            if (kb::script::IsEntityLocalEvent(event)) {
+                                sawEntityLocal = true;
+                                kb::tests::Require(!kb::script::IsWorldEvent(event), "IsEntityLocalEvent and IsWorldEvent must be mutually exclusive for the same event");
+                            } else {
+                                sawWorldOnOwnerBehaviour = true;
+                                kb::tests::Require(kb::script::IsWorldEvent(event), "An event that is not entity-local must be classified as world");
+                            }
+                        }),
+        "Taxonomy owner TimerFired listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kBroadcastAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            kb::tests::Require(kb::script::IsWorldEvent(event) && !kb::script::IsEntityLocalEvent(event), "A broadcast TimerFired reaching an unrelated listener must classify as world, not entity-local");
+                            sawWorldOnBroadcastBehaviour = true;
+                        }),
+        "Taxonomy broadcast TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Taxonomy native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // Entity-local: Timer.Once with an explicit owner — only the owner's
+    // own behaviour observes it, and it must classify as entity-local.
+    const std::uint64_t ownedTimerId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    kb::tests::Require(ownedTimerId != 0U, "Entity-local fixture timer must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(sawEntityLocal, "An owned TimerFired must be observed and classified as entity-local by its owner's own behaviour");
+    kb::tests::Require(!sawWorldOnBroadcastBehaviour, "An owned (entity-local) TimerFired must NOT reach an unrelated behaviour at all");
+
+    // World: Timer.Once with NO owner — reaches every enabled behaviour,
+    // and every one of them must classify it as world.
+    const std::uint64_t broadcastTimerId = scene.Timers().Once(0.1F, kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastTimerId != 0U, "World fixture timer must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(sawWorldOnOwnerBehaviour && sawWorldOnBroadcastBehaviour, "An ownerless TimerFired must broadcast to and be classified as world by EVERY enabled behaviour");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6446,6 +6511,7 @@ void RunScriptRuntimeTests() {
     RunTimerAndTaskCreatorDiagnosticsTest();
     RunScriptTimerAndTaskCreatorApiTest();
     RunTimerDeterminismAndSamePhaseCancellationTest();
+    RunScriptEventTaxonomyTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
