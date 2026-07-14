@@ -15,6 +15,14 @@ std::vector<SceneEntity> SceneHierarchyQueries::ChildEntities(SceneEntity entity
     return SceneHierarchyService::ChildEntities(scene_, entity);
 }
 
+std::size_t SceneHierarchyQueries::ChildCount(SceneEntity entity) const noexcept {
+    return SceneHierarchyService::ChildCount(scene_, entity);
+}
+
+SceneEntity SceneHierarchyQueries::ChildAt(SceneEntity entity, std::size_t index) const noexcept {
+    return SceneHierarchyService::ChildAt(scene_, entity, index);
+}
+
 std::vector<SceneEntity> SceneHierarchyQueries::RootEntities() const {
     return SceneHierarchyService::RootEntities(scene_);
 }
@@ -36,6 +44,14 @@ std::vector<SceneObject> SceneHierarchyAccess::Children(SceneObject object) {
 
 std::vector<SceneEntity> SceneHierarchyAccess::ChildEntities(SceneEntity entity) const {
     return SceneHierarchyService::ChildEntities(scene_, entity);
+}
+
+std::size_t SceneHierarchyAccess::ChildCount(SceneEntity entity) const noexcept {
+    return SceneHierarchyService::ChildCount(scene_, entity);
+}
+
+SceneEntity SceneHierarchyAccess::ChildAt(SceneEntity entity, std::size_t index) const noexcept {
+    return SceneHierarchyService::ChildAt(scene_, entity, index);
 }
 
 std::vector<SceneObject> SceneHierarchyAccess::RootObjects() {

@@ -71,8 +71,16 @@ std::uint64_t SceneRuntimeQueries::FixedStepIndex() const noexcept {
     return SceneRuntimeService::FixedStepIndex(scene_);
 }
 
+double SceneRuntimeQueries::ElapsedSeconds() const noexcept {
+    return SceneRuntimeService::ElapsedSeconds(scene_);
+}
+
 bool SceneRuntimeQueries::IsPlaying() const noexcept {
     return SceneRuntimeService::IsPlaying(scene_);
+}
+
+float SceneRuntimeQueries::TimeScale() const noexcept {
+    return SceneRuntimeService::TimeScale(scene_);
 }
 
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
@@ -170,12 +178,24 @@ std::uint64_t SceneRuntime::FixedStepIndex() const noexcept {
     return SceneRuntimeService::FixedStepIndex(scene_);
 }
 
+double SceneRuntime::ElapsedSeconds() const noexcept {
+    return SceneRuntimeService::ElapsedSeconds(scene_);
+}
+
 bool SceneRuntime::IsPlaying() const noexcept {
     return SceneRuntimeService::IsPlaying(scene_);
 }
 
 void SceneRuntime::SetPlaying(bool playing) noexcept {
     SceneRuntimeService::SetPlaying(scene_, playing);
+}
+
+float SceneRuntime::TimeScale() const noexcept {
+    return SceneRuntimeService::TimeScale(scene_);
+}
+
+void SceneRuntime::SetTimeScale(float scale) noexcept {
+    SceneRuntimeService::SetTimeScale(scene_, scale);
 }
 
 } // namespace kb::scene

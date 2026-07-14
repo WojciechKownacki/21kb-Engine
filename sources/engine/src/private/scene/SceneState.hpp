@@ -93,10 +93,52 @@ public:
     // fixed-step substeps across the scene's whole lifetime.
     std::uint64_t frameIndex = 0U;
     std::uint64_t fixedStepIndex = 0U;
+    // LIB-093: total simulated seconds across the scene's whole lifetime —
+    // accumulates the RAW (unclamped) deltaSeconds passed to every Update()
+    // call, mirroring frameIndex's own "counts every call, unconditionally
+    // including PrefabPrivate scenes" convention (SceneRuntimeService::
+    // Update, SceneRuntime.cpp) rather than only the (possibly clamped)
+    // delta the fixed-step accumulator uses — Elapsed answers "how much
+    // wall-clock-equivalent time has this scene been simulating," not
+    // "how much fixed-step time has been consumed."
+    double elapsedSeconds = 0.0;
     // LIB-065: true by default (a standalone/headless run has no "edit
     // mode" to distinguish from) — an editor sets this false while the
     // scene is being edited rather than simulated, via SetPlaying.
     bool isPlaying = true;
+    // LIB-094: script-visible time multiplier, applied ONLY at the
+    // Time.Delta boundary (ScriptTimeApi.cpp), never to the raw deltaSeconds
+    // threaded through SceneRuntimeService::Update/ScriptRuntimeSceneSystem
+    // — physics/ECS/elapsedSeconds/frameIndex are all deliberately
+    // untouched by this field, so slowing or pausing script-visible time
+    // never distorts the engine's own notion of simulated time. Always
+    // >= 0 (SetTimeScale rejects negative values rather than clamping them
+    // away silently). Default 1.0 = unscaled, matching today's behavior.
+    float timeScale = 1.0F;
+    // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid
+    // (default SceneEntity{}) means "no owner" — TimerFired broadcasts to
+    // every enabled behaviour (LIB-073's untargeted-broadcast convention)
+    // instead of a targeted dispatch. `id` is assigned from nextTimerId,
+    // never reused within a scene's lifetime (same convention as
+    // nextLoadedSceneId above), so a stale id can never collide with a
+    // later, unrelated timer. `intervalSeconds` is only meaningful when
+    // `repeating` is true; a one-shot timer is removed from `timers` the
+    // moment it fires, a repeating one has `remainingSeconds` reset to
+    // `intervalSeconds` and stays alive. `paused` freezes `remainingSeconds`
+    // exactly (SceneTimerService::Advance skips decrementing it) — mirrors
+    // ScriptRuntimeSceneSystem's own FixedTick-during-scene-pause rule
+    // (LIB-094): no debt accumulates while paused, no catch-up burst on
+    // resume.
+    struct TimerRecord {
+        std::uint64_t id = 0U;
+        SceneEntity owner{};
+        float remainingSeconds = 0.0F;
+        float intervalSeconds = 0.0F;
+        bool repeating = false;
+        bool paused = false;
+    };
+    std::vector<TimerRecord> timers;
+    std::uint64_t nextTimerId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;

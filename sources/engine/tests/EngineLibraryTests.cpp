@@ -6,7 +6,11 @@
 #include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
+#include "engine/library/EngineLibraryCommandBatch.hpp"
+#include "engine/library/EngineLibraryComponentChangeTracker.hpp"
+#include "engine/library/EngineLibraryTransformChangeTracker.hpp"
 #include "engine/library/EngineLibraryComponentDesc.hpp"
+#include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
@@ -22,6 +26,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
+#include "engine/library/EngineLibraryQuery.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
 #include "engine/library/EngineLibraryTextEncoding.hpp"
@@ -34,6 +39,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
@@ -146,6 +152,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Audio.Play",
         "World.FindByName",
         "Time.Delta",
+        "Timer.Once",
         "Physics.Raycast",
         "Transform.GetPosition",
         "Math.Clamp",
@@ -169,7 +176,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 8U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 9U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -181,8 +188,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Physics", "Transform", "Math", "Scene" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly eight domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Physics", "Transform", "Math", "Scene" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly nine domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -1606,6 +1613,619 @@ void RunEngineLibraryComponentRegistryTest() {
     }
 }
 
+// LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
+// new UI-facing metadata catalog (displayName/category per component,
+// displayName/tooltip per field) exactly matches the two existing sources
+// of truth it is keyed against — ScriptSceneComponentApi::ComponentNames()/
+// ComponentProperties() (LIB-077) — with zero drift in either direction
+// (missing entry or stale extra entry both fail this test), and that every
+// entry actually carries non-empty presentation text rather than a
+// placeholder.
+void RunComponentInspectorDescCatalogTest() {
+    const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
+    const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
+
+    kb::tests::Require(catalog.size() == scriptComponentNames.size(),
+        "Engine21kbLibrary component inspector catalog must cover exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
+
+    std::size_t fieldsChecked = 0U;
+    for (const std::string_view scriptName : scriptComponentNames) {
+        const kb::library::LibraryComponentInspectorDesc* componentDesc = kb::library::EngineLibraryComponentInspectorRegistry::Find(scriptName);
+        kb::tests::Require(componentDesc != nullptr, "Engine21kbLibrary component inspector catalog is missing an entry for a component ScriptSceneComponentApi.cpp already gates Lua/VisualGraph access behind");
+        kb::tests::Require(!componentDesc->displayName.empty(), "Engine21kbLibrary component inspector entry must have a non-empty displayName");
+        kb::tests::Require(!componentDesc->category.empty(), "Engine21kbLibrary component inspector entry must have a non-empty category");
+
+        const std::span<const kb::script::ScriptSceneComponentPropertyDesc> scriptProperties = kb::script::ScriptSceneComponentApi::ComponentProperties(scriptName);
+        kb::tests::Require(componentDesc->fields.size() == scriptProperties.size(),
+            "Engine21kbLibrary component inspector entry must catalog exactly the same field count ScriptSceneComponentApi::ComponentProperties() reports for that component");
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : scriptProperties) {
+            ++fieldsChecked;
+            const kb::library::LibraryComponentInspectorFieldDesc* fieldDesc = kb::library::EngineLibraryComponentInspectorRegistry::FindField(scriptName, property.name);
+            const std::string fieldLabel = std::string{ scriptName } + "." + std::string{ property.name };
+            kb::tests::Require(fieldDesc != nullptr, ("Engine21kbLibrary component inspector catalog is missing a field entry for " + fieldLabel).c_str());
+            kb::tests::Require(!fieldDesc->displayName.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty displayName for " + fieldLabel).c_str());
+            kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
+        }
+    }
+    kb::tests::Require(fieldsChecked == 37U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (37) across all 6 components");
+
+    for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
+        const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
+        kb::tests::Require(foundInScriptNames, "Engine21kbLibrary component inspector catalog names a component ScriptSceneComponentApi.cpp does not gate Lua/VisualGraph access behind — the two must never drift apart");
+    }
+
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::Find("NoSuchComponent") == nullptr, "Engine21kbLibrary component inspector catalog Find() must return nullptr for an unregistered component name");
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::FindField("Camera", "NoSuchField") == nullptr, "Engine21kbLibrary component inspector catalog FindField() must return nullptr for an unregistered field name");
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::FindField("NoSuchComponent", "projection") == nullptr, "Engine21kbLibrary component inspector catalog FindField() must return nullptr for an unregistered component name");
+}
+
+// LIB-078: kb::library::Query<T>::ForEach — proves the phase gate (reusing
+// LIB-007's ClassifyLifecycleContext, not a new classification), that the
+// visitor receives real component data for a real live entity, and that a
+// structural change attempted from INSIDE the visitor genuinely throws
+// (kb::ecs::StructuralChangeValidator, entered via the same
+// kb::ecs::World the Scene wraps — not a new guard) rather than
+// corrupting iteration state, AND that the RAII guard is still released
+// after that exception (iteration is not left permanently blocked).
+void RunLibraryQueryPhaseGateTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "QueryGateA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "QueryGateB" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 30.0F });
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 60.0F });
+
+    int visitedTick = 0;
+    float fovSum = 0.0F;
+    const bool tickIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent& camera) {
+            kb::tests::Require(entity.IsAlive(scene), "Engine21kbLibrary Query<T> visited a non-alive entity");
+            ++visitedTick;
+            fovSum += camera.verticalFovDegrees;
+        });
+    kb::tests::Require(tickIterated, "Engine21kbLibrary Query<T>::ForEach must iterate during Tick (a Frame-classified phase)");
+    kb::tests::Require(visitedTick == 2, "Engine21kbLibrary Query<T>::ForEach did not visit all matching entities");
+    kb::tests::Require(kb::tests::NearlyEqual(fovSum, 90.0F), "Engine21kbLibrary Query<T>::ForEach did not pass real component data to the visitor");
+
+    int visitedCreated = 0;
+    const bool createdIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Created,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++visitedCreated; });
+    kb::tests::Require(!createdIterated, "Engine21kbLibrary Query<T>::ForEach must refuse to iterate during Created (a Behaviour-classified phase)");
+    kb::tests::Require(visitedCreated == 0, "Engine21kbLibrary Query<T>::ForEach must never call the visitor when refusing to iterate");
+
+    bool threw = false;
+    try {
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) {
+                static_cast<void>(scene.Entities().CreateEntity());
+            }));
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "Engine21kbLibrary Query<T>::ForEach must let a structural change attempted from inside the visitor throw std::logic_error");
+
+    int visitedAfterThrow = 0;
+    const bool iteratedAfterThrow = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++visitedAfterThrow; });
+    kb::tests::Require(iteratedAfterThrow && visitedAfterThrow == 2,
+        "Engine21kbLibrary Query<T>::ForEach's RAII iteration guard must be released even after the visitor throws, not leave the world permanently refusing structural changes");
+}
+
+// LIB-079: Query.With/Without/Any/ChangedSince/Enabled + stable order —
+// proves each filter modifier against a real, differentiated population,
+// not just that the API compiles. Also proves the LIB-079 refactor (kb::
+// ecs::World::CreateQuery<T> instead of kb::scene per-type visitors)
+// genuinely covers VisibilityComponent, which LIB-078 had to exclude.
+void RunLibraryQueryFilterAndOrderTest() {
+    kb::scene::Scene scene;
+    // A: Camera + Light, active.
+    // B: Camera only, active.
+    // C: Camera + Behaviour, INACTIVE (SetActive(false)).
+    // D: Camera + Light + Behaviour, active.
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterB" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterC" });
+    const kb::scene::SceneObject objectD = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterD" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
+    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{});
+    scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectD.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 2U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Entities().SetActive(objectC.Entity(), false);
+
+    const auto namesOf = [&](const std::vector<kb::scene::SceneEntity>& entities) {
+        std::vector<std::string> names;
+        names.reserve(entities.size());
+        for (const kb::scene::SceneEntity entity : entities) {
+            names.push_back(scene.Entities().Name(entity));
+        }
+        std::ranges::sort(names);
+        return names;
+    };
+
+    // With<LightComponent>(): only A and D have both Camera and Light.
+    std::vector<kb::scene::SceneEntity> withResult;
+    kb::library::QueryFilterOptions withOptions;
+    withOptions.With<kb::scene::LightComponent>();
+    kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, withOptions,
+                            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { withResult.push_back(entity.Entity()); }),
+        "Engine21kbLibrary Query.With must still iterate during Tick");
+    kb::tests::Require(namesOf(withResult) == std::vector<std::string>{ "FilterA", "FilterD" }, "Engine21kbLibrary Query.With<LightComponent> must select exactly the entities that also have Light");
+
+    // Without<BehaviourComponent>(): only A and B lack Behaviour.
+    std::vector<kb::scene::SceneEntity> withoutResult;
+    kb::library::QueryFilterOptions withoutOptions;
+    withoutOptions.Without<kb::scene::BehaviourComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, withoutOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { withoutResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(withoutResult) == std::vector<std::string>{ "FilterA", "FilterB" }, "Engine21kbLibrary Query.Without<BehaviourComponent> must exclude every entity that has Behaviour");
+
+    // Any<LightComponent, BehaviourComponent>(): A (Light), C (Behaviour), D (both) — not B (neither).
+    std::vector<kb::scene::SceneEntity> anyResult;
+    kb::library::QueryFilterOptions anyOptions;
+    anyOptions.Any<kb::scene::LightComponent, kb::scene::BehaviourComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, anyOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { anyResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(anyResult) == std::vector<std::string>{ "FilterA", "FilterC", "FilterD" }, "Engine21kbLibrary Query.Any<Light,Behaviour> must select entities with at least one of the two, excluding the one with neither");
+
+    // Enabled(): C is inactive (SetActive(false)) and must be skipped.
+    std::vector<kb::scene::SceneEntity> enabledResult;
+    kb::library::QueryFilterOptions enabledOptions;
+    enabledOptions.Enabled();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, enabledOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { enabledResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(enabledResult) == std::vector<std::string>{ "FilterA", "FilterB", "FilterD" }, "Engine21kbLibrary Query.Enabled must skip the inactive entity (SceneEntities::IsActive == false)");
+
+    // ChangedSince<CameraComponent>(): every Camera here was just Set(), so all four must be reported as changed.
+    std::vector<kb::scene::SceneEntity> changedResult;
+    kb::library::QueryFilterOptions changedOptions;
+    changedOptions.ChangedSince<kb::scene::CameraComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, changedOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { changedResult.push_back(entity.Entity()); }));
+    kb::tests::Require(changedResult.size() == 4U, "Engine21kbLibrary Query.ChangedSince<CameraComponent> must report a just-Set() component as changed for every matching entity");
+
+    // StableOrder(): two consecutive passes over the same population must
+    // visit entities in the identical order, not just the identical set.
+    kb::library::QueryFilterOptions stableOptions;
+    stableOptions.StableOrder();
+    std::vector<kb::scene::SceneEntity> firstOrder;
+    std::vector<kb::scene::SceneEntity> secondOrder;
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, stableOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { firstOrder.push_back(entity.Entity()); }));
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, stableOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { secondOrder.push_back(entity.Entity()); }));
+    kb::tests::Require(firstOrder.size() == 4U && firstOrder == secondOrder,
+        "Engine21kbLibrary Query.StableOrder must visit entities in the identical order across two consecutive passes over the same population");
+
+    // Regression proof: LIB-078 had to exclude VisibilityComponent (no
+    // kb::scene bulk-iteration primitive existed for it) — the LIB-079
+    // refactor to kb::ecs::World::CreateQuery<T> covers it uniformly with
+    // every other registered scene component, since it is confirmed to be
+    // a real, registered kb::ecs component like the rest.
+    int visibilityVisited = 0;
+    const bool visibilityIterated = kb::library::Query<kb::scene::VisibilityComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::VisibilityComponent&) { ++visibilityVisited; });
+    kb::tests::Require(visibilityIterated && visibilityVisited == 4, "Engine21kbLibrary Query<VisibilityComponent> must now work (LIB-079 regression fix) — every entity has a Visibility component from creation");
+}
+
+// LIB-080: kb::library::CommandBatch — proves Spawn/Destroy/Add<T>/
+// Remove<T>/AddTag/RemoveTag all genuinely defer (zero effect on the live
+// world before Flush()), that Flush() actually applies them (including
+// resolving a freshly-Spawned BatchEntity to a real, live entity), that
+// recording commands from INSIDE an open Query<T>::ForEach never throws
+// (the whole reason this type exists), and that Flush() itself DOES throw
+// if called while that same iteration is still open — CommandBatch defers
+// the structural change, it does not bypass the ban on applying one
+// mid-iteration.
+void RunLibraryCommandBatchTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject existingObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchExisting" });
+    const kb::library::EntityHandle existingHandle{ existingObject.Entity(), scene.Id() };
+    const kb::scene::SceneObject toDestroyObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchToDestroy" });
+    const kb::library::EntityHandle toDestroyHandle{ toDestroyObject.Entity(), scene.Id() };
+
+    kb::library::CommandBatch batch{ scene };
+    const kb::library::BatchEntity spawned = batch.Spawn("CommandBatchSpawned");
+    kb::tests::Require(spawned.IsValid(), "Engine21kbLibrary CommandBatch::Spawn must return a valid (though not-yet-real) BatchEntity");
+
+    batch.Add<kb::scene::CameraComponent>(spawned, kb::scene::CameraComponent{ .verticalFovDegrees = 45.0F });
+    batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F });
+    batch.Destroy(toDestroyHandle);
+    kb::tests::Require(batch.AddTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::AddTag must succeed for a live handle");
+
+    // Nothing must have applied yet — the whole point of a command batch.
+    kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Add<T> must not apply anything before Flush()");
+    kb::tests::Require(scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must not apply anything before Flush()");
+    kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::AddTag must not apply anything before Flush()");
+
+    const kb::ecs::CommandBufferPlaybackResult result = batch.Flush();
+    kb::tests::Require(result.CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
+    const kb::ecs::Entity resolvedSpawned = result.Resolve(spawned.Raw());
+    kb::tests::Require(resolvedSpawned.IsValid() && scene.Entities().IsAlive(resolvedSpawned), "Engine21kbLibrary CommandBatch::Flush must resolve Spawn's BatchEntity to a real, live entity");
+    const kb::scene::CameraComponent* spawnedCamera = scene.Components().Cameras().TryGet(resolvedSpawned);
+    kb::tests::Require(spawnedCamera != nullptr && kb::tests::NearlyEqual(spawnedCamera->verticalFovDegrees, 45.0F), "Engine21kbLibrary CommandBatch::Add<T> on a BatchEntity must apply to the resolved real entity after Flush()");
+    const kb::scene::CameraComponent* existingCamera = scene.Components().Cameras().TryGet(existingObject.Entity());
+    kb::tests::Require(existingCamera != nullptr && kb::tests::NearlyEqual(existingCamera->verticalFovDegrees, 77.0F), "Engine21kbLibrary CommandBatch::Add<T> on an EntityHandle must apply after Flush()");
+    kb::tests::Require(!scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must apply after Flush()");
+    const kb::scene::TagsComponent* tagsAfterAdd = scene.Components().Tags().TryGet(existingObject.Entity());
+    kb::tests::Require(tagsAfterAdd != nullptr && kb::scene::TagsText(*tagsAfterAdd) == "Enemy", "Engine21kbLibrary CommandBatch::AddTag must apply after Flush()");
+
+    kb::library::CommandBatch removeTagBatch{ scene };
+    kb::tests::Require(removeTagBatch.RemoveTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::RemoveTag must succeed for a live handle with that tag");
+    static_cast<void>(removeTagBatch.Flush());
+    kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::RemoveTag removing the only tag must leave no TagsComponent, matching World.SetTag's existing convention");
+
+    kb::library::CommandBatch removeComponentBatch{ scene };
+    removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle);
+    static_cast<void>(removeComponentBatch.Flush());
+    kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Remove<T> must apply after Flush()");
+
+    kb::library::CommandBatch deadHandleBatch{ scene };
+    kb::tests::Require(!deadHandleBatch.AddTag(toDestroyHandle, "X"), "Engine21kbLibrary CommandBatch::AddTag on a destroyed entity must report false, not throw or queue a command");
+
+    // Recording from inside an open Query<T>::ForEach must never throw —
+    // this IS the mechanism LIB-078/079's structural-change ban expects a
+    // script to use instead of an immediate, rejected mutation.
+    const kb::scene::SceneObject queryTargetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchQueryTarget" });
+    scene.Components().Cameras().Set(queryTargetObject.Entity(), kb::scene::CameraComponent{});
+    kb::library::CommandBatch recordDuringQueryBatch{ scene };
+    int recordedInsideLoop = 0;
+    kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+                            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+                                recordDuringQueryBatch.Destroy(entity);
+                                ++recordedInsideLoop;
+                            }),
+        "Engine21kbLibrary CommandBatch test's Query<T>::ForEach must actually iterate");
+    kb::tests::Require(recordedInsideLoop > 0, "Engine21kbLibrary CommandBatch recording from inside a Query<T>::ForEach visitor must not be silently skipped");
+    kb::tests::Require(scene.Entities().IsAlive(queryTargetObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy recorded inside a Query loop must not apply until Flush() is called");
+    static_cast<void>(recordDuringQueryBatch.Flush());
+    kb::tests::Require(!scene.Entities().IsAlive(queryTargetObject.Entity()), "Engine21kbLibrary CommandBatch::Flush() called AFTER the Query loop has closed must apply the recorded Destroy");
+
+    // Flush() itself, called WHILE the iteration is still open, must throw
+    // — CommandBatch defers the change, it does not bypass the ban on
+    // applying one mid-iteration.
+    const kb::scene::SceneObject secondQueryTargetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchFlushInsideTarget" });
+    scene.Components().Cameras().Set(secondQueryTargetObject.Entity(), kb::scene::CameraComponent{});
+    kb::library::CommandBatch flushInsideQueryBatch{ scene };
+    bool flushInsideQueryThrew = false;
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+            flushInsideQueryBatch.Destroy(entity);
+            try {
+                static_cast<void>(flushInsideQueryBatch.Flush());
+            } catch (const std::logic_error&) {
+                flushInsideQueryThrew = true;
+            }
+        }));
+    kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+}
+
+// LIB-081: kb::library::ComponentChangeTracker<Component> — proves the
+// wrapper around World::ObserveComponent<T> genuinely adds the three
+// properties that primitive itself does not have: coalescing (repeated
+// Set() calls on the same entity before Drain() collapse into one pending
+// entry, even though ObserveComponent fires once per raw Set — confirmed by
+// EcsEventTests.cpp::RunComponentObserverTest), a hard capacity limit
+// honestly reported via DroppedCount() instead of growing unboundedly or
+// silently discarding, and a Drain() that resets the baseline for the next
+// round.
+void RunComponentChangeTrackerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerB" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerC" });
+    const kb::scene::SceneObject objectD = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerD" });
+
+    kb::library::ComponentChangeTracker<kb::scene::CameraComponent> tracker{ scene, 3U };
+    kb::tests::Require(tracker.Capacity() == 3U, "Engine21kbLibrary ComponentChangeTracker::Capacity must report the constructor-provided capacity");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary ComponentChangeTracker must start with no pending changes");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary ComponentChangeTracker must start with no dropped changes");
+
+    // Two Set() calls on the SAME entity before Drain() must coalesce into
+    // exactly one pending entry, not two.
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 10.0F });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 20.0F });
+    kb::tests::Require(tracker.PendingChanges().size() == 1U, "Engine21kbLibrary ComponentChangeTracker must coalesce repeated modifications of the same entity into one pending entry");
+    kb::tests::Require(tracker.PendingChanges()[0] == objectA.Entity(), "Engine21kbLibrary ComponentChangeTracker's single coalesced entry must be the modified entity");
+
+    // Filling up to capacity (B, C) must still record; a 4th distinct
+    // entity (D) once capacity is reached must be dropped, honestly
+    // counted rather than silently lost or grown unboundedly.
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.PendingChanges().size() == 3U, "Engine21kbLibrary ComponentChangeTracker must record distinct entities up to capacity");
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.PendingChanges().size() == 3U, "Engine21kbLibrary ComponentChangeTracker must not exceed its capacity");
+    kb::tests::Require(tracker.DroppedCount() == 1U, "Engine21kbLibrary ComponentChangeTracker must honestly count a modification dropped due to the capacity limit");
+
+    // A repeat Set() on an entity that was already dropped this round must
+    // also count as dropped (it is still not being recorded), not silently
+    // ignored without accounting.
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.DroppedCount() == 2U, "Engine21kbLibrary ComponentChangeTracker must count every dropped modification, not just the first one");
+
+    const std::vector<kb::scene::SceneEntity> drained = tracker.Drain();
+    kb::tests::Require(drained.size() == 3U, "Engine21kbLibrary ComponentChangeTracker::Drain must return every distinct pending entity");
+    std::vector<kb::scene::SceneEntity> sortedDrained = drained;
+    std::ranges::sort(sortedDrained);
+    std::vector<kb::scene::SceneEntity> expected{ objectA.Entity(), objectB.Entity(), objectC.Entity() };
+    std::ranges::sort(expected);
+    kb::tests::Require(sortedDrained == expected, "Engine21kbLibrary ComponentChangeTracker::Drain must return exactly the entities recorded since the last Drain (A, B, C — not D, which was dropped)");
+
+    // Drain() must reset the baseline: pending list and dropped count both
+    // clear, and a FRESH change to a previously-drained entity must be
+    // recorded again, not treated as already-seen.
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary ComponentChangeTracker::Drain must clear the pending list");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary ComponentChangeTracker::Drain must reset the dropped count");
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 30.0F });
+    kb::tests::Require(tracker.PendingChanges().size() == 1U && tracker.PendingChanges()[0] == objectA.Entity(),
+        "Engine21kbLibrary ComponentChangeTracker must record a fresh modification to a previously-drained entity as new, using Drain() as the new baseline");
+
+    // Destructor must cleanly DestroyObserver — scoping a second tracker,
+    // letting it go out of scope, then mutating the observed component
+    // again must not crash the process.
+    {
+        kb::library::ComponentChangeTracker<kb::scene::CameraComponent> scopedTracker{ scene, 4U };
+        scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 40.0F });
+        kb::tests::Require(scopedTracker.PendingChanges().size() == 1U, "Engine21kbLibrary ComponentChangeTracker (scoped) must record while alive");
+    }
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 50.0F });
+    kb::tests::Require(true, "Engine21kbLibrary ComponentChangeTracker destructor must not crash on DestroyObserver after scope exit");
+}
+
+// LIB-090: kb::library::TransformChangeTracker — proves the local/world
+// classification is correct against real Set()/hierarchy-cascade
+// scenarios, not just that it compiles: (a) a genuine LOCAL-only change to
+// an entity, BEFORE any sync, classifies Local (the world hasn't been
+// recomputed yet, so it can't be anything else); (b) after a sync, that
+// SAME directly-modified entity has also received its own deferred world
+// recompute and coalesces (widens) to Both; (c) a PARENT move that
+// cascades to its children (whose OWN local data never changed) classifies
+// EACH child as World-only — proving a parent-with-N-children move
+// produces N+1 *coalesced* entries (parent Both, each child World), not
+// N+1 unbounded raw firings, and not silently hidden fan-out either; (d)
+// Drain() resets the baseline; (e) capacity/DroppedCount() mirrors LIB-081's
+// own ComponentChangeTracker test; (f) destructor/RAII safety.
+void RunTransformChangeTrackerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeParent" });
+    const kb::scene::SceneObject childA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeChildA" });
+    const kb::scene::SceneObject childB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeChildB" });
+    kb::tests::Require(scene.Hierarchy().SetParent(childA.Entity(), parentObject.Entity()), "TransformChangeTracker fixture could not parent childA");
+    kb::tests::Require(scene.Hierarchy().SetParent(childB.Entity(), parentObject.Entity()), "TransformChangeTracker fixture could not parent childB");
+    static_cast<void>(scene.Runtime().Update(0.0F)); // Establish a clean, fully-synced baseline before tracking starts.
+
+    kb::library::TransformChangeTracker tracker{ scene, 8U };
+    kb::tests::Require(tracker.Capacity() == 8U, "Engine21kbLibrary TransformChangeTracker::Capacity must report the constructor-provided capacity");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary TransformChangeTracker must start with no pending changes");
+
+    // (a) A genuine local-only change, BEFORE any sync, must classify
+    // Local.
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parentObject.Entity());
+    parentTransform.localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parentObject.Entity(), parentTransform);
+    kb::tests::Require(tracker.PendingChanges().size() == 1U, "Engine21kbLibrary TransformChangeTracker must record exactly one pending entry after one Set()");
+    kb::tests::Require(tracker.PendingChanges()[0].entity == parentObject.Entity() && tracker.PendingChanges()[0].kind == kb::library::TransformChangeKind::Local,
+        "Engine21kbLibrary TransformChangeTracker must classify a pre-sync local write as Local");
+
+    // (b)+(c) Sync — the parent's OWN world recompute (a second, later
+    // firing for the SAME entity) must widen it to Both; the two children,
+    // whose local data never changed, get exactly ONE firing each (World)
+    // from the cascade.
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::span<const kb::library::TransformChangeEntry> afterSync = tracker.PendingChanges();
+    kb::tests::Require(afterSync.size() == 3U, "Engine21kbLibrary TransformChangeTracker must have exactly 3 pending entries after the sync cascades to 2 children (parent + 2 children, coalesced, not raw per-firing counts)");
+
+    const auto findEntry = [&](kb::scene::SceneEntity entity) -> const kb::library::TransformChangeEntry* {
+        for (const kb::library::TransformChangeEntry& entry : afterSync) {
+            if (entry.entity == entity) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    };
+    const kb::library::TransformChangeEntry* parentEntry = findEntry(parentObject.Entity());
+    const kb::library::TransformChangeEntry* childAEntry = findEntry(childA.Entity());
+    const kb::library::TransformChangeEntry* childBEntry = findEntry(childB.Entity());
+    kb::tests::Require(parentEntry != nullptr && parentEntry->kind == kb::library::TransformChangeKind::Both,
+        "Engine21kbLibrary TransformChangeTracker must widen the directly-modified parent to Both once its own deferred world recompute fires");
+    kb::tests::Require(childAEntry != nullptr && childAEntry->kind == kb::library::TransformChangeKind::World,
+        "Engine21kbLibrary TransformChangeTracker must classify a cascade-only child (local data never changed) as World, not Local or Both");
+    kb::tests::Require(childBEntry != nullptr && childBEntry->kind == kb::library::TransformChangeKind::World,
+        "Engine21kbLibrary TransformChangeTracker must classify EVERY cascade-only child as World, not just the first one found");
+
+    // (d) Drain resets the baseline.
+    const std::vector<kb::library::TransformChangeEntry> drained = tracker.Drain();
+    kb::tests::Require(drained.size() == 3U, "Engine21kbLibrary TransformChangeTracker::Drain must return every entry recorded since the last Drain()");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary TransformChangeTracker::Drain must clear the pending list");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary TransformChangeTracker::Drain must reset the dropped count");
+
+    // (e) Capacity/DroppedCount, mirroring LIB-081's own test: a fresh,
+    // small-capacity tracker, 3 distinct entities each get exactly ONE
+    // local write with NO sync in between (so only Local firings occur,
+    // nothing to coalesce) — the 3rd, over capacity, must be honestly
+    // dropped, not silently absorbed or grown into. The 3 entities are
+    // created BEFORE the tracker (entity creation itself fires a genuine
+    // Modified event for TransformComponent — SceneComponentStorage::
+    // SetDefaults calls SceneTransformComponentStore::Set — so creating
+    // them while the tracker is already observing would itself count
+    // toward capacity).
+    const kb::scene::SceneObject leafX = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafX" });
+    const kb::scene::SceneObject leafY = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafY" });
+    const kb::scene::SceneObject leafZ = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafZ" });
+    {
+        kb::library::TransformChangeTracker smallTracker{ scene, 2U };
+        kb::scene::TransformComponent leafXTransform = scene.Transforms().Get(leafX.Entity());
+        leafXTransform.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafX.Entity(), leafXTransform);
+        kb::scene::TransformComponent leafYTransform = scene.Transforms().Get(leafY.Entity());
+        leafYTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafY.Entity(), leafYTransform);
+        kb::tests::Require(smallTracker.PendingChanges().size() == 2U, "Engine21kbLibrary TransformChangeTracker must record distinct entities up to capacity");
+        kb::scene::TransformComponent leafZTransform = scene.Transforms().Get(leafZ.Entity());
+        leafZTransform.localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafZ.Entity(), leafZTransform);
+        kb::tests::Require(smallTracker.PendingChanges().size() == 2U, "Engine21kbLibrary TransformChangeTracker must not exceed its capacity");
+        kb::tests::Require(smallTracker.DroppedCount() == 1U, "Engine21kbLibrary TransformChangeTracker must honestly count a modification dropped due to the capacity limit");
+    }
+
+    // (f) Destructor RAII safety — scope a tracker, let it go out of
+    // scope, then mutate the observed component again — must not crash.
+    {
+        kb::library::TransformChangeTracker scopedTracker{ scene, 4U };
+        kb::scene::TransformComponent scopedTransform = scene.Transforms().Get(childA.Entity());
+        scopedTransform.localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(childA.Entity(), scopedTransform);
+        kb::tests::Require(scopedTracker.PendingChanges().size() == 1U, "Engine21kbLibrary TransformChangeTracker (scoped) must record while alive");
+    }
+    kb::scene::TransformComponent finalTransform = scene.Transforms().Get(childB.Entity());
+    finalTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(childB.Entity(), finalTransform);
+    kb::tests::Require(true, "Engine21kbLibrary TransformChangeTracker destructor must not crash on DestroyObserver after scope exit");
+}
+
+// LIB-083: three scenarios not covered by LIB-078/079/080's own tests —
+// (1) "query aliasing": kb::ecs::StructuralChangeValidator's
+// activeIterations_ is an ATOMIC COUNTER, not an exclusive lock
+// (EngineLibraryQuery.hpp's own comment claims nested entry is safe but no
+// test proved it) — nests a second, independent Query<T>::ForEach INSIDE
+// an outer one's visitor (same component type, then a different one),
+// proving both iterate correctly, a structural-change attempt in the
+// INNERMOST still throws (the guard is still armed), and iteration is
+// unblocked again once both close (the counter unwinds correctly through
+// two levels, not just one — mirrors RunLibraryQueryPhaseGateTest's own
+// "iteratedAfterThrow" check one level up); (2) "entity destroyed in
+// query": RunLibraryCommandBatchTest already proves a CommandBatch-recorded
+// Destroy() applies (IsAlive()==false) after Flush() — this closes the gap
+// between "not alive" and "not iterated" by running a FRESH Query<T>::
+// ForEach afterward and asserting the destroyed entity is genuinely absent
+// from the visited set, not merely flagged dead; (3) "command flush
+// boundary": kb::ecs::CommandBuffer::Playback's Create->Apply->Destroy
+// phase ordering (destroy always wins regardless of recording order) is
+// already fully proven at the kb::ecs level
+// (EcsCommandBufferTests.cpp::RunCommandBufferDeferredDestroySyncPointTest)
+// — this is a THIN confirming test (per the project's "don't duplicate
+// coverage one layer down" convention, e.g. LIB-080's own writeup) that the
+// guarantee survives the kb::library::CommandBatch wrapper unchanged, in
+// BOTH recording orders (Add-then-Destroy and Destroy-then-Add).
+void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
+    // (1) Query aliasing: nested, concurrently-open Query<T>::ForEach.
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AliasA" });
+        const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AliasB" });
+        scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 11.0F });
+        scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 22.0F });
+        scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
+
+        int outerVisited = 0;
+        int innerSameTypeVisited = 0;
+        int innerOtherTypeVisited = 0;
+        bool innerStructuralChangeThrew = false;
+        const bool outerIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) {
+                ++outerVisited;
+                // Nested query over the SAME component type — proves two
+                // concurrently-open iterations over one component don't
+                // corrupt or block each other (the atomic counter allows
+                // nesting, not just a single active iteration).
+                const bool innerSameIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+                    scene, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++innerSameTypeVisited; });
+                kb::tests::Require(innerSameIterated, "Engine21kbLibrary nested Query<CameraComponent>::ForEach (same type as outer) must still iterate");
+
+                // Nested query over a DIFFERENT component type.
+                const bool innerOtherIterated = kb::library::Query<kb::scene::LightComponent>::ForEach(
+                    scene, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::library::EntityHandle, const kb::scene::LightComponent&) {
+                        ++innerOtherTypeVisited;
+                        // Structural change attempted at the INNERMOST
+                        // nesting level must still throw — the guard must
+                        // remain armed through two levels of nesting, not
+                        // just one.
+                        try {
+                            static_cast<void>(scene.Entities().CreateEntity());
+                        } catch (const std::logic_error&) {
+                            innerStructuralChangeThrew = true;
+                        }
+                    });
+                kb::tests::Require(innerOtherIterated, "Engine21kbLibrary nested Query<LightComponent>::ForEach (different type from outer) must still iterate");
+            });
+        kb::tests::Require(outerIterated && outerVisited == 2, "Engine21kbLibrary outer Query<CameraComponent>::ForEach must visit both entities despite nested queries running inside its visitor");
+        kb::tests::Require(innerSameTypeVisited == 4, "Engine21kbLibrary nested same-type Query must visit both entities on EACH of the 2 outer visits (2*2=4)");
+        kb::tests::Require(innerOtherTypeVisited == 2, "Engine21kbLibrary nested different-type Query must visit its one matching entity on EACH of the 2 outer visits");
+        kb::tests::Require(innerStructuralChangeThrew, "Engine21kbLibrary a structural change attempted at the INNERMOST of two nested Query iterations must still throw std::logic_error");
+
+        // After BOTH nesting levels have closed, iteration must be
+        // unblocked again — the guard's counter must unwind through two
+        // levels, not just one.
+        int afterNestingVisited = 0;
+        const bool afterNestingIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++afterNestingVisited; });
+        kb::tests::Require(afterNestingIterated && afterNestingVisited == 2, "Engine21kbLibrary Query<T>::ForEach must be fully unblocked after two nested iteration levels have both closed");
+    }
+
+    // (2) Entity destroyed in query: a CommandBatch-recorded Destroy(),
+    // applied via Flush() after the recording loop closes, must make the
+    // entity genuinely ABSENT from a subsequent, fresh Query<T>::ForEach —
+    // not merely "not alive" (already proven by RunLibraryCommandBatchTest).
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject survivor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyedInQuerySurvivor" });
+        const kb::scene::SceneObject toDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyedInQueryTarget" });
+        scene.Components().Cameras().Set(survivor.Entity(), kb::scene::CameraComponent{});
+        scene.Components().Cameras().Set(toDestroy.Entity(), kb::scene::CameraComponent{});
+
+        kb::library::CommandBatch batch{ scene };
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+                if (entity.Entity() == toDestroy.Entity()) {
+                    batch.Destroy(entity);
+                }
+            }));
+        static_cast<void>(batch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(toDestroy.Entity()), "Engine21kbLibrary entity-destroyed-in-query setup must actually be dead after Flush()");
+
+        std::vector<kb::scene::SceneEntity> visitedAfterDestroy;
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { visitedAfterDestroy.push_back(entity.Entity()); }));
+        kb::tests::Require(visitedAfterDestroy.size() == 1U && visitedAfterDestroy[0] == survivor.Entity(),
+            "Engine21kbLibrary a FRESH Query<T>::ForEach run after Flush() must never visit an entity destroyed via CommandBatch during a prior query — not just report it as not-alive");
+    }
+
+    // (3) Command flush boundary: Add<T>+Destroy on the SAME entity in one
+    // CommandBatch, in BOTH recording orders — kb::ecs::CommandBuffer's
+    // Create->Apply->Destroy phase ordering (destroy always wins) is
+    // already proven at the kb::ecs level; this confirms the guarantee
+    // survives the CommandBatch wrapper unchanged.
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject addThenDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AddThenDestroy" });
+        const kb::library::EntityHandle addThenDestroyHandle{ addThenDestroy.Entity(), scene.Id() };
+        kb::library::CommandBatch addThenDestroyBatch{ scene };
+        addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F });
+        addThenDestroyBatch.Destroy(addThenDestroyHandle);
+        static_cast<void>(addThenDestroyBatch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(addThenDestroy.Entity()), "Engine21kbLibrary CommandBatch: Add<T> recorded BEFORE Destroy on the same entity must still result in the entity being destroyed after Flush()");
+
+        const kb::scene::SceneObject destroyThenAdd = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyThenAdd" });
+        const kb::library::EntityHandle destroyThenAddHandle{ destroyThenAdd.Entity(), scene.Id() };
+        kb::library::CommandBatch destroyThenAddBatch{ scene };
+        destroyThenAddBatch.Destroy(destroyThenAddHandle);
+        destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F });
+        static_cast<void>(destroyThenAddBatch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(destroyThenAdd.Entity()), "Engine21kbLibrary CommandBatch: Destroy recorded BEFORE Add<T> on the same entity must still result in the entity being destroyed after Flush() — recording order must not change the outcome");
+    }
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -1895,6 +2515,13 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunComponentInspectorDescCatalogTest();
+    RunLibraryQueryPhaseGateTest();
+    RunLibraryQueryFilterAndOrderTest();
+    RunLibraryCommandBatchTest();
+    RunComponentChangeTrackerTest();
+    RunTransformChangeTrackerTest();
+    RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();

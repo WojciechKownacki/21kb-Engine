@@ -16,6 +16,7 @@ void WriteOverride(std::ostream& output, const ScenePrefabPropertyOverride& prop
     output << ScenePrefabAssetFormat::OverridePropertyPathKey << '=' << ScenePrefabAssetEscaper::Escape(property.propertyPath) << '\n';
     output << ScenePrefabAssetFormat::OverrideValueKey << '=' << ScenePrefabAssetEscaper::Escape(property.value) << '\n';
     output << ScenePrefabAssetFormat::OverrideObjectReferenceKey << '=' << property.objectReference.Entity().Id() << '\n';
+    output << ScenePrefabAssetFormat::OverrideObjectReferenceNodeIdKey << '=' << property.objectReferenceNodeId << '\n';
     output << ScenePrefabAssetFormat::OverrideFlagKey << '=' << static_cast<std::uint32_t>(property.flag) << '\n';
     output << ScenePrefabAssetFormat::EndOverrideMarker << '\n';
 }

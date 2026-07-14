@@ -102,7 +102,15 @@ public:
     // SceneRuntime::SetPlaying(false).
     [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    // LIB-093: total simulated seconds across the scene's whole lifetime —
+    // see the matching doc comment on SceneState::elapsedSeconds
+    // (SceneState.hpp) for the exact accumulation contract.
+    [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
+    // LIB-094: script-visible time multiplier — see SceneState::timeScale's
+    // own doc comment for the exact scope (applied only at the Time.Delta
+    // boundary, never to engine/physics simulation time).
+    [[nodiscard]] float TimeScale() const noexcept;
 
 private:
     const Scene& scene_;
@@ -114,6 +122,43 @@ public:
 
     void AddSystem(std::unique_ptr<kb::ecs::System> system);
     void AddSceneSystem(std::unique_ptr<SceneSystem> system);
+    // LIB-089: the world-matrix update timing contract — WHEN
+    // TransformComponent::worldPosition/worldRotation/worldScale are
+    // recomputed after a local or parent change, and what each consumer can
+    // rely on WITHOUT calling this explicitly (confirmed against
+    // SceneRuntimeService::Update's actual sync call sites, SceneRuntime.cpp):
+    //  - SCRIPTS (kb::script::ScriptRuntimeSceneSystem, registered via
+    //    AddSceneSystem and run from Update() below): get exactly ONE
+    //    automatic sync per Update() call, BEFORE the scene-system
+    //    scheduler runs. Its FixedTick/Tick/LateTick/BeforeRender/
+    //    AfterRender phases then run back-to-back inside that single
+    //    scheduler pass with NO further automatic sync between them — a
+    //    local/parent change made in one phase is only guaranteed visible
+    //    via world* to a LATER phase in the SAME Update() call after an
+    //    EXPLICIT call to this method. This is the established pattern
+    //    kb::library::Transform.SetWorldPose/SetParent(keepWorld)/LookAt
+    //    already follow when they need a fresh parent (or self) world
+    //    transform.
+    //  - PHYSICS (any SceneSystem whose RequiresFixedStep() is true, e.g.
+    //    JoltPhysicsSceneSystem): Update() calls this BEFORE and AFTER
+    //    EVERY individual fixed step, not just once per Update() call — a
+    //    fixed step's read of world* is always fresh, and any local*/
+    //    world* it writes is fully propagated through the hierarchy before
+    //    the next fixed step (or any later reader) sees it. No manual call
+    //    needed here.
+    //  - RENDERER (kb::renderer::EcsRenderSceneSynchronizer and everything
+    //    it feeds, e.g. Renderer::SubmitSceneToViewport): reads
+    //    TransformComponent::world* directly at submission time and does
+    //    NOT sync itself — it trusts whatever the caller already produced.
+    //    A caller that calls Update() (below) and submits the SAME scene
+    //    to a renderer afterward, in the same frame, sees consistent data
+    //    (Update()'s own unconditional end-of-call sync makes this safe).
+    //    A caller that instead drives script execution SEPARATELY from
+    //    Update() (e.g. calling a ScriptRuntimeSceneSystem's
+    //    ExecuteFrame() directly rather than through AddSceneSystem(), the
+    //    pattern CliRunCommand.cpp uses) is responsible for its OWN call
+    //    to this method before submitting to a renderer — Update()'s
+    //    guarantee does not extend across that split.
     void SynchronizeTransforms();
     void SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept;
     void SetTransformPropagationBudget(SceneTransformPropagationBudget budget) noexcept;
@@ -129,14 +174,25 @@ public:
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
     [[nodiscard]] std::span<const SceneEntity> MeshRendererRenderProxyUpdateEntities() const noexcept;
+    // LIB-089: runs one frame. Calls SynchronizeTransforms() (see its own
+    // doc comment above for the full per-consumer timing contract)
+    // unconditionally before the scene-system scheduler runs, brackets
+    // every individual fixed step with a sync before AND after, and syncs
+    // once more, unconditionally, after the ECS system scheduler and
+    // kb::ecs::World::Progress — so a caller that reads world* or submits
+    // to a renderer immediately after this returns always sees fresh data,
+    // with no separate manual SynchronizeTransforms() call required.
     [[nodiscard]] bool Update(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;
     [[nodiscard]] kb::ecs::World& EcsWorld() noexcept;
     [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
     void SetPlaying(bool playing) noexcept;
+    [[nodiscard]] float TimeScale() const noexcept;
+    void SetTimeScale(float scale) noexcept;
 
 private:
     Scene& scene_;

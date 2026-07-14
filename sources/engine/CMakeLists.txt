@@ -146,6 +146,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
+    include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
     include/engine/scene/SceneSystemContext.hpp
     include/engine/scene/SceneSystemQueryAccess.hpp
@@ -196,6 +197,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
     include/engine/script/ScriptTimeApi.hpp
+    include/engine/script/ScriptTimerApi.hpp
     include/engine/script/ScriptTransformApi.hpp
     include/engine/script/ScriptValue.hpp
     include/engine/script/ScriptWorldApi.hpp
@@ -205,7 +207,10 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryAssetRef.hpp
     include/engine/library/EngineLibraryCollections.hpp
     include/engine/library/EngineLibraryCommandApplication.hpp
+    include/engine/library/EngineLibraryCommandBatch.hpp
+    include/engine/library/EngineLibraryComponentChangeTracker.hpp
     include/engine/library/EngineLibraryComponentDesc.hpp
+    include/engine/library/EngineLibraryComponentInspectorDesc.hpp
     include/engine/library/EngineLibraryDeprecation.hpp
     include/engine/library/EngineLibraryContext.hpp
     include/engine/library/EngineLibraryEntityHandle.hpp
@@ -224,9 +229,11 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryOwnership.hpp
     include/engine/library/EngineLibraryParsing.hpp
     include/engine/library/EngineLibraryPropertyDesc.hpp
+    include/engine/library/EngineLibraryQuery.hpp
     include/engine/library/EngineLibraryScriptComponentAccess.hpp
     include/engine/library/EngineLibraryTextEncoding.hpp
     include/engine/library/EngineLibraryTextFormat.hpp
+    include/engine/library/EngineLibraryTransformChangeTracker.hpp
     include/engine/library/EngineLibraryTypeDesc.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
@@ -386,6 +393,7 @@ add_library(kb_engine STATIC
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
+    src/scene/SceneTimerService.cpp
     src/scene/SceneTransformIterationService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
     src/scene/asset/io/SceneAssetComponentCodec.cpp
@@ -491,6 +499,7 @@ add_library(kb_engine STATIC
     src/scene/modules/ScenePrefabs.cpp
     src/scene/modules/ScenePrefabRegistryModule.cpp
     src/scene/modules/SceneRuntime.cpp
+    src/scene/modules/SceneTimers.cpp
     src/scene/modules/SceneTransforms.cpp
     src/scene/modules/SceneTransformIterationModule.cpp
     src/scene/modules/SceneTransformMutation.cpp
@@ -649,12 +658,14 @@ add_library(kb_engine STATIC
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
     src/script/ScriptTimeApi.cpp
+    src/script/ScriptTimerApi.cpp
     src/script/ScriptTransformApi.cpp
     src/script/ScriptValue.cpp
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
     src/library/EngineLibrary.cpp
     src/library/EngineLibraryComponentDesc.cpp
+    src/library/EngineLibraryComponentInspectorDesc.cpp
     src/library/EngineLibraryDeprecation.cpp
     src/library/EngineLibraryEntityHandle.cpp
     src/library/EngineLibraryFunctionId.cpp
@@ -737,6 +748,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneLoadedContentService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
+    src/private/scene/SceneTimerService.hpp
     src/private/scene/SceneTransformService.hpp
     src/private/scene/assets/SceneAssetLoader.hpp
     src/private/scene/asset/io/SceneAssetFormat.hpp

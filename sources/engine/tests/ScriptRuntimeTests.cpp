@@ -20,6 +20,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
@@ -44,6 +45,7 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -2261,6 +2263,799 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
+// LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
+// Transform.WorldPose/SetWorldPose. Deliberately its own fresh Scene/host
+// (isolated fixture pattern, LIB-067) rather than folding into
+// RunScriptWorldTimePhysicsApiTest above. The core of this test is
+// SetWorldPose's world-to-local back-solve (LIB-085's only genuinely new
+// capability — everything else here is thin ergonomics over pre-existing
+// GetProperty/SetProperty-reachable data): set a WORLD pose on a CHILD
+// entity whose PARENT has a non-trivial world transform (translated AND
+// rotated, not just translated), then prove WorldPose(child) reads back
+// the exact pose that was requested — a round-trip through the real
+// inverse math (kb::math::Inverse, ScriptTransformApi::SetWorldPose), not
+// just "it compiles".
+void RunTransformApiLocalAndWorldPoseTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API local/world pose test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalPosition") != nullptr, "Transform.LocalPosition was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalPosition") != nullptr, "Transform.SetLocalPosition was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalRotation") != nullptr, "Transform.LocalRotation was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalRotation") != nullptr, "Transform.SetLocalRotation was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalScale") != nullptr, "Transform.LocalScale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalScale") != nullptr, "Transform.SetLocalScale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.WorldPose") != nullptr, "Transform.WorldPose was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetWorldPose") != nullptr, "Transform.SetWorldPose was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiSubject" });
+    const kb::script::ScriptFunctionArgument entityArg{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> entityOnlyArgs{ entityArg };
+
+    // LocalPosition/LocalRotation/LocalScale: plain get/set round trip.
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalPositionArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 3.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalPosition = host.Functions().Call("Transform.SetLocalPosition", setLocalPositionArgs, context);
+    kb::tests::Require(setLocalPosition.Succeeded() && setLocalPosition.Output("moved")->AsBool(), "Transform.SetLocalPosition direct call failed");
+    const kb::script::ScriptFunctionCallResult localPosition = host.Functions().Call("Transform.LocalPosition", entityOnlyArgs, context);
+    kb::tests::Require(localPosition.Succeeded() && localPosition.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localPosition.Output("x")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(localPosition.Output("y")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(localPosition.Output("z")->AsFloat(), 3.0F),
+        "Transform.LocalPosition did not round-trip Transform.SetLocalPosition");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalRotationArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 0.7071068F } },
+        kb::script::ScriptFunctionArgument{ "w", kb::script::ScriptValue{ 0.7071068F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalRotation = host.Functions().Call("Transform.SetLocalRotation", setLocalRotationArgs, context);
+    kb::tests::Require(setLocalRotation.Succeeded() && setLocalRotation.Output("moved")->AsBool(), "Transform.SetLocalRotation direct call failed");
+    const kb::script::ScriptFunctionCallResult localRotation = host.Functions().Call("Transform.LocalRotation", entityOnlyArgs, context);
+    kb::tests::Require(localRotation.Succeeded() && localRotation.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localRotation.Output("z")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(localRotation.Output("w")->AsFloat(), 0.7071068F),
+        "Transform.LocalRotation did not round-trip Transform.SetLocalRotation");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalScaleArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 4.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalScale = host.Functions().Call("Transform.SetLocalScale", setLocalScaleArgs, context);
+    kb::tests::Require(setLocalScale.Succeeded() && setLocalScale.Output("moved")->AsBool(), "Transform.SetLocalScale direct call failed");
+    const kb::script::ScriptFunctionCallResult localScale = host.Functions().Call("Transform.LocalScale", entityOnlyArgs, context);
+    kb::tests::Require(localScale.Succeeded() && localScale.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localScale.Output("x")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(localScale.Output("y")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(localScale.Output("z")->AsFloat(), 4.0F),
+        "Transform.LocalScale did not round-trip Transform.SetLocalScale");
+
+    // WorldPose on a ROOT entity must equal its local pose directly
+    // (TransformMath::ComposeRoot copies local straight to world unchanged).
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::script::ScriptFunctionCallResult subjectWorldPose = host.Functions().Call("Transform.WorldPose", entityOnlyArgs, context);
+    kb::tests::Require(subjectWorldPose.Succeeded() && subjectWorldPose.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posX")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posY")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posZ")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("rotZ")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("rotW")->AsFloat(), 0.7071068F),
+        "Transform.WorldPose for a root entity must equal its local pose directly");
+
+    // SetWorldPose's genuinely new capability: back-solve a CHILD's local
+    // pose from a requested WORLD pose, given a PARENT with a non-trivial
+    // world transform (translated AND rotated).
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiParent" });
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parentObject.Entity());
+    parentTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    parentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    scene.Transforms().Set(parentObject.Entity(), parentTransform);
+
+    const kb::scene::SceneObject childObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(childObject.Entity(), parentObject.Entity()), "Transform API world pose test could not parent the child fixture");
+    const kb::script::ScriptFunctionArgument childEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> childEntityOnlyArgs{ childEntityArg };
+
+    const std::vector<kb::script::ScriptFunctionArgument> setWorldPoseArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 6.0F } },
+        kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 7.0F } },
+        kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.7071068F } },
+        kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 0.7071068F } },
+    };
+    const kb::script::ScriptFunctionCallResult setWorldPose = host.Functions().Call("Transform.SetWorldPose", setWorldPoseArgs, context);
+    kb::tests::Require(setWorldPose.Succeeded() && setWorldPose.Output("moved")->AsBool(), "Transform.SetWorldPose direct call failed");
+
+    // The local pose must actually have CHANGED from the requested world
+    // values verbatim — proof the back-solve genuinely computed something,
+    // not merely copied world into local (which would be wrong given this
+    // parent is neither at the origin nor unrotated).
+    const kb::scene::TransformComponent childTransformAfterSet = scene.Transforms().Get(childObject.Entity());
+    kb::tests::Require(!kb::tests::NearlyEqual(childTransformAfterSet.localPosition.x, 5.0F) || !kb::tests::NearlyEqual(childTransformAfterSet.localRotation.w, 0.7071068F),
+        "Transform.SetWorldPose must back-solve a genuinely different LOCAL pose from the requested WORLD pose for a non-trivial parent, not just copy world into local");
+
+    // The real proof: reading WorldPose back immediately (SetWorldPose's
+    // own flush, no separate Update() from the test) must report the
+    // EXACT world pose that was requested.
+    const kb::script::ScriptFunctionCallResult childWorldPoseAfterSet = host.Functions().Call("Transform.WorldPose", childEntityOnlyArgs, context);
+    kb::tests::Require(childWorldPoseAfterSet.Succeeded() && childWorldPoseAfterSet.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posX")->AsFloat(), 5.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posY")->AsFloat(), 6.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posZ")->AsFloat(), 7.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("rotY")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("rotW")->AsFloat(), 0.7071068F),
+        "Transform.SetWorldPose followed immediately by Transform.WorldPose must round-trip to the exact requested world pose, without a separate flush from the caller");
+
+    // Dead entity: every function must fail cleanly, not throw or fabricate data.
+    scene.Entities().Destroy(childObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadLocalPosition = host.Functions().Call("Transform.LocalPosition", childEntityOnlyArgs, context);
+    kb::tests::Require(deadLocalPosition.Succeeded() && !deadLocalPosition.Output("found")->AsBool(), "Transform.LocalPosition on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadSetWorldPose = host.Functions().Call("Transform.SetWorldPose", setWorldPoseArgs, context);
+    kb::tests::Require(deadSetWorldPose.Succeeded() && !deadSetWorldPose.Output("moved")->AsBool(), "Transform.SetWorldPose on a dead entity must report moved=false, not throw");
+}
+
+// LIB-086: Transform.Parent (read) and Transform.SetParent(entity, parent,
+// keepWorld). Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: (1) Transform.Parent reports the real parent
+// (invalid for a root, the actual parent for a child); (2) SetParent
+// WITHOUT keepWorld only reassigns the parent relationship, leaving local
+// pose untouched — the entity's WORLD pose genuinely changes (the "jump"
+// LIB-086's own research confirmed is today's existing behavior); (3)
+// SetParent WITH keepWorld preserves the WORLD pose across the reparent by
+// back-solving a different local pose (reusing SetWorldPose's own
+// WorldPoseToLocal math); (4) cycle detection — inherited unchanged from
+// kb::scene::SceneHierarchyParenting::WouldCreateCycle, NOT reimplemented
+// here — correctly rejects parenting an entity under its own descendant.
+void RunTransformApiParentAndHierarchyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API parent/hierarchy test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.Parent") != nullptr, "Transform.Parent was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetParent") != nullptr, "Transform.SetParent was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // Chain: grandparent -> parent -> child (all roots initially).
+    const kb::scene::SceneObject grandparentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyGrandparent" });
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyParent" });
+    const kb::scene::SceneObject childObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(parentObject.Entity(), grandparentObject.Entity()), "Hierarchy fixture could not parent parent->grandparent");
+    kb::tests::Require(scene.Hierarchy().SetParent(childObject.Entity(), parentObject.Entity()), "Hierarchy fixture could not parent child->parent");
+
+    const kb::script::ScriptFunctionArgument grandparentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ grandparentObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::script::ScriptFunctionArgument childEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> grandparentOnlyArgs{ grandparentEntityArg };
+    const std::vector<kb::script::ScriptFunctionArgument> childOnlyArgs{ childEntityArg };
+
+    // Transform.Parent: a root reports found=true with an invalid parent;
+    // a child reports its real parent.
+    const kb::script::ScriptFunctionCallResult grandparentParent = host.Functions().Call("Transform.Parent", grandparentOnlyArgs, context);
+    kb::tests::Require(grandparentParent.Succeeded() && grandparentParent.Output("found")->AsBool() && !kb::scene::SceneEntity{ grandparentParent.Output("parent")->AsUInt64() }.IsValid(),
+        "Transform.Parent for a root entity must report found=true with an invalid parent");
+    const kb::script::ScriptFunctionCallResult childParent = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(childParent.Succeeded() && childParent.Output("found")->AsBool() && childParent.Output("parent")->AsUInt64() == parentObject.Entity().Id(),
+        "Transform.Parent for a child entity must report its real parent");
+
+    // SetParent WITHOUT keepWorld: reparent grandchild directly under
+    // grandparent — local pose must stay EXACTLY as it was (kb::scene never
+    // touches local* on a plain reparent), so the WORLD pose must actually
+    // CHANGE (grandparent has a different world transform than the old
+    // parent did, by construction: grandparent is at the origin, unrelated
+    // to childObject's local offset).
+    kb::scene::TransformComponent parentTransformSetup = scene.Transforms().Get(parentObject.Entity());
+    parentTransformSetup.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parentObject.Entity(), parentTransformSetup);
+    kb::scene::TransformComponent childTransformSetup = scene.Transforms().Get(childObject.Entity());
+    childTransformSetup.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(childObject.Entity(), childTransformSetup);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const float childWorldXBeforeReparent = scene.Transforms().Get(childObject.Entity()).worldPosition.x;
+    kb::tests::Require(kb::tests::NearlyEqual(childWorldXBeforeReparent, 21.0F), "Hierarchy fixture setup: child's world X must reflect parent(20) + local(1) before any reparent");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reparentNoKeepWorldArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ grandparentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult reparentNoKeepWorld = host.Functions().Call("Transform.SetParent", reparentNoKeepWorldArgs, context);
+    kb::tests::Require(reparentNoKeepWorld.Succeeded() && reparentNoKeepWorld.Output("moved")->AsBool(), "Transform.SetParent (no keepWorld) direct call failed");
+    const kb::script::ScriptFunctionCallResult parentAfterNoKeepWorld = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(parentAfterNoKeepWorld.Output("parent")->AsUInt64() == grandparentObject.Entity().Id(), "Transform.SetParent (no keepWorld) must actually reassign the parent");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
+        "Transform.SetParent WITHOUT keepWorld must leave the local pose untouched");
+    // SetParent WITHOUT keepWorld does not force a sync itself (same lazy
+    // convention as a plain kb::scene reparent) — force one here before
+    // reading worldPosition, so this assertion checks the ACTUAL composed
+    // world pose under the new parent, not a stale cached value from
+    // before the reparent.
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).worldPosition.x, childWorldXBeforeReparent),
+        "Transform.SetParent WITHOUT keepWorld must let the WORLD pose change (the entity 'jumps' under the new parent, since only the parent relationship changed)");
+
+    // SetParent WITH keepWorld: reparent back under the ORIGINAL parent —
+    // the WORLD pose must be preserved (back-solved local compensates),
+    // even though the local pose is now different from either prior value.
+    const std::vector<kb::script::ScriptFunctionArgument> reparentKeepWorldArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ parentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+    };
+    const float childWorldXBeforeKeepWorldReparent = scene.Transforms().Get(childObject.Entity()).worldPosition.x;
+    const kb::script::ScriptFunctionCallResult reparentKeepWorld = host.Functions().Call("Transform.SetParent", reparentKeepWorldArgs, context);
+    kb::tests::Require(reparentKeepWorld.Succeeded() && reparentKeepWorld.Output("moved")->AsBool(), "Transform.SetParent (keepWorld) direct call failed");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).worldPosition.x, childWorldXBeforeKeepWorldReparent),
+        "Transform.SetParent WITH keepWorld must preserve the entity's WORLD pose across the reparent");
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
+        "Transform.SetParent WITH keepWorld must back-solve a genuinely different LOCAL pose to compensate for the new parent, not just copy the old local value");
+
+    // Cycle detection: attempting to parent grandparent (an ANCESTOR of
+    // child, now child's parent again after the keepWorld reparent) under
+    // child (its own DESCENDANT) must be rejected — inherited unchanged
+    // from kb::scene::SceneHierarchyParenting::WouldCreateCycle, not
+    // reimplemented in this script-layer wrapper.
+    const std::vector<kb::script::ScriptFunctionArgument> cycleArgs{
+        grandparentEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult cycleAttempt = host.Functions().Call("Transform.SetParent", cycleArgs, context);
+    kb::tests::Require(cycleAttempt.Succeeded() && !cycleAttempt.Output("moved")->AsBool(), "Transform.SetParent must reject parenting an entity under its own descendant (cycle)");
+    const kb::script::ScriptFunctionCallResult grandparentParentAfterCycleAttempt = host.Functions().Call("Transform.Parent", grandparentOnlyArgs, context);
+    kb::tests::Require(!kb::scene::SceneEntity{ grandparentParentAfterCycleAttempt.Output("parent")->AsUInt64() }.IsValid(),
+        "A rejected cyclic SetParent must leave the hierarchy unchanged — grandparent must still be a root");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(childObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadParent = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(deadParent.Succeeded() && !deadParent.Output("found")->AsBool(), "Transform.Parent on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadSetParent = host.Functions().Call("Transform.SetParent", reparentKeepWorldArgs, context);
+    kb::tests::Require(deadSetParent.Succeeded() && !deadSetParent.Output("moved")->AsBool(), "Transform.SetParent on a dead entity must report moved=false, not throw");
+}
+
+// LIB-087: Transform.ChildCount/GetChild/FindChild — the index-and-loop
+// convention over kb::scene's already O(1)-indexed hierarchy child storage
+// (SceneHierarchyCache, exposed through SceneHierarchyAccess::ChildCount/
+// ChildAt). Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: real counts/lookups against a real
+// multi-child fixture (including a DUPLICATE name, to prove FindChild's
+// skip parameter genuinely walks past a repeat rather than always
+// returning the first match), out-of-range/negative index handling, and
+// dead-entity handling for all three functions.
+void RunTransformApiChildIterationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API child iteration test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.ChildCount") != nullptr, "Transform.ChildCount was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.GetChild") != nullptr, "Transform.GetChild was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.FindChild") != nullptr, "Transform.FindChild was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChildIterationParent" });
+    const kb::scene::SceneObject firstChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Foo" });
+    const kb::scene::SceneObject secondChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Bar" });
+    const kb::scene::SceneObject thirdChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Foo" }); // Duplicate name, on purpose.
+    kb::tests::Require(scene.Hierarchy().SetParent(firstChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent firstChild");
+    kb::tests::Require(scene.Hierarchy().SetParent(secondChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent secondChild");
+    kb::tests::Require(scene.Hierarchy().SetParent(thirdChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent thirdChild");
+
+    const kb::script::ScriptFunctionArgument parentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ parentObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> parentOnlyArgs{ parentEntityArg };
+    const kb::script::ScriptFunctionArgument leafEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ firstChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> leafOnlyArgs{ leafEntityArg };
+
+    // ChildCount: 3 for the parent, 0 for a childless leaf (found=true
+    // either way — childless is not the same as "not found").
+    const kb::script::ScriptFunctionCallResult parentChildCount = host.Functions().Call("Transform.ChildCount", parentOnlyArgs, context);
+    kb::tests::Require(parentChildCount.Succeeded() && parentChildCount.Output("found")->AsBool() && parentChildCount.Output("count")->AsInt() == 3,
+        "Transform.ChildCount must report the real number of children (3)");
+    const kb::script::ScriptFunctionCallResult leafChildCount = host.Functions().Call("Transform.ChildCount", leafOnlyArgs, context);
+    kb::tests::Require(leafChildCount.Succeeded() && leafChildCount.Output("found")->AsBool() && leafChildCount.Output("count")->AsInt() == 0,
+        "Transform.ChildCount for a childless (but alive) entity must report found=true, count=0");
+
+    // GetChild: indices 0/1/2 in insertion order, 3 out of range, -1 invalid.
+    for (int index = 0; index < 3; ++index) {
+        const std::vector<kb::script::ScriptFunctionArgument> getChildArgs{
+            parentEntityArg,
+            kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ index } },
+        };
+        const kb::script::ScriptFunctionCallResult getChild = host.Functions().Call("Transform.GetChild", getChildArgs, context);
+        kb::tests::Require(getChild.Succeeded() && getChild.Output("found")->AsBool(), "Transform.GetChild must find every in-range index");
+    }
+    const std::vector<kb::script::ScriptFunctionArgument> getChild0Args{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ 0 } } };
+    const kb::script::ScriptFunctionCallResult getChild0 = host.Functions().Call("Transform.GetChild", getChild0Args, context);
+    kb::tests::Require(getChild0.Output("child")->AsUInt64() == firstChild.Entity().Id(), "Transform.GetChild(0) must return the FIRST child added, in insertion order");
+    const std::vector<kb::script::ScriptFunctionArgument> getChildOutOfRangeArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ 3 } } };
+    const kb::script::ScriptFunctionCallResult getChildOutOfRange = host.Functions().Call("Transform.GetChild", getChildOutOfRangeArgs, context);
+    kb::tests::Require(getChildOutOfRange.Succeeded() && !getChildOutOfRange.Output("found")->AsBool(), "Transform.GetChild must report found=false for an out-of-range index");
+    const std::vector<kb::script::ScriptFunctionArgument> getChildNegativeArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ -1 } } };
+    const kb::script::ScriptFunctionCallResult getChildNegative = host.Functions().Call("Transform.GetChild", getChildNegativeArgs, context);
+    kb::tests::Require(getChildNegative.Succeeded() && !getChildNegative.Output("found")->AsBool(), "Transform.GetChild must report found=false for a negative index, not underflow");
+
+    // FindChild: "Bar" is unique; "Foo" is duplicated — skip must walk past
+    // the first match to the second, and a third request must fail.
+    const std::vector<kb::script::ScriptFunctionArgument> findBarArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Bar" } } } };
+    const kb::script::ScriptFunctionCallResult findBar = host.Functions().Call("Transform.FindChild", findBarArgs, context);
+    kb::tests::Require(findBar.Succeeded() && findBar.Output("found")->AsBool() && findBar.Output("child")->AsUInt64() == secondChild.Entity().Id(),
+        "Transform.FindChild must find the uniquely-named child");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooFirstArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } } };
+    const kb::script::ScriptFunctionCallResult findFooFirst = host.Functions().Call("Transform.FindChild", findFooFirstArgs, context);
+    kb::tests::Require(findFooFirst.Succeeded() && findFooFirst.Output("found")->AsBool() && findFooFirst.Output("child")->AsUInt64() == firstChild.Entity().Id(),
+        "Transform.FindChild without skip must return the FIRST match");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooSkip1Args{
+        parentEntityArg,
+        kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } },
+        kb::script::ScriptFunctionArgument{ "skip", kb::script::ScriptValue{ 1 } },
+    };
+    const kb::script::ScriptFunctionCallResult findFooSkip1 = host.Functions().Call("Transform.FindChild", findFooSkip1Args, context);
+    kb::tests::Require(findFooSkip1.Succeeded() && findFooSkip1.Output("found")->AsBool() && findFooSkip1.Output("child")->AsUInt64() == thirdChild.Entity().Id(),
+        "Transform.FindChild with skip=1 must walk past the first duplicate to the SECOND match");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooSkip2Args{
+        parentEntityArg,
+        kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } },
+        kb::script::ScriptFunctionArgument{ "skip", kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult findFooSkip2 = host.Functions().Call("Transform.FindChild", findFooSkip2Args, context);
+    kb::tests::Require(findFooSkip2.Succeeded() && !findFooSkip2.Output("found")->AsBool(), "Transform.FindChild with skip beyond the last match must report found=false");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findMissingArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "NoSuchChild" } } } };
+    const kb::script::ScriptFunctionCallResult findMissing = host.Functions().Call("Transform.FindChild", findMissingArgs, context);
+    kb::tests::Require(findMissing.Succeeded() && !findMissing.Output("found")->AsBool(), "Transform.FindChild must report found=false for a name that does not match any child");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(parentObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadChildCount = host.Functions().Call("Transform.ChildCount", parentOnlyArgs, context);
+    kb::tests::Require(deadChildCount.Succeeded() && !deadChildCount.Output("found")->AsBool(), "Transform.ChildCount on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadGetChild = host.Functions().Call("Transform.GetChild", getChild0Args, context);
+    kb::tests::Require(deadGetChild.Succeeded() && !deadGetChild.Output("found")->AsBool(), "Transform.GetChild on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadFindChild = host.Functions().Call("Transform.FindChild", findBarArgs, context);
+    kb::tests::Require(deadFindChild.Succeeded() && !deadFindChild.Output("found")->AsBool(), "Transform.FindChild on a dead entity must report found=false, not throw");
+}
+
+// LIB-088: Transform.Rotate/LookAt/TransformPoint/InverseTransformPoint.
+// Transform.Translate is deliberately NOT re-tested here — it already has
+// coverage in RunScriptWorldTimePhysicsApiTest above and LIB-088 makes no
+// change to it. Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: Rotate genuinely COMPOSES (two calls produce
+// the mathematically composed quaternion, not the last delta verbatim);
+// LookAt on both a root AND a child of a non-trivially transformed parent
+// produces a WORLD rotation whose forward vector actually points at the
+// target (the real round-trip proof, mirroring LIB-085/086's own
+// round-trip tests, not just "it compiles"); TransformPoint/
+// InverseTransformPoint round-trip a point through both directions on a
+// child of a translated+rotated+scaled parent.
+void RunTransformApiRotateLookAtAndPointConversionTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API rotate/lookAt/point conversion test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.Rotate") != nullptr, "Transform.Rotate was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LookAt") != nullptr, "Transform.LookAt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.TransformPoint") != nullptr, "Transform.TransformPoint was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.InverseTransformPoint") != nullptr, "Transform.InverseTransformPoint was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // (1) Rotate: two applications of the SAME 90-degree-around-Z delta
+    // must genuinely COMPOSE to the mathematically expected 180-degree
+    // result — not just apply the delta once, and not overwrite the
+    // previous rotation with the delta verbatim.
+    const kb::scene::SceneObject rotateSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RotateSubject" });
+    const kb::script::ScriptFunctionArgument rotateEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ rotateSubject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::scene::Quat rotateDelta{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    const std::vector<kb::script::ScriptFunctionArgument> rotateArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ rotateDelta.x } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ rotateDelta.y } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ rotateDelta.z } },
+        kb::script::ScriptFunctionArgument{ "w", kb::script::ScriptValue{ rotateDelta.w } },
+    };
+    const kb::script::ScriptFunctionCallResult firstRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(firstRotate.Succeeded() && firstRotate.Output("moved")->AsBool(), "Transform.Rotate direct call failed");
+    const kb::script::ScriptFunctionCallResult secondRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(secondRotate.Succeeded() && secondRotate.Output("moved")->AsBool(), "Transform.Rotate second direct call failed");
+    const kb::scene::Quat expectedComposedRotation = kb::math::Normalize(rotateDelta * rotateDelta);
+    const kb::scene::Quat actualComposedRotation = scene.Transforms().Get(rotateSubject.Entity()).localRotation;
+    kb::tests::Require(kb::tests::NearlyEqual(std::fabs(actualComposedRotation.z), std::fabs(expectedComposedRotation.z))
+            && kb::tests::NearlyEqual(std::fabs(actualComposedRotation.w), std::fabs(expectedComposedRotation.w)),
+        "Transform.Rotate must genuinely COMPOSE two deltas (local = local * delta), not overwrite with the delta verbatim");
+
+    // (2) LookAt on a ROOT entity: the resulting rotation's forward vector
+    // (local +Z rotated by the result) must actually point toward the
+    // requested world-space target.
+    const kb::scene::SceneObject lookAtRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtRoot" });
+    const kb::script::ScriptFunctionArgument lookAtRootEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtRoot.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> lookAtRootArgs{
+        lookAtRootEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult lookAtRootResult = host.Functions().Call("Transform.LookAt", lookAtRootArgs, context);
+    kb::tests::Require(lookAtRootResult.Succeeded() && lookAtRootResult.Output("moved")->AsBool(), "Transform.LookAt (root) direct call failed");
+    const kb::scene::Quat rootLocalRotationAfterLookAt = scene.Transforms().Get(lookAtRoot.Entity()).localRotation;
+    const kb::math::Vec3 rootForwardAfterLookAt = kb::math::Rotate(rootLocalRotationAfterLookAt, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(kb::tests::NearlyEqual(rootForwardAfterLookAt.x, 1.0F) && std::fabs(rootForwardAfterLookAt.y) < 0.001F && std::fabs(rootForwardAfterLookAt.z) < 0.001F,
+        "Transform.LookAt (root) must produce a rotation whose forward vector points toward the requested target");
+
+    // (3) LookAt on a CHILD of a non-trivially transformed (translated AND
+    // rotated) parent: the resulting WORLD rotation's forward vector must
+    // STILL point at the target — proving the back-solve through
+    // WorldPoseToLocal correctly undoes the parent's own rotation.
+    const kb::scene::SceneObject lookAtParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtParent" });
+    kb::scene::TransformComponent lookAtParentTransform = scene.Transforms().Get(lookAtParent.Entity());
+    lookAtParentTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    lookAtParentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F }; // 90 degrees around +Y.
+    scene.Transforms().Set(lookAtParent.Entity(), lookAtParentTransform);
+    const kb::scene::SceneObject lookAtChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(lookAtChild.Entity(), lookAtParent.Entity()), "LookAt child fixture could not be parented");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::scene::Vec3 lookAtChildWorldPositionBefore = scene.Transforms().Get(lookAtChild.Entity()).worldPosition;
+    const kb::script::ScriptFunctionArgument lookAtChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> lookAtChildArgs{
+        lookAtChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.x } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.y + 5.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ lookAtChildWorldPositionBefore.z } },
+    };
+    const kb::script::ScriptFunctionCallResult lookAtChildResult = host.Functions().Call("Transform.LookAt", lookAtChildArgs, context);
+    kb::tests::Require(lookAtChildResult.Succeeded() && lookAtChildResult.Output("moved")->AsBool(), "Transform.LookAt (child) direct call failed");
+    const kb::scene::TransformComponent lookAtChildTransformAfter = scene.Transforms().Get(lookAtChild.Entity());
+    kb::tests::Require(kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.x, lookAtChildWorldPositionBefore.x)
+            && kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.y, lookAtChildWorldPositionBefore.y)
+            && kb::tests::NearlyEqual(lookAtChildTransformAfter.worldPosition.z, lookAtChildWorldPositionBefore.z),
+        "Transform.LookAt must not move the entity — only its rotation changes");
+    const kb::math::Vec3 childForwardAfterLookAt = kb::math::Rotate(lookAtChildTransformAfter.worldRotation, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(std::fabs(childForwardAfterLookAt.x) < 0.001F && kb::tests::NearlyEqual(childForwardAfterLookAt.y, 1.0F) && std::fabs(childForwardAfterLookAt.z) < 0.001F,
+        "Transform.LookAt on a child of a rotated parent must still produce a WORLD forward vector pointing at the target — the back-solve must undo the parent's own rotation");
+
+    // (4) TransformPoint/InverseTransformPoint round trip on a child of a
+    // translated+rotated+scaled parent.
+    const kb::scene::SceneObject pointParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PointConversionParent" });
+    kb::scene::TransformComponent pointParentTransform = scene.Transforms().Get(pointParent.Entity());
+    pointParentTransform.localPosition = kb::scene::Vec3{ 3.0F, 4.0F, 5.0F };
+    pointParentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    pointParentTransform.localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F };
+    scene.Transforms().Set(pointParent.Entity(), pointParentTransform);
+    const kb::scene::SceneObject pointChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PointConversionChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(pointChild.Entity(), pointParent.Entity()), "Point conversion child fixture could not be parented");
+    kb::scene::TransformComponent pointChildTransform = scene.Transforms().Get(pointChild.Entity());
+    pointChildTransform.localPosition = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F };
+    pointChildTransform.localRotation = kb::scene::Quat{ 0.0F, 0.7071068F, 0.0F, 0.7071068F }; // 90 degrees around +Y.
+    scene.Transforms().Set(pointChild.Entity(), pointChildTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+
+    const kb::script::ScriptFunctionArgument pointChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ pointChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> transformPointArgs{
+        pointChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 4.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult transformPointResult = host.Functions().Call("Transform.TransformPoint", transformPointArgs, context);
+    kb::tests::Require(transformPointResult.Succeeded() && transformPointResult.Output("found")->AsBool(), "Transform.TransformPoint direct call failed");
+
+    const std::vector<kb::script::ScriptFunctionArgument> inverseTransformPointArgs{
+        pointChildEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ transformPointResult.Output("x")->AsFloat() } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ transformPointResult.Output("y")->AsFloat() } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ transformPointResult.Output("z")->AsFloat() } },
+    };
+    const kb::script::ScriptFunctionCallResult inverseTransformPointResult = host.Functions().Call("Transform.InverseTransformPoint", inverseTransformPointArgs, context);
+    kb::tests::Require(inverseTransformPointResult.Succeeded() && inverseTransformPointResult.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("x")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("y")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(inverseTransformPointResult.Output("z")->AsFloat(), 4.0F),
+        "Transform.TransformPoint followed by Transform.InverseTransformPoint must round-trip the exact original local point, through a translated+rotated+scaled parent");
+
+    // Also prove TransformPoint actually did something non-trivial — the
+    // world point must differ from the input local point, given the
+    // non-identity parent chain.
+    kb::tests::Require(!kb::tests::NearlyEqual(transformPointResult.Output("x")->AsFloat(), 2.0F)
+            || !kb::tests::NearlyEqual(transformPointResult.Output("y")->AsFloat(), 3.0F)
+            || !kb::tests::NearlyEqual(transformPointResult.Output("z")->AsFloat(), 4.0F),
+        "Transform.TransformPoint must produce a genuinely different WORLD point for a non-trivial parent chain, not just echo the local input");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(rotateSubject.Entity());
+    const kb::script::ScriptFunctionCallResult deadRotate = host.Functions().Call("Transform.Rotate", rotateArgs, context);
+    kb::tests::Require(deadRotate.Succeeded() && !deadRotate.Output("moved")->AsBool(), "Transform.Rotate on a dead entity must report moved=false, not throw");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deadLookAtArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadLookAt = host.Functions().Call("Transform.LookAt", deadLookAtArgs, context);
+    kb::tests::Require(deadLookAt.Succeeded() && !deadLookAt.Output("moved")->AsBool(), "Transform.LookAt on a dead entity must report moved=false, not throw");
+
+    const std::vector<kb::script::ScriptFunctionArgument> deadTransformPointArgs{
+        rotateEntityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult deadTransformPoint = host.Functions().Call("Transform.TransformPoint", deadTransformPointArgs, context);
+    kb::tests::Require(deadTransformPoint.Succeeded() && !deadTransformPoint.Output("found")->AsBool(), "Transform.TransformPoint on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadInverseTransformPoint = host.Functions().Call("Transform.InverseTransformPoint", deadTransformPointArgs, context);
+    kb::tests::Require(deadInverseTransformPoint.Succeeded() && !deadInverseTransformPoint.Output("found")->AsBool(), "Transform.InverseTransformPoint on a dead entity must report found=false, not throw");
+}
+
+// LIB-091: test-only — closes 4 real coverage gaps left by LIB-085/086/088's
+// own tests (all 2-3 level fixtures, uniform positive scale only), per
+// research confirming NO existing bug, just untested scenarios. Each
+// scenario gets its own isolated Scene/host (LIB-067 pattern).
+void RunTransformHierarchyEdgeCaseTest() {
+    // (1a) keepWorld with a NON-UNIFORM parent scale — proves the
+    // world-to-local back-solve (WorldPoseToLocal's per-axis SafeDivide) is
+    // correct for (2,3,4), not just LIB-086's uniform 2x fixture.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 keepWorld non-uniform-scale test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject newParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldNonUniformParent" });
+        kb::scene::TransformComponent newParentTransform = scene.Transforms().Get(newParent.Entity());
+        newParentTransform.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F };
+        newParentTransform.localScale = kb::scene::Vec3{ 2.0F, 3.0F, 4.0F }; // Non-uniform.
+        scene.Transforms().Set(newParent.Entity(), newParentTransform);
+
+        const kb::scene::SceneObject reparentedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldNonUniformEntity" });
+        kb::scene::TransformComponent reparentedTransform = scene.Transforms().Get(reparentedEntity.Entity());
+        reparentedTransform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F };
+        scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const kb::scene::Vec3 entityWorldPosBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+
+        const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ newParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
+        kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) under a non-uniform-scale parent failed");
+
+        const kb::scene::Vec3 entityWorldPosAfter = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+        kb::tests::Require(kb::tests::NearlyEqual(entityWorldPosAfter.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityWorldPosAfter.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityWorldPosAfter.z, entityWorldPosBefore.z),
+            "LIB-091 keepWorld must preserve the exact world position under a NON-UNIFORM (2,3,4) parent scale, not just uniform scale");
+    }
+
+    // (1b) keepWorld reparenting an entity that itself has a child — proves
+    // subtree consistency IN THE CASE keepWorld ACTUALLY GUARANTEES IT: a
+    // reparent that does NOT change the entity's effective inherited world
+    // scale (both the old and new parent are unit-scale here). keepWorld's
+    // own implementation (ScriptTransformApi.cpp's SetParent) ONLY
+    // back-solves the DIRECTLY reparented entity's own local pose — it
+    // never touches a descendant's local transform (the same well-known
+    // limitation Unity's own Transform.SetParent(worldPositionStays) has).
+    // A first version of this test wrongly asserted subtree preservation
+    // across a SCALE-CHANGING reparent (case 1a's non-uniform-scale
+    // parent) and correctly failed — that is not a bug, it is inherent to
+    // "only the reparented entity's own pose is preserved," so this test
+    // deliberately keeps scale uniform/unchanged to isolate and prove the
+    // guarantee keepWorld actually makes.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 keepWorld subtree-consistency test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject newParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeParent" });
+        kb::scene::TransformComponent newParentTransform = scene.Transforms().Get(newParent.Entity());
+        newParentTransform.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F }; // Unit scale (default).
+        scene.Transforms().Set(newParent.Entity(), newParentTransform);
+
+        const kb::scene::SceneObject reparentedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeEntity" });
+        kb::scene::TransformComponent reparentedTransform = scene.Transforms().Get(reparentedEntity.Entity());
+        reparentedTransform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F }; // Also unit scale — no scale change across the reparent.
+        scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
+
+        const kb::scene::SceneObject subtreeChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(subtreeChild.Entity(), reparentedEntity.Entity()), "LIB-091 keepWorld subtree fixture could not attach the subtree child");
+        kb::scene::TransformComponent subtreeChildTransform = scene.Transforms().Get(subtreeChild.Entity());
+        subtreeChildTransform.localPosition = kb::scene::Vec3{ 0.5F, 0.5F, 0.5F };
+        scene.Transforms().Set(subtreeChild.Entity(), subtreeChildTransform);
+
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const kb::scene::Vec3 subtreeChildWorldPosBefore = scene.Transforms().Get(subtreeChild.Entity()).worldPosition;
+
+        const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ newParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
+        kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) subtree fixture reparent failed");
+
+        const kb::scene::Vec3 subtreeChildWorldPosAfter = scene.Transforms().Get(subtreeChild.Entity()).worldPosition;
+        kb::tests::Require(kb::tests::NearlyEqual(subtreeChildWorldPosAfter.x, subtreeChildWorldPosBefore.x) && kb::tests::NearlyEqual(subtreeChildWorldPosAfter.y, subtreeChildWorldPosBefore.y) && kb::tests::NearlyEqual(subtreeChildWorldPosAfter.z, subtreeChildWorldPosBefore.z),
+            "LIB-091 keepWorld must preserve a subtree child's world pose when the reparent does not change the reparented entity's effective inherited scale");
+    }
+
+    // (2) Parent destroy: cascading destroy of a middle entity in a 3-level
+    // chain must be reflected honestly by Transform.Parent/WorldPose (on
+    // the now-destroyed child) and Transform.ChildCount (on the surviving
+    // grandparent, which must NOT report a stale child count).
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 parent-destroy test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject grandparent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainGrandparent" });
+        const kb::scene::SceneObject middleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainMiddleParent" });
+        const kb::scene::SceneObject leafChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainLeafChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(middleParent.Entity(), grandparent.Entity()), "LIB-091 destroy fixture could not attach middleParent");
+        kb::tests::Require(scene.Hierarchy().SetParent(leafChild.Entity(), middleParent.Entity()), "LIB-091 destroy fixture could not attach leafChild");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument grandparentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ grandparent.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> grandparentOnlyArgs{ grandparentEntityArg };
+        const kb::script::ScriptFunctionCallResult childCountBeforeDestroy = host.Functions().Call("Transform.ChildCount", grandparentOnlyArgs, context);
+        kb::tests::Require(childCountBeforeDestroy.Succeeded() && childCountBeforeDestroy.Output("count")->AsInt() == 1, "LIB-091 destroy fixture setup: grandparent must have exactly 1 child before the destroy");
+
+        scene.Entities().Destroy(middleParent.Entity()); // Cascades to leafChild (kb::scene::SceneEntityDestructionService).
+        kb::tests::Require(!scene.Entities().IsAlive(leafChild.Entity()), "LIB-091 destroying middleParent must cascade-destroy leafChild");
+
+        const kb::script::ScriptFunctionArgument leafChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ leafChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> leafChildOnlyArgs{ leafChildEntityArg };
+        const kb::script::ScriptFunctionCallResult parentAfterDestroy = host.Functions().Call("Transform.Parent", leafChildOnlyArgs, context);
+        kb::tests::Require(parentAfterDestroy.Succeeded() && !parentAfterDestroy.Output("found")->AsBool(), "LIB-091 Transform.Parent on a cascade-destroyed child must report found=false, not throw or report a stale parent");
+        const kb::script::ScriptFunctionCallResult worldPoseAfterDestroy = host.Functions().Call("Transform.WorldPose", leafChildOnlyArgs, context);
+        kb::tests::Require(worldPoseAfterDestroy.Succeeded() && !worldPoseAfterDestroy.Output("found")->AsBool(), "LIB-091 Transform.WorldPose on a cascade-destroyed child must report found=false, not throw or report a stale pose");
+
+        const kb::script::ScriptFunctionCallResult childCountAfterDestroy = host.Functions().Call("Transform.ChildCount", grandparentOnlyArgs, context);
+        kb::tests::Require(childCountAfterDestroy.Succeeded() && childCountAfterDestroy.Output("found")->AsBool() && childCountAfterDestroy.Output("count")->AsInt() == 0,
+            "LIB-091 Transform.ChildCount on the surviving grandparent must drop to 0 after its only child (middleParent) is destroyed, not report a stale count");
+    }
+
+    // (3) Deep hierarchy: a 30-level chain, each level offset by (1,0,0) in
+    // local space with no rotation, so the leaf's expected world X is
+    // exactly the chain depth — proves SceneTransformHierarchySystem's
+    // iterative (not recursive) propagation produces a numerically correct
+    // result at real depth, not just "doesn't crash."
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 deep-hierarchy test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        constexpr int kChainDepth = 30;
+        kb::scene::SceneEntity previous{};
+        kb::scene::SceneEntity leaf{};
+        for (int level = 0; level < kChainDepth; ++level) {
+            const kb::scene::SceneObject node = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DeepChainNode" });
+            if (previous.IsValid()) {
+                kb::tests::Require(scene.Hierarchy().SetParent(node.Entity(), previous), "LIB-091 deep-hierarchy fixture could not extend the chain");
+            }
+            kb::scene::TransformComponent nodeTransform = scene.Transforms().Get(node.Entity());
+            nodeTransform.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+            scene.Transforms().Set(node.Entity(), nodeTransform);
+            previous = node.Entity();
+            leaf = node.Entity();
+        }
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument leafEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ leaf.Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> leafOnlyArgs{ leafEntityArg };
+        const kb::script::ScriptFunctionCallResult leafWorldPose = host.Functions().Call("Transform.WorldPose", leafOnlyArgs, context);
+        kb::tests::Require(leafWorldPose.Succeeded() && leafWorldPose.Output("found")->AsBool() && kb::tests::NearlyEqual(leafWorldPose.Output("posX")->AsFloat(), static_cast<float>(kChainDepth)),
+            "LIB-091 a 30-level deep hierarchy chain must propagate to a numerically correct leaf world position, not just avoid crashing");
+    }
+
+    // (4) Zero/negative scale — the highest-risk, never-before-exercised
+    // scenario: SafeDivide (ScriptTransformApi.cpp) exists precisely for a
+    // near-zero parent scale axis, and TransformMath's uniform-scale FAST
+    // PATH (CanUseUniformScaleParentFastPath) is reachable by a NEGATIVE
+    // uniform scale too (it only compares axes for equality, not sign) —
+    // neither has ever been exercised by a test before this.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 zero/negative-scale test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        // (4a) Near-zero parent scale axis: SetWorldPose must not produce
+        // NaN/Inf, and must still honestly report moved=true.
+        const kb::scene::SceneObject zeroScaleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ZeroScaleParent" });
+        kb::scene::TransformComponent zeroScaleParentTransform = scene.Transforms().Get(zeroScaleParent.Entity());
+        zeroScaleParentTransform.localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+        zeroScaleParentTransform.localScale = kb::scene::Vec3{ 0.0F, 1.0F, 1.0F }; // X axis genuinely zero.
+        scene.Transforms().Set(zeroScaleParent.Entity(), zeroScaleParentTransform);
+        const kb::scene::SceneObject zeroScaleChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ZeroScaleChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(zeroScaleChild.Entity(), zeroScaleParent.Entity()), "LIB-091 zero-scale fixture could not attach the child");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const std::vector<kb::script::ScriptFunctionArgument> zeroScaleSetWorldPoseArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ zeroScaleChild.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 10.0F } },
+            kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 1.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult zeroScaleSetWorldPoseResult = host.Functions().Call("Transform.SetWorldPose", zeroScaleSetWorldPoseArgs, context);
+        kb::tests::Require(zeroScaleSetWorldPoseResult.Succeeded() && zeroScaleSetWorldPoseResult.Output("moved")->AsBool(), "LIB-091 Transform.SetWorldPose under a zero-scale parent axis must still honestly report moved=true, not fail");
+        const kb::scene::TransformComponent zeroScaleChildTransform = scene.Transforms().Get(zeroScaleChild.Entity());
+        kb::tests::Require(std::isfinite(zeroScaleChildTransform.localPosition.x) && std::isfinite(zeroScaleChildTransform.localPosition.y) && std::isfinite(zeroScaleChildTransform.localPosition.z)
+                && std::isfinite(zeroScaleChildTransform.localRotation.x) && std::isfinite(zeroScaleChildTransform.localRotation.y) && std::isfinite(zeroScaleChildTransform.localRotation.z) && std::isfinite(zeroScaleChildTransform.localRotation.w),
+            "LIB-091 SafeDivide must prevent a zero parent scale axis from producing NaN/Inf in the back-solved local pose");
+
+        // (4b) Negative UNIFORM parent scale (a mirror) — reachable through
+        // TransformMath's fast path, not just the general Compose path.
+        // TransformPoint/InverseTransformPoint and SetWorldPose/WorldPose
+        // must both round-trip exactly.
+        const kb::scene::SceneObject negativeScaleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "NegativeScaleParent" });
+        kb::scene::TransformComponent negativeScaleParentTransform = scene.Transforms().Get(negativeScaleParent.Entity());
+        negativeScaleParentTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+        negativeScaleParentTransform.localScale = kb::scene::Vec3{ -2.0F, -2.0F, -2.0F }; // Uniform negative — mirror + scale.
+        scene.Transforms().Set(negativeScaleParent.Entity(), negativeScaleParentTransform);
+        const kb::scene::SceneObject negativeScaleChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "NegativeScaleChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(negativeScaleChild.Entity(), negativeScaleParent.Entity()), "LIB-091 negative-scale fixture could not attach the child");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument negativeScaleChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ negativeScaleChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleTransformPointArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 3.0F } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 4.0F } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 5.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleTransformPointResult = host.Functions().Call("Transform.TransformPoint", negativeScaleTransformPointArgs, context);
+        kb::tests::Require(negativeScaleTransformPointResult.Succeeded() && negativeScaleTransformPointResult.Output("found")->AsBool(), "LIB-091 Transform.TransformPoint under a negative-uniform-scale parent failed");
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleInverseTransformPointArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("x")->AsFloat() } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("y")->AsFloat() } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("z")->AsFloat() } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleInverseTransformPointResult = host.Functions().Call("Transform.InverseTransformPoint", negativeScaleInverseTransformPointArgs, context);
+        kb::tests::Require(negativeScaleInverseTransformPointResult.Succeeded() && negativeScaleInverseTransformPointResult.Output("found")->AsBool()
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("x")->AsFloat(), 3.0F)
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("y")->AsFloat(), 4.0F)
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("z")->AsFloat(), 5.0F),
+            "LIB-091 TransformPoint followed by InverseTransformPoint must round-trip exactly through a NEGATIVE uniform parent scale (a mirror), reachable via TransformMath's uniform-scale fast path");
+
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleSetWorldPoseArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 7.0F } },
+            kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 8.0F } },
+            kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 9.0F } },
+            kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 1.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleSetWorldPoseResult = host.Functions().Call("Transform.SetWorldPose", negativeScaleSetWorldPoseArgs, context);
+        kb::tests::Require(negativeScaleSetWorldPoseResult.Succeeded() && negativeScaleSetWorldPoseResult.Output("moved")->AsBool(), "LIB-091 Transform.SetWorldPose under a negative-uniform-scale parent failed");
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleChildOnlyArgs{ negativeScaleChildEntityArg };
+        const kb::script::ScriptFunctionCallResult negativeScaleWorldPoseResult = host.Functions().Call("Transform.WorldPose", negativeScaleChildOnlyArgs, context);
+        kb::tests::Require(negativeScaleWorldPoseResult.Succeeded() && negativeScaleWorldPoseResult.Output("found")->AsBool()
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posX")->AsFloat(), 7.0F)
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posY")->AsFloat(), 8.0F)
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posZ")->AsFloat(), 9.0F),
+            "LIB-091 SetWorldPose followed by WorldPose must round-trip the exact requested world pose through a NEGATIVE uniform parent scale");
+    }
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -4395,6 +5190,122 @@ void RunScriptSceneComponentApiTest() {
     kb::tests::Require(!badTickGroup.succeeded, "Script component API accepted invalid Behaviour.tickGroup");
 }
 
+// LIB-077: exhaustive, name-driven coverage that the generated-accessor
+// FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
+// KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
+// KB_LIGHT_KIND-generated read/write function pairs, replacing the old
+// offsetof+reinterpret_cast path) round-trips every field correctly and
+// rejects a mismatched ScriptValueType — not just the handful of fields
+// RunScriptSceneComponentApiTest already covered. Walks
+// ComponentProperties() for all 6 registered components (37 fields total)
+// rather than hand-picking a few, so a future field added to any
+// component's property-desc table is automatically covered here too.
+void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Coverage" });
+    scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
+    scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::size_t fieldsChecked = 0U;
+    for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
+        kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), componentName),
+            "Script component API generated accessor coverage test fixture is missing a component");
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : kb::script::ScriptSceneComponentApi::ComponentProperties(componentName)) {
+            ++fieldsChecked;
+            const std::string fieldLabel = std::string{ componentName } + "." + std::string{ property.name };
+
+            // A String value never matches Bool/Int/Float — must be
+            // rejected for every field, regardless of the field's own
+            // type, proving the generated write accessor actually checks
+            // ScriptValue::Type() before touching the real field.
+            const kb::script::ScriptSceneComponentMutationResult mismatched = kb::script::ScriptSceneComponentApi::SetProperty(
+                scene, object.Entity(), componentName, property.name, kb::script::ScriptValue{ std::string{ "wrong type" } });
+            kb::tests::Require(!mismatched.succeeded, ("Script component API accepted a mismatched value type for " + fieldLabel).c_str());
+
+            if (!property.writable) {
+                continue;
+            }
+
+            kb::script::ScriptValue validValue;
+            switch (property.type) {
+            case kb::script::ScriptValueType::Bool:
+                validValue = kb::script::ScriptValue{ true };
+                break;
+            case kb::script::ScriptValueType::Int:
+                // 2 is a safe value for every Int-typed field here,
+                // including enum-backed ones with a range check
+                // (BehaviourTickGroup::Physics == 2, well within
+                // [Input=0, Presentation=5]).
+                validValue = kb::script::ScriptValue{ 2 };
+                break;
+            case kb::script::ScriptValueType::Float:
+                validValue = kb::script::ScriptValue{ 2.5F };
+                break;
+            default:
+                kb::tests::Require(false, "Script component API generated accessor coverage test found a property type it does not know how to exercise");
+                break;
+            }
+
+            const kb::script::ScriptSceneComponentMutationResult set = kb::script::ScriptSceneComponentApi::SetProperty(scene, object.Entity(), componentName, property.name, validValue);
+            kb::tests::Require(set.succeeded, ("Script component API rejected a correctly-typed value for " + fieldLabel).c_str());
+
+            const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
+            kb::tests::Require(get.succeeded, ("Script component API could not read back " + fieldLabel).c_str());
+            if (property.type == kb::script::ScriptValueType::Float) {
+                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), 2.5F), ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::Int) {
+                kb::tests::Require(get.value.AsInt() == 2, ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::Bool) {
+                kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
+            }
+        }
+    }
+    kb::tests::Require(fieldsChecked == 37U, "Script component API generated accessor coverage test did not exercise the expected total field count (37) across all 6 components");
+}
+
+// LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
+// compile-time check (ScriptSceneComponentApi.cpp) already forecloses any
+// individual field's OWN declared type being a pointer at the point it is
+// wired up, and ScriptValue::Storage (LIB-032, ScriptValue.hpp) already
+// forecloses storing one directly. Neither catches a field being wired up
+// through a WIDENING ScriptValueType (Int64/UInt32/Double/Entity/Component/
+// Hash) capable of carrying a full 64-bit value that COULD, in principle,
+// encode a raw pointer's bit pattern — unlike Bool/Int/Float, which are all
+// narrower than a pointer on every platform this engine targets. This test
+// walks every registered component property and asserts its declared
+// ScriptValueType stays within the closed set {Bool, Int, Float} this
+// system is actually allowed to expose to Lua/VisualGraph today, so adding
+// a wider type to any component's property table requires a conscious,
+// reviewed change to this allowlist rather than a silent widening of the
+// attack surface.
+void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "No Raw Pointer" });
+    scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
+    scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::size_t propertiesChecked = 0U;
+    for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : kb::script::ScriptSceneComponentApi::ComponentProperties(componentName)) {
+            ++propertiesChecked;
+            const std::string fieldLabel = std::string{ componentName } + "." + std::string{ property.name };
+            const bool isNarrowValueType = property.type == kb::script::ScriptValueType::Bool ||
+                property.type == kb::script::ScriptValueType::Int ||
+                property.type == kb::script::ScriptValueType::Float;
+            kb::tests::Require(isNarrowValueType, ("Script component property " + fieldLabel + " uses a ScriptValueType wide enough to carry a raw pointer's bit pattern — LIB-082 requires component fields to stay within Bool/Int/Float").c_str());
+
+            const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
+            kb::tests::Require(get.succeeded, ("Script component property " + fieldLabel + " failed to read for LIB-082's raw-pointer audit").c_str());
+            kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
+        }
+    }
+    kb::tests::Require(propertiesChecked == 37U, "LIB-082 raw-pointer audit did not exercise the expected total field count (37) across all 6 components");
+}
+
 void RunVisualGraphSceneComponentBindingTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "VisualSceneComponentBinding";
@@ -4532,6 +5443,376 @@ void RunVisualGraphSceneComponentBindingTest() {
     kb::tests::Require(result.emittedEvents.size() == 1U && result.emittedEvents[0].name == "GraphSetTransform", "Visual graph scene component binding did not continue execution");
 }
 
+// LIB-093: Time.Delta/UnscaledDelta/FixedDelta/Elapsed/FrameIndex/
+// FixedStepIndex, called through the registry the same way
+// RunScriptWorldTimePhysicsApiTest above already exercises World.*. The
+// key assertion this test adds beyond that one is the LIB-065 POWRÓT
+// resolution: Time.FrameIndex and World.FrameIndex must return the exact
+// same value for the same scene, proving they alias the same underlying
+// SceneRuntime counter rather than two independent ones.
+void RunScriptTimeApiElapsedAndAliasingTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script time API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Time.Delta") != nullptr, "Time.Delta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.UnscaledDelta") != nullptr, "Time.UnscaledDelta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FixedDelta") != nullptr, "Time.FixedDelta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.Elapsed") != nullptr, "Time.Elapsed was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FrameIndex") != nullptr, "Time.FrameIndex was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FixedStepIndex") != nullptr, "Time.FixedStepIndex was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.25F,
+    };
+
+    const kb::script::ScriptFunctionCallResult deltaResult = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(deltaResult.Succeeded() && kb::tests::NearlyEqual(deltaResult.Output("delta")->AsFloat(), 0.25F), "Time.Delta must echo ScriptFunctionCallContext::deltaSeconds");
+
+    const kb::script::ScriptFunctionCallResult unscaledResult = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(unscaledResult.Succeeded() && kb::tests::NearlyEqual(unscaledResult.Output("delta")->AsFloat(), 0.25F), "Time.UnscaledDelta must equal Time.Delta today (no time-scale mechanism exists yet)");
+
+    const kb::script::ScriptFunctionCallResult fixedDeltaResult = host.Functions().Call("Time.FixedDelta", {}, context);
+    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), scene.Runtime().FixedStepSettings().fixedDeltaSeconds), "Time.FixedDelta must reflect SceneRuntime::FixedStepSettings().fixedDeltaSeconds");
+
+    const kb::script::ScriptFunctionCallResult elapsedBeforeUpdate = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedBeforeUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedBeforeUpdate.Output("elapsed")->AsFloat(), 0.0F), "Time.Elapsed must start at 0 before any Update()");
+
+    static_cast<void>(scene.Runtime().Update(0.5F));
+    const kb::script::ScriptFunctionCallResult elapsedAfterOneUpdate = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedAfterOneUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedAfterOneUpdate.Output("elapsed")->AsFloat(), 0.5F), "Time.Elapsed must accumulate the raw deltaSeconds passed to Update()");
+
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    const kb::script::ScriptFunctionCallResult elapsedAfterTwoUpdates = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedAfterTwoUpdates.Succeeded() && kb::tests::NearlyEqual(elapsedAfterTwoUpdates.Output("elapsed")->AsFloat(), 0.75F), "Time.Elapsed must keep accumulating across multiple Update() calls");
+
+    const kb::script::ScriptFunctionCallResult timeFrameResult = host.Functions().Call("Time.FrameIndex", {}, context);
+    const kb::script::ScriptFunctionCallResult worldFrameResult = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(timeFrameResult.Succeeded() && worldFrameResult.Succeeded() && timeFrameResult.Output("frame")->AsInt64() == worldFrameResult.Output("frame")->AsInt64() && timeFrameResult.Output("frame")->AsInt64() == 2,
+        "Time.FrameIndex must alias the exact same SceneRuntime counter World.FrameIndex uses, not a separate one (LIB-065 POWRÓT)");
+
+    const kb::script::ScriptFunctionCallResult timeStepResult = host.Functions().Call("Time.FixedStepIndex", {}, context);
+    const kb::script::ScriptFunctionCallResult worldStepResult = host.Functions().Call("World.FixedStepIndex", {}, context);
+    kb::tests::Require(timeStepResult.Succeeded() && worldStepResult.Succeeded() && timeStepResult.Output("step")->AsInt64() == worldStepResult.Output("step")->AsInt64(),
+        "Time.FixedStepIndex must alias the exact same SceneRuntime counter World.FixedStepIndex uses");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneDelta = host.Functions().Call("Time.Delta", {}, noSceneContext);
+    kb::tests::Require(noSceneDelta.Succeeded(), "Time.Delta must not require a scene");
+    const kb::script::ScriptFunctionCallResult noSceneElapsed = host.Functions().Call("Time.Elapsed", {}, noSceneContext);
+    kb::tests::Require(!noSceneElapsed.Succeeded(), "Time.Elapsed must fail honestly without a scene rather than silently returning 0");
+}
+
+// LIB-094: Time.Scale/Time.SetScale plus the explicit pause rules — Time.Delta
+// scaled+zeroed-while-paused, Time.UnscaledDelta always raw, and FixedTick
+// genuinely not firing while paused (no catch-up burst on resume).
+void RunScriptTimeApiScaleAndPauseTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script time API host did not initialize for scale/pause test");
+    kb::tests::Require(host.Functions().FindSignature("Time.Scale") != nullptr, "Time.Scale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.SetScale") != nullptr, "Time.SetScale was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+
+    const kb::script::ScriptFunctionCallResult defaultScale = host.Functions().Call("Time.Scale", {}, context);
+    kb::tests::Require(defaultScale.Succeeded() && kb::tests::NearlyEqual(defaultScale.Output("scale")->AsFloat(), 1.0F), "Time.Scale must default to 1.0 (unscaled)");
+
+    const kb::script::ScriptFunctionCallResult defaultDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(defaultDelta.Succeeded() && kb::tests::NearlyEqual(defaultDelta.Output("delta")->AsFloat(), 0.1F), "Time.Delta must equal raw deltaSeconds at default scale 1.0");
+
+    const std::vector<kb::script::ScriptFunctionArgument> negativeScaleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "scale", .value = kb::script::ScriptValue{ -1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult rejectedScale = host.Functions().Call("Time.SetScale", negativeScaleArgs, context);
+    kb::tests::Require(!rejectedScale.Succeeded(), "Time.SetScale must honestly reject a negative scale rather than silently clamping it");
+    const kb::script::ScriptFunctionCallResult scaleStillDefault = host.Functions().Call("Time.Scale", {}, context);
+    kb::tests::Require(scaleStillDefault.Succeeded() && kb::tests::NearlyEqual(scaleStillDefault.Output("scale")->AsFloat(), 1.0F), "A rejected Time.SetScale call must not have mutated the stored scale");
+
+    const std::vector<kb::script::ScriptFunctionArgument> doubleScaleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "scale", .value = kb::script::ScriptValue{ 2.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setDouble = host.Functions().Call("Time.SetScale", doubleScaleArgs, context);
+    kb::tests::Require(setDouble.Succeeded() && setDouble.Output("set")->AsBool(), "Time.SetScale(2.0) must succeed");
+    const kb::script::ScriptFunctionCallResult scaledDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(scaledDelta.Succeeded() && kb::tests::NearlyEqual(scaledDelta.Output("delta")->AsFloat(), 0.2F), "Time.Delta must reflect Time.Scale (0.1 * 2.0 == 0.2)");
+    const kb::script::ScriptFunctionCallResult unscaledStillRaw = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(unscaledStillRaw.Succeeded() && kb::tests::NearlyEqual(unscaledStillRaw.Output("delta")->AsFloat(), 0.1F), "Time.UnscaledDelta must stay raw regardless of Time.Scale");
+
+    scene.Runtime().SetPlaying(false);
+    const kb::script::ScriptFunctionCallResult pausedDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(pausedDelta.Succeeded() && kb::tests::NearlyEqual(pausedDelta.Output("delta")->AsFloat(), 0.0F), "Time.Delta must read 0 while the scene is paused, regardless of Time.Scale");
+    const kb::script::ScriptFunctionCallResult pausedUnscaled = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(pausedUnscaled.Succeeded() && kb::tests::NearlyEqual(pausedUnscaled.Output("delta")->AsFloat(), 0.1F), "Time.UnscaledDelta must keep advancing at raw wall-clock rate even while paused");
+    scene.Runtime().SetPlaying(true);
+
+    // FixedTick-during-pause: reuse the exact ScriptRuntimeSceneSystem
+    // harness RunScriptRuntimeSceneSystemFixedAccumulatorTest above already
+    // established (native FixedTick callback counting invocations).
+    kb::script::ScriptRuntime fixedTickRuntime;
+    kb::scene::Scene fixedTickScene;
+    constexpr kb::assets::AssetId kPauseFixedTickAsset{ 1210U };
+    const kb::scene::SceneObject fixedTickObject = fixedTickScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Pause FixedTick Scripted" });
+    fixedTickScene.Components().Behaviours().Set(fixedTickObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kPauseFixedTickAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto pauseNativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t pausedFixedTicks = 0U;
+    std::vector<float> pausedTickDeltas;
+    kb::tests::Require(pauseNativeBackend->RegisterLifecycle(kPauseFixedTickAsset, kb::script::ScriptLifecycleEvent::FixedTick, [&pausedFixedTicks](kb::script::ScriptExecutionContext&) {
+                            ++pausedFixedTicks;
+                        }),
+        "Pause FixedTick callback registration failed");
+    kb::tests::Require(pauseNativeBackend->RegisterLifecycle(kPauseFixedTickAsset, kb::script::ScriptLifecycleEvent::Tick, [&pausedTickDeltas](kb::script::ScriptExecutionContext& tickContext) {
+                            pausedTickDeltas.push_back(tickContext.DeltaSeconds());
+                        }),
+        "Pause Tick callback registration failed");
+    kb::tests::Require(fixedTickRuntime.RegisterBackend(std::move(pauseNativeBackend)), "Pause FixedTick native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem pauseSystem{ fixedTickRuntime };
+    const float fixedStep = pauseSystem.FrameSettings().fixedDeltaSeconds;
+
+    fixedTickScene.Runtime().SetPlaying(false);
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 3.0F));
+    kb::tests::Require(pausedFixedTicks == 0U, "FixedTick must not fire at all while the scene is paused, no matter how much wall-clock time elapses");
+    kb::tests::Require(pausedTickDeltas.size() == 1U, "Tick must keep firing while paused (only FixedTick freezes, not the whole scheduler)");
+
+    fixedTickScene.Runtime().SetPlaying(true);
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 0.5F));
+    kb::tests::Require(pausedFixedTicks == 0U, "Resuming must not replay time that elapsed while paused as a burst of catch-up FixedTicks");
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 0.5F));
+    kb::tests::Require(pausedFixedTicks == 1U, "FixedTick must resume firing normally once unpaused");
+}
+
+// LIB-095: Timer.Once/Timer.Repeat/Timer.Cancel/Timer.Pause/Timer.Resume
+// through the script registry — registration, invalid-input rejection,
+// idempotent Cancel, and the capacity-independent id uniqueness.
+void RunScriptTimerApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script timer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Once") != nullptr, "Timer.Once was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Repeat") != nullptr, "Timer.Repeat was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Cancel") != nullptr, "Timer.Cancel was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Pause") != nullptr, "Timer.Pause was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Resume") != nullptr, "Timer.Resume was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+
+    const std::vector<kb::script::ScriptFunctionArgument> negativeDelayArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ -1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult negativeDelay = host.Functions().Call("Timer.Once", negativeDelayArgs, context);
+    kb::tests::Require(!negativeDelay.Succeeded(), "Timer.Once must reject a non-positive delay");
+
+    const std::vector<kb::script::ScriptFunctionArgument> zeroDelayArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult zeroDelay = host.Functions().Call("Timer.Once", zeroDelayArgs, context);
+    kb::tests::Require(!zeroDelay.Succeeded(), "Timer.Once must reject a zero delay");
+
+    const std::vector<kb::script::ScriptFunctionArgument> onceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult onceResult = host.Functions().Call("Timer.Once", onceArgs, context);
+    kb::tests::Require(onceResult.Succeeded(), "Timer.Once with a valid delay must succeed");
+    const std::uint64_t onceId = onceResult.Output("timer")->AsUInt64();
+    kb::tests::Require(onceId != 0U, "Timer.Once must return a non-zero handle on success");
+
+    const std::vector<kb::script::ScriptFunctionArgument> repeatArgs{
+        kb::script::ScriptFunctionArgument{ .name = "interval", .value = kb::script::ScriptValue{ 0.5F } },
+    };
+    const kb::script::ScriptFunctionCallResult repeatResult = host.Functions().Call("Timer.Repeat", repeatArgs, context);
+    kb::tests::Require(repeatResult.Succeeded(), "Timer.Repeat with a valid interval must succeed");
+    const std::uint64_t repeatId = repeatResult.Output("timer")->AsUInt64();
+    kb::tests::Require(repeatId != 0U && repeatId != onceId, "Timer.Repeat must return a distinct handle from Timer.Once's");
+
+    const std::vector<kb::script::ScriptFunctionArgument> cancelOnceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ onceId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult firstCancel = host.Functions().Call("Timer.Cancel", cancelOnceArgs, context);
+    kb::tests::Require(firstCancel.Succeeded() && firstCancel.Output("cancelled")->AsBool(), "Timer.Cancel on a live timer must succeed and report cancelled=true");
+    const kb::script::ScriptFunctionCallResult secondCancel = host.Functions().Call("Timer.Cancel", cancelOnceArgs, context);
+    kb::tests::Require(secondCancel.Succeeded() && !secondCancel.Output("cancelled")->AsBool(), "Timer.Cancel must be idempotent — a second cancel of an already-cancelled timer must report cancelled=false, not error");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownTimerArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pauseUnknown = host.Functions().Call("Timer.Pause", unknownTimerArgs, context);
+    kb::tests::Require(pauseUnknown.Succeeded() && !pauseUnknown.Output("set")->AsBool(), "Timer.Pause on an unknown handle must honestly report set=false, not error");
+
+    const std::vector<kb::script::ScriptFunctionArgument> pauseRepeatArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ repeatId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pauseRepeat = host.Functions().Call("Timer.Pause", pauseRepeatArgs, context);
+    kb::tests::Require(pauseRepeat.Succeeded() && pauseRepeat.Output("set")->AsBool(), "Timer.Pause on a live timer must succeed");
+    const kb::script::ScriptFunctionCallResult pauseRepeatAgain = host.Functions().Call("Timer.Pause", pauseRepeatArgs, context);
+    kb::tests::Require(pauseRepeatAgain.Succeeded() && pauseRepeatAgain.Output("set")->AsBool(), "Timer.Pause on an already-paused timer must still report set=true (a 'set' operation, not a 'changed' operation)");
+    const kb::script::ScriptFunctionCallResult resumeRepeat = host.Functions().Call("Timer.Resume", pauseRepeatArgs, context);
+    kb::tests::Require(resumeRepeat.Succeeded() && resumeRepeat.Output("set")->AsBool(), "Timer.Resume on a live timer must succeed");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneOnce = host.Functions().Call("Timer.Once", onceArgs, noSceneContext);
+    kb::tests::Require(!noSceneOnce.Succeeded(), "Timer.Once must fail honestly without a scene rather than silently returning a handle");
+}
+
+// LIB-095: end-to-end firing behavior through the real ScriptRuntimeSceneSystem
+// per-frame drive — reuses the exact harness shape RunScriptRuntimeSceneSystemFixedAccumulatorTest
+// established (native ExecuteFrame calls with controlled deltaSeconds).
+// Exercises the parts Timer.Once/Repeat's own script-facing test above
+// cannot: owner-targeted vs. no-owner-broadcast dispatch, scene-pause
+// freezing a timer's countdown, per-timer Pause/Resume freezing exactly,
+// dead-owner auto-cancellation, and Timer.Repeat firing more than once.
+void RunScriptTimerApiFiringOwnerAndPauseTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1220U };
+    constexpr kb::assets::AssetId kOtherAsset{ 1221U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Other" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(otherObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOtherAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t ownerFired = 0U;
+    std::size_t otherFired = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TimerFired", [&ownerFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerFired;
+                        }),
+        "Timer owner TimerFired listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOtherAsset, "TimerFired", [&otherFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++otherFired;
+                        }),
+        "Timer other TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // (A) no owner => broadcast reaches every enabled behaviour.
+    const std::uint64_t broadcastId = scene.Timers().Once(0.05F, kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastId != 0U, "SceneTimers::Once with no owner must still succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(ownerFired == 1U && otherFired == 1U, "A no-owner timer must broadcast TimerFired to every enabled behaviour");
+
+    // (B) explicit owner => targeted dispatch reaches ONLY that entity.
+    const std::uint64_t targetedId = scene.Timers().Once(0.05F, ownerObject.Entity());
+    kb::tests::Require(targetedId != 0U, "SceneTimers::Once with an owner must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(ownerFired == 2U && otherFired == 1U, "An owned timer must target ONLY its owner's behaviour, not broadcast");
+
+    // (C) scene-level pause freezes the countdown entirely — no matter how
+    // much wall-clock time elapses while paused, the timer does not fire,
+    // and no debt is replayed as a burst once resumed.
+    const std::uint64_t pausedSceneId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(ownerFired == 2U, "Timer.Once must not fire while the whole scene is paused, regardless of elapsed wall-clock time");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 3U, "Timer.Once must resume counting down normally once the scene is unpaused, with no catch-up burst");
+    static_cast<void>(pausedSceneId);
+
+    // (D) per-timer Pause/Resume freezes remaining time exactly (distinct
+    // from scene-level pause above — this is Timer.Pause/Resume itself).
+    const std::uint64_t individuallyPausedId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    kb::tests::Require(scene.Timers().Pause(individuallyPausedId), "SceneTimers::Pause on a live timer must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 5.0F));
+    kb::tests::Require(ownerFired == 3U, "An individually-paused timer must not fire no matter how much time elapses");
+    kb::tests::Require(scene.Timers().Resume(individuallyPausedId), "SceneTimers::Resume on a live timer must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 4U, "Resuming an individually-paused timer must let it fire normally afterward");
+
+    // (E) dead owner => silently auto-cancelled, never fires, no crash.
+    const kb::scene::SceneObject doomedObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Doomed Owner" });
+    const std::uint64_t doomedId = scene.Timers().Once(1.0F, doomedObject.Entity());
+    kb::tests::Require(scene.Timers().Exists(doomedId), "A freshly created timer must exist immediately");
+    scene.Entities().Destroy(doomedObject);
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F));
+    kb::tests::Require(ownerFired == 4U && otherFired == 1U, "A timer whose owner died must never fire (no dangling callback for a dead entity)");
+    kb::tests::Require(!scene.Timers().Exists(doomedId), "A dead-owner timer must be auto-cancelled (removed), not left dangling");
+
+    // (F) Timer.Repeat fires more than once, resetting its own countdown
+    // each time (flat reset — no overshoot compensation, LIB-096's job).
+    const std::uint64_t repeatId = scene.Timers().Repeat(0.1F, ownerObject.Entity());
+    kb::tests::Require(repeatId != 0U, "SceneTimers::Repeat must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 5U, "Timer.Repeat must fire on its first interval");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 6U, "Timer.Repeat must fire AGAIN on its second interval, proving it resets rather than being removed after firing once");
+    kb::tests::Require(scene.Timers().Exists(repeatId), "A repeating timer must remain alive after firing, unlike a one-shot timer");
+    kb::tests::Require(scene.Timers().Cancel(repeatId), "SceneTimers::Cancel must be able to stop a still-alive repeating timer");
+}
+
+// LIB-096: same-time ordering (multiple timers due within one Advance()
+// call fire in CREATION order) and long-frame catch-up (a heavily-overdue
+// Timer.Repeat fires a BOUNDED number of times in one Advance() call rather
+// than silently dropping all its backlog to a single fire, LIB-095's
+// original behavior). Tested directly against kb::scene::SceneTimers'
+// native facade — no script layer needed, this is purely a kb::scene-level
+// contract.
+void RunSceneTimerAdvanceOrderingAndCatchUpTest() {
+    kb::scene::Scene scene;
+
+    // Same-time ordering: create three one-shot timers with DIFFERENT
+    // delays (deliberately NOT in delay-magnitude order) and advance by
+    // enough for all three to be overdue in a single call — `fired` must
+    // list them in the order they were CREATED, not by remaining-time size.
+    const std::uint64_t first = scene.Timers().Once(0.05F, kb::scene::SceneEntity{});
+    const std::uint64_t second = scene.Timers().Once(0.02F, kb::scene::SceneEntity{});
+    const std::uint64_t third = scene.Timers().Once(0.08F, kb::scene::SceneEntity{});
+    kb::tests::Require(first != 0U && second != 0U && third != 0U, "Ordering test fixture timers must all be created successfully");
+    const std::vector<kb::scene::TimerFiredRecord> sameTimeFired = scene.Timers().Advance(0.1F);
+    kb::tests::Require(sameTimeFired.size() == 3U, "All three timers due within the same Advance() call must all be reported as fired");
+    kb::tests::Require(sameTimeFired[0].id == first && sameTimeFired[1].id == second && sameTimeFired[2].id == third,
+        "Timers due within the same Advance() call must fire in CREATION order, not by remaining-time magnitude (LIB-096)");
+
+    // Long-frame catch-up: a repeating timer with a tiny interval, hit with
+    // a single huge deltaSeconds (100 intervals' worth of backlog), must
+    // fire MORE THAN ONCE (proving debt isn't silently dropped, LIB-095's
+    // original flat-reset behavior) but still a BOUNDED number of times
+    // (proving no unbounded spiral-of-death burst either) — exactly
+    // kMaxCatchUpFiresPerAdvance (8, SceneTimerService.cpp), the rest of
+    // the backlog is honestly dropped.
+    const std::uint64_t repeating = scene.Timers().Repeat(0.01F, kb::scene::SceneEntity{});
+    kb::tests::Require(repeating != 0U, "Catch-up test fixture timer must be created successfully");
+    const std::vector<kb::scene::TimerFiredRecord> caughtUp = scene.Timers().Advance(1.0F);
+    kb::tests::Require(caughtUp.size() == 8U, "A heavily-overdue Timer.Repeat must fire exactly kMaxCatchUpFiresPerAdvance times in one Advance() call, not once and not unboundedly");
+    for (const kb::scene::TimerFiredRecord& record : caughtUp) {
+        kb::tests::Require(record.id == repeating, "Every catch-up fire must report the SAME timer id it belongs to");
+    }
+    kb::tests::Require(scene.Timers().Exists(repeating), "A repeating timer must remain alive after a catch-up burst, ready for its next interval");
+
+    // After a capped catch-up burst, the timer must behave completely
+    // normally again — exactly one fire for exactly one interval's worth
+    // of time, no lingering debt or drift from the dropped backlog.
+    const std::vector<kb::scene::TimerFiredRecord> normalAfterCatchUp = scene.Timers().Advance(0.01F);
+    kb::tests::Require(normalAfterCatchUp.size() == 1U && normalAfterCatchUp[0].id == repeating, "A repeating timer must resume firing exactly once per interval after a catch-up burst, with no leftover debt");
+    const std::vector<kb::scene::TimerFiredRecord> stillNormal = scene.Timers().Advance(0.005F);
+    kb::tests::Require(stillNormal.empty(), "A repeating timer must NOT fire before its next full interval has elapsed post-catch-up");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -4563,6 +5844,16 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptTimeApiElapsedAndAliasingTest();
+    RunScriptTimeApiScaleAndPauseTest();
+    RunScriptTimerApiTest();
+    RunScriptTimerApiFiringOwnerAndPauseTest();
+    RunSceneTimerAdvanceOrderingAndCatchUpTest();
+    RunTransformApiLocalAndWorldPoseTest();
+    RunTransformApiParentAndHierarchyTest();
+    RunTransformApiChildIterationTest();
+    RunTransformApiRotateLookAtAndPointConversionTest();
+    RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
@@ -4589,6 +5880,8 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
     RunScriptSceneComponentApiTest();
+    RunScriptSceneComponentGeneratedAccessorCoverageTest();
+    RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
     RunVisualGraphSceneComponentBindingTest();
 }
 

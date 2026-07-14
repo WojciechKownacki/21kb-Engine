@@ -18,25 +18,44 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <utility>
+#include <type_traits>
 
 namespace kb::script {
 namespace {
 
-enum class FieldKind {
-    Bool,
-    Int,
-    UInt32,
-    Float,
-    BehaviourTickGroup,
-    CameraProjection,
-    LightKind,
-};
+// LIB-082: every KB_* macro below asserts, at the point the field is
+// registered, that the field's own declared type is not a raw pointer —
+// this is what actually flows into the ScriptValue the read lambda
+// constructs. ScriptValue::Storage itself already static_asserts (LIB-032)
+// that none of its variant ALTERNATIVES is a pointer type, which forecloses
+// storing one directly, but it cannot see what an individual field's C++
+// type is before a macro reads it — this assert closes that gap at the one
+// place a pointer-typed field would first be touched, so accidentally
+// wiring up a pointer/handle-as-address field is a compile error here, not
+// a silent runtime leak to Lua/VisualGraph.
+#define KB_ASSERT_NOT_POINTER(expr) \
+    static_assert(!std::is_pointer_v<decltype(expr)>, "kb::script field accessor must not expose a raw pointer to Lua/VisualGraph (LIB-082)")
 
+// LIB-077: each FieldBinding carries a REAL, per-field accessor function
+// pair — not an offsetof + reinterpret_cast<Field*> pointer walk (the
+// pre-LIB-077 mechanism this replaces). `read`/`write` are non-capturing
+// lambdas generated one per field by the KB_* macros below, each of which
+// names the field directly (`static_cast<const Component*>(component)->
+// field`) so the compiler checks the field actually exists and has the
+// type the macro claims — a copy-paste that pairs the wrong macro with a
+// field now fails to compile (wrong member access) instead of silently
+// reinterpreting the wrong bytes at runtime, which is what a
+// mismatched-but-still-offsetof-computable {kind, offset} pair could do
+// before. The `void*` here is still untyped — required so one FieldBinding
+// table works across the generic ComponentAccess/GetProperty/SetProperty
+// machinery below for any of the 6 registered components — but the cast
+// back to the concrete Component type happens ONCE, inside the generated
+// lambda that also performs the real field access, not in a separate,
+// disconnected helper trusted to receive the right type.
 struct FieldBinding {
     std::string_view name;
-    FieldKind kind = FieldKind::Float;
-    std::size_t offset = 0;
+    ScriptValue (*read)(const void* component) noexcept = nullptr;
+    bool (*write)(void* component, const ScriptValue& value) noexcept = nullptr;
 };
 
 struct ComponentAccess {
@@ -46,92 +65,95 @@ struct ComponentAccess {
     void (*markModified)(kb::scene::Scene&, kb::scene::SceneEntity) noexcept = nullptr;
 };
 
-template <typename Component, typename Field>
-[[nodiscard]] const Field& ReadField(const void* component, std::size_t offset) noexcept {
-    return *reinterpret_cast<const Field*>(static_cast<const std::byte*>(component) + offset);
-}
+// clang-format off
+#define KB_BOOL(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Bool) { return false; } \
+            static_cast<Component*>(component)->field = value.AsBool(); \
+            return true; \
+        } }
 
-template <typename Component, typename Field>
-[[nodiscard]] Field& WriteField(void* component, std::size_t offset) noexcept {
-    return *reinterpret_cast<Field*>(static_cast<std::byte*>(component) + offset);
-}
+#define KB_INT(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int) { return false; } \
+            static_cast<Component*>(component)->field = value.AsInt(); \
+            return true; \
+        } }
 
-template <typename Component>
-[[nodiscard]] ScriptValue ReadValue(const void* component, const FieldBinding& field) {
-    switch (field.kind) {
-    case FieldKind::Bool:
-        return ScriptValue{ ReadField<Component, bool>(component, field.offset) };
-    case FieldKind::Int:
-        return ScriptValue{ ReadField<Component, int>(component, field.offset) };
-    case FieldKind::UInt32:
-        return ScriptValue{ static_cast<int>(ReadField<Component, std::uint32_t>(component, field.offset)) };
-    case FieldKind::Float:
-        return ScriptValue{ ReadField<Component, float>(component, field.offset) };
-    case FieldKind::BehaviourTickGroup:
-        return ScriptValue{ static_cast<int>(ReadField<Component, kb::scene::BehaviourTickGroup>(component, field.offset)) };
-    case FieldKind::CameraProjection:
-        return ScriptValue{ static_cast<int>(ReadField<Component, kb::scene::CameraProjection>(component, field.offset)) };
-    case FieldKind::LightKind:
-        return ScriptValue{ static_cast<int>(ReadField<Component, kb::scene::LightKind>(component, field.offset)) };
-    }
-    return ScriptValue{};
-}
+#define KB_UINT32(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<std::uint32_t>(value.AsInt()); \
+            return true; \
+        } }
 
-template <typename Component>
-[[nodiscard]] bool WriteValue(void* component, const FieldBinding& field, const ScriptValue& value) {
-    switch (field.kind) {
-    case FieldKind::Bool:
-        if (value.Type() != ScriptValueType::Bool) {
-            return false;
-        }
-        WriteField<Component, bool>(component, field.offset) = value.AsBool();
-        return true;
-    case FieldKind::Int:
-        if (value.Type() != ScriptValueType::Int) {
-            return false;
-        }
-        WriteField<Component, int>(component, field.offset) = value.AsInt();
-        return true;
-    case FieldKind::UInt32:
-        if (value.Type() != ScriptValueType::Int || value.AsInt() < 0) {
-            return false;
-        }
-        WriteField<Component, std::uint32_t>(component, field.offset) = static_cast<std::uint32_t>(value.AsInt());
-        return true;
-    case FieldKind::Float:
-        if (value.Type() == ScriptValueType::Float) {
-            WriteField<Component, float>(component, field.offset) = value.AsFloat();
-            return true;
-        }
-        if (value.Type() == ScriptValueType::Int) {
-            WriteField<Component, float>(component, field.offset) = static_cast<float>(value.AsInt());
-            return true;
-        }
-        return false;
-    case FieldKind::BehaviourTickGroup:
-        if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::BehaviourTickGroup::Presentation)) {
-            return false;
-        }
-        WriteField<Component, kb::scene::BehaviourTickGroup>(component, field.offset) = static_cast<kb::scene::BehaviourTickGroup>(value.AsInt());
-        return true;
-    case FieldKind::CameraProjection:
-        if (value.Type() != ScriptValueType::Int) {
-            return false;
-        }
-        WriteField<Component, kb::scene::CameraProjection>(component, field.offset) = static_cast<kb::scene::CameraProjection>(value.AsInt());
-        return true;
-    case FieldKind::LightKind:
-        if (value.Type() != ScriptValueType::Int) {
-            return false;
-        }
-        WriteField<Component, kb::scene::LightKind>(component, field.offset) = static_cast<kb::scene::LightKind>(value.AsInt());
-        return true;
-    }
-    return false;
-}
+#define KB_FLOAT(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() == ScriptValueType::Float) { static_cast<Component*>(component)->field = value.AsFloat(); return true; } \
+            if (value.Type() == ScriptValueType::Int) { static_cast<Component*>(component)->field = static_cast<float>(value.AsInt()); return true; } \
+            return false; \
+        } }
 
-#define KB_FIELD(component, field, kind_value) FieldBinding{ #field, kind_value, offsetof(component, field) }
-#define KB_NESTED_FIELD(component, parent, field, kind_value) FieldBinding{ #parent "." #field, kind_value, offsetof(component, parent) + offsetof(decltype(std::declval<component>().parent), field) }
+#define KB_NESTED_FLOAT(Component, parent, field) \
+    FieldBinding{ #parent "." #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->parent.field); \
+            return ScriptValue{ static_cast<const Component*>(component)->parent.field }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() == ScriptValueType::Float) { static_cast<Component*>(component)->parent.field = value.AsFloat(); return true; } \
+            if (value.Type() == ScriptValueType::Int) { static_cast<Component*>(component)->parent.field = static_cast<float>(value.AsInt()); return true; } \
+            return false; \
+        } }
+
+#define KB_TICKGROUP(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::BehaviourTickGroup::Presentation)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::BehaviourTickGroup>(value.AsInt()); \
+            return true; \
+        } }
+
+#define KB_CAMERA_PROJECTION(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::CameraProjection>(value.AsInt()); \
+            return true; \
+        } }
+
+#define KB_LIGHT_KIND(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::LightKind>(value.AsInt()); \
+            return true; \
+        } }
+// clang-format on
 
 constexpr std::array<std::string_view, 6> kComponentNames{
     "Transform",
@@ -198,62 +220,69 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDesc
 };
 
 constexpr std::array<FieldBinding, 13> kTransformFields{
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localPosition, x, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localPosition, y, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localPosition, z, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localRotation, x, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localRotation, y, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localRotation, z, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localRotation, w, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localScale, x, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localScale, y, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, localScale, z, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, worldPosition, x, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, worldPosition, y, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::TransformComponent, worldPosition, z, FieldKind::Float),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, x),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, y),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, z),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localRotation, x),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localRotation, y),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localRotation, z),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localRotation, w),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localScale, x),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localScale, y),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, localScale, z),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, worldPosition, x),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, worldPosition, y),
+    KB_NESTED_FLOAT(kb::scene::TransformComponent, worldPosition, z),
 };
 
 constexpr std::array<FieldBinding, 1> kVisibilityFields{
-    KB_FIELD(kb::scene::VisibilityComponent, visible, FieldKind::Bool),
+    KB_BOOL(kb::scene::VisibilityComponent, visible),
 };
 
 constexpr std::array<FieldBinding, 6> kCameraFields{
-    KB_FIELD(kb::scene::CameraComponent, projection, FieldKind::CameraProjection),
-    KB_FIELD(kb::scene::CameraComponent, verticalFovDegrees, FieldKind::Float),
-    KB_FIELD(kb::scene::CameraComponent, orthographicHeight, FieldKind::Float),
-    KB_FIELD(kb::scene::CameraComponent, nearClip, FieldKind::Float),
-    KB_FIELD(kb::scene::CameraComponent, farClip, FieldKind::Float),
-    KB_FIELD(kb::scene::CameraComponent, primary, FieldKind::Bool),
+    KB_CAMERA_PROJECTION(kb::scene::CameraComponent, projection),
+    KB_FLOAT(kb::scene::CameraComponent, verticalFovDegrees),
+    KB_FLOAT(kb::scene::CameraComponent, orthographicHeight),
+    KB_FLOAT(kb::scene::CameraComponent, nearClip),
+    KB_FLOAT(kb::scene::CameraComponent, farClip),
+    KB_BOOL(kb::scene::CameraComponent, primary),
 };
 
 constexpr std::array<FieldBinding, 11> kLightFields{
-    KB_FIELD(kb::scene::LightComponent, kind, FieldKind::LightKind),
-    KB_NESTED_FIELD(kb::scene::LightComponent, color, x, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::LightComponent, color, y, FieldKind::Float),
-    KB_NESTED_FIELD(kb::scene::LightComponent, color, z, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, intensity, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, range, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, innerConeDegrees, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, outerConeDegrees, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, contactShadowLength, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, volumetricScattering, FieldKind::Float),
-    KB_FIELD(kb::scene::LightComponent, castsShadow, FieldKind::Bool),
+    KB_LIGHT_KIND(kb::scene::LightComponent, kind),
+    KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
+    KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
+    KB_NESTED_FLOAT(kb::scene::LightComponent, color, z),
+    KB_FLOAT(kb::scene::LightComponent, intensity),
+    KB_FLOAT(kb::scene::LightComponent, range),
+    KB_FLOAT(kb::scene::LightComponent, innerConeDegrees),
+    KB_FLOAT(kb::scene::LightComponent, outerConeDegrees),
+    KB_FLOAT(kb::scene::LightComponent, contactShadowLength),
+    KB_FLOAT(kb::scene::LightComponent, volumetricScattering),
+    KB_BOOL(kb::scene::LightComponent, castsShadow),
 };
 
 constexpr std::array<FieldBinding, 3> kMeshRendererFields{
-    KB_FIELD(kb::scene::MeshRendererComponent, materialSlotOverrideCount, FieldKind::UInt32),
-    KB_FIELD(kb::scene::MeshRendererComponent, castsShadow, FieldKind::Bool),
-    KB_FIELD(kb::scene::MeshRendererComponent, receivesShadow, FieldKind::Bool),
+    KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
+    KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
+    KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{
-    KB_FIELD(kb::scene::BehaviourComponent, enabled, FieldKind::Bool),
-    KB_FIELD(kb::scene::BehaviourComponent, tickGroup, FieldKind::BehaviourTickGroup),
-    KB_FIELD(kb::scene::BehaviourComponent, executionOrder, FieldKind::Int),
+    KB_BOOL(kb::scene::BehaviourComponent, enabled),
+    KB_TICKGROUP(kb::scene::BehaviourComponent, tickGroup),
+    KB_INT(kb::scene::BehaviourComponent, executionOrder),
 };
 
-#undef KB_NESTED_FIELD
-#undef KB_FIELD
+#undef KB_BOOL
+#undef KB_INT
+#undef KB_UINT32
+#undef KB_FLOAT
+#undef KB_NESTED_FLOAT
+#undef KB_TICKGROUP
+#undef KB_CAMERA_PROJECTION
+#undef KB_LIGHT_KIND
+#undef KB_ASSERT_NOT_POINTER
 
 [[nodiscard]] const FieldBinding* FindField(std::span<const FieldBinding> fields, std::string_view name) noexcept {
     for (const FieldBinding& field : fields) {
@@ -328,50 +357,6 @@ void MarkBehaviourModified(kb::scene::Scene& scene, kb::scene::SceneEntity entit
     return {};
 }
 
-[[nodiscard]] ScriptValue ReadByComponent(std::string_view componentName, const void* component, const FieldBinding& field) {
-    if (componentName == "Transform") {
-        return ReadValue<kb::scene::TransformComponent>(component, field);
-    }
-    if (componentName == "Visibility") {
-        return ReadValue<kb::scene::VisibilityComponent>(component, field);
-    }
-    if (componentName == "Camera") {
-        return ReadValue<kb::scene::CameraComponent>(component, field);
-    }
-    if (componentName == "Light") {
-        return ReadValue<kb::scene::LightComponent>(component, field);
-    }
-    if (componentName == "MeshRenderer") {
-        return ReadValue<kb::scene::MeshRendererComponent>(component, field);
-    }
-    if (componentName == "Behaviour") {
-        return ReadValue<kb::scene::BehaviourComponent>(component, field);
-    }
-    return ScriptValue{};
-}
-
-[[nodiscard]] bool WriteByComponent(std::string_view componentName, void* component, const FieldBinding& field, const ScriptValue& value) {
-    if (componentName == "Transform") {
-        return WriteValue<kb::scene::TransformComponent>(component, field, value);
-    }
-    if (componentName == "Visibility") {
-        return WriteValue<kb::scene::VisibilityComponent>(component, field, value);
-    }
-    if (componentName == "Camera") {
-        return WriteValue<kb::scene::CameraComponent>(component, field, value);
-    }
-    if (componentName == "Light") {
-        return WriteValue<kb::scene::LightComponent>(component, field, value);
-    }
-    if (componentName == "MeshRenderer") {
-        return WriteValue<kb::scene::MeshRendererComponent>(component, field, value);
-    }
-    if (componentName == "Behaviour") {
-        return WriteValue<kb::scene::BehaviourComponent>(component, field, value);
-    }
-    return false;
-}
-
 } // namespace
 
 std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noexcept {
@@ -421,7 +406,7 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetProperty(
 
     return ScriptSceneComponentPropertyResult{
         .succeeded = true,
-        .value = ReadByComponent(componentName, component.immutable, *field),
+        .value = field->read(component.immutable),
         .error = {},
     };
 }
@@ -446,7 +431,7 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         return ScriptSceneComponentMutationResult{ .error = "component property is read-only for scripts" };
     }
 
-    if (!WriteByComponent(componentName, component.mutableComponent, *field, value)) {
+    if (!field->write(component.mutableComponent, value)) {
         return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
     }
 

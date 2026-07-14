@@ -1,10 +1,13 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/scene/SceneTimers.hpp"
 
 #include <algorithm>
 #include <unordered_set>
@@ -84,8 +87,20 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     PrepareScene(scene);
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
+    DispatchFiredTimers(scene, clampedDeltaSeconds);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
-    fixedAccumulatorSeconds_ += clampedDeltaSeconds;
+    // LIB-094: explicit FixedTick-during-pause rule — while the scene is
+    // paused (Runtime().IsPlaying()==false), wall-clock time is NOT
+    // accumulated into fixedAccumulatorSeconds_ at all, so FixedTick simply
+    // never fires for the duration of the pause and no step "debt" builds
+    // up (unpausing does not trigger a burst of catch-up steps). Tick/
+    // LateTick/BeforeRender/AfterRender below are deliberately NOT gated
+    // here — they keep firing while paused (e.g. so pause-menu/UI
+    // behaviours keep working), the gameplay freeze instead comes from
+    // Time.Delta reading 0 while paused (ScriptTimeApi.cpp).
+    if (scene.Runtime().IsPlaying()) {
+        fixedAccumulatorSeconds_ += clampedDeltaSeconds;
+    }
     std::size_t fixedSteps = 0U;
     while (frameSettings_.fixedDeltaSeconds > 0.0F && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds && fixedSteps < frameSettings_.maxFixedStepsPerFrame) {
         fixedAccumulatorSeconds_ -= frameSettings_.fixedDeltaSeconds;
@@ -141,6 +156,23 @@ void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Sc
         event.name = std::move(pending.name);
         event.arguments.push_back(ScriptEventArgument{ .name = "sceneId", .value = ScriptValue{ pending.sceneId, ScriptValueType::Hash } });
         event.arguments.push_back(ScriptEventArgument{ .name = "sceneName", .value = ScriptValue{ std::move(pending.sceneName) } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds) {
+    for (kb::scene::TimerFiredRecord& fired : scene.Timers().Advance(deltaSeconds)) {
+        ScriptEvent event;
+        event.name = "TimerFired";
+        // Invalid owner (SceneTimers::Once/Repeat called with no owner) =
+        // an untargeted broadcast to every enabled behaviour, the same
+        // convention DispatchPendingSceneLifecycleEvents above already
+        // uses (its ScriptEvent never sets target at all). A valid owner
+        // targets ONLY that entity's own behaviour(s) — DispatchSceneBehaviours
+        // (ScriptRuntime.cpp) already skips any record whose entity does not
+        // match event.target when target is valid.
+        event.target = fired.owner;
+        event.arguments.push_back(ScriptEventArgument{ .name = "timer", .value = ScriptValue{ fired.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }

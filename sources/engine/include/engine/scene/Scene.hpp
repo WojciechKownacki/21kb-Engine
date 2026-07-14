@@ -43,6 +43,7 @@ class SceneRuntime;
 class SceneRuntimeQueries;
 class SceneAccess;
 class SceneState;
+class SceneTimers;
 class SceneTransformQueries;
 class SceneTransforms;
 
@@ -89,6 +90,7 @@ public:
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
     [[nodiscard]] SceneLoadedContent LoadedContent() noexcept;
     [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
+    [[nodiscard]] SceneTimers Timers() noexcept;
     void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
