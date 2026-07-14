@@ -10,6 +10,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,6 +42,16 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
 [[nodiscard]] bool BoolArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, bool fallback = false) noexcept {
     const ScriptValue* value = FindArg(arguments, name);
     return value == nullptr ? fallback : value->AsBool(fallback);
+}
+
+[[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback = 0) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
+[[nodiscard]] std::string StringArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, std::string fallback = {}) {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? std::move(fallback) : value->AsString();
 }
 
 [[nodiscard]] bool Alive(const ScriptFunctionCallContext& context, kb::scene::SceneEntity entity) noexcept {
@@ -391,6 +402,96 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
     return BoolResult("moved", true);
 }
 
+ScriptFunctionCallResult ChildResult(bool found, kb::scene::SceneEntity child) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "child", ScriptValue{ child.Id(), ScriptValueType::Entity } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-087: reads a genuinely O(1) count/indexed-lookup out of kb::scene's
+// hierarchy child storage (SceneHierarchyCache::ChildCount/ChildAt,
+// exposed here through SceneHierarchyAccess) — NOT the allocating
+// ChildEntities() (which materializes a fresh std::vector of every child
+// on every call). No collection crosses the script boundary here (LIB-032)
+// — the caller loops index=0..count-1, the same index-and-loop shape
+// LIB-069's World.FindAllByTag already established for its own
+// script-boundary iteration — but unlike that function's O(n) full-scene
+// rescan PER CALL (tags aren't indexed by anything), each call here is a
+// real O(1) lookup, since the underlying storage is already indexed by
+// parent and incrementally maintained on every reparent (confirmed by
+// research before writing this: SceneHierarchyCache's dense/sparse child
+// lists are updated in Add/Move/Remove, never rebuilt from a scan).
+ScriptFunctionCallResult GetChildCount(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{ "found", ScriptValue{ false } },
+                ScriptFunctionArgument{ "count", ScriptValue{ 0 } },
+            },
+            .errors = {},
+        };
+    }
+    const std::size_t count = context.scene->Hierarchy().ChildCount(entity);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ true } },
+            ScriptFunctionArgument{ "count", ScriptValue{ static_cast<int>(count) } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult GetChild(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return ChildResult(false, {});
+    }
+    const int index = IntArg(arguments, "index", 0);
+    if (index < 0) {
+        return ChildResult(false, {});
+    }
+    const kb::scene::SceneEntity child = context.scene->Hierarchy().ChildAt(entity, static_cast<std::size_t>(index));
+    return ChildResult(child.IsValid(), child);
+}
+
+// FindChild: a linear scan over `entity`'s OWN child list (already
+// O(1)-indexed, see GetChildCount/GetChild above) comparing each child's
+// Name() — cost is O(children of entity), NOT O(all entities in the
+// scene) like LIB-069's World.FindAllByTag (which rescans the whole world
+// every call because tags aren't indexed). `skip` mirrors FindAllByTag's
+// own convention for walking past duplicate names (clamped to >= 0, same
+// as FindAllByTag's clamp).
+ScriptFunctionCallResult FindChild(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return ChildResult(false, {});
+    }
+    const std::string name = StringArg(arguments, "name");
+    const int skip = IntArg(arguments, "skip", 0);
+    const int clampedSkip = skip < 0 ? 0 : skip;
+    int matched = 0;
+    const std::size_t count = context.scene->Hierarchy().ChildCount(entity);
+    for (std::size_t index = 0; index < count; ++index) {
+        const kb::scene::SceneEntity child = context.scene->Hierarchy().ChildAt(entity, index);
+        if (!child.IsValid() || context.scene->Entities().Name(child) != name) {
+            continue;
+        }
+        if (matched == clampedSkip) {
+            return ChildResult(true, child);
+        }
+        ++matched;
+    }
+    return ChildResult(false, {});
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -537,6 +638,34 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
         &SetParent) && ok;
+    ok = RegisterFunction(host, "Transform.ChildCount",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "count", ScriptValueType::Int, true },
+        },
+        &GetChildCount) && ok;
+    ok = RegisterFunction(host, "Transform.GetChild",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "index", ScriptValueType::Int, true },
+        },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "child", ScriptValueType::Entity, true },
+        },
+        &GetChild) && ok;
+    ok = RegisterFunction(host, "Transform.FindChild",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "name", ScriptValueType::String, true },
+            ScriptFunctionPin{ "skip", ScriptValueType::Int, false },
+        },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "child", ScriptValueType::Entity, true },
+        },
+        &FindChild) && ok;
     return ok;
 }
 
