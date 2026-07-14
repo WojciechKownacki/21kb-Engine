@@ -44,7 +44,8 @@ namespace {
 [[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {
     return lhs.mappingContextAssetId == rhs.mappingContextAssetId
         && lhs.priority == rhs.priority
-        && lhs.enabled == rhs.enabled;
+        && lhs.enabled == rhs.enabled
+        && lhs.localUser == rhs.localUser;
 }
 
 [[nodiscard]] bool Equal(const RigidbodyComponent& lhs, const RigidbodyComponent& rhs) noexcept {

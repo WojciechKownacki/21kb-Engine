@@ -25,6 +25,17 @@ template <typename T>
     return true;
 }
 
+// Absent when a prefab was authored before LIB-115: leaves output at its
+// InputComponent default (kPrimaryLocalUser), so old prefabs load unchanged.
+template <typename T>
+[[nodiscard]] bool ParseOptionalField(const ScenePrefabAssetFieldMap& fields, std::string_view key, T& output) {
+    const auto iterator = fields.find(std::string{ key });
+    if (iterator == fields.end()) {
+        return true;
+    }
+    return ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
+}
+
 } // namespace
 
 bool ScenePrefabAssetInputParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -40,7 +51,8 @@ bool ScenePrefabAssetInputParser::Parse(const ScenePrefabAssetFieldMap& fields, 
     int priority = 0;
     if (!ParseField(fields, "input.mappingContextAssetId", input.mappingContextAssetId)
         || !ParseField(fields, "input.priority", priority)
-        || !ParseOptionalBool(fields, "input.enabled", input.enabled)) {
+        || !ParseOptionalBool(fields, "input.enabled", input.enabled)
+        || !ParseOptionalField(fields, "input.localUser", input.localUser.value)) {
         return false;
     }
 

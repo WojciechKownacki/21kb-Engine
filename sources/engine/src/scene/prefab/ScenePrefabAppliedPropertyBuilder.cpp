@@ -266,6 +266,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = ToString(input->enabled);
             return true;
         }
+        if (propertyPath == "input.localUser") {
+            property.value = std::to_string(input->localUser.value);
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "rigidbody")) {
         const RigidbodyComponent* rigidbody = components.Rigidbodies().TryGet(entity);
