@@ -22,6 +22,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
+#include "engine/library/EngineLibraryQuery.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
 #include "engine/library/EngineLibraryTextEncoding.hpp"
@@ -1606,6 +1607,61 @@ void RunEngineLibraryComponentRegistryTest() {
     }
 }
 
+// LIB-078: kb::library::Query<T>::ForEach — proves the phase gate (reusing
+// LIB-007's ClassifyLifecycleContext, not a new classification), that the
+// visitor receives real component data for a real live entity, and that a
+// structural change attempted from INSIDE the visitor genuinely throws
+// (kb::ecs::StructuralChangeValidator, entered via the same
+// kb::ecs::World the Scene wraps — not a new guard) rather than
+// corrupting iteration state, AND that the RAII guard is still released
+// after that exception (iteration is not left permanently blocked).
+void RunLibraryQueryPhaseGateTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "QueryGateA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "QueryGateB" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 30.0F });
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 60.0F });
+
+    int visitedTick = 0;
+    float fovSum = 0.0F;
+    const bool tickIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent& camera) {
+            kb::tests::Require(entity.IsAlive(scene), "Engine21kbLibrary Query<T> visited a non-alive entity");
+            ++visitedTick;
+            fovSum += camera.verticalFovDegrees;
+        });
+    kb::tests::Require(tickIterated, "Engine21kbLibrary Query<T>::ForEach must iterate during Tick (a Frame-classified phase)");
+    kb::tests::Require(visitedTick == 2, "Engine21kbLibrary Query<T>::ForEach did not visit all matching entities");
+    kb::tests::Require(kb::tests::NearlyEqual(fovSum, 90.0F), "Engine21kbLibrary Query<T>::ForEach did not pass real component data to the visitor");
+
+    int visitedCreated = 0;
+    const bool createdIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Created,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++visitedCreated; });
+    kb::tests::Require(!createdIterated, "Engine21kbLibrary Query<T>::ForEach must refuse to iterate during Created (a Behaviour-classified phase)");
+    kb::tests::Require(visitedCreated == 0, "Engine21kbLibrary Query<T>::ForEach must never call the visitor when refusing to iterate");
+
+    bool threw = false;
+    try {
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) {
+                static_cast<void>(scene.Entities().CreateEntity());
+            }));
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "Engine21kbLibrary Query<T>::ForEach must let a structural change attempted from inside the visitor throw std::logic_error");
+
+    int visitedAfterThrow = 0;
+    const bool iteratedAfterThrow = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++visitedAfterThrow; });
+    kb::tests::Require(iteratedAfterThrow && visitedAfterThrow == 2,
+        "Engine21kbLibrary Query<T>::ForEach's RAII iteration guard must be released even after the visitor throws, not leave the world permanently refusing structural changes");
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -1895,6 +1951,7 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunLibraryQueryPhaseGateTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
