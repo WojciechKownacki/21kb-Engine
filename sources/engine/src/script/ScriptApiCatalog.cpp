@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 25> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 31> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -61,6 +61,12 @@ constexpr std::array<LuaBindingSpec, 25> kLuaBindings{ {
     { "Input", "Vector3", "Input.Vector3", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Input", "AddMappingContext", "Input.AddMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "RemoveMappingContext", "Input.RemoveMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "ActionBool", "Input.ActionBool", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "ActionFloat", "Input.ActionFloat", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "Action2D", "Input.Action2D", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Input", "Pressed", "Input.Pressed", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "Released", "Input.Released", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "Held", "Input.Held", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
 } };
 
