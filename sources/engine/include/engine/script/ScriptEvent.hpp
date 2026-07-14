@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/script/ScriptEventId.hpp"
 #include "engine/script/ScriptValue.hpp"
 
 #include <string>
@@ -58,6 +59,14 @@ struct ScriptEvent {
     kb::scene::SceneEntity target{};
     kb::assets::AssetId senderAsset{};
     std::vector<ScriptEventArgument> arguments;
+
+    // LIB-104: the typed dispatch key derived from `name` — see
+    // ScriptEventId.hpp for why this exists and how it is used on the hot
+    // dispatch path. Always computed from `name`, never cached as a
+    // separate field, so the two can never drift out of sync.
+    [[nodiscard]] EventId Id() const noexcept {
+        return ComputeEventId(name);
+    }
 };
 
 } // namespace kb::script

@@ -49,14 +49,14 @@ std::size_t NativeScriptBackend::SymbolLifecycleKeyHasher::operator()(const Symb
     return hash;
 }
 
-std::size_t NativeScriptBackend::SymbolEventKeyHasher::operator()(const SymbolEventKey& key) const noexcept {
-    std::size_t hash = std::hash<std::string>{}(key.symbol);
-    hash ^= std::hash<std::string>{}(key.eventName) + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
-    return hash;
+std::size_t NativeScriptBackend::EventKeyHasher::operator()(EventKey key) const noexcept {
+    return static_cast<std::size_t>(key.assetId ^ (key.eventId + 0x9e3779b97f4a7c15ULL + (key.assetId << 6U) + (key.assetId >> 2U)));
 }
 
-std::string NativeScriptBackend::EventKey(kb::assets::AssetId assetId, std::string_view eventName) {
-    return std::to_string(assetId.value) + ":" + std::string{eventName};
+std::size_t NativeScriptBackend::SymbolEventKeyHasher::operator()(const SymbolEventKey& key) const noexcept {
+    std::size_t hash = std::hash<std::string>{}(key.symbol);
+    hash ^= static_cast<std::size_t>(key.eventId) + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    return hash;
 }
 
 kb::scene::BehaviourBackend NativeScriptBackend::Backend() const noexcept {
@@ -83,7 +83,7 @@ bool NativeScriptBackend::RegisterEvent(kb::assets::AssetId assetId, std::string
     if (!assetId.IsValid() || eventName.empty() || callback == nullptr) {
         return false;
     }
-    eventCallbacks_[EventKey(assetId, eventName)] = std::move(callback);
+    eventCallbacks_[EventKey{ .assetId = assetId.value, .eventId = ComputeEventId(eventName) }] = std::move(callback);
     return true;
 }
 
@@ -91,7 +91,7 @@ bool NativeScriptBackend::RegisterEventSymbol(std::string symbol, std::string ev
     if (symbol.empty() || eventName.empty() || callback == nullptr) {
         return false;
     }
-    symbolEventCallbacks_[SymbolEventKey{ .symbol = std::move(symbol), .eventName = std::move(eventName) }] = std::move(callback);
+    symbolEventCallbacks_[SymbolEventKey{ .symbol = std::move(symbol), .eventId = ComputeEventId(eventName) }] = std::move(callback);
     return true;
 }
 
@@ -165,16 +165,16 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteLifecycle(const kb::sce
     return result;
 }
 
-ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, ScriptExecutionContext& context) {
+ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) {
     ScriptBackendExecutionResult result{};
     const kb::assets::AssetId assetId{behaviour.behaviourAssetId};
-    const auto iter = eventCallbacks_.find(EventKey(assetId, event.name));
+    const auto iter = eventCallbacks_.find(EventKey{ .assetId = assetId.value, .eventId = eventId });
     if (iter == eventCallbacks_.end()) {
         const auto symbolIter = assetSymbols_.find(assetId.value);
         if (symbolIter == assetSymbols_.end()) {
             return result;
         }
-        const auto symbolCallback = symbolEventCallbacks_.find(SymbolEventKey{ .symbol = symbolIter->second, .eventName = event.name });
+        const auto symbolCallback = symbolEventCallbacks_.find(SymbolEventKey{ .symbol = symbolIter->second, .eventId = eventId });
         if (symbolCallback == symbolEventCallbacks_.end()) {
             return result;
         }
