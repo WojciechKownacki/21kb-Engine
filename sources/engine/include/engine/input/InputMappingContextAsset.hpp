@@ -23,6 +23,11 @@ struct InputKeyMapping {
     // axes: bind W with scale +1 and S with -1 to build a 1D movement axis, or
     // set mouse/stick sensitivity. Buttons normally leave it at 1.
     float scale = 1.0F;
+    // Which connected gamepad this binding reads (LIB-116); ignored for
+    // keyboard/mouse/touch keys, which are inherently singular. 0 is "the first
+    // gamepad" - every mapping authored before this field existed keeps reading
+    // exactly the controller it always did.
+    std::uint8_t gamepadIndex = 0U;
     std::vector<InputModifierDesc> modifiers;
     std::vector<InputTriggerDesc> triggers;
 };
@@ -33,6 +38,8 @@ struct InputCompositeSlot {
     InputKey key = InputKey::None;
     std::uint8_t axis = 0U; // 0 = x, 1 = y, 2 = z
     float scale = 1.0F;
+    // See InputKeyMapping::gamepadIndex; ignored for non-gamepad keys.
+    std::uint8_t gamepadIndex = 0U;
 };
 
 // Combines several discrete keys into one composite axis value (WASD -> Axis2D,
