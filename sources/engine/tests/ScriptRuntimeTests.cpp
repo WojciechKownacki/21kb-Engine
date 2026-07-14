@@ -4470,6 +4470,47 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     kb::tests::Require(fieldsChecked == 37U, "Script component API generated accessor coverage test did not exercise the expected total field count (37) across all 6 components");
 }
 
+// LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
+// compile-time check (ScriptSceneComponentApi.cpp) already forecloses any
+// individual field's OWN declared type being a pointer at the point it is
+// wired up, and ScriptValue::Storage (LIB-032, ScriptValue.hpp) already
+// forecloses storing one directly. Neither catches a field being wired up
+// through a WIDENING ScriptValueType (Int64/UInt32/Double/Entity/Component/
+// Hash) capable of carrying a full 64-bit value that COULD, in principle,
+// encode a raw pointer's bit pattern — unlike Bool/Int/Float, which are all
+// narrower than a pointer on every platform this engine targets. This test
+// walks every registered component property and asserts its declared
+// ScriptValueType stays within the closed set {Bool, Int, Float} this
+// system is actually allowed to expose to Lua/VisualGraph today, so adding
+// a wider type to any component's property table requires a conscious,
+// reviewed change to this allowlist rather than a silent widening of the
+// attack surface.
+void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "No Raw Pointer" });
+    scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
+    scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::size_t propertiesChecked = 0U;
+    for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : kb::script::ScriptSceneComponentApi::ComponentProperties(componentName)) {
+            ++propertiesChecked;
+            const std::string fieldLabel = std::string{ componentName } + "." + std::string{ property.name };
+            const bool isNarrowValueType = property.type == kb::script::ScriptValueType::Bool ||
+                property.type == kb::script::ScriptValueType::Int ||
+                property.type == kb::script::ScriptValueType::Float;
+            kb::tests::Require(isNarrowValueType, ("Script component property " + fieldLabel + " uses a ScriptValueType wide enough to carry a raw pointer's bit pattern — LIB-082 requires component fields to stay within Bool/Int/Float").c_str());
+
+            const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
+            kb::tests::Require(get.succeeded, ("Script component property " + fieldLabel + " failed to read for LIB-082's raw-pointer audit").c_str());
+            kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
+        }
+    }
+    kb::tests::Require(propertiesChecked == 37U, "LIB-082 raw-pointer audit did not exercise the expected total field count (37) across all 6 components");
+}
+
 void RunVisualGraphSceneComponentBindingTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "VisualSceneComponentBinding";
@@ -4665,6 +4706,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostFrameSettingsTest();
     RunScriptSceneComponentApiTest();
     RunScriptSceneComponentGeneratedAccessorCoverageTest();
+    RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
     RunVisualGraphSceneComponentBindingTest();
 }
 
