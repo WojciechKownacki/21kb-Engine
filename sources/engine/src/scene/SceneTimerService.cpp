@@ -18,6 +18,19 @@ namespace {
 // never the other way around).
 constexpr std::size_t kMaxLiveTimers = 4096U;
 
+// LIB-096: bounds how many consecutive intervals a single Timer.Repeat can
+// "catch up" on within ONE Advance() call — mirrors the exact same
+// spiral-of-death guard ScriptRuntimeFrameSettings::maxFixedStepsPerFrame
+// already applies to FixedTick's own accumulator (ScriptRuntimeSceneSystem.
+// cpp). Without a bound, a tiny intervalSeconds under one huge deltaSeconds
+// (a debugger breakpoint, an asset-load stall) would fire thousands of
+// TimerFired events in a single frame; with no bound at all in the OTHER
+// direction (LIB-095's original flat reset), an overdue repeating timer
+// silently lost all of that backlog instead. This constant is the explicit
+// middle ground: fire up to this many times to catch up, then honestly
+// drop the remaining backlog (documented below, not silent).
+constexpr std::size_t kMaxCatchUpFiresPerAdvance = 8U;
+
 } // namespace
 
 std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner) noexcept {
@@ -109,6 +122,16 @@ std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float del
     const float scale = SceneRuntimeService::IsPlaying(scene) ? SceneRuntimeService::TimeScale(scene) : 0.0F;
     const float effectiveDelta = deltaSeconds * scale;
 
+    // LIB-096: same-time ordering — `state.timers` is walked in ITS OWN
+    // storage order, which is creation order among still-live timers
+    // (Once/Repeat push_back; erase below only ever removes an earlier
+    // element and never reorders survivors) — so when several timers
+    // become due within the same Advance() call, `fired` lists them in the
+    // order they were CREATED (Timer.Once/Timer.Repeat call order), never
+    // by remaining-time magnitude or interval size. This mirrors LIB-060's
+    // own precedent of turning an already-true, previously-undocumented
+    // storage-order behavior into an explicit, tested contract rather than
+    // inventing a new ordering scheme.
     std::vector<TimerFiredRecord> fired;
     std::size_t index = 0U;
     while (index < state.timers.size()) {
@@ -125,12 +148,29 @@ std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float del
             continue;
         }
         fired.push_back(TimerFiredRecord{ .id = timer.id, .owner = timer.owner });
-        if (timer.repeating) {
-            timer.remainingSeconds = timer.intervalSeconds;
-            ++index;
-        } else {
+        if (!timer.repeating) {
             state.timers.erase(state.timers.begin() + static_cast<std::ptrdiff_t>(index));
+            continue;
         }
+        // LIB-096: catch-up policy for a repeating timer that fell behind
+        // by more than one whole interval (a long/stalled frame) — keep
+        // firing (each one a separate TimerFired, consecutive within this
+        // timer's own slot in `fired`) until it's caught up OR the
+        // kMaxCatchUpFiresPerAdvance bound is hit, whichever comes first.
+        // Hitting the bound HONESTLY DROPS the remaining backlog (resets to
+        // one fresh interval) rather than either replaying it later
+        // (which would just move the spiral to a future frame) or firing
+        // it all at once with no bound (the actual spiral-of-death risk).
+        std::size_t catchUpFires = 1U;
+        while (timer.remainingSeconds <= 0.0F && catchUpFires < kMaxCatchUpFiresPerAdvance) {
+            timer.remainingSeconds += timer.intervalSeconds;
+            if (timer.remainingSeconds <= 0.0F) {
+                fired.push_back(TimerFiredRecord{ .id = timer.id, .owner = timer.owner });
+            }
+            ++catchUpFires;
+        }
+        timer.remainingSeconds = timer.remainingSeconds <= 0.0F ? timer.intervalSeconds : timer.remainingSeconds;
+        ++index;
     }
     return fired;
 }
