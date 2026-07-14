@@ -2261,6 +2261,150 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
+// LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
+// Transform.WorldPose/SetWorldPose. Deliberately its own fresh Scene/host
+// (isolated fixture pattern, LIB-067) rather than folding into
+// RunScriptWorldTimePhysicsApiTest above. The core of this test is
+// SetWorldPose's world-to-local back-solve (LIB-085's only genuinely new
+// capability — everything else here is thin ergonomics over pre-existing
+// GetProperty/SetProperty-reachable data): set a WORLD pose on a CHILD
+// entity whose PARENT has a non-trivial world transform (translated AND
+// rotated, not just translated), then prove WorldPose(child) reads back
+// the exact pose that was requested — a round-trip through the real
+// inverse math (kb::math::Inverse, ScriptTransformApi::SetWorldPose), not
+// just "it compiles".
+void RunTransformApiLocalAndWorldPoseTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API local/world pose test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalPosition") != nullptr, "Transform.LocalPosition was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalPosition") != nullptr, "Transform.SetLocalPosition was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalRotation") != nullptr, "Transform.LocalRotation was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalRotation") != nullptr, "Transform.SetLocalRotation was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.LocalScale") != nullptr, "Transform.LocalScale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetLocalScale") != nullptr, "Transform.SetLocalScale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.WorldPose") != nullptr, "Transform.WorldPose was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetWorldPose") != nullptr, "Transform.SetWorldPose was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiSubject" });
+    const kb::script::ScriptFunctionArgument entityArg{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> entityOnlyArgs{ entityArg };
+
+    // LocalPosition/LocalRotation/LocalScale: plain get/set round trip.
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalPositionArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 3.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalPosition = host.Functions().Call("Transform.SetLocalPosition", setLocalPositionArgs, context);
+    kb::tests::Require(setLocalPosition.Succeeded() && setLocalPosition.Output("moved")->AsBool(), "Transform.SetLocalPosition direct call failed");
+    const kb::script::ScriptFunctionCallResult localPosition = host.Functions().Call("Transform.LocalPosition", entityOnlyArgs, context);
+    kb::tests::Require(localPosition.Succeeded() && localPosition.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localPosition.Output("x")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(localPosition.Output("y")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(localPosition.Output("z")->AsFloat(), 3.0F),
+        "Transform.LocalPosition did not round-trip Transform.SetLocalPosition");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalRotationArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 0.7071068F } },
+        kb::script::ScriptFunctionArgument{ "w", kb::script::ScriptValue{ 0.7071068F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalRotation = host.Functions().Call("Transform.SetLocalRotation", setLocalRotationArgs, context);
+    kb::tests::Require(setLocalRotation.Succeeded() && setLocalRotation.Output("moved")->AsBool(), "Transform.SetLocalRotation direct call failed");
+    const kb::script::ScriptFunctionCallResult localRotation = host.Functions().Call("Transform.LocalRotation", entityOnlyArgs, context);
+    kb::tests::Require(localRotation.Succeeded() && localRotation.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localRotation.Output("z")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(localRotation.Output("w")->AsFloat(), 0.7071068F),
+        "Transform.LocalRotation did not round-trip Transform.SetLocalRotation");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setLocalScaleArgs{
+        entityArg,
+        kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 4.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setLocalScale = host.Functions().Call("Transform.SetLocalScale", setLocalScaleArgs, context);
+    kb::tests::Require(setLocalScale.Succeeded() && setLocalScale.Output("moved")->AsBool(), "Transform.SetLocalScale direct call failed");
+    const kb::script::ScriptFunctionCallResult localScale = host.Functions().Call("Transform.LocalScale", entityOnlyArgs, context);
+    kb::tests::Require(localScale.Succeeded() && localScale.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(localScale.Output("x")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(localScale.Output("y")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(localScale.Output("z")->AsFloat(), 4.0F),
+        "Transform.LocalScale did not round-trip Transform.SetLocalScale");
+
+    // WorldPose on a ROOT entity must equal its local pose directly
+    // (TransformMath::ComposeRoot copies local straight to world unchanged).
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::script::ScriptFunctionCallResult subjectWorldPose = host.Functions().Call("Transform.WorldPose", entityOnlyArgs, context);
+    kb::tests::Require(subjectWorldPose.Succeeded() && subjectWorldPose.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posX")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posY")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("posZ")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("rotZ")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(subjectWorldPose.Output("rotW")->AsFloat(), 0.7071068F),
+        "Transform.WorldPose for a root entity must equal its local pose directly");
+
+    // SetWorldPose's genuinely new capability: back-solve a CHILD's local
+    // pose from a requested WORLD pose, given a PARENT with a non-trivial
+    // world transform (translated AND rotated).
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiParent" });
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parentObject.Entity());
+    parentTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    parentTransform.localRotation = kb::scene::Quat{ 0.0F, 0.0F, 0.7071068F, 0.7071068F }; // 90 degrees around +Z.
+    scene.Transforms().Set(parentObject.Entity(), parentTransform);
+
+    const kb::scene::SceneObject childObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformApiChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(childObject.Entity(), parentObject.Entity()), "Transform API world pose test could not parent the child fixture");
+    const kb::script::ScriptFunctionArgument childEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> childEntityOnlyArgs{ childEntityArg };
+
+    const std::vector<kb::script::ScriptFunctionArgument> setWorldPoseArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 6.0F } },
+        kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 7.0F } },
+        kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.7071068F } },
+        kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 0.7071068F } },
+    };
+    const kb::script::ScriptFunctionCallResult setWorldPose = host.Functions().Call("Transform.SetWorldPose", setWorldPoseArgs, context);
+    kb::tests::Require(setWorldPose.Succeeded() && setWorldPose.Output("moved")->AsBool(), "Transform.SetWorldPose direct call failed");
+
+    // The local pose must actually have CHANGED from the requested world
+    // values verbatim — proof the back-solve genuinely computed something,
+    // not merely copied world into local (which would be wrong given this
+    // parent is neither at the origin nor unrotated).
+    const kb::scene::TransformComponent childTransformAfterSet = scene.Transforms().Get(childObject.Entity());
+    kb::tests::Require(!kb::tests::NearlyEqual(childTransformAfterSet.localPosition.x, 5.0F) || !kb::tests::NearlyEqual(childTransformAfterSet.localRotation.w, 0.7071068F),
+        "Transform.SetWorldPose must back-solve a genuinely different LOCAL pose from the requested WORLD pose for a non-trivial parent, not just copy world into local");
+
+    // The real proof: reading WorldPose back immediately (SetWorldPose's
+    // own flush, no separate Update() from the test) must report the
+    // EXACT world pose that was requested.
+    const kb::script::ScriptFunctionCallResult childWorldPoseAfterSet = host.Functions().Call("Transform.WorldPose", childEntityOnlyArgs, context);
+    kb::tests::Require(childWorldPoseAfterSet.Succeeded() && childWorldPoseAfterSet.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posX")->AsFloat(), 5.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posY")->AsFloat(), 6.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("posZ")->AsFloat(), 7.0F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("rotY")->AsFloat(), 0.7071068F)
+            && kb::tests::NearlyEqual(childWorldPoseAfterSet.Output("rotW")->AsFloat(), 0.7071068F),
+        "Transform.SetWorldPose followed immediately by Transform.WorldPose must round-trip to the exact requested world pose, without a separate flush from the caller");
+
+    // Dead entity: every function must fail cleanly, not throw or fabricate data.
+    scene.Entities().Destroy(childObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadLocalPosition = host.Functions().Call("Transform.LocalPosition", childEntityOnlyArgs, context);
+    kb::tests::Require(deadLocalPosition.Succeeded() && !deadLocalPosition.Output("found")->AsBool(), "Transform.LocalPosition on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadSetWorldPose = host.Functions().Call("Transform.SetWorldPose", setWorldPoseArgs, context);
+    kb::tests::Require(deadSetWorldPose.Succeeded() && !deadSetWorldPose.Output("moved")->AsBool(), "Transform.SetWorldPose on a dead entity must report moved=false, not throw");
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -4679,6 +4823,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunTransformApiLocalAndWorldPoseTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();

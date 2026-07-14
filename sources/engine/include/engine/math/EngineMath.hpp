@@ -355,6 +355,27 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // NaN-filled result from dividing by a near-zero length.
 [[nodiscard]] Quat Normalize(Quat value) noexcept;
 
+// LIB-085: negates the imaginary (x,y,z) part, leaves w unchanged. For a
+// UNIT quaternion (already true for every rotation this engine composes —
+// Compose/Normalize keep world/local rotations normalized) this IS the
+// rotation's inverse: the cheap, no-division common case, kept separate
+// from Inverse() below (the general form, safe for a non-unit quaternion
+// too) the same way this file already keeps Rotate constexpr-cheap
+// alongside heavier, non-constexpr operations like Slerp.
+[[nodiscard]] constexpr Quat Conjugate(Quat value) noexcept {
+    return Quat{ -value.x, -value.y, -value.z, value.w };
+}
+
+// The general inverse: Conjugate divided by squared length. Same
+// near-zero-length guard convention as Normalize (LIB-054) — a quaternion
+// shorter than 0.000001 has no well-defined inverse, so this returns the
+// identity rotation rather than a NaN-filled result from dividing by a
+// near-zero length. Added for LIB-085's Transform.SetWorldPose (world ->
+// local pose back-solve needs to undo a parent's world rotation), the
+// first caller in this codebase that needs to invert an arbitrary
+// quaternion rather than just compose/rotate with one.
+[[nodiscard]] Quat Inverse(Quat value) noexcept;
+
 // Rotates `value` by `rotation` (Rodrigues' rotation formula generalized
 // to quaternions — exact for any quaternion, not just unit-length ones,
 // unlike a formula that substitutes w²+|xyz|²=1).
