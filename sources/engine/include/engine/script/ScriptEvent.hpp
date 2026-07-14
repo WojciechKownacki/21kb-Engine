@@ -5,15 +5,47 @@
 #include "engine/script/ScriptEventId.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace kb::script {
 
+// LIB-108: "event payload value types" — a ScriptEventArgument's `value` is
+// a plain kb::script::ScriptValue, the SAME closed scalar type set every
+// other script boundary in this engine already uses (function arguments,
+// shared state, component properties — LIB-032/041). No separate "event
+// value type" system exists or is needed: kb::library::LibraryTypeDesc/
+// DescribeType (EngineLibraryTypeDesc.hpp) already documents, for every
+// ScriptValueType including every one an event payload can carry, its
+// canonical name, Visual Graph pin type, Lua marshalling type, and default
+// value — reused here, not duplicated.
 struct ScriptEventArgument {
     std::string name;
     ScriptValue value;
 };
+
+// LIB-108: "limity rozmiaru" (size limits) — the largest number of
+// arguments a single ScriptEvent may carry, enforced at every real dispatch
+// entry point (ScriptEventBus::Emit, ScriptRuntime::DispatchEvent — between
+// them these cover EVERY event delivery path in the engine, confirmed by
+// LIB-103's "exactly one delivery mechanism" research: Emit/Broadcast/
+// EmitDeferred, ScriptExecutionContext::Emit/EmitTo, Visual Graph
+// EmitEvent/EmitEventTo, and every engine-emitted event — TimerFired/
+// TaskCompleted/TaskFailed/scene lifecycle). Mirrors kb::library::
+// kDefaultLibraryInputLimits.maxEventPayloadArguments (EngineLibraryInputLimits.
+// hpp) — SAME numeric value, duplicated as a plain local constant here
+// rather than #include'd, because kb::script must never depend on
+// kb::library (kb::library wraps kb::script, never the reverse — the same
+// direction constraint SceneTimerService.cpp's kMaxLiveTimers already
+// documents for kb::scene). Was reserved/unenforced until now (LIB-037's
+// own note: enforcing it needed a real diagnostic channel, which Emit/
+// EmitTo's void return did not have — LIB-105 gave ScriptEventBus::Emit one
+// (ScriptEventDeliveryResult::errors), and ScriptRuntime::DispatchEvent
+// already had one (ScriptRuntimeExecutionResult::diagnostics) — so this is
+// no longer a fabricated check, it can now fail HONESTLY instead of
+// silently truncating or silently proceeding).
+inline constexpr std::size_t kMaxScriptEventArguments = 32U;
 
 // LIB-103: the ONE event delivery shape this engine has — every "kind" of
 // event named elsewhere in the backlog (scene lifecycle events/LIB-073,

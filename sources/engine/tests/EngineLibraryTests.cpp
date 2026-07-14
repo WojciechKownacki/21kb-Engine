@@ -16,6 +16,7 @@
 #include "engine/library/EngineLibraryEntityHandle.hpp"
 #include "engine/library/EngineLibraryScriptComponentAccess.hpp"
 #include "engine/library/EngineLibraryError.hpp"
+#include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/library/EngineLibraryFunctionId.hpp"
 #include "engine/library/EngineLibraryInputLimits.hpp"
@@ -1614,6 +1615,39 @@ void RunEngineLibraryComponentRegistryTest() {
     }
 }
 
+// LIB-108: kb::library::EngineLibraryEventRegistry — proves the built-in
+// event schema catalog is internally consistent (nonzero deterministic ids
+// matching kb::script::ComputeEventId, all starting at version 1.0, no
+// duplicate names) and that Find() honestly reports an unregistered name as
+// absent rather than fabricating an entry.
+void RunEngineLibraryEventSchemaRegistryTest() {
+    const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
+    kb::tests::Require(catalog.size() == 8U, "Engine21kbLibrary event schema registry must catalog exactly the 8 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed)");
+
+    for (const kb::library::LibraryEventDesc& desc : catalog) {
+        kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
+        kb::tests::Require(desc.id != 0U, "Engine21kbLibrary event schema registry entry must have a nonzero id");
+        kb::tests::Require(desc.id == kb::script::ComputeEventId(desc.name), "Engine21kbLibrary event schema registry entry's id must match kb::script::ComputeEventId(name) — the SAME id ScriptEvent::Id() computes for a real dispatched event of this name");
+        kb::tests::Require(desc.version.major == 1U && desc.version.minor == 0U, "Engine21kbLibrary event schema registry entries must all start at version 1.0 today");
+        kb::tests::Require(!desc.arguments.empty(), "Every currently cataloged built-in event carries at least one argument");
+        const kb::library::LibraryEventDesc* found = kb::library::EngineLibraryEventRegistry::Find(desc.name);
+        kb::tests::Require(found == &desc, "Find() must return a pointer into the SAME catalog storage Catalog() returns, not a copy");
+    }
+
+    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed" };
+    for (const std::string& name : expectedNames) {
+        kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
+    }
+    kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find("NoSuchEvent") == nullptr, "Engine21kbLibrary event schema registry Find() must return nullptr for an unregistered name");
+
+    const kb::library::LibraryEventDesc* sceneLoaded = kb::library::EngineLibraryEventRegistry::Find("SceneLoaded");
+    kb::tests::Require(sceneLoaded != nullptr && sceneLoaded->arguments.size() == 2U && sceneLoaded->arguments[0].name == "sceneId" && sceneLoaded->arguments[0].type == kb::script::ScriptValueType::Hash && sceneLoaded->arguments[1].name == "sceneName" && sceneLoaded->arguments[1].type == kb::script::ScriptValueType::String,
+        "SceneLoaded's cataloged schema must match its real dispatch shape (sceneId: Hash, sceneName: String) — see ScriptRuntimeSceneSystem.cpp::DispatchPendingSceneLifecycleEvents");
+    const kb::library::LibraryEventDesc* timerFired = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
+    kb::tests::Require(timerFired != nullptr && timerFired->arguments.size() == 1U && timerFired->arguments[0].name == "timer" && timerFired->arguments[0].type == kb::script::ScriptValueType::Hash,
+        "TimerFired's cataloged schema must match its real dispatch shape (timer: Hash) — see ScriptRuntimeSceneSystem.cpp::DispatchFiredTimers");
+}
+
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
 // new UI-facing metadata catalog (displayName/category per component,
 // displayName/tooltip per field) exactly matches the two existing sources
@@ -2516,6 +2550,7 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
