@@ -190,6 +190,46 @@ private:
     kb::scene::Vec3 targetPosition_{};
 };
 
+// LIB-089: records `entity`'s world.x AT THE MOMENT OnUpdate() runs — used
+// to prove/disprove whether a same-Update()-call, earlier scene system's
+// transform change is visible mid-pass via world*, per the timing contract
+// now documented on kb::scene::SceneRuntime::SynchronizeTransforms().
+class ObserveWorldXSceneSystem final : public kb::scene::SceneSystem {
+public:
+    ObserveWorldXSceneSystem(kb::scene::SceneEntity entity, float& observedWorldX) noexcept
+        : entity_(entity)
+        , observedWorldX_(observedWorldX) {}
+
+    void OnUpdate(kb::scene::SceneSystemContext& context) override {
+        observedWorldX_ = context.Transforms().Get(entity_).worldPosition.x;
+    }
+
+private:
+    kb::scene::SceneEntity entity_{};
+    float& observedWorldX_;
+};
+
+// LIB-089: same as ObserveWorldXSceneSystem, but observing from
+// OnFixedUpdate() (RequiresFixedStep()==true) instead of OnUpdate() — used
+// to prove a fixed-step (physics-shaped) scene system DOES see fresh,
+// synced world* data automatically, unlike a plain variable-update system.
+class ObserveWorldXFixedSceneSystem final : public kb::scene::SceneSystem {
+public:
+    ObserveWorldXFixedSceneSystem(kb::scene::SceneEntity entity, float& observedWorldX) noexcept
+        : entity_(entity)
+        , observedWorldX_(observedWorldX) {}
+
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+        observedWorldX_ = context.Transforms().Get(entity_).worldPosition.x;
+    }
+
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+
+private:
+    kb::scene::SceneEntity entity_{};
+    float& observedWorldX_;
+};
+
 void RunSceneSystemTransformSyncTest() {
     SceneSystemCounters counters;
 
@@ -222,6 +262,80 @@ void RunSceneSystemTransformSyncTest() {
     }
 
     kb::tests::Require(counters.destroyed == 1, "Scene system OnDestroy was not called");
+}
+
+// LIB-089: locks in the "scripts must self-sync across phases" half of the
+// timing contract now documented on
+// kb::scene::SceneRuntime::SynchronizeTransforms() — a transform change one
+// scene system makes in OnUpdate() is NOT automatically visible via world*
+// to a LATER scene system's OnUpdate() within the SAME Update() call
+// (SceneSystemScheduler::Update only calls SynchronizeTransformHierarchy
+// once, before the whole pass, and once more after the whole pass — never
+// between two systems inside it), even though it genuinely IS visible once
+// Update() itself returns (RunSceneSystemTransformSyncTest above already
+// proves that half; this test contrasts the two).
+void RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ContractParent",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+    });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ContractChild",
+        .parent = parent,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F } },
+    });
+    // Establish a baseline synced world position: parent(1) + child(2) = 3.
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(child).worldPosition.x, 3.0F), "Contract test fixture baseline world position must be 3 before the test proper");
+
+    SceneSystemCounters counters;
+    float observedChildWorldXDuringLaterSystem = -1.0F;
+    // Registration order matters: MoveEntitySceneSystem must run BEFORE
+    // ObserveWorldXSceneSystem within the same Update() call's scheduler
+    // pass (SceneSystemScheduler::Update iterates systems_ in push_back
+    // order).
+    scene.Runtime().AddSceneSystem(std::make_unique<MoveEntitySceneSystem>(counters, parent.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
+    scene.Runtime().AddSceneSystem(std::make_unique<ObserveWorldXSceneSystem>(child.Entity(), observedChildWorldXDuringLaterSystem));
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::tests::Require(kb::tests::NearlyEqual(observedChildWorldXDuringLaterSystem, 3.0F),
+        "LIB-089 contract: a same-pass, earlier scene system's transform change must NOT be visible via world* to a later scene system's OnUpdate() without an explicit SynchronizeTransforms() call");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(child).worldPosition.x, 12.0F),
+        "LIB-089 contract: after Update() returns, world* must reflect every change made during that call, even ones a same-pass later system could not see mid-pass");
+}
+
+// LIB-089: locks in the "physics gets fresh data automatically" half of the
+// timing contract — a fixed-step scene system (RequiresFixedStep()==true,
+// the shape JoltPhysicsSceneSystem has) sees a transform change made by an
+// EARLIER, plain variable-update scene system in the SAME Update() call,
+// with no manual sync call of its own, because SceneRuntimeService::Update
+// calls SynchronizeTransformHierarchy immediately before entering the
+// fixed-step loop (in addition to before/after every individual step).
+void RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest() {
+    kb::scene::Scene scene;
+    scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+        .fixedDeltaSeconds = 0.02F,
+        .maxFrameDeltaSeconds = 0.25F,
+        .maxFixedStepsPerFrame = 4U,
+    });
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FixedContractParent" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "FixedContractChild",
+        .parent = parent,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F } },
+    });
+
+    SceneSystemCounters counters;
+    float observedChildWorldXDuringFixedUpdate = -1.0F;
+    scene.Runtime().AddSceneSystem(std::make_unique<MoveEntitySceneSystem>(counters, parent.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
+    scene.Runtime().AddSceneSystem(std::make_unique<ObserveWorldXFixedSceneSystem>(child.Entity(), observedChildWorldXDuringFixedUpdate));
+
+    static_cast<void>(scene.Runtime().Update(0.03F)); // Exceeds fixedDeltaSeconds, so at least one fixed step runs.
+
+    kb::tests::Require(kb::tests::NearlyEqual(observedChildWorldXDuringFixedUpdate, 12.0F),
+        "LIB-089 contract: a fixed-step scene system must see fresh, synced world* data automatically, including a change from an earlier same-Update()-call variable-update system, with no manual SynchronizeTransforms() call of its own");
 }
 
 void RunSceneRuntimeFixedStepTest() {
@@ -745,6 +859,8 @@ void RunSceneBulkCreateObjectsTest() {
 
 void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
+    RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest();
+    RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest();
     RunSceneRuntimeFixedStepTest();
     RunSceneRuntimeFrameAndPlayStateTest();
     RunSceneRuntimeFixedInterpolationTest();
