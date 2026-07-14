@@ -7161,6 +7161,61 @@ end
     kb::tests::Require(combatCountAfterCombat.has_value() && combatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must have reached the combat-channel subscriber exactly once");
 }
 
+// LIB-107: regression-proves the "Dispatch mode contract" doc comment on
+// ScriptEventBus (ScriptEventBus.hpp) under REENTRANCY — the hardest, and
+// previously entirely untested, case for "no implicit mixing" between
+// synchronous and deferred delivery. Every prior EmitDeferred test called
+// it from the TOP LEVEL (outside any Emit/DrainDeferred call already in
+// progress); none proved what happens when a subscriber ITSELF calls
+// Emit or EmitDeferred while already being dispatched.
+void RunScriptEventBusDispatchModeContractTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptEventBus bus;
+
+    // (a) Sync stays sync under reentrancy: a subscriber to "Outer" calls
+    // Emit("Inner") itself — the inner subscriber must have ALREADY fired
+    // by the time the outer Emit() call returns, proving nested Emit never
+    // silently degrades to anything deferred.
+    int innerFired = 0;
+    static_cast<void>(bus.Subscribe("Inner", [&innerFired](const kb::script::ScriptEvent&) { ++innerFired; }));
+    static_cast<void>(bus.Subscribe("Outer", [&bus, &scene](const kb::script::ScriptEvent&) {
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Inner" }));
+    }));
+    const kb::script::ScriptEventDeliveryResult outerResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Outer" });
+    kb::tests::Require(outerResult.delivered == 1U, "The outer Emit call itself must report exactly one direct delivery (its own subscriber), independent of any nested Emit it triggers");
+    kb::tests::Require(innerFired == 1, "A reentrant Emit called from within another Emit's subscriber must deliver synchronously — the inner subscriber must have already fired by the time the outer Emit() call returns");
+
+    // (b) EmitDeferred called from within a SYNCHRONOUS Emit's subscriber
+    // must NOT deliver within that same Emit call — it must still wait for
+    // the next DrainDeferred, proving Emit never implicitly triggers a
+    // drain of what it just queued.
+    int deferredFromSyncFired = 0;
+    static_cast<void>(bus.Subscribe("DeferredFromSync", [&deferredFromSyncFired](const kb::script::ScriptEvent&) { ++deferredFromSyncFired; }));
+    static_cast<void>(bus.Subscribe("QueueDuringSync", [&bus](const kb::script::ScriptEvent&) {
+        bus.EmitDeferred(kb::script::ScriptEvent{ .name = "DeferredFromSync" });
+    }));
+    static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "QueueDuringSync" }));
+    kb::tests::Require(deferredFromSyncFired == 0, "EmitDeferred called from within a synchronous Emit's own subscriber must NOT deliver before that Emit call returns — no implicit sync-ification of a deferred call");
+    const kb::script::ScriptEventDeliveryResult drainAfterSync = bus.DrainDeferred(scene);
+    kb::tests::Require(drainAfterSync.delivered == 1U && deferredFromSyncFired == 1, "The event queued during the synchronous Emit must deliver on the NEXT DrainDeferred call, exactly once");
+
+    // (c) EmitDeferred called from within a subscriber THAT DrainDeferred
+    // ITSELF is currently dispatching must queue for the NEXT DrainDeferred
+    // call, not be swept up by the CURRENT one — proving DrainDeferred's
+    // "snapshot the pending list before dispatching any of it" discipline
+    // holds even when dispatch produces MORE deferred work.
+    int reQueuedFired = 0;
+    static_cast<void>(bus.Subscribe("RequeuedDuringDrain", [&reQueuedFired](const kb::script::ScriptEvent&) { ++reQueuedFired; }));
+    static_cast<void>(bus.Subscribe("QueueDuringDrain", [&bus](const kb::script::ScriptEvent&) {
+        bus.EmitDeferred(kb::script::ScriptEvent{ .name = "RequeuedDuringDrain" });
+    }));
+    bus.EmitDeferred(kb::script::ScriptEvent{ .name = "QueueDuringDrain" });
+    const kb::script::ScriptEventDeliveryResult firstDrain = bus.DrainDeferred(scene);
+    kb::tests::Require(firstDrain.delivered == 1U && reQueuedFired == 0, "A deferred event re-queued by a subscriber THAT THIS SAME DrainDeferred call is dispatching must NOT be delivered within that same drain");
+    const kb::script::ScriptEventDeliveryResult secondDrain = bus.DrainDeferred(scene);
+    kb::tests::Require(secondDrain.delivered == 1U && reQueuedFired == 1, "The re-queued-during-drain event must deliver on the FOLLOWING DrainDeferred call, exactly once");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -7217,6 +7272,7 @@ void RunScriptRuntimeTests() {
     RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest();
     RunScriptEventBusRecipientFilterTest();
     RunPucLuaEventsRecipientFilterTest();
+    RunScriptEventBusDispatchModeContractTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
