@@ -113,6 +113,11 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
         (fixedSteps == frameSettings_.maxFixedStepsPerFrame && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds)) {
         fixedAccumulatorSeconds_ = 0.0F;
     }
+    // LIB-098: fixedSteps is exactly what StartFixedStep tasks need and
+    // nothing else in ExecuteFrame previously surfaced — dispatched right
+    // after the fixed-step loop so a "wait N fixed steps" task's
+    // TaskCompleted/TaskFailed lands before the variable Tick phase below.
+    DispatchCompletedFixedStepTasks(scene, fixedSteps, clampedDeltaSeconds);
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
@@ -181,6 +186,16 @@ void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, floa
 
 void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds) {
     for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().Advance(deltaSeconds)) {
+        ScriptEvent event;
+        event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
+        event.target = completion.owner;
+        event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds) {
+    for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().AdvanceFixedSteps(stepCount)) {
         ScriptEvent event;
         event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
         event.target = completion.owner;
