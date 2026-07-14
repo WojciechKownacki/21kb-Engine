@@ -6715,6 +6715,452 @@ void RunScriptRuntimeSceneSystemDeferredEventDrainTest() {
     kb::tests::Require(deliveries == 1, "A later ExecuteFrame with nothing newly queued must not re-deliver the same event");
 }
 
+// LIB-039: proves ALL FOUR cancellable handle types the plan names
+// (Subscription, TimerHandle, AsyncHandle, TaskHandle) share ONE real,
+// explicit-cancellation contract — idempotent (a second cancel reports
+// false/no-op, never errors or double-fires) and genuinely stops future
+// delivery, not just flips a flag nothing reads. Each type already had its
+// OWN isolated idempotency test from the task that introduced it
+// (RunScriptTimerApiTest/LIB-095, RunScriptTaskApiTest/LIB-097,
+// RunScriptEventBusNativeSubscribeEmitTest/LIB-105,
+// RunEngineLibraryAsyncResultTest/LIB-100) — this is the cross-type proof
+// none of those exercised: all four side by side, in one place, against the
+// SAME contract statement. This also directly covers LIB-040's "callback
+// after cancellation" requirement for TimerHandle/TaskHandle/AsyncHandle at
+// the kb::scene/kb::library layer: since SceneTimers/SceneTasks::Cancel
+// erase the record from storage immediately, a cancelled handle can never
+// again appear in a later Advance() call's returned vector — the
+// ScriptEvent that would carry the callback is never even constructed, a
+// stronger proof than checking one particular behaviour never received it.
+void RunExplicitCancellationCrossTypeContractTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cancellation Contract Owner" });
+
+    // Subscription (LIB-105).
+    kb::script::ScriptEventBus bus;
+    int subscriptionFired = 0;
+    const kb::script::EventSubscriptionHandle subscription = bus.Subscribe("Contract", [&subscriptionFired](const kb::script::ScriptEvent&) { ++subscriptionFired; }, owner.Entity());
+    kb::tests::Require(subscription != kb::script::kInvalidEventSubscriptionHandle, "Subscription fixture must register");
+    kb::tests::Require(bus.Unsubscribe(subscription), "Explicit cancellation of a live Subscription must succeed");
+    kb::tests::Require(!bus.Unsubscribe(subscription), "A second explicit cancellation of the same Subscription must be idempotent (false, not an error)");
+    static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Contract" }, owner.Entity()));
+    kb::tests::Require(subscriptionFired == 0, "A cancelled Subscription must never deliver, even to an event that would otherwise match it");
+
+    // TimerHandle (LIB-095).
+    const std::uint64_t timer = scene.Timers().Once(1.0F, owner.Entity());
+    kb::tests::Require(timer != 0U, "TimerHandle fixture must register");
+    kb::tests::Require(scene.Timers().Cancel(timer), "Explicit cancellation of a live TimerHandle must succeed");
+    kb::tests::Require(!scene.Timers().Cancel(timer), "A second explicit cancellation of the same TimerHandle must be idempotent (false, not an error)");
+    const std::vector<kb::scene::TimerFiredRecord> timerFired = scene.Timers().Advance(10.0F);
+    kb::tests::Require(timerFired.empty(), "A cancelled TimerHandle must never fire, even long after its original delay would have elapsed");
+
+    // TaskHandle (LIB-097).
+    bool taskPolled = false;
+    const std::uint64_t task = scene.Tasks().Start([&taskPolled](float) { taskPolled = true; return kb::scene::TaskPollResult::Completed; }, owner.Entity());
+    kb::tests::Require(task != 0U, "TaskHandle fixture must register");
+    kb::tests::Require(scene.Tasks().Cancel(task), "Explicit cancellation of a live TaskHandle must succeed");
+    kb::tests::Require(!scene.Tasks().Cancel(task), "A second explicit cancellation of the same TaskHandle must be idempotent (false, not an error)");
+    const std::vector<kb::scene::TaskCompletionRecord> taskCompletions = scene.Tasks().Advance(1.0F);
+    kb::tests::Require(taskCompletions.empty() && !taskPolled, "A cancelled TaskHandle must never be polled or reported complete again");
+
+    // AsyncHandle (LIB-100) — kb::library::AsyncResult<T>, a native-only
+    // value type with no separate script-facing handle (the value itself IS
+    // the handle — see EngineLibraryAsyncResult.hpp's class doc comment).
+    int asyncCompletions = 0;
+    kb::library::AsyncResult<int> asyncResult;
+    asyncResult.OnComplete([&asyncCompletions](const kb::library::AsyncResult<int>&) { ++asyncCompletions; });
+    kb::tests::Require(asyncResult.Cancel(), "Explicit cancellation of a live AsyncHandle must succeed");
+    kb::tests::Require(asyncCompletions == 1, "Cancelling an AsyncHandle must invoke its completion callback exactly once");
+    kb::tests::Require(!asyncResult.Cancel(), "A second explicit cancellation of the same AsyncHandle must be idempotent (false, not an error)");
+    kb::tests::Require(asyncCompletions == 1, "A second, no-op cancellation must not re-invoke the completion callback");
+    kb::tests::Require(!asyncResult.SetCompleted(7), "A cancelled AsyncHandle must reject a late SetCompleted rather than resurrecting it");
+    kb::tests::Require(asyncCompletions == 1, "A late SetCompleted after cancellation must not invoke the completion callback again");
+}
+
+// LIB-040 (part 1/2): destroying an entity from WITHIN a Timer/Task/Event
+// callback while a DIFFERENT entity's timer/task/subscription is still due
+// to fire in the very same dispatch batch — genuinely untested by every
+// prior owner-death test in this file (RunScriptTimerApiFiringOwnerAndPauseTest/
+// RunScriptTaskApiCompletionOwnerAndPauseTest/RunScriptEventBusNativeSubscribeEmitTest
+// all destroy the owner BEFORE calling Advance/ExecuteFrame/Emit, never
+// reentrantly from inside an already-running callback). Researched before
+// writing this test (Explore agent, cross-checked directly): Timer/Task
+// survive this safely BY CONSTRUCTION — ScriptRuntime.cpp's
+// DispatchSceneBehaviours re-collects the CURRENT live behaviour set fresh
+// on every single DispatchEvent call (scene.Components().Behaviours().
+// ForEach), so a behaviour whose entity died earlier in the same frame's
+// dispatch sequence simply no longer appears; no explicit IsAlive recheck
+// was needed, confirmed here rather than assumed. ScriptEventBus::Emit did
+// NOT survive this safely — its per-subscriber invoke loop only checked
+// owner liveness ONCE, in an up-front snapshot pass, so a subscriber
+// destroyed by an EARLIER subscriber in the very same Emit call still fired.
+// Fixed in the same change as this test (ScriptEventBus.cpp's invoke loop
+// now re-checks OwnerGone immediately before each invocation) — the third
+// case below is a regression test for that real, previously-shipped bug.
+void RunReentrantEntityDestructionFromCallbackTest() {
+    // --- Timer: destroyer's TimerFired handler destroys the victim's
+    // owner; the victim's own TimerFired (due the SAME frame, created
+    // after the destroyer's so LIB-096 orders the destroyer first) must
+    // never actually invoke the victim's behaviour. ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kDestroyerAsset{ 8801U };
+        constexpr kb::assets::AssetId kVictimAsset{ 8802U };
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Reentrant Victim" });
+        scene.Components().Behaviours().Set(destroyerObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kDestroyerAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(victimObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVictimAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        std::size_t victimFired = 0U;
+        kb::tests::Require(nativeBackend->RegisterEvent(kDestroyerAsset, "TimerFired", [victim](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent&) {
+                                context.GetScene().Entities().Destroy(victim);
+                            }),
+            "Timer reentrant destroyer registration failed");
+        kb::tests::Require(nativeBackend->RegisterEvent(kVictimAsset, "TimerFired", [&victimFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                                ++victimFired;
+                            }),
+            "Timer reentrant victim registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer reentrant native backend registration failed");
+
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+        const std::uint64_t destroyerTimer = scene.Timers().Once(0.1F, destroyerObject.Entity());
+        const std::uint64_t victimTimer = scene.Timers().Once(0.1F, victimObject.Entity());
+        kb::tests::Require(destroyerTimer != 0U && victimTimer != 0U, "Reentrant destroy fixture timers must both register");
+
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(victimFired == 0U, "A TimerFired handler dispatched AFTER its owner was destroyed by an earlier handler in the SAME frame must never actually invoke the destroyed owner's behaviour");
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer's callback really ran");
+    }
+
+    // --- Task: same shape as Timer above, through TaskCompleted. ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kDestroyerAsset{ 8803U };
+        constexpr kb::assets::AssetId kVictimAsset{ 8804U };
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Reentrant Victim" });
+        scene.Components().Behaviours().Set(destroyerObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kDestroyerAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(victimObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVictimAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        std::size_t victimFired = 0U;
+        kb::tests::Require(nativeBackend->RegisterEvent(kDestroyerAsset, "TaskCompleted", [victim](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent&) {
+                                context.GetScene().Entities().Destroy(victim);
+                            }),
+            "Task reentrant destroyer registration failed");
+        kb::tests::Require(nativeBackend->RegisterEvent(kVictimAsset, "TaskCompleted", [&victimFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                                ++victimFired;
+                            }),
+            "Task reentrant victim registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Task reentrant native backend registration failed");
+
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+        const std::uint64_t destroyerTask = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Completed; }, destroyerObject.Entity());
+        const std::uint64_t victimTask = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Completed; }, victimObject.Entity());
+        kb::tests::Require(destroyerTask != 0U && victimTask != 0U, "Reentrant destroy fixture tasks must both register");
+
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(victimFired == 0U, "A TaskCompleted handler dispatched AFTER its owner was destroyed by an earlier handler in the SAME frame must never actually invoke the destroyed owner's behaviour");
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer's callback really ran");
+    }
+
+    // --- Subscription: the real bug this task fixed. Destroyer subscribed
+    // FIRST (ScriptEventBus::Emit invokes matching subscribers in
+    // subscription order), so it runs before the victim within the SAME
+    // Emit call. ---
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Reentrant Victim" });
+
+        kb::script::ScriptEventBus bus;
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        int victimFired = 0;
+        static_cast<void>(bus.Subscribe("Reentrant", [&scene, victim](const kb::script::ScriptEvent&) {
+            scene.Entities().Destroy(victim);
+        }, destroyerObject.Entity()));
+        static_cast<void>(bus.Subscribe("Reentrant", [&victimFired](const kb::script::ScriptEvent&) { ++victimFired; }, victim));
+
+        const kb::script::ScriptEventDeliveryResult result = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Reentrant" });
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer subscriber really ran first");
+        kb::tests::Require(victimFired == 0, "A subscriber whose owner was destroyed by an EARLIER subscriber in the SAME Emit call must not fire — ScriptEventBus::Emit must re-check owner liveness per-invocation, not just once up front (LIB-040)");
+        kb::tests::Require(result.delivered == 1U, "Emit must report exactly one real delivery (the destroyer) — the skipped dead-owner subscriber must not be counted as delivered");
+    }
+}
+
+// LIB-040 (part 2/2): "error after scene unload" — Scene.Unload's entity-
+// destruction cascade (SceneLoadedContentService::Unload -> Entities().
+// Destroy, the IDENTICAL synchronous path World.Destroy uses — see
+// ScriptWorldApi.cpp's Destroy) must be proven to ACTUALLY reach
+// Timer/Task/Subscription owners belonging to the unloaded content, not
+// just asserted by the doc comments already on SceneTimers::Advance/
+// SceneTasks::Advance. Also proves explicit Cancel/Unsubscribe called on a
+// now-dead handle AFTER the unload stays a clean, idempotent false — never
+// a crash or a stale-owner exception.
+void RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "SceneUnloadCancellationProject" / "UnloadableScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "UnloadableRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "UnloadableScene"), "Scene.Unload cancellation test fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene.Unload cancellation test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Unload cancellation test fixture load failed");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 1U, "Scene.Unload cancellation test fixture must load exactly one root entity");
+    const kb::scene::SceneEntity owner = roots.front();
+
+    const std::uint64_t timer = scene.Timers().Once(10.0F, owner);
+    const std::uint64_t task = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, owner);
+    kb::script::ScriptEventBus bus;
+    int subscriptionFired = 0;
+    const kb::script::EventSubscriptionHandle subscription = bus.Subscribe("Contract", [&subscriptionFired](const kb::script::ScriptEvent&) { ++subscriptionFired; }, owner);
+    kb::tests::Require(timer != 0U && task != 0U && subscription != kb::script::kInvalidEventSubscriptionHandle, "Scene.Unload cancellation test fixture handles must all register against the loaded root entity");
+    kb::tests::Require(scene.Timers().Exists(timer) && scene.Tasks().Exists(task) && bus.SubscriptionCount() == 1U, "Fixture handles must be live before Unload");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for the fixture's loaded id");
+    kb::tests::Require(!scene.Entities().IsAlive(owner), "Scene.Unload must genuinely destroy the loaded root entity");
+
+    // The timer/task were not yet due, so Scene.Unload's destruction must
+    // have propagated to them THROUGH the normal owner-liveness check
+    // (Advance()'s per-record OwnerGone sweep), not left them dangling
+    // until something else happens to notice.
+    const std::vector<kb::scene::TimerFiredRecord> timerFired = scene.Timers().Advance(20.0F);
+    kb::tests::Require(timerFired.empty(), "A timer owned by a Scene.Unload-destroyed entity must never fire, even long past its original delay");
+    const std::vector<kb::scene::TaskCompletionRecord> taskCompletions = scene.Tasks().Advance(1.0F);
+    kb::tests::Require(taskCompletions.empty(), "A task owned by a Scene.Unload-destroyed entity must never report completion");
+    const kb::script::ScriptEventDeliveryResult afterUnload = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Contract" }, owner);
+    kb::tests::Require(afterUnload.delivered == 0U && subscriptionFired == 0, "A subscription owned by a Scene.Unload-destroyed entity must never deliver");
+
+    // Explicit cancellation of a handle whose owner died via Scene.Unload
+    // must stay a clean, idempotent no-op — never a crash, never a stale-
+    // owner exception — the Advance()/Emit() calls above already lazily
+    // removed all three records, same as any other dead-owner cleanup.
+    kb::tests::Require(!scene.Timers().Cancel(timer), "Explicit Cancel on a timer already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+    kb::tests::Require(!scene.Tasks().Cancel(task), "Explicit Cancel on a task already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+    kb::tests::Require(!bus.Unsubscribe(subscription), "Explicit Unsubscribe on a subscription already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+}
+
+// LIB-106: proves Emit/Broadcast's new recipient filters (tag/component/
+// scene/channel) genuinely narrow delivery, each axis tested independently
+// so a bug in one axis can't hide behind another passing. `entity` (the
+// pre-existing `target` parameter) is not re-tested here —
+// RunScriptEventBusNativeSubscribeEmitTest (LIB-105) already covers it
+// exhaustively. `player` is deliberately absent from EventRecipientFilter
+// entirely (see its own doc comment in ScriptEventBus.hpp) — no Player
+// concept exists anywhere in this engine yet (LIB-195's job).
+void RunScriptEventBusRecipientFilterTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptEventBus bus;
+
+    // --- tag ---
+    {
+        const kb::scene::SceneObject tagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Tagged" });
+        const kb::scene::SceneObject untagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Untagged" });
+        kb::scene::TagsComponent tags;
+        kb::scene::SetTagsText(tags, "Enemy, Boss");
+        scene.Components().Tags().Set(tagged.Entity(), tags);
+
+        int taggedFired = 0;
+        int untaggedFired = 0;
+        static_cast<void>(bus.Subscribe("TagEvent", [&taggedFired](const kb::script::ScriptEvent&) { ++taggedFired; }, tagged.Entity()));
+        static_cast<void>(bus.Subscribe("TagEvent", [&untaggedFired](const kb::script::ScriptEvent&) { ++untaggedFired; }, untagged.Entity()));
+
+        kb::script::EventRecipientFilter tagFilter;
+        tagFilter.tag = "Enemy";
+        const kb::script::ScriptEventDeliveryResult filtered = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "TagEvent" }, tagFilter);
+        kb::tests::Require(filtered.delivered == 1U && taggedFired == 1 && untaggedFired == 0, "A tag filter must reach ONLY the subscription whose owner currently has that tag");
+
+        const kb::script::ScriptEventDeliveryResult unfiltered = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "TagEvent" });
+        kb::tests::Require(unfiltered.delivered == 2U && taggedFired == 2 && untaggedFired == 1, "An Emit/Broadcast with no filter must still reach every subscriber regardless of tag, unchanged from before this task");
+    }
+
+    // --- component ---
+    {
+        const kb::scene::SceneObject withCamera = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Camera Owner" });
+        const kb::scene::SceneObject withoutCamera = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter No Camera" });
+        scene.Components().Cameras().Set(withCamera.Entity(), kb::scene::CameraComponent{});
+
+        int cameraFired = 0;
+        int otherFired = 0;
+        static_cast<void>(bus.Subscribe("ComponentEvent", [&cameraFired](const kb::script::ScriptEvent&) { ++cameraFired; }, withCamera.Entity()));
+        static_cast<void>(bus.Subscribe("ComponentEvent", [&otherFired](const kb::script::ScriptEvent&) { ++otherFired; }, withoutCamera.Entity()));
+
+        kb::script::EventRecipientFilter componentFilter;
+        componentFilter.component = "Camera";
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ComponentEvent" }, componentFilter);
+        kb::tests::Require(result.delivered == 1U && cameraFired == 1 && otherFired == 0, "A component filter must reach ONLY the subscription whose owner currently has that component");
+    }
+
+    // --- scene ---
+    {
+        ResetTestRoot();
+        const std::filesystem::path sceneAFile = TestRoot() / "EventFilterSceneProject" / "FilterSceneA.21kbscene";
+        const std::filesystem::path sceneBFile = TestRoot() / "EventFilterSceneProject" / "FilterSceneB.21kbscene";
+        {
+            kb::scene::Scene sourceA;
+            static_cast<void>(sourceA.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "FilterRootA" }));
+            kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceA, sceneAFile, "FilterSceneA"), "Event filter scene test fixture A was not saved");
+        }
+        {
+            kb::scene::Scene sourceB;
+            static_cast<void>(sourceB.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "FilterRootB" }));
+            kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceB, sceneBFile, "FilterSceneB"), "Event filter scene test fixture B was not saved");
+        }
+
+        kb::scene::Scene filterScene;
+        kb::script::ScriptEventBus sceneBus;
+        kb::script::ScriptRuntimeHost host{ filterScene };
+        kb::tests::Require(host.Succeeded(), "Event filter scene test host setup failed");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &filterScene };
+
+        const std::vector<kb::script::ScriptFunctionArgument> loadAArgs{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneAFile.string() } },
+        };
+        const kb::script::ScriptFunctionCallResult loadAResult = host.Functions().Call("Scene.Load", loadAArgs, context);
+        kb::tests::Require(loadAResult.Succeeded(), "Event filter scene test fixture load A failed");
+        const std::uint64_t idA = loadAResult.Output("id")->AsUInt64();
+
+        const std::vector<kb::script::ScriptFunctionArgument> loadBArgs{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneBFile.string() } },
+            kb::script::ScriptFunctionArgument{ .name = "additive", .value = kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult loadBResult = host.Functions().Call("Scene.Load", loadBArgs, context);
+        kb::tests::Require(loadBResult.Succeeded(), "Event filter scene test fixture load B failed");
+        const std::uint64_t idB = loadBResult.Output("id")->AsUInt64();
+        kb::tests::Require(idA != idB, "Event filter scene test fixture must load two distinct scene ids");
+
+        const std::vector<kb::scene::SceneEntity> roots = filterScene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 2U, "Event filter scene test fixture must have exactly two root entities");
+        const kb::scene::SceneEntity rootA = filterScene.Entities().Name(roots[0]) == "FilterRootA" ? roots[0] : roots[1];
+        const kb::scene::SceneEntity rootB = filterScene.Entities().Name(roots[0]) == "FilterRootB" ? roots[0] : roots[1];
+        kb::tests::Require(filterScene.LoadedContent().OwningScene(rootA) == idA, "SceneLoadedContent::OwningScene must resolve rootA back to scene A's loaded id");
+        kb::tests::Require(filterScene.LoadedContent().OwningScene(rootB) == idB, "SceneLoadedContent::OwningScene must resolve rootB back to scene B's loaded id");
+
+        int aFired = 0;
+        int bFired = 0;
+        static_cast<void>(sceneBus.Subscribe("SceneEvent", [&aFired](const kb::script::ScriptEvent&) { ++aFired; }, rootA));
+        static_cast<void>(sceneBus.Subscribe("SceneEvent", [&bFired](const kb::script::ScriptEvent&) { ++bFired; }, rootB));
+
+        kb::script::EventRecipientFilter sceneFilter;
+        sceneFilter.sceneId = idA;
+        const kb::script::ScriptEventDeliveryResult result = sceneBus.Broadcast(filterScene, kb::script::ScriptEvent{ .name = "SceneEvent" }, sceneFilter);
+        kb::tests::Require(result.delivered == 1U && aFired == 1 && bFired == 0, "A scene filter must reach ONLY the subscription whose owner belongs to that loaded scene id");
+    }
+
+    // --- channel ---
+    {
+        const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Channel Owner" });
+        int chatFired = 0;
+        int combatFired = 0;
+        int defaultFired = 0;
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&chatFired](const kb::script::ScriptEvent&) { ++chatFired; }, owner.Entity(), "chat"));
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&combatFired](const kb::script::ScriptEvent&) { ++combatFired; }, owner.Entity(), "combat"));
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&defaultFired](const kb::script::ScriptEvent&) { ++defaultFired; }, owner.Entity()));
+
+        kb::script::EventRecipientFilter chatFilter;
+        chatFilter.channel = "chat";
+        const kb::script::ScriptEventDeliveryResult chatResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ChannelEvent" }, chatFilter);
+        kb::tests::Require(chatResult.delivered == 1U && chatFired == 1 && combatFired == 0 && defaultFired == 0, "A channel filter must reach ONLY the subscription declared on that exact channel, never the default channel or a different one");
+
+        const kb::script::ScriptEventDeliveryResult unfilteredResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ChannelEvent" });
+        kb::tests::Require(unfilteredResult.delivered == 3U && chatFired == 2 && combatFired == 1 && defaultFired == 1, "An Emit/Broadcast with no channel filter must still reach subscriptions on EVERY channel, unchanged from before this task");
+    }
+}
+
+// LIB-106: real Lua round trip for the new filters — Events.Subscribe's
+// optional 4th `channel` arg and Events.Emit/Broadcast/EmitDeferred's
+// optional trailing filter table `{tag=,component=,scene=,channel=}`,
+// proving the Lua binding genuinely threads through to ScriptEventBus
+// rather than silently ignoring the new arguments (the same "real
+// bidirectional round trip" bar RunPucLuaEventsSubscribeEmitTest set for
+// LIB-105's base Subscribe/Emit/Broadcast/EmitDeferred/Unsubscribe).
+void RunPucLuaEventsRecipientFilterTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 3320U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local chatCount = 0
+local combatCount = 0
+
+function Created(self)
+    Events.Subscribe("Shout", function(event) chatCount = chatCount + 1 end, nil, "chat")
+    Events.Subscribe("Shout", function(event) combatCount = combatCount + 1 end, nil, "combat")
+end
+
+function Tick(self, dt)
+    SetShared("lua.filter.chatCount", chatCount)
+    SetShared("lua.filter.combatCount", combatCount)
+end
+
+function ShoutOnChat(self, event)
+    Events.Broadcast("Shout", nil, { channel = "chat" })
+end
+
+function ShoutDeferredOnCombat(self, event)
+    Events.EmitDeferred("Shout", nil, nil, { channel = "combat" })
+end
+)",
+        "EventsFilterSubscriber.lua");
+    kb::tests::Require(loaded.succeeded, "Lua Events recipient filter subscriber script must load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua backend registration failed for Events recipient filter test");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Filter Lua Subscriber" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult created = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Created, 0.0F);
+    kb::tests::Require(created.Succeeded() && created.executedBehaviours == 1U, "Created dispatch (running two channel-scoped Events.Subscribe calls) must execute cleanly");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 2U, "Events.Subscribe with a channel argument must still register a real subscription");
+
+    const kb::script::ScriptRuntimeExecutionResult shoutChat = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutOnChat" }, 0.0F);
+    kb::tests::Require(shoutChat.Succeeded(), "ShoutOnChat custom event dispatch must not produce diagnostics");
+
+    const kb::script::ScriptRuntimeExecutionResult afterChat = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterChat.Succeeded(), "Tick after ShoutOnChat must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> chatCountAfterChat = runtime.SharedState().Get("lua.filter.chatCount");
+    const std::optional<kb::script::ScriptValue> combatCountAfterChat = runtime.SharedState().Get("lua.filter.combatCount");
+    kb::tests::Require(chatCountAfterChat.has_value() && chatCountAfterChat->AsInt() == 1, "Lua's Events.Broadcast with a {channel=\"chat\"} filter table must reach ONLY the chat-channel subscriber");
+    kb::tests::Require(combatCountAfterChat.has_value() && combatCountAfterChat->AsInt() == 0, "A {channel=\"chat\"} filter must not reach the combat-channel subscriber");
+
+    const kb::script::ScriptRuntimeExecutionResult shoutDeferredCombat = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutDeferredOnCombat" }, 0.0F);
+    kb::tests::Require(shoutDeferredCombat.Succeeded(), "ShoutDeferredOnCombat custom event dispatch must not produce diagnostics");
+    const kb::script::ScriptEventDeliveryResult drained = runtime.Events().DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 1U, "Lua's Events.EmitDeferred with a {channel=\"combat\"} filter table must deliver to exactly the combat-channel subscriber once drained");
+
+    const kb::script::ScriptRuntimeExecutionResult afterCombat = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterCombat.Succeeded(), "Tick after the deferred combat shout must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> chatCountAfterCombat = runtime.SharedState().Get("lua.filter.chatCount");
+    const std::optional<kb::script::ScriptValue> combatCountAfterCombat = runtime.SharedState().Get("lua.filter.combatCount");
+    kb::tests::Require(chatCountAfterCombat.has_value() && chatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must NOT have reached the chat-channel subscriber");
+    kb::tests::Require(combatCountAfterCombat.has_value() && combatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must have reached the combat-channel subscriber exactly once");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6766,6 +7212,11 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusNativeSubscribeEmitTest();
     RunPucLuaEventsSubscribeEmitTest();
     RunScriptRuntimeSceneSystemDeferredEventDrainTest();
+    RunExplicitCancellationCrossTypeContractTest();
+    RunReentrantEntityDestructionFromCallbackTest();
+    RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest();
+    RunScriptEventBusRecipientFilterTest();
+    RunPucLuaEventsRecipientFilterTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
