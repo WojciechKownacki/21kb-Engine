@@ -231,6 +231,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryScriptComponentAccess.hpp
     include/engine/library/EngineLibraryTextEncoding.hpp
     include/engine/library/EngineLibraryTextFormat.hpp
+    include/engine/library/EngineLibraryTransformChangeTracker.hpp
     include/engine/library/EngineLibraryTypeDesc.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
