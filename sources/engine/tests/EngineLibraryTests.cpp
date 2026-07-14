@@ -1929,6 +1929,142 @@ void RunComponentChangeTrackerTest() {
     kb::tests::Require(true, "Engine21kbLibrary ComponentChangeTracker destructor must not crash on DestroyObserver after scope exit");
 }
 
+// LIB-083: three scenarios not covered by LIB-078/079/080's own tests —
+// (1) "query aliasing": kb::ecs::StructuralChangeValidator's
+// activeIterations_ is an ATOMIC COUNTER, not an exclusive lock
+// (EngineLibraryQuery.hpp's own comment claims nested entry is safe but no
+// test proved it) — nests a second, independent Query<T>::ForEach INSIDE
+// an outer one's visitor (same component type, then a different one),
+// proving both iterate correctly, a structural-change attempt in the
+// INNERMOST still throws (the guard is still armed), and iteration is
+// unblocked again once both close (the counter unwinds correctly through
+// two levels, not just one — mirrors RunLibraryQueryPhaseGateTest's own
+// "iteratedAfterThrow" check one level up); (2) "entity destroyed in
+// query": RunLibraryCommandBatchTest already proves a CommandBatch-recorded
+// Destroy() applies (IsAlive()==false) after Flush() — this closes the gap
+// between "not alive" and "not iterated" by running a FRESH Query<T>::
+// ForEach afterward and asserting the destroyed entity is genuinely absent
+// from the visited set, not merely flagged dead; (3) "command flush
+// boundary": kb::ecs::CommandBuffer::Playback's Create->Apply->Destroy
+// phase ordering (destroy always wins regardless of recording order) is
+// already fully proven at the kb::ecs level
+// (EcsCommandBufferTests.cpp::RunCommandBufferDeferredDestroySyncPointTest)
+// — this is a THIN confirming test (per the project's "don't duplicate
+// coverage one layer down" convention, e.g. LIB-080's own writeup) that the
+// guarantee survives the kb::library::CommandBatch wrapper unchanged, in
+// BOTH recording orders (Add-then-Destroy and Destroy-then-Add).
+void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
+    // (1) Query aliasing: nested, concurrently-open Query<T>::ForEach.
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AliasA" });
+        const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AliasB" });
+        scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 11.0F });
+        scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 22.0F });
+        scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
+
+        int outerVisited = 0;
+        int innerSameTypeVisited = 0;
+        int innerOtherTypeVisited = 0;
+        bool innerStructuralChangeThrew = false;
+        const bool outerIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) {
+                ++outerVisited;
+                // Nested query over the SAME component type — proves two
+                // concurrently-open iterations over one component don't
+                // corrupt or block each other (the atomic counter allows
+                // nesting, not just a single active iteration).
+                const bool innerSameIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+                    scene, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++innerSameTypeVisited; });
+                kb::tests::Require(innerSameIterated, "Engine21kbLibrary nested Query<CameraComponent>::ForEach (same type as outer) must still iterate");
+
+                // Nested query over a DIFFERENT component type.
+                const bool innerOtherIterated = kb::library::Query<kb::scene::LightComponent>::ForEach(
+                    scene, kb::script::ScriptLifecycleEvent::Tick,
+                    [&](kb::library::EntityHandle, const kb::scene::LightComponent&) {
+                        ++innerOtherTypeVisited;
+                        // Structural change attempted at the INNERMOST
+                        // nesting level must still throw — the guard must
+                        // remain armed through two levels of nesting, not
+                        // just one.
+                        try {
+                            static_cast<void>(scene.Entities().CreateEntity());
+                        } catch (const std::logic_error&) {
+                            innerStructuralChangeThrew = true;
+                        }
+                    });
+                kb::tests::Require(innerOtherIterated, "Engine21kbLibrary nested Query<LightComponent>::ForEach (different type from outer) must still iterate");
+            });
+        kb::tests::Require(outerIterated && outerVisited == 2, "Engine21kbLibrary outer Query<CameraComponent>::ForEach must visit both entities despite nested queries running inside its visitor");
+        kb::tests::Require(innerSameTypeVisited == 4, "Engine21kbLibrary nested same-type Query must visit both entities on EACH of the 2 outer visits (2*2=4)");
+        kb::tests::Require(innerOtherTypeVisited == 2, "Engine21kbLibrary nested different-type Query must visit its one matching entity on EACH of the 2 outer visits");
+        kb::tests::Require(innerStructuralChangeThrew, "Engine21kbLibrary a structural change attempted at the INNERMOST of two nested Query iterations must still throw std::logic_error");
+
+        // After BOTH nesting levels have closed, iteration must be
+        // unblocked again — the guard's counter must unwind through two
+        // levels, not just one.
+        int afterNestingVisited = 0;
+        const bool afterNestingIterated = kb::library::Query<kb::scene::CameraComponent>::ForEach(
+            scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++afterNestingVisited; });
+        kb::tests::Require(afterNestingIterated && afterNestingVisited == 2, "Engine21kbLibrary Query<T>::ForEach must be fully unblocked after two nested iteration levels have both closed");
+    }
+
+    // (2) Entity destroyed in query: a CommandBatch-recorded Destroy(),
+    // applied via Flush() after the recording loop closes, must make the
+    // entity genuinely ABSENT from a subsequent, fresh Query<T>::ForEach —
+    // not merely "not alive" (already proven by RunLibraryCommandBatchTest).
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject survivor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyedInQuerySurvivor" });
+        const kb::scene::SceneObject toDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyedInQueryTarget" });
+        scene.Components().Cameras().Set(survivor.Entity(), kb::scene::CameraComponent{});
+        scene.Components().Cameras().Set(toDestroy.Entity(), kb::scene::CameraComponent{});
+
+        kb::library::CommandBatch batch{ scene };
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
+                if (entity.Entity() == toDestroy.Entity()) {
+                    batch.Destroy(entity);
+                }
+            }));
+        static_cast<void>(batch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(toDestroy.Entity()), "Engine21kbLibrary entity-destroyed-in-query setup must actually be dead after Flush()");
+
+        std::vector<kb::scene::SceneEntity> visitedAfterDestroy;
+        static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { visitedAfterDestroy.push_back(entity.Entity()); }));
+        kb::tests::Require(visitedAfterDestroy.size() == 1U && visitedAfterDestroy[0] == survivor.Entity(),
+            "Engine21kbLibrary a FRESH Query<T>::ForEach run after Flush() must never visit an entity destroyed via CommandBatch during a prior query — not just report it as not-alive");
+    }
+
+    // (3) Command flush boundary: Add<T>+Destroy on the SAME entity in one
+    // CommandBatch, in BOTH recording orders — kb::ecs::CommandBuffer's
+    // Create->Apply->Destroy phase ordering (destroy always wins) is
+    // already proven at the kb::ecs level; this confirms the guarantee
+    // survives the CommandBatch wrapper unchanged.
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject addThenDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AddThenDestroy" });
+        const kb::library::EntityHandle addThenDestroyHandle{ addThenDestroy.Entity(), scene.Id() };
+        kb::library::CommandBatch addThenDestroyBatch{ scene };
+        addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F });
+        addThenDestroyBatch.Destroy(addThenDestroyHandle);
+        static_cast<void>(addThenDestroyBatch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(addThenDestroy.Entity()), "Engine21kbLibrary CommandBatch: Add<T> recorded BEFORE Destroy on the same entity must still result in the entity being destroyed after Flush()");
+
+        const kb::scene::SceneObject destroyThenAdd = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyThenAdd" });
+        const kb::library::EntityHandle destroyThenAddHandle{ destroyThenAdd.Entity(), scene.Id() };
+        kb::library::CommandBatch destroyThenAddBatch{ scene };
+        destroyThenAddBatch.Destroy(destroyThenAddHandle);
+        destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F });
+        static_cast<void>(destroyThenAddBatch.Flush());
+        kb::tests::Require(!scene.Entities().IsAlive(destroyThenAdd.Entity()), "Engine21kbLibrary CommandBatch: Destroy recorded BEFORE Add<T> on the same entity must still result in the entity being destroyed after Flush() — recording order must not change the outcome");
+    }
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -2222,6 +2358,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
     RunComponentChangeTrackerTest();
+    RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
