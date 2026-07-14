@@ -114,6 +114,46 @@ struct ScriptEventDeliveryResult {
 // PucLuaEventApi.cpp) rather than the fixed-pin ScriptFunctionRegistry
 // model, which cannot carry a callback argument or arbitrary named payload
 // arguments.
+//
+// LIB-107: DISPATCH MODE CONTRACT. This bus has EXACTLY two delivery modes,
+// and no third, ambiguous, or runtime-selectable one:
+//   - SYNCHRONOUS (Emit/Broadcast): every matching subscriber is invoked
+//     before the call returns, on the calling thread, in the calling call
+//     stack. A subscriber that itself calls Emit/Broadcast reentrantly gets
+//     that nested delivery ALSO fully synchronously, before its own Emit
+//     call returns — sync stays sync under arbitrary reentrancy depth (up
+//     to LIB-038's registry-wide call-depth guard, which protects the whole
+//     engine against runaway reentrant chains, not something specific to
+//     this bus).
+//   - DEFERRED (EmitDeferred + DrainDeferred): EmitDeferred NEVER invokes
+//     any subscriber itself — it only appends to `deferredEmits_` and
+//     returns. Delivery happens ONLY inside a DrainDeferred call, which
+//     ScriptRuntimeSceneSystem::ExecuteFrame invokes at exactly ONE
+//     well-defined point per frame (DispatchDeferredEvents, after Timer/
+//     Task dispatch, before behaviour lifecycle sync) — never ad-hoc,
+//     never twice in the same frame. A subscriber invoked BY DrainDeferred
+//     that itself calls EmitDeferred again queues into the (by then empty)
+//     `deferredEmits_` for the NEXT DrainDeferred call, one frame later —
+//     it can never be swept up by the CURRENT drain, because DrainDeferred
+//     moves the pending list out (`std::move(deferredEmits_)`) before
+//     dispatching any of it (the same "snapshot before dispatching"
+//     discipline Emit's own subscriber-matching pass and LIB-102's Timer
+//     fix both already use).
+//
+// NO IMPLICIT MIXING: there is no boolean/flag parameter anywhere on this
+// class (or its Lua binding, PucLuaEventsApi.cpp) that silently switches an
+// Emit into deferred behavior or an EmitDeferred into synchronous behavior
+// — the two modes are ALWAYS selected by calling a differently-named
+// function, never by an argument value, mirroring World.Destroy's own
+// established "reject an ambiguous deferred=true rather than fake it"
+// discipline (LIB-067/ScriptWorldApi.cpp) rather than inventing a NEW kind
+// of implicit-mixing risk here. `kb::script::ScriptRuntime::
+// DispatchEventAndDrain`/`DrainEvents` (ScriptRuntime.hpp) are a
+// DIFFERENT, older, ALWAYS-synchronous mechanism (recursively draining
+// ScriptExecutionContext::Emit/EmitTo's own emitted-events queue within one
+// call) that predates this bus and shares no code or state with it despite
+// the similarly-named "Drain" — see that function's own doc comment for
+// the explicit disambiguation.
 class ScriptEventBus final {
 public:
     // LIB-106: `channel` declares which channel THIS subscription listens
