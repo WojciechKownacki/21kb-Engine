@@ -52,9 +52,15 @@ public:
     // rule (scale = IsPlaying() ? TimeScale() : 0) before decrementing any
     // timer, so a timer's notion of elapsed time is always identical to
     // what Time.Delta reports for the same frame. A timer whose owner is no
-    // longer alive is silently auto-cancelled (removed, no fire) the moment
-    // that's detected, regardless of remaining time or pause state — no
-    // dangling callback for a dead entity. A one-shot timer is removed from
+    // longer alive OR no longer active (LIB-099: World.SetActive(owner,
+    // false)/LIB-068 — from a gameplay standpoint a deactivated owner is as
+    // "gone" as a destroyed one) is silently auto-cancelled (removed, no
+    // fire) the moment that's detected, regardless of remaining time or
+    // pause state — no dangling callback for a dead/inactive entity.
+    // Scene.Unload needs no separate handling: it destroys its whole
+    // hierarchy through the same SceneEntityDestructionService cascade
+    // (LIB-070), so an owner anywhere inside an unloaded scene is already
+    // caught by the alive-check above. A one-shot timer is removed from
     // storage after firing.
     // LIB-096: same-time ordering — when multiple timers become due within
     // one Advance() call, `fired` lists them in CREATION order (the order

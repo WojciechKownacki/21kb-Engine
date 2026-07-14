@@ -31,6 +31,22 @@ constexpr std::size_t kMaxLiveTimers = 4096U;
 // drop the remaining backlog (documented below, not silent).
 constexpr std::size_t kMaxCatchUpFiresPerAdvance = 8U;
 
+// LIB-099: cancellation propagation — a timer's owner being destroyed
+// already auto-cancelled it (LIB-095); this widens the SAME check to also
+// cover the owner being DEACTIVATED (kb::scene::SceneEntityService::
+// IsActive, i.e. World.SetActive(owner, false), LIB-068) — an owner that
+// still exists but is no longer active is, from a gameplay-visible
+// standpoint, exactly as "gone" as a destroyed one, so a timer scheduled
+// on its behalf should stop the same way. Scene.Unload needed NO separate
+// handling: it destroys its root entity's whole hierarchy via the same
+// SceneEntityDestructionService cascade LIB-070 already established, so
+// any timer owned by an entity inside an unloaded scene is caught here via
+// the IsAlive half of this same check on the very next Advance() call —
+// confirmed by RunSceneTimerCancellationPropagationTest, not assumed.
+[[nodiscard]] bool OwnerGone(const Scene& scene, SceneEntity owner) noexcept {
+    return owner.IsValid() && (!SceneEntityService::IsAlive(scene, owner) || !SceneEntityService::IsActive(scene, owner));
+}
+
 } // namespace
 
 std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner) noexcept {
@@ -136,7 +152,7 @@ std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float del
     std::size_t index = 0U;
     while (index < state.timers.size()) {
         SceneState::TimerRecord& timer = state.timers[index];
-        if (timer.owner.IsValid() && !SceneEntityService::IsAlive(scene, timer.owner)) {
+        if (OwnerGone(scene, timer.owner)) {
             state.timers.erase(state.timers.begin() + static_cast<std::ptrdiff_t>(index));
             continue;
         }
