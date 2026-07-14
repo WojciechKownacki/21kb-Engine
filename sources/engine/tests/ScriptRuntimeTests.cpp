@@ -7528,6 +7528,141 @@ void RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest() {
     }
 }
 
+// LIB-112: EMIT direction of the gameplay event bridge — a Visual Graph
+// EmitEvent node's typed-pin output now ALSO reaches a native Events.
+// Subscribe listener through ScriptEventBus, in ADDITION to (never instead
+// of) the pre-existing old-mechanism DispatchEvent path
+// (RunVisualGraphFullLifecycleOrderTest already proves that path's own
+// ordering contract is unaffected by this task's code).
+void RunVisualGraphEmitEventReachesBusTest() {
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "EmitBridgeGraph";
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "DeltaSeconds" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "BridgeEmitted" });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 3U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "value", .toNode = 3U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Emit bridge graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5410U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)), "Emit bridge backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EmitBridgeSubject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    int busDeliveries = 0;
+    float capturedAmount = -1.0F;
+    static_cast<void>(runtime.Events().Subscribe("BridgeEmitted", [&busDeliveries, &capturedAmount](const kb::script::ScriptEvent& event) {
+        ++busDeliveries;
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "amount") {
+                capturedAmount = argument.value.AsFloat();
+            }
+        }
+    }));
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 0.25F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Emit bridge frame produced diagnostics");
+
+    bool foundInOldMechanism = false;
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        if (event.name == "BridgeEmitted") {
+            foundInOldMechanism = true;
+        }
+    }
+    kb::tests::Require(foundInOldMechanism, "The old DispatchEvent mechanism must still see the EmitEvent node's output, unchanged by this task");
+    kb::tests::Require(busDeliveries == 1 && kb::tests::NearlyEqual(capturedAmount, 0.25F), "The SAME EmitEvent node's output must ALSO reach a native Events.Subscribe listener through the bus, with the correct typed argument value");
+}
+
+// LIB-112: RECEIVE direction of the gameplay event bridge — a native
+// Events.Broadcast (bus-side, LIB-105) now ALSO reaches a Visual Graph
+// behaviour's CustomEvent node, with typed pins flowing through the SAME
+// StoreCustomEventArguments matching the old DispatchEvent mechanism
+// already uses — closing the real gap ScriptEventBus.hpp's own doc
+// comment named this task for. Also proves the auto-subscription is
+// correctly torn down on Destroyed (no leak, no post-destroy invocation).
+void RunScriptEventBusReachesVisualGraphCustomEventTest() {
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ReceiveBridgeGraph";
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::CustomEvent, .symbol = "BridgeReceived" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "RecordAmount" });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "amount", .toNode = 2U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Receive bridge graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5411U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+
+    std::vector<float> recordedAmounts;
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphRuntimeBinding{
+                            .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                            .symbol = "RecordAmount",
+                            .inputs = { kb::visual::VisualGraphNativePinSignature{ .name = "amount", .type = kb::visual::VisualGraphValueType::Float } },
+                            .callback = [&recordedAmounts](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                                recordedAmounts.push_back(context.ReadFloat(instruction.inputs[0].sourceNodeId, instruction.inputs[0].sourcePin));
+                            },
+                        }),
+        "Receive bridge runtime binding registration failed");
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)), "Receive bridge backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ReceiveBridgeSubject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Receive bridge Created dispatch produced diagnostics");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 1U, "Created must have auto-subscribed exactly one bus subscription for the graph's single CustomEvent node");
+
+    const kb::script::ScriptEventDeliveryResult delivery = runtime.Events().Broadcast(scene, kb::script::ScriptEvent{
+        .name = "BridgeReceived",
+        .arguments = { kb::script::ScriptEventArgument{ .name = "amount", .value = kb::script::ScriptValue{ 0.75F } } },
+    });
+    kb::tests::Require(delivery.delivered == 1U && delivery.errors.empty(), "A native Events.Broadcast must reach the auto-subscribed Visual Graph CustomEvent node");
+    kb::tests::Require(recordedAmounts.size() == 1U && kb::tests::NearlyEqual(recordedAmounts[0], 0.75F), "The bus-delivered event's typed argument must reach the graph's CustomEvent output pin and flow through to CallNative, exactly like the old DispatchEvent mechanism already does");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Receive bridge Destroyed dispatch produced diagnostics");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 0U, "Destroyed must have unsubscribed the bridge subscription — no leaked entry");
+
+    const kb::script::ScriptEventDeliveryResult afterDestroy = runtime.Events().Broadcast(scene, kb::script::ScriptEvent{ .name = "BridgeReceived" });
+    kb::tests::Require(afterDestroy.delivered == 0U && recordedAmounts.size() == 1U, "A Broadcast after the behaviour was destroyed must not re-invoke the graph — the subscription must genuinely be gone, not just skipped once");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -7589,6 +7724,8 @@ void RunScriptRuntimeTests() {
     RunEngineLibraryEventSchemaMatchesRealDispatchTest();
     RunScriptEventBusTelemetryTest();
     RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest();
+    RunVisualGraphEmitEventReachesBusTest();
+    RunScriptEventBusReachesVisualGraphCustomEventTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
