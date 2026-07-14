@@ -71,6 +71,21 @@ public:
         ScriptLifecycleEvent event,
         float deltaSeconds,
         ScriptRuntimeDispatchOptions options = {});
+    // LIB-107: "AndDrain" here means something DIFFERENT from ScriptEventBus
+    // ::DrainDeferred, despite the shared word — this drains
+    // ScriptExecutionContext::Emit/EmitTo's own emittedEvents queue
+    // SYNCHRONOUSLY, recursively, within THIS SAME call (bounded by
+    // ScriptRuntimeDispatchOptions::maxEventDepth, LIB-038's reentrancy
+    // discipline) — every event this dispatch chain produces is fully
+    // delivered before this function returns. ScriptEventBus::DrainDeferred
+    // is the opposite: it delivers events queued by a PRIOR, separate
+    // EmitDeferred call, at a LATER frame-boundary sync point
+    // (ScriptRuntimeSceneSystem::DispatchDeferredEvents) — never within the
+    // call that queued them. See ScriptEventBus.hpp's own "Dispatch mode
+    // contract" doc comment for the full synchronous-vs-deferred contract;
+    // this function and DrainEvents below are UNRELATED to that contract —
+    // they predate ScriptEventBus (LIB-105) and are always, unconditionally
+    // synchronous, with no deferred counterpart of their own.
     [[nodiscard]] ScriptRuntimeExecutionResult DispatchEventAndDrain(
         kb::scene::Scene& scene,
         const ScriptEvent& event,
