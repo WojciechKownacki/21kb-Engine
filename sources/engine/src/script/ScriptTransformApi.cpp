@@ -38,6 +38,11 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? fallback : value->AsFloat(fallback);
 }
 
+[[nodiscard]] bool BoolArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, bool fallback = false) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsBool(fallback);
+}
+
 [[nodiscard]] bool Alive(const ScriptFunctionCallContext& context, kb::scene::SceneEntity entity) noexcept {
     return context.scene != nullptr && entity.IsValid() && context.scene->Entities().IsAlive(entity);
 }
@@ -107,6 +112,31 @@ ScriptFunctionCallResult PoseResult(bool found, kb::scene::Vec3 position, kb::sc
 // crash" resolution LIB-054 already applies elsewhere in kb::math.
 [[nodiscard]] float SafeDivide(float numerator, float denominator) noexcept {
     return std::fabs(denominator) <= 0.000001F ? numerator : numerator / denominator;
+}
+
+struct LocalPose {
+    kb::math::Vec3 position{};
+    kb::math::Quat rotation{};
+};
+
+// LIB-085/086: the world-to-local back-solve, extracted here so both
+// Transform.SetWorldPose and Transform.SetParent's keepWorld branch share
+// ONE implementation rather than two copies of the same inverse math.
+// `parentTransform` must already be a FRESH read (the caller is
+// responsible for calling SynchronizeTransforms() first) — this function
+// itself never touches the scene, it is pure math.
+[[nodiscard]] LocalPose WorldPoseToLocal(const kb::scene::TransformComponent& parentTransform, kb::math::Vec3 worldPosition, kb::math::Quat worldRotation) noexcept {
+    const kb::math::Quat parentWorldRotationInverse = kb::math::Inverse(parentTransform.worldRotation);
+    const kb::math::Vec3 worldDelta = worldPosition - parentTransform.worldPosition;
+    const kb::math::Vec3 unrotatedDelta = kb::math::Rotate(parentWorldRotationInverse, worldDelta);
+    return LocalPose{
+        .position = kb::math::Vec3{
+            SafeDivide(unrotatedDelta.x, parentTransform.worldScale.x),
+            SafeDivide(unrotatedDelta.y, parentTransform.worldScale.y),
+            SafeDivide(unrotatedDelta.z, parentTransform.worldScale.z),
+        },
+        .rotation = parentWorldRotationInverse * worldRotation,
+    };
 }
 
 ScriptFunctionCallResult GetPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -262,18 +292,102 @@ ScriptFunctionCallResult SetWorldPose(const ScriptFunctionCallContext& context, 
     } else {
         context.scene->Runtime().SynchronizeTransforms();
         const kb::scene::TransformComponent parentTransform = context.scene->Transforms().Get(parent);
-        const kb::math::Quat parentWorldRotationInverse = kb::math::Inverse(parentTransform.worldRotation);
-        const kb::math::Vec3 worldDelta = desiredWorldPosition - parentTransform.worldPosition;
-        const kb::math::Vec3 unrotatedDelta = kb::math::Rotate(parentWorldRotationInverse, worldDelta);
-        transform.localPosition = kb::math::Vec3{
-            SafeDivide(unrotatedDelta.x, parentTransform.worldScale.x),
-            SafeDivide(unrotatedDelta.y, parentTransform.worldScale.y),
-            SafeDivide(unrotatedDelta.z, parentTransform.worldScale.z),
-        };
-        transform.localRotation = parentWorldRotationInverse * desiredWorldRotation;
+        const LocalPose localPose = WorldPoseToLocal(parentTransform, desiredWorldPosition, desiredWorldRotation);
+        transform.localPosition = localPose.position;
+        transform.localRotation = localPose.rotation;
     }
     context.scene->Transforms().Set(entity, transform);
     context.scene->Runtime().SynchronizeTransforms();
+    return BoolResult("moved", true);
+}
+
+// LIB-086: read-only — the entity's current parent (kb::scene::SceneEntity{}
+// / invalid if it is a root), mirroring the "found" = alive convention every
+// other Get*/read function in this module already uses. A root entity is
+// NOT an error (found=true, parent=invalid) — only a dead/unknown entity
+// reports found=false.
+ScriptFunctionCallResult GetParent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{ "found", ScriptValue{ false } },
+                ScriptFunctionArgument{ "parent", ScriptValue{ kb::scene::SceneEntity{}.Id(), ScriptValueType::Entity } },
+            },
+            .errors = {},
+        };
+    }
+    const kb::scene::SceneEntity parent = context.scene->Hierarchy().Parent(entity);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ true } },
+            ScriptFunctionArgument{ "parent", ScriptValue{ parent.Id(), ScriptValueType::Entity } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-086: reparents `entity` under `parent` (invalid/omitted `parent` ==
+// un-parent to root). Cycle detection is NOT reimplemented here — it
+// already lives at the kb::scene level
+// (SceneHierarchyParenting::WouldCreateCycle, reached through
+// Hierarchy().SetParent, the exact same path World.SetParent already
+// uses) and simply surfaces as this function returning moved=false, same
+// as any other rejected reparent (dead entity, entity==parent, no-op
+// already-this-parent).
+//
+// `keepWorld` is the genuinely new behavior LIB-086 adds: WITHOUT it,
+// SceneHierarchyParenting::SetParent only reassigns the parent
+// relationship — it never touches localPosition/localRotation/localScale
+// — so the entity's WORLD pose changes to (new parent's world) composed
+// with the UNCHANGED local pose, a visual "jump". WITH keepWorld=true,
+// this captures the entity's world pose BEFORE reparenting (forcing a
+// sync first, so it reflects any pending changes from earlier this frame),
+// then AFTER reparenting succeeds, back-solves a new local pose against
+// the NEW parent's (freshly synced) world transform — reusing the exact
+// same WorldPoseToLocal helper Transform.SetWorldPose uses — so the
+// entity's world pose is unchanged across the reparent even though its
+// local pose is not.
+ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    const kb::scene::SceneEntity newParent = EntityArg(arguments, "parent");
+    const bool keepWorld = BoolArg(arguments, "keepWorld", false);
+
+    kb::math::Vec3 worldPositionBeforeReparent{};
+    kb::math::Quat worldRotationBeforeReparent{};
+    if (keepWorld) {
+        context.scene->Runtime().SynchronizeTransforms();
+        const kb::scene::TransformComponent beforeTransform = context.scene->Transforms().Get(entity);
+        worldPositionBeforeReparent = beforeTransform.worldPosition;
+        worldRotationBeforeReparent = beforeTransform.worldRotation;
+    }
+
+    if (!context.scene->Hierarchy().SetParent(entity, newParent)) {
+        return BoolResult("moved", false);
+    }
+
+    if (keepWorld) {
+        kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+        if (newParent.IsValid()) {
+            context.scene->Runtime().SynchronizeTransforms();
+            const kb::scene::TransformComponent parentTransform = context.scene->Transforms().Get(newParent);
+            const LocalPose localPose = WorldPoseToLocal(parentTransform, worldPositionBeforeReparent, worldRotationBeforeReparent);
+            transform.localPosition = localPose.position;
+            transform.localRotation = localPose.rotation;
+        } else {
+            // New parent is root (none) — local IS world directly, same as
+            // Transform.SetWorldPose's own root case.
+            transform.localPosition = worldPositionBeforeReparent;
+            transform.localRotation = worldRotationBeforeReparent;
+        }
+        context.scene->Transforms().Set(entity, transform);
+        context.scene->Runtime().SynchronizeTransforms();
+    }
     return BoolResult("moved", true);
 }
 
@@ -408,6 +522,21 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
         &SetWorldPose) && ok;
+    ok = RegisterFunction(host, "Transform.Parent",
+        { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "parent", ScriptValueType::Entity, true },
+        },
+        &GetParent) && ok;
+    ok = RegisterFunction(host, "Transform.SetParent",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
+            ScriptFunctionPin{ "keepWorld", ScriptValueType::Bool, false },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &SetParent) && ok;
     return ok;
 }
 
