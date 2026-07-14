@@ -7417,6 +7417,117 @@ void RunScriptEventBusTelemetryTest() {
     }
 }
 
+// LIB-111: the exhaustive edge-case tests LIB-105's own doc comment
+// explicitly deferred to this task — ordering with MANY subscribers (not
+// just two), Unsubscribe called from WITHIN dispatch (self and a
+// not-yet-invoked sibling), a destroyed owner shared by MULTIPLE
+// subscriptions mid-dispatch, and recursive Emit both bounded (works
+// correctly) and unbounded (safely caught, not a stack overflow).
+void RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest() {
+    kb::scene::Scene scene;
+
+    // --- ordering: 6 subscribers, strict connection order. ---
+    {
+        kb::script::ScriptEventBus bus;
+        std::vector<int> order;
+        for (int i = 0; i < 6; ++i) {
+            static_cast<void>(bus.Subscribe("Order", [&order, i](const kb::script::ScriptEvent&) { order.push_back(i); }));
+        }
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "Order" });
+        kb::tests::Require(result.delivered == 6U, "All 6 subscribers must have been delivered to");
+        kb::tests::Require(order.size() == 6U, "All 6 subscribers must have actually run");
+        for (int i = 0; i < 6; ++i) {
+            kb::tests::Require(order[static_cast<std::size_t>(i)] == i, "Delivery order must exactly match connection order for every one of 6 subscribers, not just a lucky first/last pair");
+        }
+    }
+
+    // --- unsubscribe during dispatch: self, and a not-yet-invoked sibling. ---
+    {
+        kb::script::ScriptEventBus bus;
+        int selfFired = 0;
+        kb::script::EventSubscriptionHandle selfHandle = kb::script::kInvalidEventSubscriptionHandle;
+        selfHandle = bus.Subscribe("SelfUnsub", [&bus, &selfFired, &selfHandle](const kb::script::ScriptEvent&) {
+            ++selfFired;
+            kb::tests::Require(bus.Unsubscribe(selfHandle), "A subscriber must be able to Unsubscribe ITSELF from within its own dispatch");
+        });
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "SelfUnsub" }));
+        kb::tests::Require(selfFired == 1, "A self-unsubscribing subscriber must still have run exactly once for the Emit call that triggered the unsubscribe");
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "SelfUnsub" }));
+        kb::tests::Require(selfFired == 1, "After self-unsubscribing, the subscriber must never fire again on a later Emit");
+        kb::tests::Require(bus.SubscriptionCount() == 0U, "The self-unsubscribed subscription must actually be gone");
+    }
+    {
+        kb::script::ScriptEventBus bus;
+        int siblingFired = 0;
+        kb::script::EventSubscriptionHandle siblingHandle = kb::script::kInvalidEventSubscriptionHandle;
+        static_cast<void>(bus.Subscribe("UnsubSibling", [&bus, &siblingHandle](const kb::script::ScriptEvent&) {
+            kb::tests::Require(bus.Unsubscribe(siblingHandle), "A subscriber must be able to Unsubscribe a SIBLING (registered later, not yet invoked) from within its own dispatch");
+        }));
+        siblingHandle = bus.Subscribe("UnsubSibling", [&siblingFired](const kb::script::ScriptEvent&) { ++siblingFired; });
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "UnsubSibling" });
+        kb::tests::Require(result.delivered == 1U && siblingFired == 0, "A sibling unsubscribed by an EARLIER subscriber in the SAME Emit call must never fire, and must not be counted as delivered");
+        kb::tests::Require(bus.SubscriptionCount() == 1U, "Only the unsubscribed sibling should be gone; the unsubscribing subscriber itself remains connected");
+    }
+
+    // --- destroyed owner shared by MULTIPLE subscriptions mid-dispatch:
+    // proves EVERY subscription on the dead owner is skipped, not just the
+    // first one found. ---
+    {
+        kb::script::ScriptEventBus bus;
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Multi Destroyed Owner Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Multi Destroyed Owner Victim" });
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        int victimAFired = 0;
+        int victimBFired = 0;
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&scene, victim](const kb::script::ScriptEvent&) { scene.Entities().Destroy(victim); }, destroyerObject.Entity()));
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&victimAFired](const kb::script::ScriptEvent&) { ++victimAFired; }, victim));
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&victimBFired](const kb::script::ScriptEvent&) { ++victimBFired; }, victim));
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "MultiDestroyed" });
+        kb::tests::Require(result.delivered == 1U && victimAFired == 0 && victimBFired == 0, "BOTH subscriptions sharing a mid-dispatch-destroyed owner must be skipped, not just the first one encountered");
+    }
+
+    // --- recursive emit: bounded (works correctly), unbounded (safely
+    // caught by kMaxEmitDepth — LIB-111's discovery of a real, previously
+    // unguarded stack-overflow risk, fixed in the same change as this
+    // test). ---
+    {
+        kb::script::ScriptEventBus bus;
+        int pingPongCount = 0;
+        static_cast<void>(bus.Subscribe("PingPong", [&bus, &scene, &pingPongCount](const kb::script::ScriptEvent&) {
+            ++pingPongCount;
+            if (pingPongCount < 10) {
+                static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "PingPong" }));
+            }
+        }));
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "PingPong" }));
+        kb::tests::Require(pingPongCount == 10, "A bounded, self-terminating recursive Emit chain must run to completion normally (10 levels), well under kMaxEmitDepth");
+    }
+    {
+        kb::script::ScriptEventBus bus;
+        std::size_t runawayInvocations = 0;
+        static_cast<void>(bus.Subscribe("Runaway", [&bus, &scene, &runawayInvocations](const kb::script::ScriptEvent&) {
+            ++runawayInvocations;
+            static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Runaway" }));
+        }));
+        const kb::script::ScriptEventBusTelemetrySnapshot before = bus.Telemetry();
+        // If this call doesn't return (or crashes), kMaxEmitDepth's guard
+        // has failed — the whole point of this test.
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Runaway" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot after = bus.Telemetry();
+        kb::tests::Require(runawayInvocations == kb::script::ScriptEventBus::kMaxEmitDepth, "An unconditionally self-recursive Emit chain must run EXACTLY kMaxEmitDepth times before the guard rejects the next nested attempt — not fewer (guard too eager) and not more (guard not actually bounding depth)");
+        kb::tests::Require(after.invalidEventCount == before.invalidEventCount + 1U, "The depth-exceeded rejection deep in the recursive chain must be counted as exactly one invalid event");
+
+        // Prove the depth counter genuinely unwound back to 0 (RAII on
+        // every exit path) rather than staying stuck high after a rejected
+        // deep call — a completely unrelated, ordinary Emit right
+        // afterward must work normally.
+        int normalFired = 0;
+        static_cast<void>(bus.Subscribe("AfterRunaway", [&normalFired](const kb::script::ScriptEvent&) { ++normalFired; }));
+        const kb::script::ScriptEventDeliveryResult normalResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "AfterRunaway" });
+        kb::tests::Require(normalResult.delivered == 1U && normalFired == 1, "After a rejected runaway-recursion Emit unwinds completely, the bus must behave completely normally for an unrelated event — the depth counter must not be left stuck");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -7477,6 +7588,7 @@ void RunScriptRuntimeTests() {
     RunScriptEventPayloadSizeLimitTest();
     RunEngineLibraryEventSchemaMatchesRealDispatchTest();
     RunScriptEventBusTelemetryTest();
+    RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
