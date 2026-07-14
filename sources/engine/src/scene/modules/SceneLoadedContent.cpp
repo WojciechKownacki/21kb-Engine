@@ -23,6 +23,10 @@ std::uint64_t SceneLoadedContentQueries::ActiveScene() const noexcept {
     return SceneLoadedContentService::ActiveScene(scene_);
 }
 
+std::uint64_t SceneLoadedContentQueries::OwningScene(SceneEntity entity) const noexcept {
+    return SceneLoadedContentService::OwningScene(scene_, entity);
+}
+
 SceneLoadedContent::SceneLoadedContent(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -52,6 +56,10 @@ bool SceneLoadedContent::SetActive(std::uint64_t id) noexcept {
 
 std::uint64_t SceneLoadedContent::ActiveScene() const noexcept {
     return SceneLoadedContentService::ActiveScene(scene_);
+}
+
+std::uint64_t SceneLoadedContent::OwningScene(SceneEntity entity) const noexcept {
+    return SceneLoadedContentService::OwningScene(scene_, entity);
 }
 
 std::vector<SceneLifecycleEventRecord> SceneLoadedContent::DrainPendingLifecycleEvents() {

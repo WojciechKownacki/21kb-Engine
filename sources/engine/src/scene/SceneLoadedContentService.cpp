@@ -163,6 +163,29 @@ std::uint64_t SceneLoadedContentService::ActiveScene(const Scene& scene) noexcep
     return SceneAccess::State(scene).activeLoadedSceneId;
 }
 
+// LIB-106: walks `entity` up to its hierarchy root (SceneHierarchyAccess::
+// Parent already returns an invalid SceneEntity once there is no parent —
+// the same convention RootEntities() relies on) and matches that root
+// against every currently-loaded record's own `root` — the exact
+// composition of already-existing primitives (hierarchy walk +
+// loadedScenes scan) SceneLoadedContentService::Unload already performs
+// internally for its OWN record, just not previously exposed as one
+// reusable query. Returns 0 (never a valid Scene.Load id, same "unknown"
+// sentinel Find/Progress already use) for an invalid/dead entity or one
+// that was never part of any Scene.Load'ed content (e.g. spawned directly).
+std::uint64_t SceneLoadedContentService::OwningScene(const Scene& scene, SceneEntity entity) noexcept {
+    if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
+        return 0U;
+    }
+    SceneEntity root = entity;
+    for (SceneEntity parent = scene.Hierarchy().Parent(root); parent.IsValid(); parent = scene.Hierarchy().Parent(root)) {
+        root = parent;
+    }
+    const SceneState& state = SceneAccess::State(scene);
+    const auto iterator = std::ranges::find_if(state.loadedScenes, [root](const SceneState::LoadedSceneRecord& record) { return record.root == root; });
+    return iterator == state.loadedScenes.end() ? 0U : iterator->id;
+}
+
 std::vector<SceneLifecycleEventRecord> SceneLoadedContentService::DrainPendingLifecycleEvents(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     std::vector<SceneLifecycleEventRecord> drained;

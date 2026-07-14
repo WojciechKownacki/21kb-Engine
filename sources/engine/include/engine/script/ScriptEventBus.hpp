@@ -54,6 +54,45 @@ inline constexpr EventSubscriptionHandle kInvalidEventSubscriptionHandle = 0;
 // needs at Subscribe time, so no ScriptExecutionContext is threaded through.
 using NativeEventSubscriptionCallback = std::function<void(const ScriptEvent&)>;
 
+// LIB-106: recipient filter criteria for Emit/Broadcast/EmitDeferred,
+// generalizing the entity-only `target` parameter Emit already had. Each
+// field left at its default means "no constraint on this axis" — an
+// unfiltered Emit(scene, event, target) call behaves EXACTLY as it did
+// before this task, so no existing caller's delivery set changes. `tag`/
+// `component`/`sceneId` are evaluated against a candidate subscription's
+// OWNER entity at delivery time (a subscription with no owner, or whose
+// owner is currently dead, never matches a non-default tag/component/scene
+// filter — the same "no entity identity to match against" rule Emit's
+// existing entity `target` filter already applies): `tag` via
+// kb::scene::SceneTagsComponents (World.HasTag's own backing store),
+// `component` via kb::script::ScriptSceneComponentApi::HasComponent (the
+// same runtime, string-name-keyed query World.Has-style component checks
+// already use), `sceneId` via kb::scene::SceneLoadedContent::OwningScene
+// (which loaded-scene id, from Scene.Load/LIB-071, the owner's root entity
+// belongs to; 0 means "not part of any explicitly loaded scene record" and
+// can never match a non-zero filter). `channel` is different in kind: it is
+// NOT derived from the owner entity, but compared directly against the
+// channel the SUBSCRIPTION itself declared at Subscribe time (see
+// Subscribe's own `channel` parameter below) — a subscription with no
+// channel ("") is reached only by an Emit call that also leaves `channel`
+// unset, matching this struct's all-default "no constraint" behavior.
+//
+// Deliberately NOT a field here: `player`. No Player/LocalUser/PlayerId
+// concept exists ANYWHERE in this engine today (confirmed by a full-repo
+// grep before implementing) — LIB-195 is the task that will define
+// `Player`/`PlayerController`/`Pawn`/`PlayerState` and join/leave lifecycle;
+// LIB-115 is per-player Input. Adding a `player` filter now would mean
+// inventing that entire concept under this much narrower "event recipient
+// filter" task, the same fabrication this codebase has repeatedly refused
+// to do (LIB-097/098's yield-reason deferrals, LIB-105's Visual Graph
+// deferral to LIB-112). Revisit once LIB-195 exists.
+struct EventRecipientFilter {
+    std::string tag;
+    std::string component;
+    std::uint64_t sceneId = 0U;
+    std::string channel;
+};
+
 // Emit/Broadcast/DrainDeferred bypass ScriptRuntime::DispatchEvent entirely
 // (subscriptions are not behaviours), so they cannot rely on that
 // pipeline's ScriptDiagnostic vector to surface a misbehaving subscriber —
@@ -77,7 +116,10 @@ struct ScriptEventDeliveryResult {
 // arguments.
 class ScriptEventBus final {
 public:
-    [[nodiscard]] EventSubscriptionHandle Subscribe(std::string eventName, NativeEventSubscriptionCallback callback, kb::scene::SceneEntity owner = {});
+    // LIB-106: `channel` declares which channel THIS subscription listens
+    // on ("" is the default channel) — see EventRecipientFilter::channel's
+    // own doc comment for the full matching rule against Emit's filter.
+    [[nodiscard]] EventSubscriptionHandle Subscribe(std::string eventName, NativeEventSubscriptionCallback callback, kb::scene::SceneEntity owner = {}, std::string channel = {});
     bool Unsubscribe(EventSubscriptionHandle handle) noexcept;
 
     // Synchronous: invokes every live subscription matching event.name
@@ -88,15 +130,19 @@ public:
     // targeted Emit, since it has no entity identity to match against.
     // Lazily drops (and skips firing) any subscription whose owner has
     // died or been deactivated since it was registered, same policy as
-    // Timer/Task's OwnerGone check (LIB-095/097/099).
-    ScriptEventDeliveryResult Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target = {});
+    // Timer/Task's OwnerGone check (LIB-095/097/099). `filter` (LIB-106)
+    // narrows the recipient set further along the tag/component/scene/
+    // channel axes — see EventRecipientFilter's doc comment; left at its
+    // default, delivery is identical to before this parameter existed.
+    ScriptEventDeliveryResult Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target = {}, const EventRecipientFilter& filter = {});
 
     // Always reaches every live subscription matching event.name,
     // regardless of any owner — the same delivery Emit performs when called
     // with no target, given a distinct, self-documenting name for callers
     // (especially Lua/native call sites) that want to make "no targeting,
     // full stop" explicit rather than relying on a default argument.
-    ScriptEventDeliveryResult Broadcast(kb::scene::Scene& scene, const ScriptEvent& event);
+    // `filter` (LIB-106) applies exactly as it does on Emit.
+    ScriptEventDeliveryResult Broadcast(kb::scene::Scene& scene, const ScriptEvent& event, const EventRecipientFilter& filter = {});
 
     // Queues `event` for delivery at the next DrainDeferred() call instead
     // of firing inline — DrainDeferred is called once per frame by
@@ -105,7 +151,10 @@ public:
     // real, observable timing difference from Emit (now vs next drain), not
     // a renamed duplicate: code calling EmitDeferred during dispatch of one
     // event will never see it delivered within that same call stack.
-    void EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target = {});
+    // `filter` (LIB-106) is stored alongside `target` and re-applied at the
+    // eventual DrainDeferred-driven Emit, exactly as if Emit(filter) had
+    // been called directly at drain time.
+    void EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target = {}, EventRecipientFilter filter = {});
 
     // Delivers every event queued by EmitDeferred since the last drain, in
     // FIFO order, and clears the queue. Returns the number of subscriber
@@ -119,12 +168,14 @@ private:
         EventSubscriptionHandle handle = kInvalidEventSubscriptionHandle;
         std::string eventName;
         kb::scene::SceneEntity owner{};
+        std::string channel;
         NativeEventSubscriptionCallback callback;
     };
 
     struct DeferredEmit {
         ScriptEvent event;
         kb::scene::SceneEntity target{};
+        EventRecipientFilter filter{};
     };
 
     std::vector<Subscription> subscriptions_;

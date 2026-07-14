@@ -96,6 +96,53 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     return kb::scene::SceneEntity{ static_cast<std::uint64_t>(id) };
 }
 
+// LIB-106: `channel` for Events.Subscribe — "" (unset/nil) is the default
+// channel, matching EventRecipientFilter::channel's own "no constraint"
+// default for an Emit call that never mentions a channel.
+[[nodiscard]] std::string OptionalStringArg(lua_State* state, int index) {
+    if (lua_gettop(state) < index || lua_isnoneornil(state, index) != 0) {
+        return {};
+    }
+    return luaL_checkstring(state, index);
+}
+
+[[nodiscard]] std::string OptionalFilterTableStringField(lua_State* state, int tableIndex, const char* field) {
+    lua_getfield(state, tableIndex, field);
+    std::string value;
+    if (lua_isstring(state, -1) != 0) {
+        value = lua_tostring(state, -1);
+    }
+    lua_pop(state, 1);
+    return value;
+}
+
+[[nodiscard]] std::uint64_t OptionalFilterTableIntegerField(lua_State* state, int tableIndex, const char* field) {
+    lua_getfield(state, tableIndex, field);
+    std::uint64_t value = 0U;
+    if (lua_isnumber(state, -1) != 0) {
+        const lua_Integer id = lua_tointeger(state, -1);
+        value = id < 0 ? 0U : static_cast<std::uint64_t>(id);
+    }
+    lua_pop(state, 1);
+    return value;
+}
+
+// LIB-106: reads an optional trailing recipient-filter table —
+// { tag = "...", component = "...", scene = <id>, channel = "..." } — every
+// field optional, an absent/non-table argument yields an all-default filter
+// (identical delivery to before this parameter existed).
+[[nodiscard]] EventRecipientFilter OptionalFilterArg(lua_State* state, int index) {
+    EventRecipientFilter filter;
+    if (lua_gettop(state) < index || lua_isnoneornil(state, index) != 0 || lua_istable(state, index) == 0) {
+        return filter;
+    }
+    filter.tag = OptionalFilterTableStringField(state, index, "tag");
+    filter.component = OptionalFilterTableStringField(state, index, "component");
+    filter.channel = OptionalFilterTableStringField(state, index, "channel");
+    filter.sceneId = OptionalFilterTableIntegerField(state, index, "scene");
+    return filter;
+}
+
 int LuaEventsSubscribe(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     const auto* runtime = static_cast<const PucLuaScriptRuntime*>(lua_touserdata(state, lua_upvalueindex(2)));
@@ -106,6 +153,7 @@ int LuaEventsSubscribe(lua_State* state) {
     const char* eventName = luaL_checkstring(state, 1);
     luaL_checktype(state, 2, LUA_TFUNCTION);
     const kb::scene::SceneEntity owner = OptionalEntityArg(state, 3);
+    const std::string channel = OptionalStringArg(state, 4);
 
     lua_pushvalue(state, 2);
     const int ref = luaL_ref(state, LUA_REGISTRYINDEX);
@@ -113,7 +161,8 @@ int LuaEventsSubscribe(lua_State* state) {
     const EventSubscriptionHandle handle = context->Events()->Subscribe(
         eventName,
         [invocation](const ScriptEvent& event) { InvokeSubscriber(invocation, event); },
-        owner);
+        owner,
+        channel);
     if (handle == kInvalidEventSubscriptionHandle) {
         luaL_unref(state, LUA_REGISTRYINDEX, ref);
     }
@@ -149,8 +198,9 @@ int LuaEventsEmit(lua_State* state) {
         return 1;
     }
     const kb::scene::SceneEntity target = OptionalEntityArg(state, 3);
+    const EventRecipientFilter filter = OptionalFilterArg(state, 4);
     const ScriptEvent event = BuildEvent(state, *context, eventName, target);
-    const ScriptEventDeliveryResult result = context->Events()->Emit(context->GetScene(), event, target);
+    const ScriptEventDeliveryResult result = context->Events()->Emit(context->GetScene(), event, target, filter);
     lua_pushinteger(state, static_cast<lua_Integer>(result.delivered));
     return 1;
 }
@@ -162,8 +212,9 @@ int LuaEventsBroadcast(lua_State* state) {
         lua_pushinteger(state, 0);
         return 1;
     }
+    const EventRecipientFilter filter = OptionalFilterArg(state, 3);
     const ScriptEvent event = BuildEvent(state, *context, eventName, kb::scene::SceneEntity{});
-    const ScriptEventDeliveryResult result = context->Events()->Broadcast(context->GetScene(), event);
+    const ScriptEventDeliveryResult result = context->Events()->Broadcast(context->GetScene(), event, filter);
     lua_pushinteger(state, static_cast<lua_Integer>(result.delivered));
     return 1;
 }
@@ -175,8 +226,9 @@ int LuaEventsEmitDeferred(lua_State* state) {
         return 0;
     }
     const kb::scene::SceneEntity target = OptionalEntityArg(state, 3);
+    const EventRecipientFilter filter = OptionalFilterArg(state, 4);
     ScriptEvent event = BuildEvent(state, *context, eventName, target);
-    context->Events()->EmitDeferred(std::move(event), target);
+    context->Events()->EmitDeferred(std::move(event), target, filter);
     return 0;
 }
 
