@@ -102,6 +102,10 @@ public:
     // SceneRuntime::SetPlaying(false).
     [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    // LIB-093: total simulated seconds across the scene's whole lifetime —
+    // see the matching doc comment on SceneState::elapsedSeconds
+    // (SceneState.hpp) for the exact accumulation contract.
+    [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
 
 private:
@@ -180,6 +184,7 @@ public:
     [[nodiscard]] kb::ecs::World& EcsWorld() noexcept;
     [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
+    [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
     void SetPlaying(bool playing) noexcept;
 

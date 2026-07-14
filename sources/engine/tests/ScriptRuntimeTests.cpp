@@ -5442,6 +5442,69 @@ void RunVisualGraphSceneComponentBindingTest() {
     kb::tests::Require(result.emittedEvents.size() == 1U && result.emittedEvents[0].name == "GraphSetTransform", "Visual graph scene component binding did not continue execution");
 }
 
+// LIB-093: Time.Delta/UnscaledDelta/FixedDelta/Elapsed/FrameIndex/
+// FixedStepIndex, called through the registry the same way
+// RunScriptWorldTimePhysicsApiTest above already exercises World.*. The
+// key assertion this test adds beyond that one is the LIB-065 POWRÓT
+// resolution: Time.FrameIndex and World.FrameIndex must return the exact
+// same value for the same scene, proving they alias the same underlying
+// SceneRuntime counter rather than two independent ones.
+void RunScriptTimeApiElapsedAndAliasingTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script time API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Time.Delta") != nullptr, "Time.Delta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.UnscaledDelta") != nullptr, "Time.UnscaledDelta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FixedDelta") != nullptr, "Time.FixedDelta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.Elapsed") != nullptr, "Time.Elapsed was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FrameIndex") != nullptr, "Time.FrameIndex was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.FixedStepIndex") != nullptr, "Time.FixedStepIndex was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.25F,
+    };
+
+    const kb::script::ScriptFunctionCallResult deltaResult = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(deltaResult.Succeeded() && kb::tests::NearlyEqual(deltaResult.Output("delta")->AsFloat(), 0.25F), "Time.Delta must echo ScriptFunctionCallContext::deltaSeconds");
+
+    const kb::script::ScriptFunctionCallResult unscaledResult = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(unscaledResult.Succeeded() && kb::tests::NearlyEqual(unscaledResult.Output("delta")->AsFloat(), 0.25F), "Time.UnscaledDelta must equal Time.Delta today (no time-scale mechanism exists yet)");
+
+    const kb::script::ScriptFunctionCallResult fixedDeltaResult = host.Functions().Call("Time.FixedDelta", {}, context);
+    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), scene.Runtime().FixedStepSettings().fixedDeltaSeconds), "Time.FixedDelta must reflect SceneRuntime::FixedStepSettings().fixedDeltaSeconds");
+
+    const kb::script::ScriptFunctionCallResult elapsedBeforeUpdate = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedBeforeUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedBeforeUpdate.Output("elapsed")->AsFloat(), 0.0F), "Time.Elapsed must start at 0 before any Update()");
+
+    static_cast<void>(scene.Runtime().Update(0.5F));
+    const kb::script::ScriptFunctionCallResult elapsedAfterOneUpdate = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedAfterOneUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedAfterOneUpdate.Output("elapsed")->AsFloat(), 0.5F), "Time.Elapsed must accumulate the raw deltaSeconds passed to Update()");
+
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    const kb::script::ScriptFunctionCallResult elapsedAfterTwoUpdates = host.Functions().Call("Time.Elapsed", {}, context);
+    kb::tests::Require(elapsedAfterTwoUpdates.Succeeded() && kb::tests::NearlyEqual(elapsedAfterTwoUpdates.Output("elapsed")->AsFloat(), 0.75F), "Time.Elapsed must keep accumulating across multiple Update() calls");
+
+    const kb::script::ScriptFunctionCallResult timeFrameResult = host.Functions().Call("Time.FrameIndex", {}, context);
+    const kb::script::ScriptFunctionCallResult worldFrameResult = host.Functions().Call("World.FrameIndex", {}, context);
+    kb::tests::Require(timeFrameResult.Succeeded() && worldFrameResult.Succeeded() && timeFrameResult.Output("frame")->AsInt64() == worldFrameResult.Output("frame")->AsInt64() && timeFrameResult.Output("frame")->AsInt64() == 2,
+        "Time.FrameIndex must alias the exact same SceneRuntime counter World.FrameIndex uses, not a separate one (LIB-065 POWRÓT)");
+
+    const kb::script::ScriptFunctionCallResult timeStepResult = host.Functions().Call("Time.FixedStepIndex", {}, context);
+    const kb::script::ScriptFunctionCallResult worldStepResult = host.Functions().Call("World.FixedStepIndex", {}, context);
+    kb::tests::Require(timeStepResult.Succeeded() && worldStepResult.Succeeded() && timeStepResult.Output("step")->AsInt64() == worldStepResult.Output("step")->AsInt64(),
+        "Time.FixedStepIndex must alias the exact same SceneRuntime counter World.FixedStepIndex uses");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneDelta = host.Functions().Call("Time.Delta", {}, noSceneContext);
+    kb::tests::Require(noSceneDelta.Succeeded(), "Time.Delta must not require a scene");
+    const kb::script::ScriptFunctionCallResult noSceneElapsed = host.Functions().Call("Time.Elapsed", {}, noSceneContext);
+    kb::tests::Require(!noSceneElapsed.Succeeded(), "Time.Elapsed must fail honestly without a scene rather than silently returning 0");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5473,6 +5536,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptTimeApiElapsedAndAliasingTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();

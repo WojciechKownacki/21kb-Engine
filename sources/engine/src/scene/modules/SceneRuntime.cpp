@@ -71,6 +71,10 @@ std::uint64_t SceneRuntimeQueries::FixedStepIndex() const noexcept {
     return SceneRuntimeService::FixedStepIndex(scene_);
 }
 
+double SceneRuntimeQueries::ElapsedSeconds() const noexcept {
+    return SceneRuntimeService::ElapsedSeconds(scene_);
+}
+
 bool SceneRuntimeQueries::IsPlaying() const noexcept {
     return SceneRuntimeService::IsPlaying(scene_);
 }
@@ -168,6 +172,10 @@ std::uint64_t SceneRuntime::FrameIndex() const noexcept {
 
 std::uint64_t SceneRuntime::FixedStepIndex() const noexcept {
     return SceneRuntimeService::FixedStepIndex(scene_);
+}
+
+double SceneRuntime::ElapsedSeconds() const noexcept {
+    return SceneRuntimeService::ElapsedSeconds(scene_);
 }
 
 bool SceneRuntime::IsPlaying() const noexcept {
