@@ -9,6 +9,7 @@
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -18,6 +19,7 @@
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -139,6 +141,22 @@ public:
     };
     std::vector<TimerRecord> timers;
     std::uint64_t nextTimerId = 1U;
+    // LIB-097: one live Task started through kb::scene::SceneTasks::Start —
+    // `poll` is a NATIVE C++-only callable (never script-authored, see
+    // SceneTasks.hpp's class doc comment for the full Coroutine/Task model
+    // decision), called once per frame by SceneTaskService::Advance with
+    // the same scaled/pause-aware deltaSeconds Timer uses, until it
+    // reports anything other than Running — at that point the record is
+    // removed and a TaskCompleted/TaskFailed event is dispatched. `owner`
+    // follows the exact same auto-cancel-on-death convention as
+    // TimerRecord::owner above.
+    struct TaskRecord {
+        std::uint64_t id = 0U;
+        SceneEntity owner{};
+        std::function<TaskPollResult(float)> poll;
+    };
+    std::vector<TaskRecord> tasks;
+    std::uint64_t nextTaskId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;

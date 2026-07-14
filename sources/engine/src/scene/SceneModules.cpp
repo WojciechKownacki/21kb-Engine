@@ -8,6 +8,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
@@ -75,6 +76,10 @@ SceneLoadedContentQueries Scene::LoadedContent() const noexcept {
 
 SceneTimers Scene::Timers() noexcept {
     return SceneTimers{ *this };
+}
+
+SceneTasks Scene::Tasks() noexcept {
+    return SceneTasks{ *this };
 }
 
 } // namespace kb::scene
