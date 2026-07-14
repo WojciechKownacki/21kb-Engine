@@ -135,10 +135,13 @@ public:
     // callback at all that frame (mirrors FixedTick freezing during pause,
     // LIB-094 — a paused game must not let a task's poll observe or react
     // to scene state that shouldn't be changing). A task whose owner is no
-    // longer alive is silently auto-cancelled (removed, no completion
+    // longer alive OR no longer active (LIB-099: World.SetActive(owner,
+    // false)/LIB-068) is silently auto-cancelled (removed, no completion
     // record) the moment that's detected, regardless of pause state — the
-    // identical pattern Timer's owner entity uses (LIB-095). Only polls
-    // Frame-domain tasks (Start); StartFixedStep tasks are untouched here.
+    // identical pattern Timer's owner entity uses (LIB-095/099). Scene.
+    // Unload needs no separate handling — see SceneTimers::Advance's own
+    // doc comment for why. Only polls Frame-domain tasks (Start);
+    // StartFixedStep tasks are untouched here.
     [[nodiscard]] std::vector<TaskCompletionRecord> Advance(float deltaSeconds);
     // LIB-098: called once per frame by ScriptRuntimeSceneSystem, AFTER its
     // fixed-step loop, with the number of FixedTick steps that occurred
