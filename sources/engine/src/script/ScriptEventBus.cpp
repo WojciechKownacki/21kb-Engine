@@ -8,12 +8,42 @@
 #include "engine/script/ScriptSceneComponentApi.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <string>
 #include <utility>
 
 namespace kb::script {
 namespace {
+
+// LIB-110: RAII wall-clock timer — records elapsed nanoseconds into both
+// `last` and (accumulated into) `total` when it goes out of scope, so every
+// return path through Emit() (including the early-reject ones) is timed
+// without repeating stop-the-clock code at each one. std::chrono::
+// steady_clock matches kb::ecs::SystemScheduler/QueryState's own telemetry
+// clock choice (WorldTelemetry.hpp) — monotonic, unaffected by system clock
+// adjustments.
+class ScopedElapsedNanosecondsTimer final {
+public:
+    ScopedElapsedNanosecondsTimer(std::uint64_t& last, std::uint64_t& total) noexcept
+        : last_(last)
+        , total_(total)
+        , start_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedElapsedNanosecondsTimer() {
+        const std::uint64_t elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start_).count());
+        last_ = elapsed;
+        total_ += elapsed;
+    }
+
+    ScopedElapsedNanosecondsTimer(const ScopedElapsedNanosecondsTimer&) = delete;
+    ScopedElapsedNanosecondsTimer& operator=(const ScopedElapsedNanosecondsTimer&) = delete;
+
+private:
+    std::uint64_t& last_;
+    std::uint64_t& total_;
+    std::chrono::steady_clock::time_point start_;
+};
 
 // Same lazy "check on next use, not eagerly on death" policy as
 // SceneTimerService/SceneTaskService's OwnerGone (LIB-095/097/099) — no
@@ -122,8 +152,11 @@ bool ScriptEventBus::Unsubscribe(EventSubscriptionHandle handle) noexcept {
 }
 
 ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target, const EventRecipientFilter& filter) {
+    const ScopedElapsedNanosecondsTimer timer{ telemetry_.lastEmitElapsedNanoseconds, telemetry_.totalEmitElapsedNanoseconds };
+    ++telemetry_.emitCalls;
     ScriptEventDeliveryResult result{};
     if (event.name.empty()) {
+        ++telemetry_.invalidEventCount;
         return result;
     }
     // LIB-108: reject an oversized payload BEFORE matching/invoking any
@@ -133,6 +166,7 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
     // than silently truncating arguments or delivering to some subscribers
     // and not others.
     if (event.arguments.size() > kMaxScriptEventArguments) {
+        ++telemetry_.invalidEventCount;
         result.errors.push_back(std::string{ "event \"" } + event.name + "\" exceeds the maximum of " + std::to_string(kMaxScriptEventArguments) + " arguments (" + std::to_string(event.arguments.size()) + " given)");
         return result;
     }
@@ -191,6 +225,7 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
         try {
             callback(event);
             ++result.delivered;
+            ++telemetry_.deliveredCount;
         } catch (const std::exception& exception) {
             result.errors.push_back(std::string{ "event subscriber for \"" } + event.name + "\" threw an exception: " + exception.what());
         } catch (...) {
@@ -204,15 +239,25 @@ ScriptEventDeliveryResult ScriptEventBus::Broadcast(kb::scene::Scene& scene, con
     return Emit(scene, event, kb::scene::SceneEntity{}, filter);
 }
 
-void ScriptEventBus::EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target, EventRecipientFilter filter) {
+bool ScriptEventBus::EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target, EventRecipientFilter filter) {
     if (event.name.empty()) {
-        return;
+        ++telemetry_.invalidEventCount;
+        return false;
+    }
+    if (event.arguments.size() > kMaxScriptEventArguments) {
+        ++telemetry_.invalidEventCount;
+        return false;
+    }
+    if (deferredEmits_.size() >= kMaxPendingDeferredEvents) {
+        ++telemetry_.droppedDeferredEventCount;
+        return false;
     }
     deferredEmits_.push_back(DeferredEmit{
         .event = std::move(event),
         .target = target,
         .filter = std::move(filter),
     });
+    return true;
 }
 
 ScriptEventDeliveryResult ScriptEventBus::DrainDeferred(kb::scene::Scene& scene) {
@@ -231,6 +276,12 @@ ScriptEventDeliveryResult ScriptEventBus::DrainDeferred(kb::scene::Scene& scene)
 
 std::size_t ScriptEventBus::SubscriptionCount() const noexcept {
     return subscriptions_.size();
+}
+
+ScriptEventBusTelemetrySnapshot ScriptEventBus::Telemetry() const noexcept {
+    ScriptEventBusTelemetrySnapshot snapshot = telemetry_;
+    snapshot.subscriptionCount = subscriptions_.size();
+    return snapshot;
 }
 
 } // namespace kb::script
