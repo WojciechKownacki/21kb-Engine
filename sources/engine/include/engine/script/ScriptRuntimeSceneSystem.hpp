@@ -70,6 +70,11 @@ private:
     // a real, targeted "TimerFired" ScriptEvent — mirrors
     // DispatchPendingSceneLifecycleEvents' own drain-and-broadcast shape.
     void DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-097: polls every native-started Task live in the scene
+    // (kb::scene::SceneTasks::Advance) and turns each one that reached a
+    // terminal state into a real, targeted "TaskCompleted"/"TaskFailed"
+    // ScriptEvent — same shape as DispatchFiredTimers above.
+    void DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

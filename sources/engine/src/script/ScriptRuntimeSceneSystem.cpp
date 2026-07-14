@@ -7,6 +7,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 
 #include <algorithm>
@@ -88,6 +89,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
+    DispatchCompletedTasks(scene, clampedDeltaSeconds);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
     // paused (Runtime().IsPlaying()==false), wall-clock time is NOT
@@ -173,6 +175,16 @@ void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, floa
         // match event.target when target is valid.
         event.target = fired.owner;
         event.arguments.push_back(ScriptEventArgument{ .name = "timer", .value = ScriptValue{ fired.id, ScriptValueType::Hash } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds) {
+    for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().Advance(deltaSeconds)) {
+        ScriptEvent event;
+        event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
+        event.target = completion.owner;
+        event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }
