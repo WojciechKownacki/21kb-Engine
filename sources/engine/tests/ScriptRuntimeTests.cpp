@@ -7,6 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryAsyncResult.hpp"
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -6132,6 +6133,107 @@ void RunTimerAndTaskCancellationPropagationTest() {
     kb::tests::Require(cascadeTaskPolls == 0 && !scene.Tasks().Exists(cascadeTaskId), "A task owned by a leaf entity in a destroyed hierarchy must likewise be auto-cancelled, never polled again");
 }
 
+// LIB-100: kb::library::AsyncResult<T> — success/error/cancellation, the
+// completion callback (both registered-before-completion and
+// registered-after-completion cases), and idempotency. Pure value-type
+// tests, no scene needed.
+void RunEngineLibraryAsyncResultTest() {
+    kb::library::AsyncResult<int> completed;
+    kb::tests::Require(completed.State() == kb::library::AsyncState::Running && completed.IsRunning(), "AsyncResult must start in the Running state");
+    kb::tests::Require(completed.SetCompleted(42), "SetCompleted on a Running AsyncResult must succeed");
+    kb::tests::Require(completed.Succeeded() && completed.State() == kb::library::AsyncState::Completed && completed.Value() == 42, "SetCompleted must transition to Completed and store the value");
+    kb::tests::Require(!completed.SetCompleted(99), "SetCompleted on an already-terminal AsyncResult must be idempotent (return false), not overwrite the value");
+    kb::tests::Require(completed.Value() == 42, "A rejected second SetCompleted must not have overwritten the original value");
+
+    kb::library::AsyncResult<int> failed;
+    kb::tests::Require(failed.SetFailed(kb::library::ScriptError{ .code = kb::library::LibraryErrorCode::Timeout, .operation = "test", .message = "simulated failure" }), "SetFailed on a Running AsyncResult must succeed");
+    kb::tests::Require(!failed.Succeeded() && failed.State() == kb::library::AsyncState::Failed && failed.Error().code == kb::library::LibraryErrorCode::Timeout, "SetFailed must transition to Failed and store the error");
+    kb::tests::Require(!failed.Cancel(), "Cancel on an already-Failed AsyncResult must be idempotent (return false)");
+
+    kb::library::AsyncResult<int> cancelled;
+    kb::tests::Require(cancelled.Cancel(), "Cancel on a Running AsyncResult must succeed");
+    kb::tests::Require(cancelled.State() == kb::library::AsyncState::Cancelled && !cancelled.Succeeded(), "Cancel must transition to Cancelled");
+    kb::tests::Require(!cancelled.SetCompleted(1), "SetCompleted on an already-Cancelled AsyncResult must be idempotent (return false)");
+
+    // Callback registered BEFORE completion — must fire exactly once, at
+    // the moment of completion, with the final state visible.
+    kb::library::AsyncResult<int> beforeCallback;
+    int beforeCallbackFires = 0;
+    int beforeCallbackObservedValue = 0;
+    beforeCallback.OnComplete([&beforeCallbackFires, &beforeCallbackObservedValue](const kb::library::AsyncResult<int>& result) {
+        ++beforeCallbackFires;
+        beforeCallbackObservedValue = result.Value();
+    });
+    kb::tests::Require(beforeCallbackFires == 0, "OnComplete registered before completion must not fire immediately");
+    static_cast<void>(beforeCallback.SetCompleted(7));
+    kb::tests::Require(beforeCallbackFires == 1 && beforeCallbackObservedValue == 7, "OnComplete must fire exactly once, synchronously, the moment SetCompleted is called");
+    static_cast<void>(beforeCallback.SetCompleted(8));
+    kb::tests::Require(beforeCallbackFires == 1, "OnComplete must not fire again for a rejected (idempotent) second SetCompleted");
+
+    // Callback registered AFTER completion — must fire immediately, exactly
+    // once, upon registration itself (a late listener never misses it).
+    kb::library::AsyncResult<int> afterCallback;
+    static_cast<void>(afterCallback.SetCompleted(99));
+    int afterCallbackFires = 0;
+    afterCallback.OnComplete([&afterCallbackFires](const kb::library::AsyncResult<int>&) {
+        ++afterCallbackFires;
+    });
+    kb::tests::Require(afterCallbackFires == 1, "OnComplete registered AFTER completion must fire immediately, exactly once");
+
+    // MakeTaskPollFromAsyncResult — the bridge to SceneTasks' poll model.
+    kb::library::AsyncResult<int> bridged;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedPoll = kb::library::MakeTaskPollFromAsyncResult(bridged);
+    kb::tests::Require(bridgedPoll(0.1F) == kb::scene::TaskPollResult::Running, "MakeTaskPollFromAsyncResult must report Running while the AsyncResult is Running");
+    static_cast<void>(bridged.SetCompleted(5));
+    kb::tests::Require(bridgedPoll(0.1F) == kb::scene::TaskPollResult::Completed, "MakeTaskPollFromAsyncResult must report Completed once the AsyncResult completes");
+
+    kb::library::AsyncResult<int> bridgedFailed;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedFailedPoll = kb::library::MakeTaskPollFromAsyncResult(bridgedFailed);
+    static_cast<void>(bridgedFailed.SetFailed(kb::library::ScriptError{}));
+    kb::tests::Require(bridgedFailedPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must report Failed for AsyncState::Failed");
+
+    kb::library::AsyncResult<int> bridgedCancelled;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedCancelledPoll = kb::library::MakeTaskPollFromAsyncResult(bridgedCancelled);
+    static_cast<void>(bridgedCancelled.Cancel());
+    kb::tests::Require(bridgedCancelledPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must also report Failed for AsyncState::Cancelled (TaskPollResult has no distinct Cancelled state)");
+}
+
+// LIB-100: end-to-end proof that MakeTaskPollFromAsyncResult genuinely
+// drives a real SceneTasks task through ScriptRuntimeSceneSystem — an
+// AsyncResult<T> completed by native code (simulating, e.g., a plugin
+// finishing some native-side work) causes a real TaskCompleted ScriptEvent,
+// exactly like any other Task.
+void RunAsyncResultDrivenTaskEndToEndTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1250U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AsyncResult Task Owner" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t completedCount = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&completedCount](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++completedCount;
+                        }),
+        "AsyncResult-driven task TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "AsyncResult-driven task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    kb::library::AsyncResult<std::string> asyncOperation;
+    const std::uint64_t taskId = scene.Tasks().Start(kb::library::MakeTaskPollFromAsyncResult(asyncOperation), ownerObject.Entity());
+    kb::tests::Require(taskId != 0U, "AsyncResult-driven SceneTasks::Start must succeed");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(scene.Tasks().Exists(taskId) && completedCount == 0U, "An AsyncResult-driven task must stay Running until the AsyncResult itself completes");
+
+    static_cast<void>(asyncOperation.SetCompleted("done"));
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(!scene.Tasks().Exists(taskId) && completedCount == 1U, "Completing the underlying AsyncResult must cause the driven SceneTasks task to report Completed and dispatch TaskCompleted on the very next Advance");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6173,6 +6275,8 @@ void RunScriptRuntimeTests() {
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();
+    RunEngineLibraryAsyncResultTest();
+    RunAsyncResultDrivenTaskEndToEndTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
