@@ -24,6 +24,9 @@ struct DispatchContext {
     ScriptFunctionRegistry* functions = nullptr;
     ScriptLifecycleEvent lifecycle = ScriptLifecycleEvent::Tick;
     const ScriptEvent* event = nullptr;
+    // LIB-104: computed ONCE per dispatch (DispatchEvent), not once per
+    // behaviour — see ScriptEventId.hpp/IScriptBackend::ExecuteEvent.
+    EventId eventId = 0;
     float deltaSeconds = 0.0F;
     ScriptRuntimeExecutionResult* result = nullptr;
 };
@@ -95,7 +98,7 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
 
     const ScriptBackendExecutionResult backendResult = dispatch.event == nullptr
         ? backend->ExecuteLifecycle(behaviour, scriptContext)
-        : backend->ExecuteEvent(behaviour, *dispatch.event, scriptContext);
+        : backend->ExecuteEvent(behaviour, *dispatch.event, dispatch.eventId, scriptContext);
     if (backendResult.executed && backendResult.Succeeded()) {
         ++dispatch.result->executedBehaviours;
     }
@@ -225,6 +228,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
         .functions = &functions_,
         .lifecycle = ScriptLifecycleEvent::Tick,
         .event = &event,
+        .eventId = event.Id(),
         .deltaSeconds = deltaSeconds,
         .result = &result,
     };
