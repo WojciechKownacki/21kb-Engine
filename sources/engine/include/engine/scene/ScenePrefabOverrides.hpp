@@ -59,6 +59,20 @@ struct ScenePrefabPropertyOverride {
     std::string propertyPath;
     std::string value;
     SceneObject objectReference{};
+    // LIB-092: the stable, within-instance node id of `objectReference`'s
+    // target (0 / ScenePrefabNodeDesc::InvalidStableId if the reference
+    // does not correspond to another node of THIS instance — e.g. a
+    // "parent" override where the new parent lies entirely outside the
+    // prefab's own structure). `objectReference` itself is a live
+    // SceneObject that does not survive a save/load round trip; this id
+    // does, by mirroring the same nodeId-based resolution `target`/
+    // nodeIndex already use (ScenePrefab::ResolveNodeIndex /
+    // FindNodeIndexByStableId) — populated when the override is first
+    // detected (ScenePrefabObjectOverrideReporter), written to and read
+    // back from the prefab asset file (ScenePrefabAssetVariantWriter /
+    // ScenePrefabAssetOverrideReader), and re-resolved to a live
+    // SceneObject at instantiation time (ScenePrefabInstanceSynchronizer).
+    std::uint64_t objectReferenceNodeId = 0;
     ScenePrefabOverrideFlag flag = ScenePrefabOverrideFlag::None;
 };
 

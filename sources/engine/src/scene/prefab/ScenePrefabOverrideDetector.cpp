@@ -30,7 +30,7 @@ ScenePrefabOverrideReport ScenePrefabOverrideDetector::Detect(Scene& scene, cons
                 .object = object,
                 .flags = flags,
             });
-            ScenePrefabOverridePropertyReporter::AppendChangedProperties(scene, nodes[nodeIndex], expectedParent, nodeIndex, object, report);
+            ScenePrefabOverridePropertyReporter::AppendChangedProperties(scene, nodes[nodeIndex], expectedParent, nodeIndex, object, report, objects, nodes);
         }
     }
     return report;
