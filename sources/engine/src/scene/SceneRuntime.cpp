@@ -161,6 +161,10 @@ std::uint64_t SceneRuntimeService::FixedStepIndex(const Scene& scene) noexcept {
     return SceneAccess::State(scene).fixedStepIndex;
 }
 
+double SceneRuntimeService::ElapsedSeconds(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).elapsedSeconds;
+}
+
 bool SceneRuntimeService::IsPlaying(const Scene& scene) noexcept {
     return SceneAccess::State(scene).isPlaying;
 }
@@ -261,6 +265,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     // PrefabPrivate scenes below) — "how many times has this scene been
     // stepped" is well-defined regardless of mode.
     ++state.frameIndex;
+    // LIB-093: same unconditional convention as frameIndex above — total
+    // simulated time is well-defined regardless of scene mode too.
+    state.elapsedSeconds += static_cast<double>(deltaSeconds);
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
