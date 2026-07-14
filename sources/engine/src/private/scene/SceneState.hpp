@@ -138,6 +138,14 @@ public:
         float intervalSeconds = 0.0F;
         bool repeating = false;
         bool paused = false;
+        // LIB-101: creation-site diagnostics — the entity that CALLED
+        // Timer.Once/Repeat (ScriptFunctionCallContext::caller for a script
+        // call, invalid for a native-C++-only SceneTimers::Once/Repeat
+        // call that didn't supply one), distinct from `owner` above (who
+        // RECEIVES TimerFired, not who wrote the call that created the
+        // timer) — lets a hung/leaked/misbehaving timer be traced back to
+        // whatever created it, e.g. via Timer.Creator(handle).
+        SceneEntity creator{};
     };
     std::vector<TimerRecord> timers;
     std::uint64_t nextTimerId = 1U;
@@ -160,6 +168,13 @@ public:
         // step count) — see SceneTasks.hpp's class doc comment for why
         // these need two separate Advance call sites.
         bool fixedStepDomain = false;
+        // LIB-101: creation-site diagnostics — see TimerRecord::creator's
+        // own doc comment above for the full reasoning. A Task is
+        // native-C++-only to create (SceneTasks.hpp), so this is whatever
+        // the native caller explicitly passed, not derived from a
+        // ScriptFunctionCallContext (none exists at a Task's creation
+        // site).
+        SceneEntity creator{};
     };
     std::vector<TaskRecord> tasks;
     std::uint64_t nextTaskId = 1U;

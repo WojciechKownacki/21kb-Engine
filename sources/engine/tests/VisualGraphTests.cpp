@@ -1111,6 +1111,48 @@ void RunVisualGraphCompilerRejectsCyclesTest() {
     kb::tests::Require(!dataCompiled.Succeeded(), "Visual graph compiler accepted a data dependency cycle");
 }
 
+// LIB-101: watchdog for a control-flow loop the AUTHORING PIPELINE cannot
+// see. RunVisualGraphCompilerRejectsCyclesTest above already proves
+// VisualGraphValidator::ValidateAcyclicEdges rejects an execution-edge
+// cycle authored through the normal VisualGraphAsset editor, BEFORE
+// compilation ever produces IR — so a graph built and compiled the normal
+// way can never contain a cyclic nextNodeId chain. This test instead
+// constructs VisualGraphIrInstruction/VisualGraphIrFunction DIRECTLY,
+// bypassing VisualGraphValidator/VisualGraphCompiler entirely — the one
+// path (hand-authored or otherwise non-compiler-produced IR) the asset-level
+// validator cannot protect — to prove VisualGraphRuntimeExecutor::ExecuteNode
+// itself has an independent, second-layer guard (kMaxVisualGraphExecutionSteps)
+// against an unbounded forward-flow loop, rather than relying solely on the
+// validator upstream.
+void RunVisualGraphRuntimeControlFlowLoopWatchdogTest() {
+    kb::visual::VisualGraphIrFunction function{};
+    function.event = kb::visual::VisualGraphLifecycleEvent::Tick;
+    function.entryNodeId = 1U;
+    function.instructions = {
+        kb::visual::VisualGraphIrInstruction{ .opcode = kb::visual::VisualGraphIrOpcode::Sequence, .sourceNodeId = 1U, .nextNodeId = 2U },
+        kb::visual::VisualGraphIrInstruction{ .opcode = kb::visual::VisualGraphIrOpcode::Sequence, .sourceNodeId = 2U, .nextNodeId = 1U },
+    };
+
+    kb::visual::VisualGraphRuntimeArtifact artifact{};
+    artifact.module.functions = { function };
+
+    const kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    const kb::visual::VisualGraphRuntimeExecutor executor{ bindings };
+    kb::visual::VisualGraphRuntimeExecutionContext context;
+    const kb::visual::VisualGraphRuntimeExecutionResult result = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+
+    kb::tests::Require(!result.Succeeded(), "A hand-authored control-flow loop (two Sequence nodes wired back to each other, bypassing the asset-level validator) must be caught as a runtime error, not hang or crash the engine");
+    kb::tests::Require(!result.diagnostics.empty(), "The control-flow-loop watchdog must report a structured diagnostic, not just a bare error string");
+    bool foundStepBudgetMessage = false;
+    for (const std::string& error : result.errors) {
+        if (error.find("step budget") != std::string::npos) {
+            foundStepBudgetMessage = true;
+            break;
+        }
+    }
+    kb::tests::Require(foundStepBudgetMessage, "The watchdog's error message must clearly name the step-budget guard, not report a generic/unrelated failure");
+}
+
 void RunVisualGraphCompilerBranchTargetsTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "BranchGraph";
@@ -1481,6 +1523,7 @@ void RunVisualGraphTests() {
     RunVisualGraphCompilerRejectsInvalidEdgesTest();
     RunVisualGraphCompilerRejectsInvalidDataPinsTest();
     RunVisualGraphCompilerRejectsCyclesTest();
+    RunVisualGraphRuntimeControlFlowLoopWatchdogTest();
     RunVisualGraphCompilerBranchTargetsTest();
     RunVisualGraphRuntimeDataDependencyDoesNotFollowExecutionTest();
     RunVisualGraphRuntimeDoesNotReevaluateExecutedDataProducerTest();

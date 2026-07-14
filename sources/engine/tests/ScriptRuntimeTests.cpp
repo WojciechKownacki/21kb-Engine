@@ -6234,6 +6234,75 @@ void RunAsyncResultDrivenTaskEndToEndTest() {
     kb::tests::Require(!scene.Tasks().Exists(taskId) && completedCount == 1U, "Completing the underlying AsyncResult must cause the driven SceneTasks task to report Completed and dispatch TaskCompleted on the very next Advance");
 }
 
+// LIB-101: creation-site diagnostics for Timer/Task — SceneTimers::
+// Once/Repeat and SceneTasks::Start/StartFixedStep's new optional
+// `creator` parameter, plus Timer.Creator/Task.Creator's script-facing
+// query. Native-level: explicit creator round-trips, omitted creator
+// reads back invalid, unknown handle reads back invalid.
+void RunTimerAndTaskCreatorDiagnosticsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject creatorObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer/Task Creator" });
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer/Task Owner" });
+
+    const std::uint64_t timerWithCreator = scene.Timers().Once(1.0F, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(timerWithCreator != 0U, "SceneTimers::Once with an explicit creator must still succeed");
+    kb::tests::Require(scene.Timers().Creator(timerWithCreator) == creatorObject.Entity(), "SceneTimers::Creator must round-trip the explicit creator passed to Once");
+
+    const std::uint64_t timerWithoutCreator = scene.Timers().Once(1.0F, ownerObject.Entity());
+    kb::tests::Require(timerWithoutCreator != 0U, "SceneTimers::Once without a creator must still succeed (creator is optional)");
+    kb::tests::Require(!scene.Timers().Creator(timerWithoutCreator).IsValid(), "SceneTimers::Creator must read back invalid for a timer created without one");
+
+    kb::tests::Require(!scene.Timers().Creator(999999U).IsValid(), "SceneTimers::Creator must read back invalid for an unknown handle, not error");
+
+    const std::uint64_t repeatWithCreator = scene.Timers().Repeat(1.0F, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(scene.Timers().Creator(repeatWithCreator) == creatorObject.Entity(), "SceneTimers::Creator must round-trip the explicit creator passed to Repeat");
+
+    const std::uint64_t taskWithCreator = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(taskWithCreator != 0U, "SceneTasks::Start with an explicit creator must still succeed");
+    kb::tests::Require(scene.Tasks().Creator(taskWithCreator) == creatorObject.Entity(), "SceneTasks::Creator must round-trip the explicit creator passed to Start");
+
+    const std::uint64_t taskWithoutCreator = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity());
+    kb::tests::Require(!scene.Tasks().Creator(taskWithoutCreator).IsValid(), "SceneTasks::Creator must read back invalid for a task created without one");
+
+    const std::uint64_t fixedStepTaskWithCreator = scene.Tasks().StartFixedStep([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(scene.Tasks().Creator(fixedStepTaskWithCreator) == creatorObject.Entity(), "SceneTasks::Creator must round-trip the explicit creator passed to StartFixedStep");
+
+    kb::tests::Require(!scene.Tasks().Creator(999999U).IsValid(), "SceneTasks::Creator must read back invalid for an unknown handle, not error");
+}
+
+// LIB-101: script-facing proof — a real Timer.Once call through
+// ScriptFunctionRegistry automatically threads ScriptFunctionCallContext::
+// caller through as the timer's creator (no explicit script argument for
+// it, unlike `owner`), and Timer.Creator/Task.Creator are reachable as
+// real registered functions.
+void RunScriptTimerAndTaskCreatorApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script timer/task creator API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Creator") != nullptr, "Timer.Creator was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Creator") != nullptr, "Task.Creator was not registered");
+
+    const kb::scene::SceneObject callerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Caller" });
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .caller = callerObject.Entity(),
+        .deltaSeconds = 0.1F,
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> onceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult onceResult = host.Functions().Call("Timer.Once", onceArgs, context);
+    kb::tests::Require(onceResult.Succeeded(), "Timer.Once must succeed through the script registry");
+    const std::uint64_t timerId = onceResult.Output("timer")->AsUInt64();
+
+    const std::vector<kb::script::ScriptFunctionArgument> creatorArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ timerId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult creatorResult = host.Functions().Call("Timer.Creator", creatorArgs, context);
+    kb::tests::Require(creatorResult.Succeeded() && creatorResult.Output("creator")->AsUInt64() == callerObject.Entity().Id(),
+        "Timer.Creator must report the ScriptFunctionCallContext::caller that actually invoked Timer.Once, threaded through automatically");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6277,6 +6346,8 @@ void RunScriptRuntimeTests() {
     RunTimerAndTaskCancellationPropagationTest();
     RunEngineLibraryAsyncResultTest();
     RunAsyncResultDrivenTaskEndToEndTest();
+    RunTimerAndTaskCreatorDiagnosticsTest();
+    RunScriptTimerAndTaskCreatorApiTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
