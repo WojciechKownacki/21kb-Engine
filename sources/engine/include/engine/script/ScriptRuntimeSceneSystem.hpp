@@ -75,6 +75,12 @@ private:
     // terminal state into a real, targeted "TaskCompleted"/"TaskFailed"
     // ScriptEvent — same shape as DispatchFiredTimers above.
     void DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-098: identical shape to DispatchCompletedTasks above, but drives
+    // kb::scene::SceneTasks::AdvanceFixedSteps (StartFixedStep tasks)
+    // instead of Advance — called right after the fixed-step loop below
+    // with the number of FixedTick steps this frame actually produced,
+    // the one piece of state that loop previously never surfaced anywhere.
+    void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

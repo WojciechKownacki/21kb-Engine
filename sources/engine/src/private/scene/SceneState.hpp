@@ -154,6 +154,12 @@ public:
         std::uint64_t id = 0U;
         SceneEntity owner{};
         std::function<TaskPollResult(float)> poll;
+        // LIB-098: false = Frame-domain (SceneTasks::Start, polled by
+        // Advance with elapsed seconds); true = FixedTick-domain
+        // (SceneTasks::StartFixedStep, polled by AdvanceFixedSteps with a
+        // step count) — see SceneTasks.hpp's class doc comment for why
+        // these need two separate Advance call sites.
+        bool fixedStepDomain = false;
     };
     std::vector<TaskRecord> tasks;
     std::uint64_t nextTaskId = 1U;

@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneEntity.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -59,14 +60,47 @@ struct TaskCompletionRecord {
 // exact per-frame-drive shape (LIB-095). The Lua generator model and the
 // Visual Graph state-machine model are DELIBERATELY NOT implemented here —
 // documented as the chosen future models, not fabricated — because a
-// script cannot author the body of a Task/Coroutine until LIB-098 delivers
-// a real yield mechanism (seconds/fixed-steps/event/asset-load/scene-load).
-// Until then, only NATIVE C++ code can create a task (Start below has no
-// script-facing equivalent); scripts can only observe/control an
-// already-running task through Task.IsRunning/Task.Cancel and the
-// TaskCompleted/TaskFailed events it dispatches — a real, non-fabricated
-// capability (e.g. a native plugin starts a background operation and hands
-// script the resulting handle to poll or cancel).
+// script cannot author the body of a Task/Coroutine without real
+// suspension. Until then, only NATIVE C++ code can create a task (Start/
+// StartFixedStep below have no script-facing equivalent); scripts can only
+// observe/control an already-running task through Task.IsRunning/
+// Task.Cancel and the TaskCompleted/TaskFailed events it dispatches — a
+// real, non-fabricated capability (e.g. a native plugin starts a
+// background operation and hands script the resulting handle to poll or
+// cancel).
+//
+// LIB-098 ("yield na sekundy, fixed steps, event, asset load, scene load")
+// scope decision, researched against this same model — of the five named
+// "yield reasons," only TWO are genuinely distinct, buildable capabilities
+// today:
+//   - seconds: kb::library::MakeWaitSecondsTask (EngineLibraryTaskFactories.
+//     hpp) — a Frame-domain poll closure, direct mirror of TimerRecord::
+//     remainingSeconds.
+//   - fixed steps: kb::library::MakeWaitFixedStepsTask, paired with the NEW
+//     StartFixedStep/AdvanceFixedSteps plumbing below — this is the one
+//     piece of real new engine work LIB-098 required (not just a factory
+//     function), because nothing previously surfaced FixedTick's per-frame
+//     step count to anything outside ScriptRuntimeSceneSystem::ExecuteFrame.
+//   - event: DELIBERATELY NOT implemented — event delivery
+//     (NativeScriptBackend::RegisterEvent/DispatchEvent) is push-only,
+//     single-callback-per-(asset,eventName) with last-write-wins semantics;
+//     nothing persists "did event X happen" for a poll to observe, and
+//     building a proper multi-listener registry to support it is closer in
+//     scope to Events.Subscribe (LIB-105) than to this task — documented as
+//     a real, deferred gap, not silently faked with a hack that would break
+//     under >1 concurrent listener.
+//   - asset load / scene load: DELIBERATELY NOT given bespoke factory
+//     helpers — both AssetManager::Load and Scene.Load already run fully
+//     synchronously today (confirmed: SceneLoadedContentQueries::Progress
+//     is a binary 1.0/0.0, never a real multi-frame ramp, per its own
+//     LIB-071 doc comment), so "yielding" for either would degenerate to a
+//     task that completes on its very first poll — indistinguishable from
+//     any other trivial one-poll-and-done task and not worth a named
+//     helper (a plain `[](float){ return TaskPollResult::Completed; }`
+//     closure already covers it). Real multi-frame asset/scene-load
+//     waiting requires an asynchronous AssetManager path that does not
+//     exist anywhere in this engine — a much larger, separately-scoped
+//     future change, not fabricated here.
 class SceneTasks {
 public:
     explicit SceneTasks(Scene& scene) noexcept;
@@ -74,10 +108,23 @@ public:
     // Returns 0 (never a valid id) if `poll` is empty, or if the scene
     // already holds its maximum number of live tasks. NATIVE-ONLY — see
     // the class doc comment above for why no script-facing Task.Start
-    // exists yet.
+    // exists yet. Frame-domain: poll's float argument is scaled/pause-aware
+    // elapsed SECONDS (see Advance below).
     [[nodiscard]] std::uint64_t Start(std::function<TaskPollResult(float)> poll, SceneEntity owner);
+    // LIB-098: identical to Start above, EXCEPT this task is driven by
+    // AdvanceFixedSteps instead of Advance — poll's float argument is the
+    // number of FixedTick STEPS that occurred this frame (0, 1, or more —
+    // never seconds). Needed because FixedTick's step count is computed
+    // inside ScriptRuntimeSceneSystem::ExecuteFrame's own fixed-step loop
+    // and was never previously surfaced anywhere Task could observe it —
+    // a Frame-domain task driven by wall-clock delta cannot correctly
+    // count "N fixed steps," since fixed-step count and elapsed seconds
+    // are decoupled (0 to maxFixedStepsPerFrame steps can occur for the
+    // same deltaSeconds, depending on accumulated backlog).
+    [[nodiscard]] std::uint64_t StartFixedStep(std::function<TaskPollResult(float)> poll, SceneEntity owner);
     // Idempotent — false if `id` names no currently live task (already
-    // completed/failed/cancelled, or never existed).
+    // completed/failed/cancelled, or never existed). Works for tasks from
+    // either Start or StartFixedStep.
     [[nodiscard]] bool Cancel(std::uint64_t id) noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
 
@@ -90,8 +137,18 @@ public:
     // to scene state that shouldn't be changing). A task whose owner is no
     // longer alive is silently auto-cancelled (removed, no completion
     // record) the moment that's detected, regardless of pause state — the
-    // identical pattern Timer's owner entity uses (LIB-095).
+    // identical pattern Timer's owner entity uses (LIB-095). Only polls
+    // Frame-domain tasks (Start); StartFixedStep tasks are untouched here.
     [[nodiscard]] std::vector<TaskCompletionRecord> Advance(float deltaSeconds);
+    // LIB-098: called once per frame by ScriptRuntimeSceneSystem, AFTER its
+    // fixed-step loop, with the number of FixedTick steps that occurred
+    // THIS frame (0 while paused — FixedTick's own accumulator already
+    // freezes during scene pause, LIB-094, so stepCount is naturally 0
+    // then; no separate pause check is needed). If stepCount is 0, no poll
+    // is called at all this frame — the same "never call poll for a reason
+    // that didn't happen" rule Advance follows above. Only polls
+    // StartFixedStep tasks; Frame-domain tasks (Start) are untouched here.
+    [[nodiscard]] std::vector<TaskCompletionRecord> AdvanceFixedSteps(std::size_t stepCount);
 
 private:
     Scene& scene_;

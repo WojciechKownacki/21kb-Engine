@@ -233,6 +233,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryPropertyDesc.hpp
     include/engine/library/EngineLibraryQuery.hpp
     include/engine/library/EngineLibraryScriptComponentAccess.hpp
+    include/engine/library/EngineLibraryTaskFactories.hpp
     include/engine/library/EngineLibraryTextEncoding.hpp
     include/engine/library/EngineLibraryTextFormat.hpp
     include/engine/library/EngineLibraryTransformChangeTracker.hpp

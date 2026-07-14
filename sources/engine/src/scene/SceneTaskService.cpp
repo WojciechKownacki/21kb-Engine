@@ -31,6 +31,25 @@ std::uint64_t SceneTaskService::Start(Scene& scene, std::function<TaskPollResult
         .id = id,
         .owner = owner,
         .poll = std::move(poll),
+        .fixedStepDomain = false,
+    });
+    return id;
+}
+
+std::uint64_t SceneTaskService::StartFixedStep(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner) {
+    if (!poll) {
+        return 0U;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    if (state.tasks.size() >= kMaxLiveTasks) {
+        return 0U;
+    }
+    const std::uint64_t id = state.nextTaskId++;
+    state.tasks.push_back(SceneState::TaskRecord{
+        .id = id,
+        .owner = owner,
+        .poll = std::move(poll),
+        .fixedStepDomain = true,
     });
     return id;
 }
@@ -64,10 +83,16 @@ std::vector<TaskCompletionRecord> SceneTaskService::Advance(Scene& scene, float 
     if (!isPlaying) {
         // Owner-death auto-cancel still applies even while paused (an
         // entity can be destroyed by native code regardless of play state).
+        // Only touches Frame-domain tasks — StartFixedStep tasks are
+        // cleaned up by AdvanceFixedSteps below, not here.
         std::vector<TaskCompletionRecord> none;
         std::size_t index = 0U;
         while (index < state.tasks.size()) {
             SceneState::TaskRecord& task = state.tasks[index];
+            if (task.fixedStepDomain) {
+                ++index;
+                continue;
+            }
             if (task.owner.IsValid() && !SceneEntityService::IsAlive(scene, task.owner)) {
                 state.tasks.erase(state.tasks.begin() + static_cast<std::ptrdiff_t>(index));
                 continue;
@@ -83,11 +108,52 @@ std::vector<TaskCompletionRecord> SceneTaskService::Advance(Scene& scene, float 
     std::size_t index = 0U;
     while (index < state.tasks.size()) {
         SceneState::TaskRecord& task = state.tasks[index];
+        if (task.fixedStepDomain) {
+            ++index;
+            continue;
+        }
         if (task.owner.IsValid() && !SceneEntityService::IsAlive(scene, task.owner)) {
             state.tasks.erase(state.tasks.begin() + static_cast<std::ptrdiff_t>(index));
             continue;
         }
         const TaskPollResult result = task.poll(effectiveDelta);
+        if (result == TaskPollResult::Running) {
+            ++index;
+            continue;
+        }
+        completed.push_back(TaskCompletionRecord{
+            .id = task.id,
+            .owner = task.owner,
+            .succeeded = result == TaskPollResult::Completed,
+        });
+        state.tasks.erase(state.tasks.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+    return completed;
+}
+
+std::vector<TaskCompletionRecord> SceneTaskService::AdvanceFixedSteps(Scene& scene, std::size_t stepCount) {
+    SceneState& state = SceneAccess::State(scene);
+    std::vector<TaskCompletionRecord> completed;
+    std::size_t index = 0U;
+    while (index < state.tasks.size()) {
+        SceneState::TaskRecord& task = state.tasks[index];
+        if (!task.fixedStepDomain) {
+            ++index;
+            continue;
+        }
+        if (task.owner.IsValid() && !SceneEntityService::IsAlive(scene, task.owner)) {
+            state.tasks.erase(state.tasks.begin() + static_cast<std::ptrdiff_t>(index));
+            continue;
+        }
+        // LIB-098: zero fixed steps this frame (e.g. scene paused, or the
+        // accumulator hasn't reached a full step yet) means no poll call —
+        // same "never call poll for a reason that didn't happen" rule
+        // Advance follows above.
+        if (stepCount == 0U) {
+            ++index;
+            continue;
+        }
+        const TaskPollResult result = task.poll(static_cast<float>(stepCount));
         if (result == TaskPollResult::Running) {
             ++index;
             continue;
