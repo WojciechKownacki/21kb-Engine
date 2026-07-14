@@ -25,4 +25,14 @@ std::vector<SceneEntity> SceneHierarchyChildrenService::ChildEntities(const Scen
     return SceneHierarchyCache::Children(state, entity);
 }
 
+std::size_t SceneHierarchyChildrenService::ChildCount(const Scene& scene, SceneEntity entity) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    return SceneHierarchyCache::ChildCount(state, entity);
+}
+
+SceneEntity SceneHierarchyChildrenService::ChildAt(const Scene& scene, SceneEntity entity, std::size_t index) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    return SceneHierarchyCache::ChildAt(state, entity, index);
+}
+
 } // namespace kb::scene

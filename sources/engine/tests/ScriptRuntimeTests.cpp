@@ -2522,6 +2522,109 @@ void RunTransformApiParentAndHierarchyTest() {
     kb::tests::Require(deadSetParent.Succeeded() && !deadSetParent.Output("moved")->AsBool(), "Transform.SetParent on a dead entity must report moved=false, not throw");
 }
 
+// LIB-087: Transform.ChildCount/GetChild/FindChild — the index-and-loop
+// convention over kb::scene's already O(1)-indexed hierarchy child storage
+// (SceneHierarchyCache, exposed through SceneHierarchyAccess::ChildCount/
+// ChildAt). Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: real counts/lookups against a real
+// multi-child fixture (including a DUPLICATE name, to prove FindChild's
+// skip parameter genuinely walks past a repeat rather than always
+// returning the first match), out-of-range/negative index handling, and
+// dead-entity handling for all three functions.
+void RunTransformApiChildIterationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API child iteration test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.ChildCount") != nullptr, "Transform.ChildCount was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.GetChild") != nullptr, "Transform.GetChild was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.FindChild") != nullptr, "Transform.FindChild was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChildIterationParent" });
+    const kb::scene::SceneObject firstChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Foo" });
+    const kb::scene::SceneObject secondChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Bar" });
+    const kb::scene::SceneObject thirdChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Foo" }); // Duplicate name, on purpose.
+    kb::tests::Require(scene.Hierarchy().SetParent(firstChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent firstChild");
+    kb::tests::Require(scene.Hierarchy().SetParent(secondChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent secondChild");
+    kb::tests::Require(scene.Hierarchy().SetParent(thirdChild.Entity(), parentObject.Entity()), "Child iteration fixture could not parent thirdChild");
+
+    const kb::script::ScriptFunctionArgument parentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ parentObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> parentOnlyArgs{ parentEntityArg };
+    const kb::script::ScriptFunctionArgument leafEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ firstChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> leafOnlyArgs{ leafEntityArg };
+
+    // ChildCount: 3 for the parent, 0 for a childless leaf (found=true
+    // either way — childless is not the same as "not found").
+    const kb::script::ScriptFunctionCallResult parentChildCount = host.Functions().Call("Transform.ChildCount", parentOnlyArgs, context);
+    kb::tests::Require(parentChildCount.Succeeded() && parentChildCount.Output("found")->AsBool() && parentChildCount.Output("count")->AsInt() == 3,
+        "Transform.ChildCount must report the real number of children (3)");
+    const kb::script::ScriptFunctionCallResult leafChildCount = host.Functions().Call("Transform.ChildCount", leafOnlyArgs, context);
+    kb::tests::Require(leafChildCount.Succeeded() && leafChildCount.Output("found")->AsBool() && leafChildCount.Output("count")->AsInt() == 0,
+        "Transform.ChildCount for a childless (but alive) entity must report found=true, count=0");
+
+    // GetChild: indices 0/1/2 in insertion order, 3 out of range, -1 invalid.
+    for (int index = 0; index < 3; ++index) {
+        const std::vector<kb::script::ScriptFunctionArgument> getChildArgs{
+            parentEntityArg,
+            kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ index } },
+        };
+        const kb::script::ScriptFunctionCallResult getChild = host.Functions().Call("Transform.GetChild", getChildArgs, context);
+        kb::tests::Require(getChild.Succeeded() && getChild.Output("found")->AsBool(), "Transform.GetChild must find every in-range index");
+    }
+    const std::vector<kb::script::ScriptFunctionArgument> getChild0Args{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ 0 } } };
+    const kb::script::ScriptFunctionCallResult getChild0 = host.Functions().Call("Transform.GetChild", getChild0Args, context);
+    kb::tests::Require(getChild0.Output("child")->AsUInt64() == firstChild.Entity().Id(), "Transform.GetChild(0) must return the FIRST child added, in insertion order");
+    const std::vector<kb::script::ScriptFunctionArgument> getChildOutOfRangeArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ 3 } } };
+    const kb::script::ScriptFunctionCallResult getChildOutOfRange = host.Functions().Call("Transform.GetChild", getChildOutOfRangeArgs, context);
+    kb::tests::Require(getChildOutOfRange.Succeeded() && !getChildOutOfRange.Output("found")->AsBool(), "Transform.GetChild must report found=false for an out-of-range index");
+    const std::vector<kb::script::ScriptFunctionArgument> getChildNegativeArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "index", kb::script::ScriptValue{ -1 } } };
+    const kb::script::ScriptFunctionCallResult getChildNegative = host.Functions().Call("Transform.GetChild", getChildNegativeArgs, context);
+    kb::tests::Require(getChildNegative.Succeeded() && !getChildNegative.Output("found")->AsBool(), "Transform.GetChild must report found=false for a negative index, not underflow");
+
+    // FindChild: "Bar" is unique; "Foo" is duplicated — skip must walk past
+    // the first match to the second, and a third request must fail.
+    const std::vector<kb::script::ScriptFunctionArgument> findBarArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Bar" } } } };
+    const kb::script::ScriptFunctionCallResult findBar = host.Functions().Call("Transform.FindChild", findBarArgs, context);
+    kb::tests::Require(findBar.Succeeded() && findBar.Output("found")->AsBool() && findBar.Output("child")->AsUInt64() == secondChild.Entity().Id(),
+        "Transform.FindChild must find the uniquely-named child");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooFirstArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } } };
+    const kb::script::ScriptFunctionCallResult findFooFirst = host.Functions().Call("Transform.FindChild", findFooFirstArgs, context);
+    kb::tests::Require(findFooFirst.Succeeded() && findFooFirst.Output("found")->AsBool() && findFooFirst.Output("child")->AsUInt64() == firstChild.Entity().Id(),
+        "Transform.FindChild without skip must return the FIRST match");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooSkip1Args{
+        parentEntityArg,
+        kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } },
+        kb::script::ScriptFunctionArgument{ "skip", kb::script::ScriptValue{ 1 } },
+    };
+    const kb::script::ScriptFunctionCallResult findFooSkip1 = host.Functions().Call("Transform.FindChild", findFooSkip1Args, context);
+    kb::tests::Require(findFooSkip1.Succeeded() && findFooSkip1.Output("found")->AsBool() && findFooSkip1.Output("child")->AsUInt64() == thirdChild.Entity().Id(),
+        "Transform.FindChild with skip=1 must walk past the first duplicate to the SECOND match");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findFooSkip2Args{
+        parentEntityArg,
+        kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "Foo" } } },
+        kb::script::ScriptFunctionArgument{ "skip", kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult findFooSkip2 = host.Functions().Call("Transform.FindChild", findFooSkip2Args, context);
+    kb::tests::Require(findFooSkip2.Succeeded() && !findFooSkip2.Output("found")->AsBool(), "Transform.FindChild with skip beyond the last match must report found=false");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findMissingArgs{ parentEntityArg, kb::script::ScriptFunctionArgument{ "name", kb::script::ScriptValue{ std::string{ "NoSuchChild" } } } };
+    const kb::script::ScriptFunctionCallResult findMissing = host.Functions().Call("Transform.FindChild", findMissingArgs, context);
+    kb::tests::Require(findMissing.Succeeded() && !findMissing.Output("found")->AsBool(), "Transform.FindChild must report found=false for a name that does not match any child");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(parentObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadChildCount = host.Functions().Call("Transform.ChildCount", parentOnlyArgs, context);
+    kb::tests::Require(deadChildCount.Succeeded() && !deadChildCount.Output("found")->AsBool(), "Transform.ChildCount on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadGetChild = host.Functions().Call("Transform.GetChild", getChild0Args, context);
+    kb::tests::Require(deadGetChild.Succeeded() && !deadGetChild.Output("found")->AsBool(), "Transform.GetChild on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadFindChild = host.Functions().Call("Transform.FindChild", findBarArgs, context);
+    kb::tests::Require(deadFindChild.Succeeded() && !deadFindChild.Output("found")->AsBool(), "Transform.FindChild on a dead entity must report found=false, not throw");
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -4942,6 +5045,7 @@ void RunScriptRuntimeTests() {
     RunScriptWorldTimePhysicsApiTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
+    RunTransformApiChildIterationTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
