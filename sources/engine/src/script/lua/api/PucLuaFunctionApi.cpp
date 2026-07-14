@@ -445,7 +445,12 @@ int LuaPhysicsRaycast(lua_State* state) {
 
 [[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
     const char* action = luaL_checkstring(state, 1);
-    return { Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
+    std::vector<ScriptFunctionArgument> arguments{ Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
+    const int player = static_cast<int>(luaL_optinteger(state, 2, 0));
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{ player }));
+    }
+    return arguments;
 }
 
 int LuaInputBool(lua_State* state, std::string_view functionName, std::string_view outputName) {
@@ -571,10 +576,14 @@ int LuaInputAddMappingContext(lua_State* state) {
         return 1;
     }
     const int priority = static_cast<int>(luaL_optinteger(state, 2, 0));
-    const std::vector<ScriptFunctionArgument> arguments{
+    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    std::vector<ScriptFunctionArgument> arguments{
         Arg("context", ScriptValue{ LuaContextId(state, 1) }),
         Arg("priority", ScriptValue{ priority }),
     };
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{ player }));
+    }
     const ScriptFunctionCallResult result = context->CallFunction("Input.AddMappingContext", arguments);
     lua_pushboolean(state, result.Output("added").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
@@ -586,7 +595,11 @@ int LuaInputRemoveMappingContext(lua_State* state) {
         lua_pushboolean(state, 0);
         return 1;
     }
-    const std::vector<ScriptFunctionArgument> arguments{ Arg("context", ScriptValue{ LuaContextId(state, 1) }) };
+    const int player = static_cast<int>(luaL_optinteger(state, 2, 0));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("context", ScriptValue{ LuaContextId(state, 1) }) };
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{ player }));
+    }
     const ScriptFunctionCallResult result = context->CallFunction("Input.RemoveMappingContext", arguments);
     lua_pushboolean(state, result.Output("removed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;

@@ -9,6 +9,11 @@ class ScriptRuntimeHost;
 // (CallFunction) and a Visual Graph CallNative node, a single registration here
 // exposes input to all three scripting backends from one source of truth.
 //
+// Every function below also takes an optional trailing `player:Int` pin (LIB-115).
+// Omitted or <= 0 means the primary/default local user - the exact single-player
+// behavior every function had before this pin existed. player=N queries/mutates
+// local user N's own independent InputSubsystem instead (see LocalUserId).
+//
 // Registered functions (all take/return well-typed pins):
 //   Input.IsPressed(action:String)        -> pressed:Bool
 //   Input.WasPressed(action:String)       -> pressed:Bool

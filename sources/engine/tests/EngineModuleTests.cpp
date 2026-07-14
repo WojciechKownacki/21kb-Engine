@@ -412,6 +412,74 @@ void RunSceneInputActivationUsesUnsafeHotQueryTest() {
     kb::tests::Require(after.queryExecutions == before.queryExecutions, "Scene input activation used the safe query executor");
 }
 
+// LIB-115: two InputComponents on the same action name, routed to two different
+// local users, must resolve to two independent InputSubsystems that nonetheless
+// share the SAME physical device state (one keyboard) - proving both isolation
+// (each user's own mapping context/action result) and sharing (no duplicate
+// device-state plumbing needed) at once.
+void RunSceneInputActivationPerLocalUserTest() {
+    auto move = std::make_shared<kb::input::InputActionAsset>();
+    move->name = "Move";
+    move->valueType = kb::input::InputActionValueType::Axis1D;
+
+    auto primaryContext = std::make_shared<kb::input::InputMappingContextAsset>();
+    primaryContext->mappings.push_back(kb::input::InputKeyMapping{ .actionId = 1U, .key = kb::input::InputKey::W, .scale = 1.0F });
+    auto player2Context = std::make_shared<kb::input::InputMappingContextAsset>();
+    player2Context->mappings.push_back(kb::input::InputKeyMapping{ .actionId = 1U, .key = kb::input::InputKey::ArrowUp, .scale = 1.0F });
+
+    kb::scene::Scene scene;
+    const auto resolveAction = [move](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> {
+        return id == 1U ? move : nullptr;
+    };
+    const auto resolveContext = [primaryContext, player2Context](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> {
+        if (id == 10U) {
+            return primaryContext;
+        }
+        if (id == 20U) {
+            return player2Context;
+        }
+        return nullptr;
+    };
+    scene.Input().SetResolvers(resolveAction, resolveContext);
+    scene.Input(kb::input::LocalUserId{ 2U }).SetResolvers(resolveAction, resolveContext);
+
+    const kb::scene::SceneObject player1 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player 1 Input" });
+    const kb::scene::SceneObject player2 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player 2 Input" });
+    scene.Components().Inputs().Set(player1.Entity(), kb::scene::InputComponent{
+        .mappingContextAssetId = 10U,
+        .enabled = true,
+    });
+    scene.Components().Inputs().Set(player2.Entity(), kb::scene::InputComponent{
+        .mappingContextAssetId = 20U,
+        .enabled = true,
+        .localUser = kb::input::LocalUserId{ 2U },
+    });
+
+    kb::scene::SceneInputActivation::Apply(scene);
+    kb::tests::Require(scene.Input().HasMappingContext(10U), "Primary user should receive player 1's mapping context");
+    kb::tests::Require(!scene.Input().HasMappingContext(20U), "Primary user must not receive player 2's mapping context");
+    kb::tests::Require(scene.Input(kb::input::LocalUserId{ 2U }).HasMappingContext(20U),
+        "Local user 2 should receive player 2's mapping context");
+    kb::tests::Require(!scene.Input(kb::input::LocalUserId{ 2U }).HasMappingContext(10U),
+        "Local user 2 must not receive player 1's mapping context");
+
+    // Both subsystems read the SAME physical device state - only ever set on the
+    // primary user, since there is one real keyboard.
+    scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::W, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Input().GetActionValue("Move").AsAxis1D(), 1.0F),
+        "Player 1 should see Move=1 while W is held");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Input(kb::input::LocalUserId{ 2U }).GetActionValue("Move").AsAxis1D(), 0.0F),
+        "Player 2 must not react to W - only ArrowUp is bound to their Move");
+
+    scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::ArrowUp, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Input(kb::input::LocalUserId{ 2U }).GetActionValue("Move").AsAxis1D(), 1.0F),
+        "Player 2 should see Move=1 once ArrowUp (set on the shared device state) is held");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Input().GetActionValue("Move").AsAxis1D(), 1.0F),
+        "Player 1 should remain unaffected by player 2's ArrowUp binding");
+}
+
 void RunBasicLightingPluginTogglesSceneLightingTest() {
 #if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
     return;
@@ -458,6 +526,7 @@ void RunEngineModuleTests() {
     RunEngineModuleLoaderShadowCopyTest();
     RunSceneInputToggleTest();
     RunSceneInputActivationUsesUnsafeHotQueryTest();
+    RunSceneInputActivationPerLocalUserTest();
     RunBasicLightingPluginTogglesSceneLightingTest();
 }
 

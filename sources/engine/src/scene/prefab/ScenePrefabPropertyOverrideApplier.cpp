@@ -201,6 +201,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "input.enabled") {
         return ParseBool(property.value, Ensure(node.components.input).enabled);
     }
+    if (property.propertyPath == "input.localUser") {
+        return ParseNumber(property.value, Ensure(node.components.input).localUser.value);
+    }
     if (property.propertyPath == "rigidbody") {
         return ApplyComponentPresence(property.value, node.components.rigidbody);
     }

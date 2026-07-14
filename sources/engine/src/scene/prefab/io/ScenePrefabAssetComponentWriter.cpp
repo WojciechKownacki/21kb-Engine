@@ -58,6 +58,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "input.mappingContextAssetId=" << components.input->mappingContextAssetId << '\n';
         output << "input.priority=" << components.input->priority << '\n';
         output << "input.enabled=" << (components.input->enabled ? 1 : 0) << '\n';
+        output << "input.localUser=" << components.input->localUser.value << '\n';
     }
 
     output << "rigidbody=" << (components.rigidbody.has_value() ? 1 : 0) << '\n';

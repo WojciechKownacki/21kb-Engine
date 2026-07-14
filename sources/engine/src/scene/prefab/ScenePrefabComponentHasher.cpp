@@ -50,6 +50,7 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.input->mappingContextAssetId);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.input->priority)));
         ScenePrefabHashBuilder::Mix(hash, components.input->enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.input->localUser.value));
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.rigidbody.has_value() ? 1U : 0U);

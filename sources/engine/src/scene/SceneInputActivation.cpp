@@ -15,11 +15,14 @@ namespace kb::scene {
 namespace {
 
 template <typename Batch>
-void ApplyInputMappingBatch(const Batch& batch, kb::input::InputSubsystem& input) {
+void ApplyInputMappingBatch(const Batch& batch, Scene& scene) {
     const InputComponent* components = batch.template Components<0>();
     for (std::size_t index = 0; index < batch.Count(); ++index) {
         const InputComponent& component = components[index];
         if (component.enabled && component.mappingContextAssetId != 0U) {
+            // Routed to this entity's own local user's InputSubsystem, not always
+            // the primary one - see InputComponent::localUser (LIB-115).
+            kb::input::InputSubsystem& input = scene.Input(component.localUser);
             static_cast<void>(input.AddMappingContext(component.mappingContextAssetId, component.priority));
         }
     }
@@ -29,8 +32,7 @@ void ApplyInputMappingBatch(const Batch& batch, kb::input::InputSubsystem& input
 
 void SceneInputActivation::Apply(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
-    kb::input::InputSubsystem& input = scene.Input();
-    input.ClearMappingContexts();
+    scene.ClearAllLocalUserInputMappingContexts();
 
     kb::ecs::Query<InputComponent> query = state.world.CreateQuery<InputComponent>();
     if (!query.IsValid()) {
@@ -43,13 +45,13 @@ void SceneInputActivation::Apply(Scene& scene) {
     if (!hotQuery.Rebuild(query, settings)) {
         return;
     }
-    hotQuery.ForEachRange(settings.maxBatchSize, [&input](const auto& batch) {
-        ApplyInputMappingBatch(batch, input);
+    hotQuery.ForEachRange(settings.maxBatchSize, [&scene](const auto& batch) {
+        ApplyInputMappingBatch(batch, scene);
     });
 }
 
 void SceneInputActivation::Clear(Scene& scene) {
-    scene.Input().ClearMappingContexts();
+    scene.ClearAllLocalUserInputMappingContexts();
 }
 
 } // namespace kb::scene

@@ -69,8 +69,15 @@ public:
     void ClearMappingContexts() noexcept;
     [[nodiscard]] bool HasMappingContext(std::uint64_t contextId) const noexcept;
 
-    // Recomputes every action's value and trigger events for this frame.
+    // Recomputes every action's value and trigger events for this frame, reading
+    // this subsystem's own device state.
     void Evaluate(float deltaSeconds);
+
+    // Same as Evaluate, but reads an external device state instead of this
+    // subsystem's own - used by non-primary LocalUsers, which share the primary
+    // user's physical device state (one keyboard/mouse) while keeping their own
+    // independent mapping-context stack and action results.
+    void EvaluateWithDeviceState(const InputDeviceState& device, float deltaSeconds);
 
     // --- Queries ---
     [[nodiscard]] bool IsActionPressed(std::string_view action) const;
