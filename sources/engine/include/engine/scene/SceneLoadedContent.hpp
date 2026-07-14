@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -46,6 +48,10 @@ public:
     // are synchronous today; see SceneLoadedContentService's own comment.
     [[nodiscard]] float Progress(std::uint64_t id) const noexcept;
     [[nodiscard]] std::uint64_t ActiveScene() const noexcept;
+    // LIB-106: which loaded-scene record `entity`'s hierarchy root belongs
+    // to; 0 if none — see SceneLoadedContentService::OwningScene's own
+    // doc comment for the full contract.
+    [[nodiscard]] std::uint64_t OwningScene(SceneEntity entity) const noexcept;
 
 private:
     const Scene& scene_;
@@ -68,6 +74,10 @@ public:
     // dynamically is a much larger, separate change, not attempted here).
     [[nodiscard]] bool SetActive(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t ActiveScene() const noexcept;
+    // LIB-106: which loaded-scene record `entity`'s hierarchy root belongs
+    // to; 0 if none — see SceneLoadedContentService::OwningScene's own
+    // doc comment for the full contract.
+    [[nodiscard]] std::uint64_t OwningScene(SceneEntity entity) const noexcept;
     // LIB-073: returns and clears every scene lifecycle notification
     // queued since the last drain. Intended to be called once per frame by
     // kb::script::ScriptRuntimeSceneSystem; a caller that never drains
