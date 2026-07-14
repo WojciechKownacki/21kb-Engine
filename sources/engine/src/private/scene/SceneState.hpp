@@ -4,6 +4,7 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMode.hpp"
@@ -76,6 +77,12 @@ public:
     SceneMode mode = SceneMode::Runtime;
     kb::assets::AssetManager assets;
     kb::input::InputSubsystem inputSubsystem;
+    // LIB-115: independent input state for local users other than the primary
+    // (split-screen / shared-keyboard local co-op). Keyed by LocalUserId::value;
+    // lazily created on first access (see Scene::Input(LocalUserId)). unordered_map
+    // never moves/invalidates existing values on insert, so held InputSubsystem&
+    // references stay valid across later insertions.
+    std::unordered_map<std::uint32_t, kb::input::InputSubsystem> secondaryInputSubsystems;
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
     kb::ecs::SystemScheduler systemScheduler;
