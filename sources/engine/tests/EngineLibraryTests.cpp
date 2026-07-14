@@ -1662,6 +1662,106 @@ void RunLibraryQueryPhaseGateTest() {
         "Engine21kbLibrary Query<T>::ForEach's RAII iteration guard must be released even after the visitor throws, not leave the world permanently refusing structural changes");
 }
 
+// LIB-079: Query.With/Without/Any/ChangedSince/Enabled + stable order —
+// proves each filter modifier against a real, differentiated population,
+// not just that the API compiles. Also proves the LIB-079 refactor (kb::
+// ecs::World::CreateQuery<T> instead of kb::scene per-type visitors)
+// genuinely covers VisibilityComponent, which LIB-078 had to exclude.
+void RunLibraryQueryFilterAndOrderTest() {
+    kb::scene::Scene scene;
+    // A: Camera + Light, active.
+    // B: Camera only, active.
+    // C: Camera + Behaviour, INACTIVE (SetActive(false)).
+    // D: Camera + Light + Behaviour, active.
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterB" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterC" });
+    const kb::scene::SceneObject objectD = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FilterD" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
+    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{});
+    scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectD.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 2U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Entities().SetActive(objectC.Entity(), false);
+
+    const auto namesOf = [&](const std::vector<kb::scene::SceneEntity>& entities) {
+        std::vector<std::string> names;
+        names.reserve(entities.size());
+        for (const kb::scene::SceneEntity entity : entities) {
+            names.push_back(scene.Entities().Name(entity));
+        }
+        std::ranges::sort(names);
+        return names;
+    };
+
+    // With<LightComponent>(): only A and D have both Camera and Light.
+    std::vector<kb::scene::SceneEntity> withResult;
+    kb::library::QueryFilterOptions withOptions;
+    withOptions.With<kb::scene::LightComponent>();
+    kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, withOptions,
+                            [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { withResult.push_back(entity.Entity()); }),
+        "Engine21kbLibrary Query.With must still iterate during Tick");
+    kb::tests::Require(namesOf(withResult) == std::vector<std::string>{ "FilterA", "FilterD" }, "Engine21kbLibrary Query.With<LightComponent> must select exactly the entities that also have Light");
+
+    // Without<BehaviourComponent>(): only A and B lack Behaviour.
+    std::vector<kb::scene::SceneEntity> withoutResult;
+    kb::library::QueryFilterOptions withoutOptions;
+    withoutOptions.Without<kb::scene::BehaviourComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, withoutOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { withoutResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(withoutResult) == std::vector<std::string>{ "FilterA", "FilterB" }, "Engine21kbLibrary Query.Without<BehaviourComponent> must exclude every entity that has Behaviour");
+
+    // Any<LightComponent, BehaviourComponent>(): A (Light), C (Behaviour), D (both) — not B (neither).
+    std::vector<kb::scene::SceneEntity> anyResult;
+    kb::library::QueryFilterOptions anyOptions;
+    anyOptions.Any<kb::scene::LightComponent, kb::scene::BehaviourComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, anyOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { anyResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(anyResult) == std::vector<std::string>{ "FilterA", "FilterC", "FilterD" }, "Engine21kbLibrary Query.Any<Light,Behaviour> must select entities with at least one of the two, excluding the one with neither");
+
+    // Enabled(): C is inactive (SetActive(false)) and must be skipped.
+    std::vector<kb::scene::SceneEntity> enabledResult;
+    kb::library::QueryFilterOptions enabledOptions;
+    enabledOptions.Enabled();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, enabledOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { enabledResult.push_back(entity.Entity()); }));
+    kb::tests::Require(namesOf(enabledResult) == std::vector<std::string>{ "FilterA", "FilterB", "FilterD" }, "Engine21kbLibrary Query.Enabled must skip the inactive entity (SceneEntities::IsActive == false)");
+
+    // ChangedSince<CameraComponent>(): every Camera here was just Set(), so all four must be reported as changed.
+    std::vector<kb::scene::SceneEntity> changedResult;
+    kb::library::QueryFilterOptions changedOptions;
+    changedOptions.ChangedSince<kb::scene::CameraComponent>();
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, changedOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { changedResult.push_back(entity.Entity()); }));
+    kb::tests::Require(changedResult.size() == 4U, "Engine21kbLibrary Query.ChangedSince<CameraComponent> must report a just-Set() component as changed for every matching entity");
+
+    // StableOrder(): two consecutive passes over the same population must
+    // visit entities in the identical order, not just the identical set.
+    kb::library::QueryFilterOptions stableOptions;
+    stableOptions.StableOrder();
+    std::vector<kb::scene::SceneEntity> firstOrder;
+    std::vector<kb::scene::SceneEntity> secondOrder;
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, stableOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { firstOrder.push_back(entity.Entity()); }));
+    static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick, stableOptions,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) { secondOrder.push_back(entity.Entity()); }));
+    kb::tests::Require(firstOrder.size() == 4U && firstOrder == secondOrder,
+        "Engine21kbLibrary Query.StableOrder must visit entities in the identical order across two consecutive passes over the same population");
+
+    // Regression proof: LIB-078 had to exclude VisibilityComponent (no
+    // kb::scene bulk-iteration primitive existed for it) — the LIB-079
+    // refactor to kb::ecs::World::CreateQuery<T> covers it uniformly with
+    // every other registered scene component, since it is confirmed to be
+    // a real, registered kb::ecs component like the rest.
+    int visibilityVisited = 0;
+    const bool visibilityIterated = kb::library::Query<kb::scene::VisibilityComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::VisibilityComponent&) { ++visibilityVisited; });
+    kb::tests::Require(visibilityIterated && visibilityVisited == 4, "Engine21kbLibrary Query<VisibilityComponent> must now work (LIB-079 regression fix) — every entity has a Visibility component from creation");
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -1952,6 +2052,7 @@ void RunEngineLibraryTests() {
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunLibraryQueryPhaseGateTest();
+    RunLibraryQueryFilterAndOrderTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
