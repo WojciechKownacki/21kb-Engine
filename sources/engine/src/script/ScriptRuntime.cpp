@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -227,6 +228,21 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
     if (event.name.empty()) {
         result.diagnostics.push_back(ScriptDiagnostic{
             .message = "script event name is empty",
+        });
+        return result;
+    }
+    // LIB-108: reject an oversized payload BEFORE dispatching to any
+    // behaviour — this is the ONE dispatch entry every event delivery path
+    // in the engine funnels through (ScriptExecutionContext::Emit/EmitTo,
+    // Visual Graph EmitEvent/EmitEventTo, and every engine-emitted event —
+    // TimerFired/TaskCompleted/TaskFailed/scene lifecycle — LIB-103's
+    // confirmed "exactly one delivery mechanism"), so one check here covers
+    // all of them; ScriptEventBus::Emit has its own identical check for the
+    // separate bus (LIB-105) delivery path, which does not reach this
+    // function.
+    if (event.arguments.size() > kMaxScriptEventArguments) {
+        result.diagnostics.push_back(ScriptDiagnostic{
+            .message = "script event \"" + event.name + "\" exceeds the maximum of " + std::to_string(kMaxScriptEventArguments) + " arguments (" + std::to_string(event.arguments.size()) + " given)",
         });
         return result;
     }
