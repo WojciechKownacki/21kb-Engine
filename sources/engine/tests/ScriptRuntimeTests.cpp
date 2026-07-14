@@ -44,6 +44,7 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -2794,6 +2795,266 @@ void RunTransformApiRotateLookAtAndPointConversionTest() {
     kb::tests::Require(deadInverseTransformPoint.Succeeded() && !deadInverseTransformPoint.Output("found")->AsBool(), "Transform.InverseTransformPoint on a dead entity must report found=false, not throw");
 }
 
+// LIB-091: test-only — closes 4 real coverage gaps left by LIB-085/086/088's
+// own tests (all 2-3 level fixtures, uniform positive scale only), per
+// research confirming NO existing bug, just untested scenarios. Each
+// scenario gets its own isolated Scene/host (LIB-067 pattern).
+void RunTransformHierarchyEdgeCaseTest() {
+    // (1a) keepWorld with a NON-UNIFORM parent scale — proves the
+    // world-to-local back-solve (WorldPoseToLocal's per-axis SafeDivide) is
+    // correct for (2,3,4), not just LIB-086's uniform 2x fixture.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 keepWorld non-uniform-scale test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject newParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldNonUniformParent" });
+        kb::scene::TransformComponent newParentTransform = scene.Transforms().Get(newParent.Entity());
+        newParentTransform.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F };
+        newParentTransform.localScale = kb::scene::Vec3{ 2.0F, 3.0F, 4.0F }; // Non-uniform.
+        scene.Transforms().Set(newParent.Entity(), newParentTransform);
+
+        const kb::scene::SceneObject reparentedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldNonUniformEntity" });
+        kb::scene::TransformComponent reparentedTransform = scene.Transforms().Get(reparentedEntity.Entity());
+        reparentedTransform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F };
+        scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const kb::scene::Vec3 entityWorldPosBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+
+        const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ newParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
+        kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) under a non-uniform-scale parent failed");
+
+        const kb::scene::Vec3 entityWorldPosAfter = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+        kb::tests::Require(kb::tests::NearlyEqual(entityWorldPosAfter.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityWorldPosAfter.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityWorldPosAfter.z, entityWorldPosBefore.z),
+            "LIB-091 keepWorld must preserve the exact world position under a NON-UNIFORM (2,3,4) parent scale, not just uniform scale");
+    }
+
+    // (1b) keepWorld reparenting an entity that itself has a child — proves
+    // subtree consistency IN THE CASE keepWorld ACTUALLY GUARANTEES IT: a
+    // reparent that does NOT change the entity's effective inherited world
+    // scale (both the old and new parent are unit-scale here). keepWorld's
+    // own implementation (ScriptTransformApi.cpp's SetParent) ONLY
+    // back-solves the DIRECTLY reparented entity's own local pose — it
+    // never touches a descendant's local transform (the same well-known
+    // limitation Unity's own Transform.SetParent(worldPositionStays) has).
+    // A first version of this test wrongly asserted subtree preservation
+    // across a SCALE-CHANGING reparent (case 1a's non-uniform-scale
+    // parent) and correctly failed — that is not a bug, it is inherent to
+    // "only the reparented entity's own pose is preserved," so this test
+    // deliberately keeps scale uniform/unchanged to isolate and prove the
+    // guarantee keepWorld actually makes.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 keepWorld subtree-consistency test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject newParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeParent" });
+        kb::scene::TransformComponent newParentTransform = scene.Transforms().Get(newParent.Entity());
+        newParentTransform.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F }; // Unit scale (default).
+        scene.Transforms().Set(newParent.Entity(), newParentTransform);
+
+        const kb::scene::SceneObject reparentedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeEntity" });
+        kb::scene::TransformComponent reparentedTransform = scene.Transforms().Get(reparentedEntity.Entity());
+        reparentedTransform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F }; // Also unit scale — no scale change across the reparent.
+        scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
+
+        const kb::scene::SceneObject subtreeChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldSubtreeChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(subtreeChild.Entity(), reparentedEntity.Entity()), "LIB-091 keepWorld subtree fixture could not attach the subtree child");
+        kb::scene::TransformComponent subtreeChildTransform = scene.Transforms().Get(subtreeChild.Entity());
+        subtreeChildTransform.localPosition = kb::scene::Vec3{ 0.5F, 0.5F, 0.5F };
+        scene.Transforms().Set(subtreeChild.Entity(), subtreeChildTransform);
+
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const kb::scene::Vec3 subtreeChildWorldPosBefore = scene.Transforms().Get(subtreeChild.Entity()).worldPosition;
+
+        const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ newParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
+        kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) subtree fixture reparent failed");
+
+        const kb::scene::Vec3 subtreeChildWorldPosAfter = scene.Transforms().Get(subtreeChild.Entity()).worldPosition;
+        kb::tests::Require(kb::tests::NearlyEqual(subtreeChildWorldPosAfter.x, subtreeChildWorldPosBefore.x) && kb::tests::NearlyEqual(subtreeChildWorldPosAfter.y, subtreeChildWorldPosBefore.y) && kb::tests::NearlyEqual(subtreeChildWorldPosAfter.z, subtreeChildWorldPosBefore.z),
+            "LIB-091 keepWorld must preserve a subtree child's world pose when the reparent does not change the reparented entity's effective inherited scale");
+    }
+
+    // (2) Parent destroy: cascading destroy of a middle entity in a 3-level
+    // chain must be reflected honestly by Transform.Parent/WorldPose (on
+    // the now-destroyed child) and Transform.ChildCount (on the surviving
+    // grandparent, which must NOT report a stale child count).
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 parent-destroy test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        const kb::scene::SceneObject grandparent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainGrandparent" });
+        const kb::scene::SceneObject middleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainMiddleParent" });
+        const kb::scene::SceneObject leafChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyChainLeafChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(middleParent.Entity(), grandparent.Entity()), "LIB-091 destroy fixture could not attach middleParent");
+        kb::tests::Require(scene.Hierarchy().SetParent(leafChild.Entity(), middleParent.Entity()), "LIB-091 destroy fixture could not attach leafChild");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument grandparentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ grandparent.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> grandparentOnlyArgs{ grandparentEntityArg };
+        const kb::script::ScriptFunctionCallResult childCountBeforeDestroy = host.Functions().Call("Transform.ChildCount", grandparentOnlyArgs, context);
+        kb::tests::Require(childCountBeforeDestroy.Succeeded() && childCountBeforeDestroy.Output("count")->AsInt() == 1, "LIB-091 destroy fixture setup: grandparent must have exactly 1 child before the destroy");
+
+        scene.Entities().Destroy(middleParent.Entity()); // Cascades to leafChild (kb::scene::SceneEntityDestructionService).
+        kb::tests::Require(!scene.Entities().IsAlive(leafChild.Entity()), "LIB-091 destroying middleParent must cascade-destroy leafChild");
+
+        const kb::script::ScriptFunctionArgument leafChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ leafChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> leafChildOnlyArgs{ leafChildEntityArg };
+        const kb::script::ScriptFunctionCallResult parentAfterDestroy = host.Functions().Call("Transform.Parent", leafChildOnlyArgs, context);
+        kb::tests::Require(parentAfterDestroy.Succeeded() && !parentAfterDestroy.Output("found")->AsBool(), "LIB-091 Transform.Parent on a cascade-destroyed child must report found=false, not throw or report a stale parent");
+        const kb::script::ScriptFunctionCallResult worldPoseAfterDestroy = host.Functions().Call("Transform.WorldPose", leafChildOnlyArgs, context);
+        kb::tests::Require(worldPoseAfterDestroy.Succeeded() && !worldPoseAfterDestroy.Output("found")->AsBool(), "LIB-091 Transform.WorldPose on a cascade-destroyed child must report found=false, not throw or report a stale pose");
+
+        const kb::script::ScriptFunctionCallResult childCountAfterDestroy = host.Functions().Call("Transform.ChildCount", grandparentOnlyArgs, context);
+        kb::tests::Require(childCountAfterDestroy.Succeeded() && childCountAfterDestroy.Output("found")->AsBool() && childCountAfterDestroy.Output("count")->AsInt() == 0,
+            "LIB-091 Transform.ChildCount on the surviving grandparent must drop to 0 after its only child (middleParent) is destroyed, not report a stale count");
+    }
+
+    // (3) Deep hierarchy: a 30-level chain, each level offset by (1,0,0) in
+    // local space with no rotation, so the leaf's expected world X is
+    // exactly the chain depth — proves SceneTransformHierarchySystem's
+    // iterative (not recursive) propagation produces a numerically correct
+    // result at real depth, not just "doesn't crash."
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 deep-hierarchy test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        constexpr int kChainDepth = 30;
+        kb::scene::SceneEntity previous{};
+        kb::scene::SceneEntity leaf{};
+        for (int level = 0; level < kChainDepth; ++level) {
+            const kb::scene::SceneObject node = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DeepChainNode" });
+            if (previous.IsValid()) {
+                kb::tests::Require(scene.Hierarchy().SetParent(node.Entity(), previous), "LIB-091 deep-hierarchy fixture could not extend the chain");
+            }
+            kb::scene::TransformComponent nodeTransform = scene.Transforms().Get(node.Entity());
+            nodeTransform.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+            scene.Transforms().Set(node.Entity(), nodeTransform);
+            previous = node.Entity();
+            leaf = node.Entity();
+        }
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument leafEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ leaf.Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> leafOnlyArgs{ leafEntityArg };
+        const kb::script::ScriptFunctionCallResult leafWorldPose = host.Functions().Call("Transform.WorldPose", leafOnlyArgs, context);
+        kb::tests::Require(leafWorldPose.Succeeded() && leafWorldPose.Output("found")->AsBool() && kb::tests::NearlyEqual(leafWorldPose.Output("posX")->AsFloat(), static_cast<float>(kChainDepth)),
+            "LIB-091 a 30-level deep hierarchy chain must propagate to a numerically correct leaf world position, not just avoid crashing");
+    }
+
+    // (4) Zero/negative scale — the highest-risk, never-before-exercised
+    // scenario: SafeDivide (ScriptTransformApi.cpp) exists precisely for a
+    // near-zero parent scale axis, and TransformMath's uniform-scale FAST
+    // PATH (CanUseUniformScaleParentFastPath) is reachable by a NEGATIVE
+    // uniform scale too (it only compares axes for equality, not sign) —
+    // neither has ever been exercised by a test before this.
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-091 zero/negative-scale test host did not initialize");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+        // (4a) Near-zero parent scale axis: SetWorldPose must not produce
+        // NaN/Inf, and must still honestly report moved=true.
+        const kb::scene::SceneObject zeroScaleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ZeroScaleParent" });
+        kb::scene::TransformComponent zeroScaleParentTransform = scene.Transforms().Get(zeroScaleParent.Entity());
+        zeroScaleParentTransform.localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+        zeroScaleParentTransform.localScale = kb::scene::Vec3{ 0.0F, 1.0F, 1.0F }; // X axis genuinely zero.
+        scene.Transforms().Set(zeroScaleParent.Entity(), zeroScaleParentTransform);
+        const kb::scene::SceneObject zeroScaleChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ZeroScaleChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(zeroScaleChild.Entity(), zeroScaleParent.Entity()), "LIB-091 zero-scale fixture could not attach the child");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const std::vector<kb::script::ScriptFunctionArgument> zeroScaleSetWorldPoseArgs{
+            kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ zeroScaleChild.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 10.0F } },
+            kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 1.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult zeroScaleSetWorldPoseResult = host.Functions().Call("Transform.SetWorldPose", zeroScaleSetWorldPoseArgs, context);
+        kb::tests::Require(zeroScaleSetWorldPoseResult.Succeeded() && zeroScaleSetWorldPoseResult.Output("moved")->AsBool(), "LIB-091 Transform.SetWorldPose under a zero-scale parent axis must still honestly report moved=true, not fail");
+        const kb::scene::TransformComponent zeroScaleChildTransform = scene.Transforms().Get(zeroScaleChild.Entity());
+        kb::tests::Require(std::isfinite(zeroScaleChildTransform.localPosition.x) && std::isfinite(zeroScaleChildTransform.localPosition.y) && std::isfinite(zeroScaleChildTransform.localPosition.z)
+                && std::isfinite(zeroScaleChildTransform.localRotation.x) && std::isfinite(zeroScaleChildTransform.localRotation.y) && std::isfinite(zeroScaleChildTransform.localRotation.z) && std::isfinite(zeroScaleChildTransform.localRotation.w),
+            "LIB-091 SafeDivide must prevent a zero parent scale axis from producing NaN/Inf in the back-solved local pose");
+
+        // (4b) Negative UNIFORM parent scale (a mirror) — reachable through
+        // TransformMath's fast path, not just the general Compose path.
+        // TransformPoint/InverseTransformPoint and SetWorldPose/WorldPose
+        // must both round-trip exactly.
+        const kb::scene::SceneObject negativeScaleParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "NegativeScaleParent" });
+        kb::scene::TransformComponent negativeScaleParentTransform = scene.Transforms().Get(negativeScaleParent.Entity());
+        negativeScaleParentTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+        negativeScaleParentTransform.localScale = kb::scene::Vec3{ -2.0F, -2.0F, -2.0F }; // Uniform negative — mirror + scale.
+        scene.Transforms().Set(negativeScaleParent.Entity(), negativeScaleParentTransform);
+        const kb::scene::SceneObject negativeScaleChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "NegativeScaleChild" });
+        kb::tests::Require(scene.Hierarchy().SetParent(negativeScaleChild.Entity(), negativeScaleParent.Entity()), "LIB-091 negative-scale fixture could not attach the child");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+
+        const kb::script::ScriptFunctionArgument negativeScaleChildEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ negativeScaleChild.Entity().Id(), kb::script::ScriptValueType::Entity } };
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleTransformPointArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 3.0F } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 4.0F } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 5.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleTransformPointResult = host.Functions().Call("Transform.TransformPoint", negativeScaleTransformPointArgs, context);
+        kb::tests::Require(negativeScaleTransformPointResult.Succeeded() && negativeScaleTransformPointResult.Output("found")->AsBool(), "LIB-091 Transform.TransformPoint under a negative-uniform-scale parent failed");
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleInverseTransformPointArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("x")->AsFloat() } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("y")->AsFloat() } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ negativeScaleTransformPointResult.Output("z")->AsFloat() } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleInverseTransformPointResult = host.Functions().Call("Transform.InverseTransformPoint", negativeScaleInverseTransformPointArgs, context);
+        kb::tests::Require(negativeScaleInverseTransformPointResult.Succeeded() && negativeScaleInverseTransformPointResult.Output("found")->AsBool()
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("x")->AsFloat(), 3.0F)
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("y")->AsFloat(), 4.0F)
+                && kb::tests::NearlyEqual(negativeScaleInverseTransformPointResult.Output("z")->AsFloat(), 5.0F),
+            "LIB-091 TransformPoint followed by InverseTransformPoint must round-trip exactly through a NEGATIVE uniform parent scale (a mirror), reachable via TransformMath's uniform-scale fast path");
+
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleSetWorldPoseArgs{
+            negativeScaleChildEntityArg,
+            kb::script::ScriptFunctionArgument{ "posX", kb::script::ScriptValue{ 7.0F } },
+            kb::script::ScriptFunctionArgument{ "posY", kb::script::ScriptValue{ 8.0F } },
+            kb::script::ScriptFunctionArgument{ "posZ", kb::script::ScriptValue{ 9.0F } },
+            kb::script::ScriptFunctionArgument{ "rotX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotZ", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "rotW", kb::script::ScriptValue{ 1.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult negativeScaleSetWorldPoseResult = host.Functions().Call("Transform.SetWorldPose", negativeScaleSetWorldPoseArgs, context);
+        kb::tests::Require(negativeScaleSetWorldPoseResult.Succeeded() && negativeScaleSetWorldPoseResult.Output("moved")->AsBool(), "LIB-091 Transform.SetWorldPose under a negative-uniform-scale parent failed");
+        const std::vector<kb::script::ScriptFunctionArgument> negativeScaleChildOnlyArgs{ negativeScaleChildEntityArg };
+        const kb::script::ScriptFunctionCallResult negativeScaleWorldPoseResult = host.Functions().Call("Transform.WorldPose", negativeScaleChildOnlyArgs, context);
+        kb::tests::Require(negativeScaleWorldPoseResult.Succeeded() && negativeScaleWorldPoseResult.Output("found")->AsBool()
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posX")->AsFloat(), 7.0F)
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posY")->AsFloat(), 8.0F)
+                && kb::tests::NearlyEqual(negativeScaleWorldPoseResult.Output("posZ")->AsFloat(), 9.0F),
+            "LIB-091 SetWorldPose followed by WorldPose must round-trip the exact requested world pose through a NEGATIVE uniform parent scale");
+    }
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -5216,6 +5477,7 @@ void RunScriptRuntimeTests() {
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
     RunTransformApiRotateLookAtAndPointConversionTest();
+    RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
