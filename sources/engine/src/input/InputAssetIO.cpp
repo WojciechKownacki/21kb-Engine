@@ -68,6 +68,7 @@ void WriteMapping(std::vector<std::uint8_t>& output, const InputKeyMapping& mapp
     io::WriteUInt64(output, mapping.actionId);
     io::WriteUInt32(output, static_cast<std::uint32_t>(mapping.key));
     io::WriteFloat(output, mapping.scale);
+    io::WriteUInt8(output, mapping.gamepadIndex);
     io::WriteUInt32(output, static_cast<std::uint32_t>(mapping.modifiers.size()));
     for (const InputModifierDesc& modifier : mapping.modifiers) {
         WriteModifier(output, modifier);
@@ -81,7 +82,7 @@ void WriteMapping(std::vector<std::uint8_t>& output, const InputKeyMapping& mapp
 [[nodiscard]] bool ReadMapping(io::ByteReader& reader, InputKeyMapping& mapping) {
     std::uint32_t key = 0U;
     if (!reader.ReadUInt64(mapping.bindingId) || !reader.ReadUInt64(mapping.actionId) ||
-        !reader.ReadUInt32(key) || !reader.ReadFloat(mapping.scale)) {
+        !reader.ReadUInt32(key) || !reader.ReadFloat(mapping.scale) || !reader.ReadUInt8(mapping.gamepadIndex)) {
         return false;
     }
     mapping.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
@@ -114,11 +115,13 @@ void WriteCompositeSlot(std::vector<std::uint8_t>& output, const InputCompositeS
     io::WriteUInt32(output, static_cast<std::uint32_t>(slot.key));
     io::WriteUInt8(output, slot.axis);
     io::WriteFloat(output, slot.scale);
+    io::WriteUInt8(output, slot.gamepadIndex);
 }
 
 [[nodiscard]] bool ReadCompositeSlot(io::ByteReader& reader, InputCompositeSlot& slot) {
     std::uint32_t key = 0U;
-    if (!reader.ReadUInt32(key) || !reader.ReadUInt8(slot.axis) || slot.axis > 2U || !reader.ReadFloat(slot.scale)) {
+    if (!reader.ReadUInt32(key) || !reader.ReadUInt8(slot.axis) || slot.axis > 2U || !reader.ReadFloat(slot.scale) ||
+        !reader.ReadUInt8(slot.gamepadIndex)) {
         return false;
     }
     slot.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
