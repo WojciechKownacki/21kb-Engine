@@ -109,8 +109,11 @@ public:
     // already holds its maximum number of live tasks. NATIVE-ONLY — see
     // the class doc comment above for why no script-facing Task.Start
     // exists yet. Frame-domain: poll's float argument is scaled/pause-aware
-    // elapsed SECONDS (see Advance below).
-    [[nodiscard]] std::uint64_t Start(std::function<TaskPollResult(float)> poll, SceneEntity owner);
+    // elapsed SECONDS (see Advance below). `creator` (LIB-101) is an
+    // optional creation-site diagnostic the native caller may supply — see
+    // TaskRecord::creator's own doc comment (SceneState.hpp) for the full
+    // reasoning.
+    [[nodiscard]] std::uint64_t Start(std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator = {});
     // LIB-098: identical to Start above, EXCEPT this task is driven by
     // AdvanceFixedSteps instead of Advance — poll's float argument is the
     // number of FixedTick STEPS that occurred this frame (0, 1, or more —
@@ -121,12 +124,15 @@ public:
     // count "N fixed steps," since fixed-step count and elapsed seconds
     // are decoupled (0 to maxFixedStepsPerFrame steps can occur for the
     // same deltaSeconds, depending on accumulated backlog).
-    [[nodiscard]] std::uint64_t StartFixedStep(std::function<TaskPollResult(float)> poll, SceneEntity owner);
+    [[nodiscard]] std::uint64_t StartFixedStep(std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator = {});
     // Idempotent — false if `id` names no currently live task (already
     // completed/failed/cancelled, or never existed). Works for tasks from
     // either Start or StartFixedStep.
     [[nodiscard]] bool Cancel(std::uint64_t id) noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
+    // LIB-101: returns an invalid SceneEntity if `id` names no currently
+    // live task, or if it was created without a creator.
+    [[nodiscard]] SceneEntity Creator(std::uint64_t id) const noexcept;
 
     // LIB-097: called once per frame by kb::script::ScriptRuntimeSceneSystem
     // with the same raw deltaSeconds it uses for Tick — Advance applies the

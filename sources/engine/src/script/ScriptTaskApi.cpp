@@ -68,6 +68,23 @@ ScriptFunctionCallResult Cancel(const ScriptFunctionCallContext& context, std::s
     };
 }
 
+// LIB-101: creation-site diagnostics — returns whatever creator entity the
+// NATIVE caller passed to SceneTasks::Start/StartFixedStep (invalid if
+// none was supplied, or the handle is unknown/gone) — a Task's creation
+// site is never a script call (see the class doc comment above), so unlike
+// Timer.Creator this can never resolve to context.caller automatically.
+ScriptFunctionCallResult Creator(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::scene::SceneEntity creator = context.scene->Tasks().Creator(HashArg(arguments, "task"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "creator", ScriptValue{ creator.Id(), ScriptValueType::Entity } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -88,6 +105,10 @@ bool ScriptTaskApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Task.Cancel",
               { ScriptFunctionPin{ "task", ScriptValueType::Hash, true } },
               { ScriptFunctionPin{ "cancelled", ScriptValueType::Bool, true } }, &Cancel)
+        && ok;
+    ok = RegisterFunction(host, "Task.Creator",
+              { ScriptFunctionPin{ "task", ScriptValueType::Hash, true } },
+              { ScriptFunctionPin{ "creator", ScriptValueType::Entity, true } }, &Creator)
         && ok;
     return ok;
 }

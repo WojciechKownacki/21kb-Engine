@@ -28,7 +28,7 @@ constexpr std::size_t kMaxLiveTasks = 4096U;
 
 } // namespace
 
-std::uint64_t SceneTaskService::Start(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner) {
+std::uint64_t SceneTaskService::Start(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator) {
     if (!poll) {
         return 0U;
     }
@@ -42,11 +42,12 @@ std::uint64_t SceneTaskService::Start(Scene& scene, std::function<TaskPollResult
         .owner = owner,
         .poll = std::move(poll),
         .fixedStepDomain = false,
+        .creator = creator,
     });
     return id;
 }
 
-std::uint64_t SceneTaskService::StartFixedStep(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner) {
+std::uint64_t SceneTaskService::StartFixedStep(Scene& scene, std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator) {
     if (!poll) {
         return 0U;
     }
@@ -60,6 +61,7 @@ std::uint64_t SceneTaskService::StartFixedStep(Scene& scene, std::function<TaskP
         .owner = owner,
         .poll = std::move(poll),
         .fixedStepDomain = true,
+        .creator = creator,
     });
     return id;
 }
@@ -81,6 +83,14 @@ bool SceneTaskService::Exists(const Scene& scene, std::uint64_t id) noexcept {
     return std::any_of(state.tasks.begin(), state.tasks.end(), [id](const SceneState::TaskRecord& task) {
         return task.id == id;
     });
+}
+
+SceneEntity SceneTaskService::Creator(const Scene& scene, std::uint64_t id) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    const auto iterator = std::find_if(state.tasks.begin(), state.tasks.end(), [id](const SceneState::TaskRecord& task) {
+        return task.id == id;
+    });
+    return iterator == state.tasks.end() ? SceneEntity{} : iterator->creator;
 }
 
 std::vector<TaskCompletionRecord> SceneTaskService::Advance(Scene& scene, float deltaSeconds) {
