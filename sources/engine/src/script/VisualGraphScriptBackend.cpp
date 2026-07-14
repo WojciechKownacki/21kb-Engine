@@ -80,7 +80,12 @@ ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteLifecycle(const kb
     return ToScriptResult(result, behaviour, context.Self());
 }
 
-ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, ScriptExecutionContext& context) {
+ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId /*eventId*/, ScriptExecutionContext& context) {
+    // LIB-104: Visual Graph resolves the custom-event handler by matching
+    // event.name against compiled node names (VisualGraphBehaviourRuntime::
+    // ExecuteCustomEvent) — inherently string-keyed by the graph runtime
+    // itself, so the typed EventId has no lookup to replace here (see
+    // IScriptBackend::ExecuteEvent's comment).
     kb::visual::VisualGraphRuntimeExecutionContext& graphContext = ContextFor(behaviour, context.Self());
     StoreCommonInputs(graphContext, context);
     const std::vector<kb::visual::VisualGraphCustomEventArgument> arguments = ToVisualGraphArguments(event);

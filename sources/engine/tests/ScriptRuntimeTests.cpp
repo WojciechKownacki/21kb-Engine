@@ -124,6 +124,7 @@ public:
     kb::script::ScriptBackendExecutionResult ExecuteEvent(
         const kb::scene::BehaviourComponent&,
         const kb::script::ScriptEvent& event,
+        kb::script::EventId,
         kb::script::ScriptExecutionContext& context) override {
         ++eventExecutionCount;
         eventSelf = context.Self();
@@ -6465,6 +6466,61 @@ void RunScriptEventTaxonomyTest() {
     kb::tests::Require(sawWorldOnOwnerBehaviour && sawWorldOnBroadcastBehaviour, "An ownerless TimerFired must broadcast to and be classified as world by EVERY enabled behaviour");
 }
 
+// LIB-104: EventId is the typed hot-path dispatch key that replaces the
+// per-behaviour string allocation NativeScriptBackend::ExecuteEvent used to
+// perform (its old EventKey(assetId, event.name) built a new "<id>:<name>"
+// string on every visited behaviour — DispatchSceneBehaviours visits every
+// enabled behaviour for a single dispatched event). This test proves two
+// things a naive migration to a hashed key could get wrong: (1) Compute
+// EventId/ScriptEvent::Id() are deterministic — same name always yields the
+// same id, different names yield different ids, and the method agrees with
+// the free function; (2) the new POD (assetId, EventId) key still
+// disambiguates exactly like the old string key did — behaviours on
+// DIFFERENT assets listening for the SAME event name each only see their
+// own callback fire (not cross-fire another asset's callback), and
+// DIFFERENT event names registered on the SAME asset route to their own
+// distinct callback.
+void RunScriptEventIdHotPathTest() {
+    kb::tests::Require(kb::script::ComputeEventId("Ping") == kb::script::ComputeEventId("Ping"), "ComputeEventId must be deterministic for the same name");
+    kb::tests::Require(kb::script::ComputeEventId("Ping") != kb::script::ComputeEventId("Pong"), "ComputeEventId must differ for different names");
+    const kb::script::ScriptEvent pingEvent{ .name = "Ping" };
+    kb::tests::Require(pingEvent.Id() == kb::script::ComputeEventId("Ping"), "ScriptEvent::Id() must agree with ComputeEventId(name)");
+
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAssetA{ 1280U };
+    constexpr kb::assets::AssetId kAssetB{ 1281U };
+    constexpr kb::assets::AssetId kAssetC{ 1282U };
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId A" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId B" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId C" });
+    scene.Components().Behaviours().Set(objectA.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetA.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectB.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetB.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetC.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    int pingCountA = 0;
+    int pingCountB = 0;
+    int pingCountC = 0;
+    int pongCountA = 0;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetA, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountA; }), "Asset A Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetB, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountB; }), "Asset B Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetC, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountC; }), "Asset C Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetA, "Pong", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pongCountA; }), "Asset A Pong registration failed");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "EventId hot-path native backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult ping = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "Ping" }, 0.0F);
+    kb::tests::Require(ping.Succeeded() && ping.executedBehaviours == 3U, "Ping must reach all three same-named-event listeners across different assets");
+    kb::tests::Require(pingCountA == 1 && pingCountB == 1 && pingCountC == 1, "Each asset's own Ping callback must fire exactly once, not cross-fire another asset's callback");
+    kb::tests::Require(pongCountA == 0, "Dispatching Ping must not fire a different event name's callback on the same asset");
+
+    const kb::script::ScriptRuntimeExecutionResult pong = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "Pong" }, 0.0F);
+    kb::tests::Require(pong.Succeeded() && pong.executedBehaviours == 1U, "Pong must reach only its own registered listener");
+    kb::tests::Require(pongCountA == 1, "Asset A's Pong callback must fire when Pong is dispatched");
+    kb::tests::Require(pingCountA == 1 && pingCountB == 1 && pingCountC == 1, "Dispatching Pong must not re-fire any Ping callback");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6512,6 +6568,7 @@ void RunScriptRuntimeTests() {
     RunScriptTimerAndTaskCreatorApiTest();
     RunTimerDeterminismAndSamePhaseCancellationTest();
     RunScriptEventTaxonomyTest();
+    RunScriptEventIdHotPathTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();

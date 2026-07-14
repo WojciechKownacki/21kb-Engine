@@ -44,9 +44,18 @@ public:
     [[nodiscard]] virtual ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
         ScriptExecutionContext& context) = 0;
+    // LIB-104: eventId is ScriptEvent::Id(), computed ONCE per dispatch by
+    // ScriptRuntime::DispatchEvent (not once per behaviour) — the typed key
+    // NativeScriptBackend uses for its hot-path callback lookup instead of
+    // rebuilding a string from `event.name` on every call. Lua/Visual Graph
+    // backends accept it but do not use it: their own dispatch is
+    // inherently string-keyed (Lua global lookup, Visual Graph node
+    // matching) — rearchitecting either is out of scope here, the same
+    // proportionality precedent as LIB-097/098's documented deferrals.
     [[nodiscard]] virtual ScriptBackendExecutionResult ExecuteEvent(
         const kb::scene::BehaviourComponent& behaviour,
         const ScriptEvent& event,
+        EventId eventId,
         ScriptExecutionContext& context) = 0;
 };
 
