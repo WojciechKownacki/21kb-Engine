@@ -180,6 +180,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptBehaviourBindingService.hpp
     include/engine/script/ScriptEvent.hpp
+    include/engine/script/ScriptEventTaxonomy.hpp
     include/engine/script/ScriptExecutionContext.hpp
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
