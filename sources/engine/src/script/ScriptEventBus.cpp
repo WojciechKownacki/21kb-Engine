@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <string>
 #include <utility>
 
 namespace kb::script {
@@ -123,6 +124,16 @@ bool ScriptEventBus::Unsubscribe(EventSubscriptionHandle handle) noexcept {
 ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target, const EventRecipientFilter& filter) {
     ScriptEventDeliveryResult result{};
     if (event.name.empty()) {
+        return result;
+    }
+    // LIB-108: reject an oversized payload BEFORE matching/invoking any
+    // subscriber (the same "validate wholesale, then act" discipline
+    // ScriptFunctionRegistry::ValidateInputs already uses for oversized
+    // string arguments) — fails the WHOLE Emit honestly via `errors` rather
+    // than silently truncating arguments or delivering to some subscribers
+    // and not others.
+    if (event.arguments.size() > kMaxScriptEventArguments) {
+        result.errors.push_back(std::string{ "event \"" } + event.name + "\" exceeds the maximum of " + std::to_string(kMaxScriptEventArguments) + " arguments (" + std::to_string(event.arguments.size()) + " given)");
         return result;
     }
     // Snapshot the matching handles before invoking anything: a subscriber
