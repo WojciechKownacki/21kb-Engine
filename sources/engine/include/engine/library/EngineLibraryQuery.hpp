@@ -1,231 +1,152 @@
 #pragma once
 
+#include "engine/ecs/Query.hpp"
+#include "engine/ecs/QueryExecutionSettings.hpp"
+#include "engine/ecs/QueryFilter.hpp"
 #include "engine/ecs/StructuralChangeValidator.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
 #include "engine/library/EngineLibraryLifecycle.hpp"
-#include "engine/scene/BehaviourComponent.hpp"
-#include "engine/scene/CameraComponent.hpp"
-#include "engine/scene/LightComponent.hpp"
-#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
-#include "engine/scene/SceneBehaviourComponents.hpp"
-#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/SceneTransforms.hpp"
-#include "engine/scene/TransformComponent.hpp"
 
-#include <exception>
-#include <type_traits>
+#include <cstddef>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace kb::library {
 
-namespace detail {
-// LIB-078: same "dependent false" trick LIB-075's ScriptComponentAccess<T>
-// uses — fires only when the primary QueryProvider template is actually
-// instantiated for an unregistered Component, not at header-parse time.
-template <typename Component>
-struct LibraryQueryProviderUnregistered : std::false_type {};
-
-// LIB-078: dispatches Query<Component>::ForEach to the real kb::scene
-// iteration primitive for each of the registered component types that
-// actually HAS one. Deliberately does NOT cover VisibilityComponent — no
-// SceneVisibilityComponents::ForEach / SceneComponentVisitors entry point
-// exists anywhere in kb::scene today (checked: no bulk-iteration
-// mechanism for Visibility at all, unlike the other five) — instantiating
-// Query<VisibilityComponent> fails to compile with a clear message
-// instead of silently returning zero results or crashing. Adding that
-// primitive to kb::scene is a bigger, separate change, not attempted
-// here.
-template <typename Component>
-struct LibraryQueryProvider {
-    static_assert(detail::LibraryQueryProviderUnregistered<Component>::value,
-        "kb::library::Query<T>: this component type has no registered iteration primitive (LIB-078) — "
-        "Transform/Behaviour/Camera/Light/MeshRenderer only; VisibilityComponent has no bulk ForEach "
-        "anywhere in kb::scene today");
-};
-
-// LIB-078: Camera/Light/MeshRenderer iteration (SceneComponentVisitors::
-// ForEachCamera/ForEachLight/ForEachMeshRenderer) runs through a cached
-// flecs ecs_query_t* under the hood (SceneComponentIteration.hpp) — a C
-// library's own iteration loop, which is NOT guaranteed to unwind a C++
-// exception thrown from a callback it invokes cleanly (confirmed by
-// testing: an early version of this file that let the visitor's
-// exception propagate directly out of the trampoline crashed the whole
-// process, exit code 3, instead of the exception reaching the caller's
-// try/catch). The fix: the trampoline NEVER lets an exception cross back
-// into the C iteration frame — it catches everything, stores it, and lets
-// the C loop finish/return normally; ForEach then rethrows the stored
-// exception once back on pure C++ ground. Transform/Behaviour iteration
-// (no cached ecs_query_t*, a native-storage-only loop) is not confirmed
-// to have this problem, but every provider uses the same pattern anyway —
-// one exception-safety contract for all five, not two different ones
-// depending on which internal iteration mechanism a given component
-// happens to use today.
-template <typename Visitor>
-struct VisitorTrampolineContext {
-    Visitor* visitor = nullptr;
-    std::uint64_t sceneId = 0U;
-    std::exception_ptr capturedException;
-};
-
-template <typename Visitor>
-void RethrowIfCaptured(const VisitorTrampolineContext<Visitor>& context) {
-    if (context.capturedException) {
-        std::rethrow_exception(context.capturedException);
-    }
-}
-
-template <>
-struct LibraryQueryProvider<kb::scene::TransformComponent> {
-    template <typename Visitor>
-    static void ForEach(kb::scene::Scene& scene, Visitor& visitor) {
-        VisitorTrampolineContext<Visitor> context{ &visitor, scene.Id(), {} };
-        scene.Transforms().ForEach(
-            [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* rawContext) {
-                auto* typedContext = static_cast<VisitorTrampolineContext<Visitor>*>(rawContext);
-                if (typedContext->capturedException) {
-                    return;
-                }
-                try {
-                    (*typedContext->visitor)(EntityHandle{ entity, typedContext->sceneId }, transform);
-                } catch (...) {
-                    typedContext->capturedException = std::current_exception();
-                }
-            },
-            &context);
-        RethrowIfCaptured(context);
-    }
-};
-
-template <>
-struct LibraryQueryProvider<kb::scene::BehaviourComponent> {
-    template <typename Visitor>
-    static void ForEach(kb::scene::Scene& scene, Visitor& visitor) {
-        VisitorTrampolineContext<Visitor> context{ &visitor, scene.Id(), {} };
-        scene.Components().Behaviours().ForEach(
-            [](kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
-                auto* typedContext = static_cast<VisitorTrampolineContext<Visitor>*>(rawContext);
-                if (typedContext->capturedException) {
-                    return;
-                }
-                try {
-                    (*typedContext->visitor)(EntityHandle{ entity, typedContext->sceneId }, behaviour);
-                } catch (...) {
-                    typedContext->capturedException = std::current_exception();
-                }
-            },
-            &context);
-        RethrowIfCaptured(context);
-    }
-};
-
-// Camera/Light/MeshRenderer visitors carry the entity's TransformComponent
-// alongside the specific component (kb::scene::SceneVisitorTypes.hpp) —
-// existing infrastructure built for rendering, which always needs both.
-// Query<CameraComponent>/<LightComponent>/<MeshRendererComponent> only
-// asked for one component, so the transform argument is real data that
-// exists but is simply not forwarded to the caller's visitor here.
-template <>
-struct LibraryQueryProvider<kb::scene::CameraComponent> {
-    template <typename Visitor>
-    static void ForEach(kb::scene::Scene& scene, Visitor& visitor) {
-        VisitorTrampolineContext<Visitor> context{ &visitor, scene.Id(), {} };
-        scene.Components().Visitors().ForEachCamera(
-            [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, const kb::scene::CameraComponent& camera, void* rawContext) {
-                auto* typedContext = static_cast<VisitorTrampolineContext<Visitor>*>(rawContext);
-                if (typedContext->capturedException) {
-                    return;
-                }
-                try {
-                    (*typedContext->visitor)(EntityHandle{ entity, typedContext->sceneId }, camera);
-                } catch (...) {
-                    typedContext->capturedException = std::current_exception();
-                }
-            },
-            &context);
-        RethrowIfCaptured(context);
-    }
-};
-
-template <>
-struct LibraryQueryProvider<kb::scene::LightComponent> {
-    template <typename Visitor>
-    static void ForEach(kb::scene::Scene& scene, Visitor& visitor) {
-        VisitorTrampolineContext<Visitor> context{ &visitor, scene.Id(), {} };
-        scene.Components().Visitors().ForEachLight(
-            [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, const kb::scene::LightComponent& light, void* rawContext) {
-                auto* typedContext = static_cast<VisitorTrampolineContext<Visitor>*>(rawContext);
-                if (typedContext->capturedException) {
-                    return;
-                }
-                try {
-                    (*typedContext->visitor)(EntityHandle{ entity, typedContext->sceneId }, light);
-                } catch (...) {
-                    typedContext->capturedException = std::current_exception();
-                }
-            },
-            &context);
-        RethrowIfCaptured(context);
-    }
-};
-
-template <>
-struct LibraryQueryProvider<kb::scene::MeshRendererComponent> {
-    template <typename Visitor>
-    static void ForEach(kb::scene::Scene& scene, Visitor& visitor) {
-        VisitorTrampolineContext<Visitor> context{ &visitor, scene.Id(), {} };
-        scene.Components().Visitors().ForEachMeshRenderer(
-            [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& meshRenderer, void* rawContext) {
-                auto* typedContext = static_cast<VisitorTrampolineContext<Visitor>*>(rawContext);
-                if (typedContext->capturedException) {
-                    return;
-                }
-                try {
-                    (*typedContext->visitor)(EntityHandle{ entity, typedContext->sceneId }, meshRenderer);
-                } catch (...) {
-                    typedContext->capturedException = std::current_exception();
-                }
-            },
-            &context);
-        RethrowIfCaptured(context);
-    }
-};
-
-} // namespace detail
-
-// LIB-078: a script-facing, phase-gated read-only query over one of the
-// component types registered for scripts (LIB-075/076/077's closed set —
-// Transform/Behaviour/Camera/Light/MeshRenderer; Visibility has no
-// registered iteration primitive, see LibraryQueryProvider's comment).
-// Native C++ script code only — Lua/Visual Graph cannot express a C++
-// template, so they never reach this type; ScriptFunctionRegistry-backed
-// World.* functions remain the cross-frontend surface (LIB-065..077).
+// LIB-079: fluent filter/order options for Query<Component>::ForEach.
+// With/Without/ChangedSince resolve straight onto kb::ecs::QueryFilter's
+// existing Require/Exclude/Changed (LIB-079 does not reinvent filtering —
+// QueryFilter already had exactly this shape); the component id for an
+// arbitrary type is resolved lazily, once World& is available inside
+// ForEach, via World::Component<T>() — never re-registering, just
+// looking up the id SceneComponentRegistry already assigned at Scene
+// construction (or 0 for a genuinely unregistered type, which
+// QueryFilter::Require/Exclude then treat as an always-false/always-true
+// degenerate filter rather than crashing).
 //
-// "Only for phases that allow iteration" (this task's own name) reuses
-// LIB-007's EXISTING phase classification instead of inventing a second
-// one: ForEach() proceeds only when ClassifyLifecycleContext(event) is
-// Fixed, Frame, or Render — never Behaviour (Created/Activated/Ready/
-// Deactivated/Destroyed), the same phases where CreateEntity/Destroy/
-// component Add/Remove are routine and structural, and where scene
-// dispatch itself is mid-snapshot-collection (see
-// EngineLibraryCommandApplication.hpp's own note on this). Returns false
-// without iterating for a Behaviour phase — an honest rejection, not a
-// crash or empty-but-silent success.
+// Any<Components...>() has no kb::ecs-level equivalent (QueryFilter's
+// Optional means "may or may not be present," not "at least one of a
+// set") — implemented as a real per-entity OR predicate
+// (World::Has<T>(entity) || ...) over the given type pack, stored as a
+// plain (non-capturing-lambda-derived) function pointer, not a heavier
+// std::function. Calling Any<...>() more than once ANDs the resulting
+// OR-groups together (each call is its own "must have at least one of
+// these" requirement).
 //
-// "Ban on structural change in the loop" is NOT a new mechanism: ForEach()
-// enters kb::ecs::World::EnterIteration() (the SAME
-// kb::ecs::StructuralChangeValidator instance World::CreateEntity/
-// DestroyEntity/SetComponent/RemoveComponent already check) for the
-// duration of the call, via the public kb::scene::SceneRuntime::EcsWorld()
-// accessor — so a script calling World.Spawn/World.Destroy/
-// EntityHandle::Add<T>/Remove<T> from inside a visitor throws
-// std::logic_error, caught and re-thrown by the exception-safe trampoline
-// above so it reaches the CALLER (not the C iteration frame) exactly as
-// it already would inside a kb::ecs::Query<T...> loop. Recording changes
-// to apply after the loop instead is kb::ecs::CommandBuffer's job
-// (LIB-080, not wrapped here yet).
+// Enabled() has no kb::ecs-level equivalent either — kb::ecs has no
+// notion of an entity being active/inactive at all. It bridges to
+// kb::scene::SceneEntities::IsActive(entity), the flat-set LIB-068 added
+// (SceneState::inactiveEntities) — the only "active" concept that exists
+// anywhere in this engine today.
+//
+// StableOrder() maps directly onto the already-fully-implemented
+// kb::ecs::QueryIterationOrder::Deterministic (LIB-074 confirmed this
+// forces serial, byte-for-byte-repeatable execution) — no new ordering
+// logic. Both the stable and default (StorageOrder) paths always force
+// QueryExecutionPolicy::SingleThread regardless: this is a script-facing
+// wrapper, and every other native script dispatch path in this engine
+// runs on the main thread only (LibraryThreadAffinity's own doc comment:
+// "no worker-safe... dispatch path exists yet") — StorageOrder is about
+// whether swap-remove churn may reorder survivors between calls, NOT an
+// invitation to run the visitor from multiple threads at once.
+class QueryFilterOptions final {
+public:
+    template <typename Component>
+    QueryFilterOptions& With() {
+        with_.push_back(&ResolveComponentId<Component>);
+        return *this;
+    }
+
+    template <typename Component>
+    QueryFilterOptions& Without() {
+        without_.push_back(&ResolveComponentId<Component>);
+        return *this;
+    }
+
+    template <typename Component>
+    QueryFilterOptions& ChangedSince() {
+        changed_.push_back(&ResolveComponentId<Component>);
+        return *this;
+    }
+
+    template <typename... AnyComponents>
+    QueryFilterOptions& Any() {
+        anyPredicates_.push_back([](const kb::ecs::World& world, kb::ecs::Entity entity) noexcept {
+            return (world.Has<AnyComponents>(entity) || ...);
+        });
+        return *this;
+    }
+
+    QueryFilterOptions& Enabled() noexcept {
+        enabledOnly_ = true;
+        return *this;
+    }
+
+    QueryFilterOptions& StableOrder() noexcept {
+        stableOrder_ = true;
+        return *this;
+    }
+
+    using ComponentIdResolver = kb::ecs::ComponentId (*)(const kb::ecs::World&);
+    using AnyPredicate = bool (*)(const kb::ecs::World&, kb::ecs::Entity);
+
+    [[nodiscard]] std::span<const ComponentIdResolver> WithResolvers() const noexcept { return with_; }
+    [[nodiscard]] std::span<const ComponentIdResolver> WithoutResolvers() const noexcept { return without_; }
+    [[nodiscard]] std::span<const ComponentIdResolver> ChangedResolvers() const noexcept { return changed_; }
+    [[nodiscard]] std::span<const AnyPredicate> AnyPredicates() const noexcept { return anyPredicates_; }
+    [[nodiscard]] bool EnabledOnlyRequested() const noexcept { return enabledOnly_; }
+    [[nodiscard]] bool StableOrderRequested() const noexcept { return stableOrder_; }
+
+private:
+    template <typename Component>
+    [[nodiscard]] static kb::ecs::ComponentId ResolveComponentId(const kb::ecs::World& world) noexcept {
+        return world.Component<Component>();
+    }
+
+    std::vector<ComponentIdResolver> with_;
+    std::vector<ComponentIdResolver> without_;
+    std::vector<ComponentIdResolver> changed_;
+    std::vector<AnyPredicate> anyPredicates_;
+    bool enabledOnly_ = false;
+    bool stableOrder_ = false;
+};
+
+// LIB-078/079: a script-facing, phase-gated, filterable read-only query
+// over one component type registered for scripts. Native C++ script code
+// only — Lua/Visual Graph cannot express a C++ template, so they never
+// reach this type.
+//
+// Wraps kb::ecs::World::CreateQuery<Component>(filter) directly (LIB-079
+// switched this from LIB-078's original kb::scene-per-type-visitor
+// dispatch): every kb::scene named component — INCLUDING
+// VisibilityComponent, which LIB-078 had to exclude for lack of a
+// kb::scene-level bulk iteration primitive — is confirmed to be a real,
+// registered kb::ecs component (SceneComponentRegistry.cpp registers all
+// of them via World::RegisterComponent<T>), so this now covers all six
+// uniformly. It also eliminates the flecs-C-iteration exception-safety
+// hazard LIB-078 had to work around for Camera/Light/MeshRenderer
+// (SceneComponentVisitors::ForEachCamera/Light/MeshRenderer cache a raw
+// flecs ecs_query_t* under the hood): kb::ecs::Query<T...>'s own
+// iteration is pure native-storage C++, never crosses into a C library's
+// callback frame, so a visitor's exception propagates through
+// ForEachBatchKernel exactly like it would through any other C++ call —
+// confirmed by RunLibraryQueryFilterAndOrderTest, no catch/rethrow
+// trampoline needed here.
+//
+// "Only for phases that allow iteration" still reuses LIB-007's
+// ClassifyLifecycleContext (Behaviour phases refused, Fixed/Frame/Render
+// allowed) — unchanged from LIB-078. "Ban on structural change in the
+// loop" still enters kb::ecs::World::EnterIteration() explicitly before
+// building the query — ForEachBatchKernel's own QueryState.cpp also
+// enters the same guard internally, so this is redundant-but-harmless
+// (the guard is an atomic counter, not an exclusive lock — nested entry
+// is fine), kept for defense-in-depth and because it must still cover the
+// filter-resolution step that runs before the query itself exists.
 template <typename Component>
 class Query final {
 public:
@@ -233,11 +154,55 @@ public:
 
     template <typename Visitor>
     [[nodiscard]] static bool ForEach(kb::scene::Scene& scene, LifecycleEvent event, Visitor&& visitor) {
+        return ForEach(scene, event, QueryFilterOptions{}, std::forward<Visitor>(visitor));
+    }
+
+    template <typename Visitor>
+    [[nodiscard]] static bool ForEach(kb::scene::Scene& scene, LifecycleEvent event, const QueryFilterOptions& options, Visitor&& visitor) {
         if (ClassifyLifecycleContext(event) == LibraryLifecycleContextKind::Behaviour) {
             return false;
         }
-        const kb::ecs::StructuralChangeValidator::Guard iterationGuard = scene.Runtime().EcsWorld().EnterIteration();
-        detail::LibraryQueryProvider<Component>::ForEach(scene, visitor);
+
+        kb::ecs::World& world = scene.Runtime().EcsWorld();
+        const kb::ecs::StructuralChangeValidator::Guard iterationGuard = world.EnterIteration();
+
+        kb::ecs::QueryFilter filter;
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options.WithResolvers()) {
+            filter.Require(resolve(world));
+        }
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options.WithoutResolvers()) {
+            filter.Exclude(resolve(world));
+        }
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options.ChangedResolvers()) {
+            filter.Changed(resolve(world));
+        }
+
+        const kb::ecs::Query<Component> query = world.CreateQuery<Component>(filter);
+        const kb::ecs::QueryExecutionSettings settings{
+            .iterationOrder = options.StableOrderRequested() ? kb::ecs::QueryIterationOrder::Deterministic : kb::ecs::QueryIterationOrder::StorageOrder,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+
+        query.ForEachBatchKernel(settings, [&](const typename kb::ecs::Query<Component>::Batch& batch) {
+            const Component* components = batch.template Components<0>();
+            for (std::size_t index = 0; index < batch.Count(); ++index) {
+                const kb::ecs::Entity entity = batch.EntityAt(index);
+                if (options.EnabledOnlyRequested() && !scene.Entities().IsActive(entity)) {
+                    continue;
+                }
+                bool matchesEveryAnyGroup = true;
+                for (const QueryFilterOptions::AnyPredicate predicate : options.AnyPredicates()) {
+                    if (!predicate(world, entity)) {
+                        matchesEveryAnyGroup = false;
+                        break;
+                    }
+                }
+                if (!matchesEveryAnyGroup) {
+                    continue;
+                }
+                visitor(EntityHandle{ entity, scene.Id() }, components[index]);
+            }
+        });
         return true;
     }
 };
