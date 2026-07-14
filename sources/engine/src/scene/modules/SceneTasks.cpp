@@ -9,12 +9,12 @@ namespace kb::scene {
 SceneTasks::SceneTasks(Scene& scene) noexcept
     : scene_(scene) {}
 
-std::uint64_t SceneTasks::Start(std::function<TaskPollResult(float)> poll, SceneEntity owner) {
-    return SceneTaskService::Start(scene_, std::move(poll), owner);
+std::uint64_t SceneTasks::Start(std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator) {
+    return SceneTaskService::Start(scene_, std::move(poll), owner, creator);
 }
 
-std::uint64_t SceneTasks::StartFixedStep(std::function<TaskPollResult(float)> poll, SceneEntity owner) {
-    return SceneTaskService::StartFixedStep(scene_, std::move(poll), owner);
+std::uint64_t SceneTasks::StartFixedStep(std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator) {
+    return SceneTaskService::StartFixedStep(scene_, std::move(poll), owner, creator);
 }
 
 bool SceneTasks::Cancel(std::uint64_t id) noexcept {
@@ -23,6 +23,10 @@ bool SceneTasks::Cancel(std::uint64_t id) noexcept {
 
 bool SceneTasks::Exists(std::uint64_t id) const noexcept {
     return SceneTaskService::Exists(scene_, id);
+}
+
+SceneEntity SceneTasks::Creator(std::uint64_t id) const noexcept {
+    return SceneTaskService::Creator(scene_, id);
 }
 
 std::vector<TaskCompletionRecord> SceneTasks::Advance(float deltaSeconds) {
