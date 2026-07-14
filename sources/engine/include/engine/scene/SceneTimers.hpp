@@ -55,10 +55,19 @@ public:
     // longer alive is silently auto-cancelled (removed, no fire) the moment
     // that's detected, regardless of remaining time or pause state — no
     // dangling callback for a dead entity. A one-shot timer is removed from
-    // storage after firing; a repeating timer's remainingSeconds resets to
-    // intervalSeconds (flat reset, no overshoot compensation — deterministic
-    // same-time ordering and long-frame catch-up policy are LIB-096's job,
-    // not fabricated here). Fires at most once per timer per Advance call.
+    // storage after firing.
+    // LIB-096: same-time ordering — when multiple timers become due within
+    // one Advance() call, `fired` lists them in CREATION order (the order
+    // Timer.Once/Timer.Repeat were called), never by remaining-time
+    // magnitude. Long-frame catch-up — a repeating timer that fell behind by
+    // more than one whole interval fires once per missed interval
+    // (consecutive entries in `fired`, still within that timer's own slot in
+    // creation order) up to a bounded cap (SceneTimerService's internal
+    // kMaxCatchUpFiresPerAdvance); once that cap is hit, the remaining
+    // backlog is honestly dropped (reset to exactly one fresh interval)
+    // rather than replayed on a later frame or left to grow unboundedly —
+    // the same spiral-of-death guard ScriptRuntimeFrameSettings::
+    // maxFixedStepsPerFrame already applies to FixedTick.
     [[nodiscard]] std::vector<TimerFiredRecord> Advance(float deltaSeconds);
 
 private:
