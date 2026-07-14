@@ -30,6 +30,7 @@
 #include "engine/library/EngineLibraryQuery.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
+#include "engine/library/EngineLibrarySignal.hpp"
 #include "engine/library/EngineLibraryTextEncoding.hpp"
 #include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
@@ -2509,6 +2510,80 @@ void RunExpandedValueTypesTest() {
     kb::tests::Require(echoedOutput.has_value() && echoedOutput->Type() == ScriptValueType::Hash && echoedOutput->AsUInt64() == 0x1234ULL, "Tests.EchoHash must return the exact Hash value it was given");
 }
 
+// LIB-109: kb::library::Signal<Args...> — the native-only, per-instance,
+// compile-time-typed observer list (no global registry, no string names,
+// no ScriptValue boxing — contrast with kb::script::ScriptEventBus/LIB-105).
+void RunEngineLibrarySignalTest() {
+    // Basic connect/emit, connection order, multi-arg.
+    {
+        kb::library::Signal<int, std::string> signal;
+        kb::tests::Require(signal.SlotCount() == 0U, "A freshly constructed Signal must have zero connected slots");
+
+        std::vector<std::string> order;
+        const kb::library::Signal<int, std::string>::SlotId firstId = signal.Connect([&order](int value, const std::string& text) {
+            order.push_back("first:" + std::to_string(value) + ":" + text);
+        });
+        const kb::library::Signal<int, std::string>::SlotId secondId = signal.Connect([&order](int value, const std::string& text) {
+            order.push_back("second:" + std::to_string(value) + ":" + text);
+        });
+        kb::tests::Require(firstId != 0U && secondId != 0U && firstId != secondId, "Connect must return distinct, nonzero ids for two live slots");
+        kb::tests::Require(signal.SlotCount() == 2U, "SlotCount must reflect both connected slots");
+
+        signal.Emit(7, "hello");
+        kb::tests::Require(order.size() == 2U && order[0] == "first:7:hello" && order[1] == "second:7:hello",
+            "Emit must invoke every connected slot, in connection order, with the exact arguments given");
+
+        kb::tests::Require(signal.Connect(nullptr) == 0U, "Connect with an empty/null slot must return the invalid id (0) and not add a slot");
+        kb::tests::Require(signal.SlotCount() == 2U, "Connect with an empty slot must not increase SlotCount");
+    }
+
+    // Disconnect: idempotent, stops future delivery.
+    {
+        kb::library::Signal<int> signal;
+        int fired = 0;
+        const kb::library::Signal<int>::SlotId id = signal.Connect([&fired](int) { ++fired; });
+        kb::tests::Require(signal.Disconnect(id), "Disconnect on a live slot must succeed");
+        kb::tests::Require(!signal.Disconnect(id), "A second Disconnect on the same id must be idempotent (false, not an error)");
+        kb::tests::Require(!signal.Disconnect(kb::library::Signal<int>::kInvalidSlotId), "Disconnect on the invalid id must fail cleanly");
+        signal.Emit(1);
+        kb::tests::Require(fired == 0, "A disconnected slot must never fire again");
+        kb::tests::Require(signal.SlotCount() == 0U, "SlotCount must reflect the disconnect");
+    }
+
+    // Reentrancy (a): a slot Connecting a NEW slot mid-Emit must not have
+    // that new slot fire within the SAME Emit call — only starting the
+    // next one (mirrors ScriptEventBus::Emit's own snapshot-before-dispatch
+    // discipline, LIB-102/LIB-040).
+    {
+        kb::library::Signal<> signal;
+        int lateFired = 0;
+        kb::library::Signal<>::SlotId lateId = kb::library::Signal<>::kInvalidSlotId;
+        static_cast<void>(signal.Connect([&signal, &lateFired, &lateId]() {
+            lateId = signal.Connect([&lateFired]() { ++lateFired; });
+        }));
+        signal.Emit();
+        kb::tests::Require(lateId != kb::library::Signal<>::kInvalidSlotId && lateFired == 0, "A slot connected DURING an Emit call must not fire within that same Emit call");
+        signal.Emit();
+        kb::tests::Require(lateFired == 1, "A slot connected during a PRIOR Emit call must fire normally on the NEXT Emit call");
+    }
+
+    // Reentrancy (b): a slot Disconnecting a sibling (already snapshotted
+    // for THIS Emit call) mid-dispatch must safely skip that sibling, no
+    // crash, no double-invoke.
+    {
+        kb::library::Signal<> signal;
+        int siblingFired = 0;
+        kb::library::Signal<>::SlotId siblingId = kb::library::Signal<>::kInvalidSlotId;
+        static_cast<void>(signal.Connect([&signal, &siblingId]() {
+            static_cast<void>(signal.Disconnect(siblingId));
+        }));
+        siblingId = signal.Connect([&siblingFired]() { ++siblingFired; });
+        signal.Emit();
+        kb::tests::Require(siblingFired == 0, "A sibling slot disconnected by an EARLIER slot within the SAME Emit call must not fire");
+        kb::tests::Require(signal.SlotCount() == 1U, "Only the disconnected sibling should be gone; the disconnecting slot itself remains connected");
+    }
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -2564,6 +2639,7 @@ void RunEngineLibraryTests() {
     RunErrorCodeTest();
     RunInputLimitsTest();
     RunExpandedValueTypesTest();
+    RunEngineLibrarySignalTest();
 }
 
 } // namespace kb::tests
