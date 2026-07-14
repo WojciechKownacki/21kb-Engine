@@ -94,6 +94,7 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
         dispatch.event,
         dispatch.sharedState,
         dispatch.functions,
+        dispatch.runtime == nullptr ? nullptr : &dispatch.runtime->Events(),
     };
 
     const ScriptBackendExecutionResult backendResult = dispatch.event == nullptr
@@ -156,6 +157,14 @@ ScriptFunctionRegistry& ScriptRuntime::Functions() noexcept {
 
 const ScriptFunctionRegistry& ScriptRuntime::Functions() const noexcept {
     return functions_;
+}
+
+ScriptEventBus& ScriptRuntime::Events() noexcept {
+    return events_;
+}
+
+const ScriptEventBus& ScriptRuntime::Events() const noexcept {
+    return events_;
 }
 
 ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycle(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {

@@ -81,6 +81,15 @@ private:
     // with the number of FixedTick steps this frame actually produced,
     // the one piece of state that loop previously never surfaced anywhere.
     void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
+    // LIB-105: delivers every kb::script::ScriptEventBus::EmitDeferred call
+    // queued since the last frame — the deferred half of the pub/sub bus's
+    // sync/deferred pair. Unlike DispatchFiredTimers/DispatchCompletedTasks
+    // above, this does not go through ScriptRuntime::DispatchEventAndDrain
+    // (there is no behaviour to visit — subscriptions are not behaviours);
+    // any subscriber exception surfaces as a ScriptDiagnostic in
+    // lastResult_ instead, since ScriptEventBus::Emit already converts it
+    // to a plain error string rather than letting it escape.
+    void DispatchDeferredEvents(kb::scene::Scene& scene);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

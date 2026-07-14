@@ -17,7 +17,8 @@ ScriptExecutionContext::ScriptExecutionContext(
     std::vector<ScriptEvent>* emittedEvents,
     const ScriptEvent* incomingEvent,
     ScriptSharedState* sharedState,
-    ScriptFunctionRegistry* functions) noexcept
+    ScriptFunctionRegistry* functions,
+    ScriptEventBus* events) noexcept
     : scene_(scene)
     , self_(self)
     , assetId_(assetId)
@@ -27,7 +28,8 @@ ScriptExecutionContext::ScriptExecutionContext(
     , emittedEvents_(emittedEvents)
     , incomingEvent_(incomingEvent)
     , sharedState_(sharedState)
-    , functions_(functions) {}
+    , functions_(functions)
+    , events_(events) {}
 
 kb::scene::Scene& ScriptExecutionContext::GetScene() noexcept {
     return scene_;
@@ -103,6 +105,14 @@ ScriptFunctionRegistry* ScriptExecutionContext::Functions() noexcept {
 
 const ScriptFunctionRegistry* ScriptExecutionContext::Functions() const noexcept {
     return functions_;
+}
+
+ScriptEventBus* ScriptExecutionContext::Events() noexcept {
+    return events_;
+}
+
+const ScriptEventBus* ScriptExecutionContext::Events() const noexcept {
+    return events_;
 }
 
 ScriptFunctionCallResult ScriptExecutionContext::CallFunction(std::string_view name, std::span<const ScriptFunctionArgument> arguments) {

@@ -6521,6 +6521,200 @@ void RunScriptEventIdHotPathTest() {
     kb::tests::Require(pingCountA == 1 && pingCountB == 1 && pingCountC == 1, "Dispatching Pong must not re-fire any Ping callback");
 }
 
+// LIB-105: kb::script::ScriptEventBus (Events.Subscribe/Unsubscribe/Emit/
+// EmitDeferred/Broadcast) — the engine's first real pub/sub bus, additive
+// to the ScriptEvent/DispatchEvent pipeline (LIB-041..104), not a
+// replacement of it. Pure native-layer test: no ScriptRuntimeSceneSystem,
+// no Lua — exercises kb::script::ScriptEventBus directly, mirroring how
+// LIB-095/097's own bus-level tests preceded their integration tests.
+void RunScriptEventBusNativeSubscribeEmitTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Other" });
+
+    kb::script::ScriptEventBus bus;
+
+    kb::tests::Require(bus.Subscribe("", [](const kb::script::ScriptEvent&) {}) == kb::script::kInvalidEventSubscriptionHandle, "Subscribe with an empty name must be rejected");
+    kb::tests::Require(bus.Subscribe("X", nullptr) == kb::script::kInvalidEventSubscriptionHandle, "Subscribe with a null callback must be rejected");
+
+    int globalCount = 0;
+    int ownerCount = 0;
+    const kb::script::EventSubscriptionHandle globalHandle = bus.Subscribe("Ping", [&](const kb::script::ScriptEvent&) { ++globalCount; });
+    const kb::script::EventSubscriptionHandle ownerHandle = bus.Subscribe("Ping", [&](const kb::script::ScriptEvent&) { ++ownerCount; }, ownerObject.Entity());
+    kb::tests::Require(globalHandle != kb::script::kInvalidEventSubscriptionHandle && ownerHandle != kb::script::kInvalidEventSubscriptionHandle && globalHandle != ownerHandle, "Two Subscribe calls must return distinct, valid handles");
+    kb::tests::Require(bus.SubscriptionCount() == 2U, "The bus must track both live subscriptions");
+
+    const kb::script::ScriptEvent ping{ .name = "Ping" };
+    const kb::script::ScriptEventDeliveryResult untargeted = bus.Emit(scene, ping);
+    kb::tests::Require(untargeted.delivered == 2U && untargeted.errors.empty(), "An untargeted Emit must reach every live subscriber of the name");
+    kb::tests::Require(globalCount == 1 && ownerCount == 1, "Both subscribers must have fired exactly once");
+
+    const kb::script::ScriptEventDeliveryResult targeted = bus.Emit(scene, ping, ownerObject.Entity());
+    kb::tests::Require(targeted.delivered == 1U, "A targeted Emit must reach only the subscription owned by that entity");
+    kb::tests::Require(globalCount == 1 && ownerCount == 2, "Targeted Emit must not re-fire the ownerless subscriber");
+
+    const kb::script::ScriptEventDeliveryResult unmatched = bus.Emit(scene, ping, otherObject.Entity());
+    kb::tests::Require(unmatched.delivered == 0U, "A targeted Emit at an entity with no matching subscription must deliver nothing, not fall back to the ownerless subscriber");
+
+    const kb::script::ScriptEventDeliveryResult broadcast = bus.Broadcast(scene, ping);
+    kb::tests::Require(broadcast.delivered == 2U, "Broadcast must reach every live subscriber regardless of owner, same as an untargeted Emit");
+
+    const kb::script::ScriptEventDeliveryResult pongResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Pong" });
+    kb::tests::Require(pongResult.delivered == 0U, "Emit for an unrelated event name must not fire any Ping subscriber");
+
+    bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Ping" });
+    kb::tests::Require(globalCount == 2 && ownerCount == 3, "Counts before drain must reflect only the synchronous Emit/Broadcast calls above, not the still-queued deferred one");
+    const kb::script::ScriptEventDeliveryResult drained = bus.DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 2U && globalCount == 3 && ownerCount == 4, "DrainDeferred must deliver exactly what EmitDeferred queued, exactly once");
+    const kb::script::ScriptEventDeliveryResult drainedAgain = bus.DrainDeferred(scene);
+    kb::tests::Require(drainedAgain.delivered == 0U, "DrainDeferred must not re-deliver an already-drained queue");
+
+    kb::tests::Require(bus.Unsubscribe(ownerHandle), "Unsubscribe on a live handle must succeed");
+    kb::tests::Require(!bus.Unsubscribe(ownerHandle), "A second Unsubscribe on the same handle must be idempotent, not error");
+    kb::tests::Require(!bus.Unsubscribe(kb::script::kInvalidEventSubscriptionHandle), "Unsubscribe on the invalid handle must fail cleanly");
+    const kb::script::ScriptEventDeliveryResult afterUnsubscribe = bus.Emit(scene, ping);
+    kb::tests::Require(afterUnsubscribe.delivered == 1U && ownerCount == 4, "An unsubscribed subscription must never fire again");
+
+    // Dead/deactivated owner auto-skips, mirroring Timer/Task's OwnerGone
+    // policy (LIB-095/097/099) — no crash, no delivery.
+    static_cast<void>(bus.Subscribe("Ping", [](const kb::script::ScriptEvent&) {
+        kb::tests::Require(false, "A subscription whose owner died before Emit must never fire");
+    }, otherObject.Entity()));
+    scene.Entities().Destroy(otherObject.Entity());
+    kb::tests::Require(!scene.Entities().IsAlive(otherObject.Entity()), "Fixture entity must be destroyable");
+    const kb::script::ScriptEventDeliveryResult afterOwnerDeath = bus.Emit(scene, ping, otherObject.Entity());
+    kb::tests::Require(afterOwnerDeath.delivered == 0U, "A targeted Emit at a dead owner must deliver nothing and must not crash");
+
+    // A throwing subscriber must not abort delivery to others and must be
+    // reported, not silently swallowed (ScriptEventBus::Emit's try/catch).
+    static_cast<void>(bus.Subscribe("Boom", [](const kb::script::ScriptEvent&) { throw std::runtime_error{ "boom" }; }));
+    const kb::script::ScriptEventDeliveryResult boomResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Boom" });
+    kb::tests::Require(boomResult.delivered == 0U && boomResult.errors.size() == 1U, "A throwing subscriber must be caught, reported as an error, and not counted as delivered");
+}
+
+// LIB-105: real Lua round trip — Events.Subscribe registered from a Lua
+// script receives a native-emitted event (native -> Lua), and Events.
+// Broadcast/EmitDeferred called from Lua reach a native subscriber (Lua ->
+// native), proving the bus is genuinely bidirectional, not native-only with
+// a decorative Lua facade. Events.Unsubscribe is verified end-to-end too.
+void RunPucLuaEventsSubscribeEmitTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 3310U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local doorHandle = nil
+local doorCount = 0
+local lastDoor = nil
+
+function Created(self)
+    doorHandle = Events.Subscribe("DoorOpened", function(event)
+        doorCount = doorCount + 1
+        lastDoor = event.args.door
+    end)
+end
+
+function Tick(self, dt)
+    SetShared("lua.events.doorCount", doorCount)
+    SetShared("lua.events.lastDoor", lastDoor)
+end
+
+function EmitPing(self, event)
+    Events.Broadcast("Ping", { value = 7 })
+end
+
+function EmitDeferredPing(self, event)
+    Events.EmitDeferred("Ping", { value = 9 })
+end
+
+function DoUnsubscribe(self, event)
+    local ok = Events.Unsubscribe(doorHandle)
+    SetShared("lua.events.unsubscribed", ok)
+end
+)",
+        "EventsSubscriber.lua");
+    kb::tests::Require(loaded.succeeded, "Lua Events subscriber script must load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua backend registration failed for Events test");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Lua Subscriber" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult created = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Created, 0.0F);
+    kb::tests::Require(created.Succeeded() && created.executedBehaviours == 1U, "Created dispatch (running Events.Subscribe) must execute cleanly");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 1U, "Events.Subscribe must have registered exactly one subscription");
+
+    int pingValueSeen = -1;
+    const kb::script::EventSubscriptionHandle nativePingHandle = runtime.Events().Subscribe("Ping", [&](const kb::script::ScriptEvent& event) {
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "value") {
+                pingValueSeen = argument.value.AsInt();
+            }
+        }
+    });
+    kb::tests::Require(nativePingHandle != kb::script::kInvalidEventSubscriptionHandle, "Native Ping subscription must register");
+
+    const kb::script::ScriptEvent doorOpened{
+        .name = "DoorOpened",
+        .arguments = { kb::script::ScriptEventArgument{ .name = "door", .value = kb::script::ScriptValue{ 42 } } },
+    };
+    const kb::script::ScriptEventDeliveryResult delivery = runtime.Events().Emit(scene, doorOpened);
+    kb::tests::Require(delivery.delivered == 1U && delivery.errors.empty(), "A native Emit must deliver to the Lua Events.Subscribe callback exactly once");
+
+    const kb::script::ScriptRuntimeExecutionResult afterDoor = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterDoor.Succeeded(), "Tick after DoorOpened must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> doorCount = runtime.SharedState().Get("lua.events.doorCount");
+    kb::tests::Require(doorCount.has_value() && doorCount->AsInt() == 1, "Lua subscriber must have observed exactly one DoorOpened delivery");
+    const std::optional<kb::script::ScriptValue> lastDoor = runtime.SharedState().Get("lua.events.lastDoor");
+    kb::tests::Require(lastDoor.has_value() && lastDoor->AsInt() == 42, "Lua subscriber must have received the correct event argument value");
+
+    const kb::script::ScriptRuntimeExecutionResult emitPing = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "EmitPing" }, 0.0F);
+    kb::tests::Require(emitPing.Succeeded(), "EmitPing custom event dispatch must not produce diagnostics");
+    kb::tests::Require(pingValueSeen == 7, "Lua's own Events.Broadcast must reach the native subscriber with the correct payload");
+
+    pingValueSeen = -1;
+    const kb::script::ScriptRuntimeExecutionResult emitDeferredPing = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "EmitDeferredPing" }, 0.0F);
+    kb::tests::Require(emitDeferredPing.Succeeded(), "EmitDeferredPing custom event dispatch must not produce diagnostics");
+    kb::tests::Require(pingValueSeen == -1, "Lua's Events.EmitDeferred must not deliver synchronously");
+    const kb::script::ScriptEventDeliveryResult drained = runtime.Events().DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 1U, "DrainDeferred must deliver the event Lua queued with EmitDeferred");
+    kb::tests::Require(pingValueSeen == 9, "The deferred Ping must reach the native subscriber with its own payload once drained");
+
+    const kb::script::ScriptRuntimeExecutionResult unsub = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "DoUnsubscribe" }, 0.0F);
+    kb::tests::Require(unsub.Succeeded(), "DoUnsubscribe custom event dispatch must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> unsubscribed = runtime.SharedState().Get("lua.events.unsubscribed");
+    kb::tests::Require(unsubscribed.has_value() && unsubscribed->AsBool(), "Events.Unsubscribe must report success for a live handle");
+    const kb::script::ScriptEventDeliveryResult afterUnsubscribe = runtime.Events().Emit(scene, doorOpened);
+    kb::tests::Require(afterUnsubscribe.delivered == 0U, "DoorOpened must no longer reach the Lua subscriber after Events.Unsubscribe");
+}
+
+// LIB-105: proves EmitDeferred's real timing contract through the actual
+// per-frame drain point (ScriptRuntimeSceneSystem::ExecuteFrame), not just
+// a direct DrainDeferred call — an event queued during one ExecuteFrame
+// must not be visible to a subscriber until the NEXT ExecuteFrame call.
+void RunScriptRuntimeSceneSystemDeferredEventDrainTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntime runtime;
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    int deliveries = 0;
+    const kb::script::EventSubscriptionHandle handle = runtime.Events().Subscribe("FrameBoundary", [&](const kb::script::ScriptEvent&) { ++deliveries; });
+    kb::tests::Require(handle != kb::script::kInvalidEventSubscriptionHandle, "FrameBoundary subscription must register");
+
+    runtime.Events().EmitDeferred(kb::script::ScriptEvent{ .name = "FrameBoundary" });
+    kb::tests::Require(deliveries == 0, "EmitDeferred must not deliver before any frame executes");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.016F));
+    kb::tests::Require(deliveries == 1, "The first ExecuteFrame after EmitDeferred must drain and deliver the queued event exactly once");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.016F));
+    kb::tests::Require(deliveries == 1, "A later ExecuteFrame with nothing newly queued must not re-deliver the same event");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6569,6 +6763,9 @@ void RunScriptRuntimeTests() {
     RunTimerDeterminismAndSamePhaseCancellationTest();
     RunScriptEventTaxonomyTest();
     RunScriptEventIdHotPathTest();
+    RunScriptEventBusNativeSubscribeEmitTest();
+    RunPucLuaEventsSubscribeEmitTest();
+    RunScriptRuntimeSceneSystemDeferredEventDrainTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
