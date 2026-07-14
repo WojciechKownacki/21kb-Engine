@@ -45,6 +45,23 @@ private:
     std::chrono::steady_clock::time_point start_;
 };
 
+// LIB-111: RAII so `depth` is decremented on every exit path out of Emit()
+// (the normal return AND every early-reject return), mirroring
+// ScriptFunctionRegistry::CallDepthGuard (LIB-038) exactly.
+class EmitDepthGuard final {
+public:
+    explicit EmitDepthGuard(std::size_t& depth) noexcept
+        : depth_(depth) {
+        ++depth_;
+    }
+    ~EmitDepthGuard() noexcept { --depth_; }
+    EmitDepthGuard(const EmitDepthGuard&) = delete;
+    EmitDepthGuard& operator=(const EmitDepthGuard&) = delete;
+
+private:
+    std::size_t& depth_;
+};
+
 // Same lazy "check on next use, not eagerly on death" policy as
 // SceneTimerService/SceneTaskService's OwnerGone (LIB-095/097/099) — no
 // push-based "entity died" notification exists anywhere in the engine, so
@@ -155,6 +172,19 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
     const ScopedElapsedNanosecondsTimer timer{ telemetry_.lastEmitElapsedNanoseconds, telemetry_.totalEmitElapsedNanoseconds };
     ++telemetry_.emitCalls;
     ScriptEventDeliveryResult result{};
+    // LIB-111: reject before recursing further once the depth limit is
+    // reached, rather than letting a runaway self- or mutually-recursive
+    // Emit chain (a subscriber that Emits the same or another event from
+    // within its own dispatch) grow the native call stack until it
+    // overflows and crashes the process — mirrors ScriptFunctionRegistry::
+    // Call's identical guard (LIB-038) exactly. Checked BEFORE constructing
+    // EmitDepthGuard (below), the same "reject before incrementing" order
+    // that guard's own precedent uses.
+    if (emitDepth_ >= kMaxEmitDepth) {
+        ++telemetry_.invalidEventCount;
+        result.errors.push_back("event \"" + event.name + "\" exceeded the maximum Emit depth (" + std::to_string(kMaxEmitDepth) + "); this usually means a reentrant or mutually recursive Emit chain");
+        return result;
+    }
     if (event.name.empty()) {
         ++telemetry_.invalidEventCount;
         return result;
@@ -170,6 +200,10 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
         result.errors.push_back(std::string{ "event \"" } + event.name + "\" exceeds the maximum of " + std::to_string(kMaxScriptEventArguments) + " arguments (" + std::to_string(event.arguments.size()) + " given)");
         return result;
     }
+    // LIB-111: guards everything below — matching AND dispatch — for the
+    // remainder of this call, so any subscriber invoked below that itself
+    // calls Emit reentrantly is counted at the incremented depth.
+    const EmitDepthGuard depthGuard{ emitDepth_ };
     // Snapshot the matching handles before invoking anything: a subscriber
     // callback may itself Subscribe/Unsubscribe (including unsubscribing
     // itself or a sibling scheduled later in this same pass) — mutating

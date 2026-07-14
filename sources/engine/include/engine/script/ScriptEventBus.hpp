@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/script/ScriptEvent.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -200,6 +201,20 @@ public:
     // reason about the real capacity rather than guessing a magic number.
     static constexpr std::size_t kMaxPendingDeferredEvents = 4096U;
 
+    // LIB-111: reentrancy guard — a subscriber that (directly, or through a
+    // chain of other subscribers Emit-ing each other) calls Emit again on
+    // this SAME bus increments an internal depth counter; past this many
+    // nested Emit calls, Emit() rejects the call with an error instead of
+    // recursing until the C++ call stack overflows. Mirrors kb::script::
+    // ScriptFunctionRegistry's own kMaxCallDepth=64 guard (LIB-038) exactly
+    // — same value, same reasoning (comfortably covers legitimate nested
+    // gameplay event chains while catching runaway self-recursive Emit long
+    // before the stack is actually at risk) — discovered as a genuine,
+    // previously-unguarded gap while writing this task's own "recursive
+    // emit" test, the same class of latent stack-overflow risk LIB-101
+    // found and fixed for Visual Graph's control-flow executor.
+    static constexpr std::size_t kMaxEmitDepth = 64U;
+
     // LIB-106: `channel` declares which channel THIS subscription listens
     // on ("" is the default channel) — see EventRecipientFilter::channel's
     // own doc comment for the full matching rule against Emit's filter.
@@ -278,6 +293,7 @@ private:
     std::vector<DeferredEmit> deferredEmits_;
     EventSubscriptionHandle nextHandle_ = 1;
     ScriptEventBusTelemetrySnapshot telemetry_{};
+    std::size_t emitDepth_ = 0;
 };
 
 } // namespace kb::script
