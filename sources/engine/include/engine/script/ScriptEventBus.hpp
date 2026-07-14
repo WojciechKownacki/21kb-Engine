@@ -106,6 +106,38 @@ struct ScriptEventDeliveryResult {
     std::vector<std::string> errors;
 };
 
+// LIB-110: a point-in-time telemetry snapshot — the honest observability
+// this bus previously had none of beyond the pre-existing SubscriptionCount()
+// (still available separately for a cheap, allocation-free single number).
+struct ScriptEventBusTelemetrySnapshot {
+    // Live subscriptions right now (same value SubscriptionCount() reports).
+    std::size_t subscriptionCount = 0;
+    // Total Emit() calls ever made (Broadcast/DrainDeferred both funnel
+    // through Emit, so their activity is already included here — one
+    // instrumentation point covers all three, not three separate counters
+    // that could drift apart).
+    std::uint64_t emitCalls = 0;
+    // Total individual subscriber callback invocations that actually ran
+    // and returned normally, summed across every Emit() call ever made.
+    std::uint64_t deliveredCount = 0;
+    // "invalid events" — whole Emit() calls rejected outright before
+    // matching any subscriber: an empty event name, or a payload exceeding
+    // kMaxScriptEventArguments (LIB-108).
+    std::uint64_t invalidEventCount = 0;
+    // "dropped events" — EmitDeferred() calls rejected because the pending
+    // deferred queue was already at kMaxPendingDeferredEvents capacity (see
+    // that constant's own doc comment) — an event that was NEVER queued at
+    // all, not a subscriber that merely didn't match.
+    std::uint64_t droppedDeferredEventCount = 0;
+    // Wall-clock cost of the most recent Emit() call, and the running total
+    // across every Emit() call ever made — std::chrono::steady_clock, the
+    // same clock kb::ecs::SystemScheduler/QueryState already use for their
+    // own telemetry (WorldTelemetry.hpp), for the same reason (monotonic,
+    // never affected by system clock adjustments).
+    std::uint64_t lastEmitElapsedNanoseconds = 0;
+    std::uint64_t totalEmitElapsedNanoseconds = 0;
+};
+
 // LIB-105: owned by ScriptRuntime (ScriptRuntime::Events()) — reachable from
 // native code holding a ScriptExecutionContext (context.Events()) or a
 // ScriptRuntime& directly, and from Lua via the bespoke `Events` table
@@ -156,6 +188,18 @@ struct ScriptEventDeliveryResult {
 // the explicit disambiguation.
 class ScriptEventBus final {
 public:
+    // LIB-110: bounds how many not-yet-drained events EmitDeferred can
+    // queue — without this, a caller that queues every frame but never
+    // drains (or drains less often than it queues) would grow
+    // deferredEmits_ without bound, the same unbounded-growth risk
+    // kb::scene::SceneTimers/SceneTasks's own kMaxLiveTimers-style caps
+    // already guard against. A rejected EmitDeferred is counted honestly
+    // via ScriptEventBusTelemetrySnapshot::droppedDeferredEventCount
+    // (returned bool from EmitDeferred itself), never silently swallowed.
+    // Public (not a private implementation detail) so callers/tests can
+    // reason about the real capacity rather than guessing a magic number.
+    static constexpr std::size_t kMaxPendingDeferredEvents = 4096U;
+
     // LIB-106: `channel` declares which channel THIS subscription listens
     // on ("" is the default channel) — see EventRecipientFilter::channel's
     // own doc comment for the full matching rule against Emit's filter.
@@ -194,7 +238,13 @@ public:
     // `filter` (LIB-106) is stored alongside `target` and re-applied at the
     // eventual DrainDeferred-driven Emit, exactly as if Emit(filter) had
     // been called directly at drain time.
-    void EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target = {}, EventRecipientFilter filter = {});
+    //
+    // LIB-110: returns false (and honestly drops the event — see
+    // kMaxPendingDeferredEvents's own doc comment, not marked [[nodiscard]]
+    // so every pre-existing call site, none of which checked a return value
+    // because none existed before this task, still compiles unchanged) if
+    // the pending queue is already at capacity.
+    bool EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target = {}, EventRecipientFilter filter = {});
 
     // Delivers every event queued by EmitDeferred since the last drain, in
     // FIFO order, and clears the queue. Returns the number of subscriber
@@ -202,6 +252,12 @@ public:
     ScriptEventDeliveryResult DrainDeferred(kb::scene::Scene& scene);
 
     [[nodiscard]] std::size_t SubscriptionCount() const noexcept;
+
+    // LIB-110: a cheap, allocation-free point-in-time snapshot of this
+    // bus's own observability counters — subscription count, dispatch
+    // duration, and dropped/invalid events. See ScriptEventBusTelemetrySnapshot's
+    // own doc comment for exactly what each field means.
+    [[nodiscard]] ScriptEventBusTelemetrySnapshot Telemetry() const noexcept;
 
 private:
     struct Subscription {
@@ -221,6 +277,7 @@ private:
     std::vector<Subscription> subscriptions_;
     std::vector<DeferredEmit> deferredEmits_;
     EventSubscriptionHandle nextHandle_ = 1;
+    ScriptEventBusTelemetrySnapshot telemetry_{};
 };
 
 } // namespace kb::script

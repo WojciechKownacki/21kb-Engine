@@ -50,6 +50,7 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -58,6 +59,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -7332,6 +7334,89 @@ void RunEngineLibraryEventSchemaMatchesRealDispatchTest() {
     }
 }
 
+// LIB-110: proves ScriptEventBusTelemetrySnapshot's counters are genuine
+// measurements, not fabricated placeholders — subscription count, dispatch
+// duration (checked against a deliberately slow subscriber so the
+// assertion can't flake on clock resolution), and dropped/invalid events
+// (empty-name/oversized Emit AND EmitDeferred, plus the deferred queue
+// actually hitting kMaxPendingDeferredEvents capacity).
+void RunScriptEventBusTelemetryTest() {
+    kb::scene::Scene scene;
+
+    // --- subscription count + delivered count ---
+    {
+        kb::script::ScriptEventBus bus;
+        const kb::script::ScriptEventBusTelemetrySnapshot initial = bus.Telemetry();
+        kb::tests::Require(initial.subscriptionCount == 0U && initial.emitCalls == 0U && initial.deliveredCount == 0U && initial.invalidEventCount == 0U && initial.droppedDeferredEventCount == 0U,
+            "A freshly constructed ScriptEventBus must report all-zero telemetry");
+
+        static_cast<void>(bus.Subscribe("Telemetry", [](const kb::script::ScriptEvent&) {}));
+        static_cast<void>(bus.Subscribe("Telemetry", [](const kb::script::ScriptEvent&) {}));
+        kb::tests::Require(bus.Telemetry().subscriptionCount == 2U, "Telemetry().subscriptionCount must match live subscriptions, the same number SubscriptionCount() reports");
+
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Telemetry" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterEmit = bus.Telemetry();
+        kb::tests::Require(afterEmit.emitCalls == 1U && afterEmit.deliveredCount == 2U, "Telemetry must count exactly one Emit call and two real subscriber deliveries");
+    }
+
+    // --- dispatch duration, measured against a deliberately slow subscriber
+    // (avoids asserting on raw clock resolution, which could legitimately
+    // read back as 0 for genuinely fast work on a coarse clock). ---
+    {
+        kb::script::ScriptEventBus bus;
+        static_cast<void>(bus.Subscribe("Slow", [](const kb::script::ScriptEvent&) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }));
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Slow" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterFirst = bus.Telemetry();
+        kb::tests::Require(afterFirst.lastEmitElapsedNanoseconds >= 1'000'000ULL, "lastEmitElapsedNanoseconds must reflect a genuinely measured duration — a 2ms-sleeping subscriber must show up as at least 1ms, not a fabricated/zero placeholder");
+        kb::tests::Require(afterFirst.totalEmitElapsedNanoseconds >= afterFirst.lastEmitElapsedNanoseconds, "totalEmitElapsedNanoseconds must accumulate at least the most recent call's duration");
+
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Slow" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterSecond = bus.Telemetry();
+        kb::tests::Require(afterSecond.totalEmitElapsedNanoseconds >= afterFirst.totalEmitElapsedNanoseconds + 1'000'000ULL, "totalEmitElapsedNanoseconds must keep accumulating across multiple Emit calls, not just reflect the latest one");
+    }
+
+    // --- invalid events: empty name, oversized payload, on BOTH Emit and
+    // EmitDeferred. ---
+    {
+        kb::script::ScriptEventBus bus;
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "" }));
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 1U, "An empty-name Emit must count as an invalid event");
+
+        std::vector<kb::script::ScriptEventArgument> overLimit;
+        for (std::size_t i = 0; i < kb::script::kMaxScriptEventArguments + 1U; ++i) {
+            overLimit.push_back(kb::script::ScriptEventArgument{ .name = "arg", .value = kb::script::ScriptValue{ 0 } });
+        }
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Oversized", .arguments = overLimit }));
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 2U && bus.Telemetry().emitCalls == 2U, "An oversized-payload Emit must ALSO count as invalid, and both rejected calls still count as attempted Emit calls");
+
+        kb::tests::Require(!bus.EmitDeferred(kb::script::ScriptEvent{ .name = "" }), "An empty-name EmitDeferred must be rejected (return false)");
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 3U, "An empty-name EmitDeferred must ALSO count as an invalid event, even though it never reaches Emit()");
+        kb::tests::Require(bus.Telemetry().emitCalls == 2U, "A rejected EmitDeferred must NOT increment emitCalls — it never called Emit()");
+    }
+
+    // --- dropped deferred events: queue at capacity. ---
+    {
+        kb::script::ScriptEventBus bus;
+        std::size_t queuedCount = 0U;
+        for (std::size_t i = 0; i < kb::script::ScriptEventBus::kMaxPendingDeferredEvents; ++i) {
+            if (bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Fill" })) {
+                ++queuedCount;
+            }
+        }
+        kb::tests::Require(queuedCount == kb::script::ScriptEventBus::kMaxPendingDeferredEvents, "Filling exactly to capacity must succeed for every call");
+        kb::tests::Require(bus.Telemetry().droppedDeferredEventCount == 0U, "No event should be dropped while still at or under capacity");
+
+        const bool oneTooMany = bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Fill" });
+        kb::tests::Require(!oneTooMany, "An EmitDeferred call once the queue is already at kMaxPendingDeferredEvents must be honestly rejected (false), not silently grow the queue unbounded");
+        kb::tests::Require(bus.Telemetry().droppedDeferredEventCount == 1U, "The rejected over-capacity EmitDeferred must count as a dropped event");
+
+        const kb::script::ScriptEventDeliveryResult drained = bus.DrainDeferred(scene);
+        kb::tests::Require(drained.delivered == 0U, "Draining events with no subscribers must report zero deliveries, not error");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -7391,6 +7476,7 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusDispatchModeContractTest();
     RunScriptEventPayloadSizeLimitTest();
     RunEngineLibraryEventSchemaMatchesRealDispatchTest();
+    RunScriptEventBusTelemetryTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();

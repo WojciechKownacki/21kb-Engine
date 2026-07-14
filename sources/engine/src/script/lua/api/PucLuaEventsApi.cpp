@@ -223,13 +223,19 @@ int LuaEventsEmitDeferred(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     const char* eventName = luaL_checkstring(state, 1);
     if (context == nullptr || context->Events() == nullptr) {
-        return 0;
+        lua_pushboolean(state, 0);
+        return 1;
     }
     const kb::scene::SceneEntity target = OptionalEntityArg(state, 3);
     const EventRecipientFilter filter = OptionalFilterArg(state, 4);
     ScriptEvent event = BuildEvent(state, *context, eventName, target);
-    context->Events()->EmitDeferred(std::move(event), target, filter);
-    return 0;
+    // LIB-110: EmitDeferred now honestly reports whether the event was
+    // actually queued (false if invalid, or the pending queue was at
+    // kMaxPendingDeferredEvents capacity) — Lua callers can check this the
+    // same way Events.Unsubscribe's boolean already works.
+    const bool queued = context->Events()->EmitDeferred(std::move(event), target, filter);
+    lua_pushboolean(state, queued ? 1 : 0);
+    return 1;
 }
 
 } // namespace
