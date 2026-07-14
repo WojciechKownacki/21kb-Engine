@@ -29,9 +29,17 @@ public:
     [[nodiscard]] virtual ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
         ScriptExecutionContext& context) = 0;
+    // LIB-104: eventId accepted for interface parity with IScriptBackend
+    // but not used — Lua event dispatch (PucLuaScriptRuntime::ExecuteEvent)
+    // resolves by calling the Lua global named `event.name` directly
+    // (lua_getglobal), an inherently string-keyed operation of the Lua VM
+    // itself; replacing that would mean rearchitecting Lua function
+    // dispatch, out of scope here (same deferral as LIB-097's Lua-
+    // coroutine finding).
     [[nodiscard]] virtual ScriptBackendExecutionResult ExecuteEvent(
         const kb::scene::BehaviourComponent& behaviour,
         const ScriptEvent& event,
+        EventId eventId,
         ScriptExecutionContext& context) = 0;
 };
 
@@ -41,7 +49,7 @@ public:
 
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
-    [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, ScriptExecutionContext& context) override;
+    [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;
 
 private:
     ILuaScriptRuntime& runtime_;
