@@ -2405,6 +2405,123 @@ void RunTransformApiLocalAndWorldPoseTest() {
     kb::tests::Require(deadSetWorldPose.Succeeded() && !deadSetWorldPose.Output("moved")->AsBool(), "Transform.SetWorldPose on a dead entity must report moved=false, not throw");
 }
 
+// LIB-086: Transform.Parent (read) and Transform.SetParent(entity, parent,
+// keepWorld). Deliberately its own fresh Scene/host (isolated fixture
+// pattern, LIB-067). Proves: (1) Transform.Parent reports the real parent
+// (invalid for a root, the actual parent for a child); (2) SetParent
+// WITHOUT keepWorld only reassigns the parent relationship, leaving local
+// pose untouched — the entity's WORLD pose genuinely changes (the "jump"
+// LIB-086's own research confirmed is today's existing behavior); (3)
+// SetParent WITH keepWorld preserves the WORLD pose across the reparent by
+// back-solving a different local pose (reusing SetWorldPose's own
+// WorldPoseToLocal math); (4) cycle detection — inherited unchanged from
+// kb::scene::SceneHierarchyParenting::WouldCreateCycle, NOT reimplemented
+// here — correctly rejects parenting an entity under its own descendant.
+void RunTransformApiParentAndHierarchyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Transform API parent/hierarchy test host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Transform.Parent") != nullptr, "Transform.Parent was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.SetParent") != nullptr, "Transform.SetParent was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    // Chain: grandparent -> parent -> child (all roots initially).
+    const kb::scene::SceneObject grandparentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyGrandparent" });
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyParent" });
+    const kb::scene::SceneObject childObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "HierarchyChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(parentObject.Entity(), grandparentObject.Entity()), "Hierarchy fixture could not parent parent->grandparent");
+    kb::tests::Require(scene.Hierarchy().SetParent(childObject.Entity(), parentObject.Entity()), "Hierarchy fixture could not parent child->parent");
+
+    const kb::script::ScriptFunctionArgument grandparentEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ grandparentObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::script::ScriptFunctionArgument childEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const std::vector<kb::script::ScriptFunctionArgument> grandparentOnlyArgs{ grandparentEntityArg };
+    const std::vector<kb::script::ScriptFunctionArgument> childOnlyArgs{ childEntityArg };
+
+    // Transform.Parent: a root reports found=true with an invalid parent;
+    // a child reports its real parent.
+    const kb::script::ScriptFunctionCallResult grandparentParent = host.Functions().Call("Transform.Parent", grandparentOnlyArgs, context);
+    kb::tests::Require(grandparentParent.Succeeded() && grandparentParent.Output("found")->AsBool() && !kb::scene::SceneEntity{ grandparentParent.Output("parent")->AsUInt64() }.IsValid(),
+        "Transform.Parent for a root entity must report found=true with an invalid parent");
+    const kb::script::ScriptFunctionCallResult childParent = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(childParent.Succeeded() && childParent.Output("found")->AsBool() && childParent.Output("parent")->AsUInt64() == parentObject.Entity().Id(),
+        "Transform.Parent for a child entity must report its real parent");
+
+    // SetParent WITHOUT keepWorld: reparent grandchild directly under
+    // grandparent — local pose must stay EXACTLY as it was (kb::scene never
+    // touches local* on a plain reparent), so the WORLD pose must actually
+    // CHANGE (grandparent has a different world transform than the old
+    // parent did, by construction: grandparent is at the origin, unrelated
+    // to childObject's local offset).
+    kb::scene::TransformComponent parentTransformSetup = scene.Transforms().Get(parentObject.Entity());
+    parentTransformSetup.localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parentObject.Entity(), parentTransformSetup);
+    kb::scene::TransformComponent childTransformSetup = scene.Transforms().Get(childObject.Entity());
+    childTransformSetup.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(childObject.Entity(), childTransformSetup);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const float childWorldXBeforeReparent = scene.Transforms().Get(childObject.Entity()).worldPosition.x;
+    kb::tests::Require(kb::tests::NearlyEqual(childWorldXBeforeReparent, 21.0F), "Hierarchy fixture setup: child's world X must reflect parent(20) + local(1) before any reparent");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reparentNoKeepWorldArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ grandparentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult reparentNoKeepWorld = host.Functions().Call("Transform.SetParent", reparentNoKeepWorldArgs, context);
+    kb::tests::Require(reparentNoKeepWorld.Succeeded() && reparentNoKeepWorld.Output("moved")->AsBool(), "Transform.SetParent (no keepWorld) direct call failed");
+    const kb::script::ScriptFunctionCallResult parentAfterNoKeepWorld = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(parentAfterNoKeepWorld.Output("parent")->AsUInt64() == grandparentObject.Entity().Id(), "Transform.SetParent (no keepWorld) must actually reassign the parent");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
+        "Transform.SetParent WITHOUT keepWorld must leave the local pose untouched");
+    // SetParent WITHOUT keepWorld does not force a sync itself (same lazy
+    // convention as a plain kb::scene reparent) — force one here before
+    // reading worldPosition, so this assertion checks the ACTUAL composed
+    // world pose under the new parent, not a stale cached value from
+    // before the reparent.
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).worldPosition.x, childWorldXBeforeReparent),
+        "Transform.SetParent WITHOUT keepWorld must let the WORLD pose change (the entity 'jumps' under the new parent, since only the parent relationship changed)");
+
+    // SetParent WITH keepWorld: reparent back under the ORIGINAL parent —
+    // the WORLD pose must be preserved (back-solved local compensates),
+    // even though the local pose is now different from either prior value.
+    const std::vector<kb::script::ScriptFunctionArgument> reparentKeepWorldArgs{
+        childEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ parentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+    };
+    const float childWorldXBeforeKeepWorldReparent = scene.Transforms().Get(childObject.Entity()).worldPosition.x;
+    const kb::script::ScriptFunctionCallResult reparentKeepWorld = host.Functions().Call("Transform.SetParent", reparentKeepWorldArgs, context);
+    kb::tests::Require(reparentKeepWorld.Succeeded() && reparentKeepWorld.Output("moved")->AsBool(), "Transform.SetParent (keepWorld) direct call failed");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).worldPosition.x, childWorldXBeforeKeepWorldReparent),
+        "Transform.SetParent WITH keepWorld must preserve the entity's WORLD pose across the reparent");
+    kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
+        "Transform.SetParent WITH keepWorld must back-solve a genuinely different LOCAL pose to compensate for the new parent, not just copy the old local value");
+
+    // Cycle detection: attempting to parent grandparent (an ANCESTOR of
+    // child, now child's parent again after the keepWorld reparent) under
+    // child (its own DESCENDANT) must be rejected — inherited unchanged
+    // from kb::scene::SceneHierarchyParenting::WouldCreateCycle, not
+    // reimplemented in this script-layer wrapper.
+    const std::vector<kb::script::ScriptFunctionArgument> cycleArgs{
+        grandparentEntityArg,
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ childObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult cycleAttempt = host.Functions().Call("Transform.SetParent", cycleArgs, context);
+    kb::tests::Require(cycleAttempt.Succeeded() && !cycleAttempt.Output("moved")->AsBool(), "Transform.SetParent must reject parenting an entity under its own descendant (cycle)");
+    const kb::script::ScriptFunctionCallResult grandparentParentAfterCycleAttempt = host.Functions().Call("Transform.Parent", grandparentOnlyArgs, context);
+    kb::tests::Require(!kb::scene::SceneEntity{ grandparentParentAfterCycleAttempt.Output("parent")->AsUInt64() }.IsValid(),
+        "A rejected cyclic SetParent must leave the hierarchy unchanged — grandparent must still be a root");
+
+    // Dead entity: every function must fail cleanly, not throw.
+    scene.Entities().Destroy(childObject.Entity());
+    const kb::script::ScriptFunctionCallResult deadParent = host.Functions().Call("Transform.Parent", childOnlyArgs, context);
+    kb::tests::Require(deadParent.Succeeded() && !deadParent.Output("found")->AsBool(), "Transform.Parent on a dead entity must report found=false, not throw");
+    const kb::script::ScriptFunctionCallResult deadSetParent = host.Functions().Call("Transform.SetParent", reparentKeepWorldArgs, context);
+    kb::tests::Require(deadSetParent.Succeeded() && !deadSetParent.Output("moved")->AsBool(), "Transform.SetParent on a dead entity must report moved=false, not throw");
+}
+
 // LIB-067: World.Destroy idempotency (repeat call on an already-dead
 // entity is a safe no-op, not an error) and the "deferred" flag being
 // HONEST about this engine's current immediate-only lifecycle (rejected
@@ -4824,6 +4941,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunTransformApiLocalAndWorldPoseTest();
+    RunTransformApiParentAndHierarchyTest();
     RunWorldDestroyDeferredFlagTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
