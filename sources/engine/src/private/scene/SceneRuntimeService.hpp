@@ -31,6 +31,7 @@ public:
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;
     [[nodiscard]] static std::uint64_t FrameIndex(const Scene& scene) noexcept;
     [[nodiscard]] static std::uint64_t FixedStepIndex(const Scene& scene) noexcept;
+    [[nodiscard]] static double ElapsedSeconds(const Scene& scene) noexcept;
     [[nodiscard]] static bool IsPlaying(const Scene& scene) noexcept;
     static void SetPlaying(Scene& scene, bool playing) noexcept;
     static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;

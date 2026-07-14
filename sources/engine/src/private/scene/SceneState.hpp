@@ -93,6 +93,15 @@ public:
     // fixed-step substeps across the scene's whole lifetime.
     std::uint64_t frameIndex = 0U;
     std::uint64_t fixedStepIndex = 0U;
+    // LIB-093: total simulated seconds across the scene's whole lifetime —
+    // accumulates the RAW (unclamped) deltaSeconds passed to every Update()
+    // call, mirroring frameIndex's own "counts every call, unconditionally
+    // including PrefabPrivate scenes" convention (SceneRuntimeService::
+    // Update, SceneRuntime.cpp) rather than only the (possibly clamped)
+    // delta the fixed-step accumulator uses — Elapsed answers "how much
+    // wall-clock-equivalent time has this scene been simulating," not
+    // "how much fixed-step time has been consumed."
+    double elapsedSeconds = 0.0;
     // LIB-065: true by default (a standalone/headless run has no "edit
     // mode" to distinguish from) — an editor sets this false while the
     // scene is being edited rather than simulated, via SetPlaying.
