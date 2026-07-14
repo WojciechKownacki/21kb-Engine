@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/library/EngineLibraryAsyncResult.hpp"
 #include "engine/scene/SceneTasks.hpp"
 
 #include <cstddef>
@@ -41,6 +42,33 @@ namespace kb::library {
         const std::size_t elapsed = stepsElapsed > 0.0F ? static_cast<std::size_t>(stepsElapsed) : 0U;
         remaining = elapsed >= remaining ? 0U : remaining - elapsed;
         return remaining == 0U ? kb::scene::TaskPollResult::Completed : kb::scene::TaskPollResult::Running;
+    };
+}
+
+// LIB-100: bridges an AsyncResult<T> to SceneTasks' poll-based Task
+// model — pass the returned closure to SceneTasks::Start(...); it reports
+// Running/Completed while `result` is Running/Completed, and Failed for
+// BOTH AsyncState::Failed and AsyncState::Cancelled (TaskPollResult itself
+// has no distinct Cancelled state — a caller that needs to tell the two
+// apart should inspect `result.State()` directly after the task's
+// TaskFailed event fires, rather than through the task's own result).
+// LIFETIME: `result` is captured BY REFERENCE — it must outlive every
+// Advance() call that polls the returned closure (typically achieved by
+// the caller owning the AsyncResult<T> as a long-lived member, not a local
+// that goes out of scope before the task finishes).
+template <typename T>
+[[nodiscard]] std::function<kb::scene::TaskPollResult(float)> MakeTaskPollFromAsyncResult(const AsyncResult<T>& result) {
+    return [&result](float) -> kb::scene::TaskPollResult {
+        switch (result.State()) {
+            case AsyncState::Running:
+                return kb::scene::TaskPollResult::Running;
+            case AsyncState::Completed:
+                return kb::scene::TaskPollResult::Completed;
+            case AsyncState::Failed:
+            case AsyncState::Cancelled:
+            default:
+                return kb::scene::TaskPollResult::Failed;
+        }
     };
 }
 
