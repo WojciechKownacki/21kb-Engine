@@ -195,6 +195,30 @@ public:
         return children == state.hierarchyChildren.end() ? std::vector<SceneEntity>{} : children->second;
     }
 
+    // LIB-087: unlike Children() above, these never copy the child vector —
+    // both index directly into whichever storage (dense array or sparse
+    // fallback map) already holds it, the same two-tier lookup Children()
+    // itself already does, just without materializing a new vector for a
+    // single count or a single element.
+    [[nodiscard]] static std::size_t ChildCount(const SceneState& state, SceneEntity entity) noexcept {
+        if (const std::vector<SceneEntity>* children = DenseChildren(state, entity); children != nullptr) {
+            return children->size();
+        }
+        const auto children = state.hierarchyChildren.find(entity.Id());
+        return children == state.hierarchyChildren.end() ? 0U : children->second.size();
+    }
+
+    [[nodiscard]] static SceneEntity ChildAt(const SceneState& state, SceneEntity entity, std::size_t index) noexcept {
+        if (const std::vector<SceneEntity>* children = DenseChildren(state, entity); children != nullptr) {
+            return index < children->size() ? (*children)[index] : SceneEntity{};
+        }
+        const auto children = state.hierarchyChildren.find(entity.Id());
+        if (children == state.hierarchyChildren.end() || index >= children->second.size()) {
+            return SceneEntity{};
+        }
+        return children->second[index];
+    }
+
 private:
     static void MarkTopologyDirty(SceneState& state) noexcept {
         ++state.hierarchyTopologyVersion;
