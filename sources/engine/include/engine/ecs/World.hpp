@@ -82,6 +82,17 @@ public:
     void CreateEntitiesInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components);
     void CreateEntitiesNativeOnlyInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components);
 
+    // LIB-078: the same guard kb::ecs::Query<T...>::ForEach/ForEachBatch/
+    // ForEachMutableBatch already enter internally (QueryState.cpp),
+    // exposed publicly so an external, non-Query-based manual iteration
+    // wrapper (e.g. kb::library::Query<T>) can protect its own loop
+    // against structural changes with this exact mechanism instead of
+    // duplicating StructuralChangeValidator's logic or reimplementing a
+    // second guard. Read-only, const, noexcept — safe to expose: the only
+    // effect is incrementing/decrementing an atomic counter for the
+    // guard's lifetime.
+    [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
+
 #include "engine/ecs/world/WorldEntityApi.inl"
 #include "engine/ecs/world/WorldComponentApi.inl"
 #include "engine/ecs/world/WorldQueryApi.inl"
@@ -125,7 +136,6 @@ private:
     void ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const;
     void ValidateStructuralChangeAllowed(std::string_view operation) const;
     [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept;
-    [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     [[nodiscard]] NativeComponentValue MakeNativeComponentValue(const BulkComponentData& component) const;
     [[nodiscard]] std::vector<NativeComponentValue> MakeNativeComponentValues(std::span<const BulkComponentData> components) const;
     [[nodiscard]] std::vector<NativeBulkComponentColumn> MakeNativeBulkComponentColumns(std::span<const BulkComponentData> components) const;
