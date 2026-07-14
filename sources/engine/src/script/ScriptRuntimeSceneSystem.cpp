@@ -158,6 +158,8 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: a WORLD event (ScriptEvent.hpp's taxonomy) — target is never
+    // set, so this always broadcasts to every enabled behaviour.
     for (kb::scene::SceneLifecycleEventRecord& pending : scene.LoadedContent().DrainPendingLifecycleEvents()) {
         ScriptEvent event;
         event.name = std::move(pending.name);
@@ -168,16 +170,12 @@ void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Sc
 }
 
 void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL if the timer had an owner (fired.owner valid),
+    // WORLD otherwise (ScriptEvent.hpp's taxonomy) — see IsEntityLocalEvent/
+    // IsWorldEvent (ScriptEventTaxonomy.hpp) for the canonical check.
     for (kb::scene::TimerFiredRecord& fired : scene.Timers().Advance(deltaSeconds)) {
         ScriptEvent event;
         event.name = "TimerFired";
-        // Invalid owner (SceneTimers::Once/Repeat called with no owner) =
-        // an untargeted broadcast to every enabled behaviour, the same
-        // convention DispatchPendingSceneLifecycleEvents above already
-        // uses (its ScriptEvent never sets target at all). A valid owner
-        // targets ONLY that entity's own behaviour(s) — DispatchSceneBehaviours
-        // (ScriptRuntime.cpp) already skips any record whose entity does not
-        // match event.target when target is valid.
         event.target = fired.owner;
         event.arguments.push_back(ScriptEventArgument{ .name = "timer", .value = ScriptValue{ fired.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
@@ -185,6 +183,8 @@ void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, floa
 }
 
 void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL or WORLD depending on completion.owner — same
+    // taxonomy/convention as DispatchFiredTimers above.
     for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().Advance(deltaSeconds)) {
         ScriptEvent event;
         event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
@@ -195,6 +195,7 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
 }
 
 void ScriptRuntimeSceneSystem::DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds) {
+    // LIB-103: same ENTITY-LOCAL/WORLD taxonomy as DispatchCompletedTasks.
     for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().AdvanceFixedSteps(stepCount)) {
         ScriptEvent event;
         event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
