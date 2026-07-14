@@ -7,6 +7,8 @@
 #include "engine/visual/VisualGraphRuntimeExecutor.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
+#include <cstdint>
+#include <map>
 #include <vector>
 
 namespace kb::script {
@@ -32,9 +34,31 @@ private:
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity);
 
+    // LIB-112: gameplay event bridge to ScriptEventBus (LIB-105), additive
+    // to the pre-existing old-mechanism CustomEvent/EmitEvent path above
+    // (never replacing it). See VisualGraphScriptBackend.cpp's doc comment
+    // above SubscribeCustomEventsToBus for the full design.
+    void BroadcastEmittedEventsToBus(kb::visual::VisualGraphRuntimeExecutionContext& graphContext, kb::scene::Scene& scene, ScriptEventBus& eventBus) const;
+    void SubscribeCustomEventsToBus(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context);
+    void UnsubscribeCustomEventsFromBus(kb::assets::AssetId assetId, kb::scene::SceneEntity entity, ScriptEventBus* eventBus);
+
+    struct EventBridgeKey {
+        std::uint64_t entityId = 0;
+        std::uint64_t assetId = 0;
+
+        [[nodiscard]] friend bool operator<(const EventBridgeKey& lhs, const EventBridgeKey& rhs) noexcept {
+            return lhs.entityId != rhs.entityId ? lhs.entityId < rhs.entityId : lhs.assetId < rhs.assetId;
+        }
+    };
+
     const kb::visual::VisualGraphRuntimeRegistry& artifacts_;
     const kb::visual::VisualGraphRuntimeBindingRegistry& bindings_;
     kb::visual::VisualGraphBehaviourInstanceRegistry& instances_;
+    // LIB-112: one entry per (entity, asset) behaviour instance that has
+    // ANY CustomEvent node — populated on Created, erased on Destroyed.
+    // std::map (not unordered_map) because this is Created/Destroyed-rate
+    // traffic, not per-frame — a hasher isn't worth writing for it.
+    std::map<EventBridgeKey, std::vector<EventSubscriptionHandle>> eventBridgeSubscriptions_;
 };
 
 } // namespace kb::script
