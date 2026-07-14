@@ -65,6 +65,11 @@ private:
     // before any newly-instantiated entities' own Created/Activated/Ready
     // lifecycle fires in the same pass.
     void DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-095: advances every Timer.Once/Timer.Repeat live in the scene
+    // (kb::scene::SceneTimers::Advance) and turns each one that fired into
+    // a real, targeted "TimerFired" ScriptEvent — mirrors
+    // DispatchPendingSceneLifecycleEvents' own drain-and-broadcast shape.
+    void DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

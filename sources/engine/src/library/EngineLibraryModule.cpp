@@ -8,6 +8,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
 #include "engine/script/ScriptTimeApi.hpp"
+#include "engine/script/ScriptTimerApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
 
@@ -21,7 +22,9 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
     // guessed): Input reads kb::input::InputSubsystem; Audio plays through
     // kb::audio::AudioPlayback; World creates/destroys through
     // kb::scene::SceneEntities; Time reads the per-dispatch delta already
-    // carried on ScriptExecutionContext; Physics.Raycast today walks
+    // carried on ScriptExecutionContext; Timer (LIB-095, added after the
+    // original seven plus Scene) schedules callbacks through the new
+    // kb::scene::SceneTimerService; Physics.Raycast today walks
     // kb::scene::SceneTransforms directly (no physics-engine query yet —
     // see LIB-123..134); Transform reads/writes kb::scene::SceneTransforms;
     // Math (LIB-045) has no backing runtime subsystem at all — every
@@ -67,6 +70,14 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Time",
             .ownerRuntime = "kb::script::ScriptExecutionContext",
             .Register = &kb::script::ScriptTimeApi::Register,
+        },
+        // LIB-095: added after the original seven plus Scene (LIB-071) —
+        // Timer.* tracks scheduled callbacks (SceneState::timers) inside
+        // the one live kb::scene::Scene, via the new SceneTimerService.
+        LibraryModuleDesc{
+            .name = "Timer",
+            .ownerRuntime = "kb::scene::SceneTimerService",
+            .Register = &kb::script::ScriptTimerApi::Register,
         },
         LibraryModuleDesc{
             .name = "Physics",

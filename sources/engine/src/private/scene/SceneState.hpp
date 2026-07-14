@@ -115,6 +115,30 @@ public:
     // >= 0 (SetTimeScale rejects negative values rather than clamping them
     // away silently). Default 1.0 = unscaled, matching today's behavior.
     float timeScale = 1.0F;
+    // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid
+    // (default SceneEntity{}) means "no owner" — TimerFired broadcasts to
+    // every enabled behaviour (LIB-073's untargeted-broadcast convention)
+    // instead of a targeted dispatch. `id` is assigned from nextTimerId,
+    // never reused within a scene's lifetime (same convention as
+    // nextLoadedSceneId above), so a stale id can never collide with a
+    // later, unrelated timer. `intervalSeconds` is only meaningful when
+    // `repeating` is true; a one-shot timer is removed from `timers` the
+    // moment it fires, a repeating one has `remainingSeconds` reset to
+    // `intervalSeconds` and stays alive. `paused` freezes `remainingSeconds`
+    // exactly (SceneTimerService::Advance skips decrementing it) — mirrors
+    // ScriptRuntimeSceneSystem's own FixedTick-during-scene-pause rule
+    // (LIB-094): no debt accumulates while paused, no catch-up burst on
+    // resume.
+    struct TimerRecord {
+        std::uint64_t id = 0U;
+        SceneEntity owner{};
+        float remainingSeconds = 0.0F;
+        float intervalSeconds = 0.0F;
+        bool repeating = false;
+        bool paused = false;
+    };
+    std::vector<TimerRecord> timers;
+    std::uint64_t nextTimerId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;

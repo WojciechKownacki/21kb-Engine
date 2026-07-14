@@ -20,6 +20,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
@@ -5591,6 +5592,179 @@ void RunScriptTimeApiScaleAndPauseTest() {
     kb::tests::Require(pausedFixedTicks == 1U, "FixedTick must resume firing normally once unpaused");
 }
 
+// LIB-095: Timer.Once/Timer.Repeat/Timer.Cancel/Timer.Pause/Timer.Resume
+// through the script registry — registration, invalid-input rejection,
+// idempotent Cancel, and the capacity-independent id uniqueness.
+void RunScriptTimerApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script timer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Once") != nullptr, "Timer.Once was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Repeat") != nullptr, "Timer.Repeat was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Cancel") != nullptr, "Timer.Cancel was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Pause") != nullptr, "Timer.Pause was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Resume") != nullptr, "Timer.Resume was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+
+    const std::vector<kb::script::ScriptFunctionArgument> negativeDelayArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ -1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult negativeDelay = host.Functions().Call("Timer.Once", negativeDelayArgs, context);
+    kb::tests::Require(!negativeDelay.Succeeded(), "Timer.Once must reject a non-positive delay");
+
+    const std::vector<kb::script::ScriptFunctionArgument> zeroDelayArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult zeroDelay = host.Functions().Call("Timer.Once", zeroDelayArgs, context);
+    kb::tests::Require(!zeroDelay.Succeeded(), "Timer.Once must reject a zero delay");
+
+    const std::vector<kb::script::ScriptFunctionArgument> onceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult onceResult = host.Functions().Call("Timer.Once", onceArgs, context);
+    kb::tests::Require(onceResult.Succeeded(), "Timer.Once with a valid delay must succeed");
+    const std::uint64_t onceId = onceResult.Output("timer")->AsUInt64();
+    kb::tests::Require(onceId != 0U, "Timer.Once must return a non-zero handle on success");
+
+    const std::vector<kb::script::ScriptFunctionArgument> repeatArgs{
+        kb::script::ScriptFunctionArgument{ .name = "interval", .value = kb::script::ScriptValue{ 0.5F } },
+    };
+    const kb::script::ScriptFunctionCallResult repeatResult = host.Functions().Call("Timer.Repeat", repeatArgs, context);
+    kb::tests::Require(repeatResult.Succeeded(), "Timer.Repeat with a valid interval must succeed");
+    const std::uint64_t repeatId = repeatResult.Output("timer")->AsUInt64();
+    kb::tests::Require(repeatId != 0U && repeatId != onceId, "Timer.Repeat must return a distinct handle from Timer.Once's");
+
+    const std::vector<kb::script::ScriptFunctionArgument> cancelOnceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ onceId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult firstCancel = host.Functions().Call("Timer.Cancel", cancelOnceArgs, context);
+    kb::tests::Require(firstCancel.Succeeded() && firstCancel.Output("cancelled")->AsBool(), "Timer.Cancel on a live timer must succeed and report cancelled=true");
+    const kb::script::ScriptFunctionCallResult secondCancel = host.Functions().Call("Timer.Cancel", cancelOnceArgs, context);
+    kb::tests::Require(secondCancel.Succeeded() && !secondCancel.Output("cancelled")->AsBool(), "Timer.Cancel must be idempotent — a second cancel of an already-cancelled timer must report cancelled=false, not error");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownTimerArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pauseUnknown = host.Functions().Call("Timer.Pause", unknownTimerArgs, context);
+    kb::tests::Require(pauseUnknown.Succeeded() && !pauseUnknown.Output("set")->AsBool(), "Timer.Pause on an unknown handle must honestly report set=false, not error");
+
+    const std::vector<kb::script::ScriptFunctionArgument> pauseRepeatArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ repeatId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pauseRepeat = host.Functions().Call("Timer.Pause", pauseRepeatArgs, context);
+    kb::tests::Require(pauseRepeat.Succeeded() && pauseRepeat.Output("set")->AsBool(), "Timer.Pause on a live timer must succeed");
+    const kb::script::ScriptFunctionCallResult pauseRepeatAgain = host.Functions().Call("Timer.Pause", pauseRepeatArgs, context);
+    kb::tests::Require(pauseRepeatAgain.Succeeded() && pauseRepeatAgain.Output("set")->AsBool(), "Timer.Pause on an already-paused timer must still report set=true (a 'set' operation, not a 'changed' operation)");
+    const kb::script::ScriptFunctionCallResult resumeRepeat = host.Functions().Call("Timer.Resume", pauseRepeatArgs, context);
+    kb::tests::Require(resumeRepeat.Succeeded() && resumeRepeat.Output("set")->AsBool(), "Timer.Resume on a live timer must succeed");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneOnce = host.Functions().Call("Timer.Once", onceArgs, noSceneContext);
+    kb::tests::Require(!noSceneOnce.Succeeded(), "Timer.Once must fail honestly without a scene rather than silently returning a handle");
+}
+
+// LIB-095: end-to-end firing behavior through the real ScriptRuntimeSceneSystem
+// per-frame drive — reuses the exact harness shape RunScriptRuntimeSceneSystemFixedAccumulatorTest
+// established (native ExecuteFrame calls with controlled deltaSeconds).
+// Exercises the parts Timer.Once/Repeat's own script-facing test above
+// cannot: owner-targeted vs. no-owner-broadcast dispatch, scene-pause
+// freezing a timer's countdown, per-timer Pause/Resume freezing exactly,
+// dead-owner auto-cancellation, and Timer.Repeat firing more than once.
+void RunScriptTimerApiFiringOwnerAndPauseTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1220U };
+    constexpr kb::assets::AssetId kOtherAsset{ 1221U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Other" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(otherObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOtherAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t ownerFired = 0U;
+    std::size_t otherFired = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TimerFired", [&ownerFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerFired;
+                        }),
+        "Timer owner TimerFired listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOtherAsset, "TimerFired", [&otherFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++otherFired;
+                        }),
+        "Timer other TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // (A) no owner => broadcast reaches every enabled behaviour.
+    const std::uint64_t broadcastId = scene.Timers().Once(0.05F, kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastId != 0U, "SceneTimers::Once with no owner must still succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(ownerFired == 1U && otherFired == 1U, "A no-owner timer must broadcast TimerFired to every enabled behaviour");
+
+    // (B) explicit owner => targeted dispatch reaches ONLY that entity.
+    const std::uint64_t targetedId = scene.Timers().Once(0.05F, ownerObject.Entity());
+    kb::tests::Require(targetedId != 0U, "SceneTimers::Once with an owner must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(ownerFired == 2U && otherFired == 1U, "An owned timer must target ONLY its owner's behaviour, not broadcast");
+
+    // (C) scene-level pause freezes the countdown entirely — no matter how
+    // much wall-clock time elapses while paused, the timer does not fire,
+    // and no debt is replayed as a burst once resumed.
+    const std::uint64_t pausedSceneId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(ownerFired == 2U, "Timer.Once must not fire while the whole scene is paused, regardless of elapsed wall-clock time");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 3U, "Timer.Once must resume counting down normally once the scene is unpaused, with no catch-up burst");
+    static_cast<void>(pausedSceneId);
+
+    // (D) per-timer Pause/Resume freezes remaining time exactly (distinct
+    // from scene-level pause above — this is Timer.Pause/Resume itself).
+    const std::uint64_t individuallyPausedId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    kb::tests::Require(scene.Timers().Pause(individuallyPausedId), "SceneTimers::Pause on a live timer must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 5.0F));
+    kb::tests::Require(ownerFired == 3U, "An individually-paused timer must not fire no matter how much time elapses");
+    kb::tests::Require(scene.Timers().Resume(individuallyPausedId), "SceneTimers::Resume on a live timer must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 4U, "Resuming an individually-paused timer must let it fire normally afterward");
+
+    // (E) dead owner => silently auto-cancelled, never fires, no crash.
+    const kb::scene::SceneObject doomedObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Doomed Owner" });
+    const std::uint64_t doomedId = scene.Timers().Once(1.0F, doomedObject.Entity());
+    kb::tests::Require(scene.Timers().Exists(doomedId), "A freshly created timer must exist immediately");
+    scene.Entities().Destroy(doomedObject);
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F));
+    kb::tests::Require(ownerFired == 4U && otherFired == 1U, "A timer whose owner died must never fire (no dangling callback for a dead entity)");
+    kb::tests::Require(!scene.Timers().Exists(doomedId), "A dead-owner timer must be auto-cancelled (removed), not left dangling");
+
+    // (F) Timer.Repeat fires more than once, resetting its own countdown
+    // each time (flat reset — no overshoot compensation, LIB-096's job).
+    const std::uint64_t repeatId = scene.Timers().Repeat(0.1F, ownerObject.Entity());
+    kb::tests::Require(repeatId != 0U, "SceneTimers::Repeat must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 5U, "Timer.Repeat must fire on its first interval");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFired == 6U, "Timer.Repeat must fire AGAIN on its second interval, proving it resets rather than being removed after firing once");
+    kb::tests::Require(scene.Timers().Exists(repeatId), "A repeating timer must remain alive after firing, unlike a one-shot timer");
+    kb::tests::Require(scene.Timers().Cancel(repeatId), "SceneTimers::Cancel must be able to stop a still-alive repeating timer");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5624,6 +5798,8 @@ void RunScriptRuntimeTests() {
     RunScriptWorldTimePhysicsApiTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
+    RunScriptTimerApiTest();
+    RunScriptTimerApiFiringOwnerAndPauseTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
