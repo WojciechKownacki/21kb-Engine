@@ -5,6 +5,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/script/ScriptEvent.hpp"
+#include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptSharedState.hpp"
@@ -35,7 +36,8 @@ public:
         std::vector<ScriptEvent>* emittedEvents,
         const ScriptEvent* incomingEvent = nullptr,
         ScriptSharedState* sharedState = nullptr,
-        ScriptFunctionRegistry* functions = nullptr) noexcept;
+        ScriptFunctionRegistry* functions = nullptr,
+        ScriptEventBus* events = nullptr) noexcept;
 
     [[nodiscard]] kb::scene::Scene& GetScene() noexcept;
     [[nodiscard]] const kb::scene::Scene& GetScene() const noexcept;
@@ -58,6 +60,12 @@ public:
     [[nodiscard]] ScriptFunctionRegistry* Functions() noexcept;
     [[nodiscard]] const ScriptFunctionRegistry* Functions() const noexcept;
     [[nodiscard]] ScriptFunctionCallResult CallFunction(std::string_view name, std::span<const ScriptFunctionArgument> arguments);
+    // LIB-105: null only for a ScriptExecutionContext built without a
+    // ScriptRuntime behind it (e.g. isolated unit tests exercising a single
+    // IScriptBackend directly) — every context reached through the normal
+    // ScriptRuntime dispatch path always has one, mirroring Functions().
+    [[nodiscard]] ScriptEventBus* Events() noexcept;
+    [[nodiscard]] const ScriptEventBus* Events() const noexcept;
 
     void Emit(std::string eventName);
     void Emit(std::string eventName, std::vector<ScriptEventArgument> arguments);
@@ -75,6 +83,7 @@ private:
     const ScriptEvent* incomingEvent_ = nullptr;
     ScriptSharedState* sharedState_ = nullptr;
     ScriptFunctionRegistry* functions_ = nullptr;
+    ScriptEventBus* events_ = nullptr;
 };
 
 } // namespace kb::script

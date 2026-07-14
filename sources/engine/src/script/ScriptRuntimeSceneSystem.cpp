@@ -90,6 +90,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
+    DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
     // paused (Runtime().IsPlaying()==false), wall-clock time is NOT
@@ -191,6 +192,15 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
         event.target = completion.owner;
         event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {
+    const ScriptEventDeliveryResult result = runtime_.Events().DrainDeferred(scene);
+    for (const std::string& error : result.errors) {
+        lastResult_.diagnostics.push_back(ScriptDiagnostic{
+            .message = error,
+        });
     }
 }
 

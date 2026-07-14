@@ -180,6 +180,8 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptBehaviourBindingService.hpp
     include/engine/script/ScriptEvent.hpp
+    include/engine/script/ScriptEventBus.hpp
+    include/engine/script/ScriptEventId.hpp
     include/engine/script/ScriptEventTaxonomy.hpp
     include/engine/script/ScriptExecutionContext.hpp
     include/engine/script/ScriptFunctionRegistry.hpp
@@ -627,6 +629,7 @@ add_library(kb_engine STATIC
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
     src/script/lua/api/PucLuaEventApi.cpp
+    src/script/lua/api/PucLuaEventsApi.cpp
     src/script/lua/api/PucLuaFunctionApi.cpp
     src/script/lua/api/PucLuaModuleApi.cpp
     src/script/lua/api/PucLuaSelfApi.cpp
@@ -647,6 +650,7 @@ add_library(kb_engine STATIC
     src/script/ScriptAssetLoader.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
+    src/script/ScriptEventBus.cpp
     src/script/ScriptExecutionContext.cpp
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
@@ -688,6 +692,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryTextEncoding.cpp
     src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
+    src/private/script/lua/api/PucLuaEventsApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp
     src/private/script/lua/api/PucLuaModuleApi.hpp
     src/private/script/lua/api/PucLuaSelfApi.hpp

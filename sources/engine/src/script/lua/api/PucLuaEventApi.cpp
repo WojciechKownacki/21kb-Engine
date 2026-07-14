@@ -19,26 +19,6 @@ namespace {
     return static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
 }
 
-[[nodiscard]] std::vector<ScriptEventArgument> ArgumentsFromTable(lua_State* state, int index) {
-    std::vector<ScriptEventArgument> arguments;
-    if (lua_istable(state, index) == 0) {
-        return arguments;
-    }
-
-    const int absoluteIndex = lua_absindex(state, index);
-    lua_pushnil(state);
-    while (lua_next(state, absoluteIndex) != 0) {
-        if (lua_type(state, -2) == LUA_TSTRING) {
-            arguments.push_back(ScriptEventArgument{
-                .name = lua_tostring(state, -2),
-                .value = PucLuaValueBridge::FromLua(state, -1),
-            });
-        }
-        lua_pop(state, 1);
-    }
-    return arguments;
-}
-
 int LuaEmit(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -47,7 +27,7 @@ int LuaEmit(lua_State* state) {
     const char* eventName = luaL_checkstring(state, 1);
     std::vector<ScriptEventArgument> arguments;
     if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
-        arguments = ArgumentsFromTable(state, 2);
+        arguments = PucLuaEventApi::ArgumentsFromTable(state, 2);
     }
     context->Emit(eventName, std::move(arguments));
     return 0;
@@ -66,7 +46,7 @@ int LuaEmitTo(lua_State* state) {
     const char* eventName = luaL_checkstring(state, 2);
     std::vector<ScriptEventArgument> arguments;
     if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
-        arguments = ArgumentsFromTable(state, 3);
+        arguments = PucLuaEventApi::ArgumentsFromTable(state, 3);
     }
     context->EmitTo(target, eventName, std::move(arguments));
     return 0;
@@ -81,6 +61,26 @@ void PucLuaEventApi::Attach(lua_State* state, int environmentIndex, ScriptExecut
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaEmitTo, 1);
     lua_setfield(state, environmentIndex, "EmitTo");
+}
+
+std::vector<ScriptEventArgument> PucLuaEventApi::ArgumentsFromTable(lua_State* state, int index) {
+    std::vector<ScriptEventArgument> arguments;
+    if (lua_istable(state, index) == 0) {
+        return arguments;
+    }
+
+    const int absoluteIndex = lua_absindex(state, index);
+    lua_pushnil(state);
+    while (lua_next(state, absoluteIndex) != 0) {
+        if (lua_type(state, -2) == LUA_TSTRING) {
+            arguments.push_back(ScriptEventArgument{
+                .name = lua_tostring(state, -2),
+                .value = PucLuaValueBridge::FromLua(state, -1),
+            });
+        }
+        lua_pop(state, 1);
+    }
+    return arguments;
 }
 
 void PucLuaEventApi::PushEvent(lua_State* state, const ScriptEvent& event) {
