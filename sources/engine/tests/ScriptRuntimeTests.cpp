@@ -5505,6 +5505,92 @@ void RunScriptTimeApiElapsedAndAliasingTest() {
     kb::tests::Require(!noSceneElapsed.Succeeded(), "Time.Elapsed must fail honestly without a scene rather than silently returning 0");
 }
 
+// LIB-094: Time.Scale/Time.SetScale plus the explicit pause rules — Time.Delta
+// scaled+zeroed-while-paused, Time.UnscaledDelta always raw, and FixedTick
+// genuinely not firing while paused (no catch-up burst on resume).
+void RunScriptTimeApiScaleAndPauseTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script time API host did not initialize for scale/pause test");
+    kb::tests::Require(host.Functions().FindSignature("Time.Scale") != nullptr, "Time.Scale was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.SetScale") != nullptr, "Time.SetScale was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+
+    const kb::script::ScriptFunctionCallResult defaultScale = host.Functions().Call("Time.Scale", {}, context);
+    kb::tests::Require(defaultScale.Succeeded() && kb::tests::NearlyEqual(defaultScale.Output("scale")->AsFloat(), 1.0F), "Time.Scale must default to 1.0 (unscaled)");
+
+    const kb::script::ScriptFunctionCallResult defaultDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(defaultDelta.Succeeded() && kb::tests::NearlyEqual(defaultDelta.Output("delta")->AsFloat(), 0.1F), "Time.Delta must equal raw deltaSeconds at default scale 1.0");
+
+    const std::vector<kb::script::ScriptFunctionArgument> negativeScaleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "scale", .value = kb::script::ScriptValue{ -1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult rejectedScale = host.Functions().Call("Time.SetScale", negativeScaleArgs, context);
+    kb::tests::Require(!rejectedScale.Succeeded(), "Time.SetScale must honestly reject a negative scale rather than silently clamping it");
+    const kb::script::ScriptFunctionCallResult scaleStillDefault = host.Functions().Call("Time.Scale", {}, context);
+    kb::tests::Require(scaleStillDefault.Succeeded() && kb::tests::NearlyEqual(scaleStillDefault.Output("scale")->AsFloat(), 1.0F), "A rejected Time.SetScale call must not have mutated the stored scale");
+
+    const std::vector<kb::script::ScriptFunctionArgument> doubleScaleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "scale", .value = kb::script::ScriptValue{ 2.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult setDouble = host.Functions().Call("Time.SetScale", doubleScaleArgs, context);
+    kb::tests::Require(setDouble.Succeeded() && setDouble.Output("set")->AsBool(), "Time.SetScale(2.0) must succeed");
+    const kb::script::ScriptFunctionCallResult scaledDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(scaledDelta.Succeeded() && kb::tests::NearlyEqual(scaledDelta.Output("delta")->AsFloat(), 0.2F), "Time.Delta must reflect Time.Scale (0.1 * 2.0 == 0.2)");
+    const kb::script::ScriptFunctionCallResult unscaledStillRaw = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(unscaledStillRaw.Succeeded() && kb::tests::NearlyEqual(unscaledStillRaw.Output("delta")->AsFloat(), 0.1F), "Time.UnscaledDelta must stay raw regardless of Time.Scale");
+
+    scene.Runtime().SetPlaying(false);
+    const kb::script::ScriptFunctionCallResult pausedDelta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(pausedDelta.Succeeded() && kb::tests::NearlyEqual(pausedDelta.Output("delta")->AsFloat(), 0.0F), "Time.Delta must read 0 while the scene is paused, regardless of Time.Scale");
+    const kb::script::ScriptFunctionCallResult pausedUnscaled = host.Functions().Call("Time.UnscaledDelta", {}, context);
+    kb::tests::Require(pausedUnscaled.Succeeded() && kb::tests::NearlyEqual(pausedUnscaled.Output("delta")->AsFloat(), 0.1F), "Time.UnscaledDelta must keep advancing at raw wall-clock rate even while paused");
+    scene.Runtime().SetPlaying(true);
+
+    // FixedTick-during-pause: reuse the exact ScriptRuntimeSceneSystem
+    // harness RunScriptRuntimeSceneSystemFixedAccumulatorTest above already
+    // established (native FixedTick callback counting invocations).
+    kb::script::ScriptRuntime fixedTickRuntime;
+    kb::scene::Scene fixedTickScene;
+    constexpr kb::assets::AssetId kPauseFixedTickAsset{ 1210U };
+    const kb::scene::SceneObject fixedTickObject = fixedTickScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Pause FixedTick Scripted" });
+    fixedTickScene.Components().Behaviours().Set(fixedTickObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kPauseFixedTickAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto pauseNativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t pausedFixedTicks = 0U;
+    std::vector<float> pausedTickDeltas;
+    kb::tests::Require(pauseNativeBackend->RegisterLifecycle(kPauseFixedTickAsset, kb::script::ScriptLifecycleEvent::FixedTick, [&pausedFixedTicks](kb::script::ScriptExecutionContext&) {
+                            ++pausedFixedTicks;
+                        }),
+        "Pause FixedTick callback registration failed");
+    kb::tests::Require(pauseNativeBackend->RegisterLifecycle(kPauseFixedTickAsset, kb::script::ScriptLifecycleEvent::Tick, [&pausedTickDeltas](kb::script::ScriptExecutionContext& tickContext) {
+                            pausedTickDeltas.push_back(tickContext.DeltaSeconds());
+                        }),
+        "Pause Tick callback registration failed");
+    kb::tests::Require(fixedTickRuntime.RegisterBackend(std::move(pauseNativeBackend)), "Pause FixedTick native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem pauseSystem{ fixedTickRuntime };
+    const float fixedStep = pauseSystem.FrameSettings().fixedDeltaSeconds;
+
+    fixedTickScene.Runtime().SetPlaying(false);
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 3.0F));
+    kb::tests::Require(pausedFixedTicks == 0U, "FixedTick must not fire at all while the scene is paused, no matter how much wall-clock time elapses");
+    kb::tests::Require(pausedTickDeltas.size() == 1U, "Tick must keep firing while paused (only FixedTick freezes, not the whole scheduler)");
+
+    fixedTickScene.Runtime().SetPlaying(true);
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 0.5F));
+    kb::tests::Require(pausedFixedTicks == 0U, "Resuming must not replay time that elapsed while paused as a burst of catch-up FixedTicks");
+    static_cast<void>(pauseSystem.ExecuteFrame(fixedTickScene, fixedStep * 0.5F));
+    kb::tests::Require(pausedFixedTicks == 1U, "FixedTick must resume firing normally once unpaused");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5537,6 +5623,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptTimeApiElapsedAndAliasingTest();
+    RunScriptTimeApiScaleAndPauseTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();

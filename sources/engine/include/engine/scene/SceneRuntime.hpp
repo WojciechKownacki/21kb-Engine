@@ -107,6 +107,10 @@ public:
     // (SceneState.hpp) for the exact accumulation contract.
     [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
+    // LIB-094: script-visible time multiplier — see SceneState::timeScale's
+    // own doc comment for the exact scope (applied only at the Time.Delta
+    // boundary, never to engine/physics simulation time).
+    [[nodiscard]] float TimeScale() const noexcept;
 
 private:
     const Scene& scene_;
@@ -187,6 +191,8 @@ public:
     [[nodiscard]] double ElapsedSeconds() const noexcept;
     [[nodiscard]] bool IsPlaying() const noexcept;
     void SetPlaying(bool playing) noexcept;
+    [[nodiscard]] float TimeScale() const noexcept;
+    void SetTimeScale(float scale) noexcept;
 
 private:
     Scene& scene_;

@@ -173,6 +173,19 @@ void SceneRuntimeService::SetPlaying(Scene& scene, bool playing) noexcept {
     SceneAccess::State(scene).isPlaying = playing;
 }
 
+float SceneRuntimeService::TimeScale(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).timeScale;
+}
+
+void SceneRuntimeService::SetTimeScale(Scene& scene, float scale) noexcept {
+    // Defensive clamp only — the script-facing Time.SetScale (ScriptTimeApi.cpp)
+    // is the actual validation boundary and rejects negative input with an
+    // honest error rather than silently clamping it away (LIB-064's
+    // validate-at-the-boundary precedent); this clamp exists purely so no
+    // native C++ caller can push the field itself negative.
+    SceneAccess::State(scene).timeScale = std::max(0.0F, scale);
+}
+
 void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept {
     SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
 }

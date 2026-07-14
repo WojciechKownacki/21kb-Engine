@@ -1,9 +1,11 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
+#include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
 #include <algorithm>
@@ -85,7 +87,18 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
-    fixedAccumulatorSeconds_ += clampedDeltaSeconds;
+    // LIB-094: explicit FixedTick-during-pause rule — while the scene is
+    // paused (Runtime().IsPlaying()==false), wall-clock time is NOT
+    // accumulated into fixedAccumulatorSeconds_ at all, so FixedTick simply
+    // never fires for the duration of the pause and no step "debt" builds
+    // up (unpausing does not trigger a burst of catch-up steps). Tick/
+    // LateTick/BeforeRender/AfterRender below are deliberately NOT gated
+    // here — they keep firing while paused (e.g. so pause-menu/UI
+    // behaviours keep working), the gameplay freeze instead comes from
+    // Time.Delta reading 0 while paused (ScriptTimeApi.cpp).
+    if (scene.Runtime().IsPlaying()) {
+        fixedAccumulatorSeconds_ += clampedDeltaSeconds;
+    }
     std::size_t fixedSteps = 0U;
     while (frameSettings_.fixedDeltaSeconds > 0.0F && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds && fixedSteps < frameSettings_.maxFixedStepsPerFrame) {
         fixedAccumulatorSeconds_ -= frameSettings_.fixedDeltaSeconds;
