@@ -26,6 +26,7 @@ struct ResolvedMapping {
     bool consumeInput = true;
     InputKey key = InputKey::None;
     float scale = 1.0F;
+    std::uint8_t gamepadIndex = 0U;
     std::vector<InputModifierDesc> modifiers;
     std::vector<InputTriggerDesc> triggers;
     std::vector<std::string> chordActionNames; // parallel to triggers; empty unless Chorded

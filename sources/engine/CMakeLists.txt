@@ -1009,6 +1009,7 @@ add_library(kb_engine STATIC
     include/engine/input/InputActionValueType.hpp
     include/engine/input/InputKey.hpp
     include/engine/input/InputLocalUser.hpp
+    include/engine/input/InputTouchPoint.hpp
     include/engine/input/InputValue.hpp
     include/engine/input/InputDeviceState.hpp
     include/engine/input/InputModifierDesc.hpp

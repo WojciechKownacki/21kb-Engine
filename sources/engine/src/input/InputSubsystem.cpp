@@ -41,7 +41,13 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
     actionStates_.clear();
     frameEvents_.clear();
 
-    std::unordered_map<std::uint16_t, bool> consumedKeys; // key -> consumed by a higher context
+    // Keyed by (key, gamepadIndex) - the SAME InputKey value on two different
+    // gamepads is a different physical control, so consumption must not alias
+    // across controllers.
+    std::unordered_map<std::uint32_t, bool> consumedKeys;
+    const auto consumeKey = [](InputKey key, std::uint8_t gamepadIndex) noexcept -> std::uint32_t {
+        return (static_cast<std::uint32_t>(gamepadIndex) << 16U) | static_cast<std::uint16_t>(key);
+    };
     const InputMappingEvaluator evaluator;
     const auto chordSatisfied = [this](std::string_view action) {
         const auto found = previousCombined_.find(std::string{action});
@@ -50,14 +56,14 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
 
     for (ActiveMappingContext& context : stack_.Active()) {
         for (ResolvedMapping& mapping : context.mappings) {
-            const auto keyIndex = static_cast<std::uint16_t>(mapping.key);
+            const std::uint32_t keyIndex = consumeKey(mapping.key, mapping.gamepadIndex);
             if (consumedKeys[keyIndex]) {
                 continue; // A higher-priority context already claimed this key.
             }
 
             const MappingEvaluationInput evalInput{
                 .valueType = mapping.valueType,
-                .raw = InputValue{.x = device.GetValue(mapping.key) * mapping.scale, .type = mapping.valueType},
+                .raw = InputValue{.x = device.GetValue(mapping.key, mapping.gamepadIndex) * mapping.scale, .type = mapping.valueType},
                 .modifiers = mapping.modifiers,
                 .triggers = mapping.triggers,
                 .chordActionNames = mapping.chordActionNames,
@@ -91,11 +97,11 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
             InputValue raw{.type = composite.valueType};
             bool anyFree = false;
             for (const InputCompositeSlot& slot : composite.slots) {
-                if (consumedKeys[static_cast<std::uint16_t>(slot.key)]) {
+                if (consumedKeys[consumeKey(slot.key, slot.gamepadIndex)]) {
                     continue;
                 }
                 anyFree = true;
-                const float contribution = device.GetValue(slot.key) * slot.scale;
+                const float contribution = device.GetValue(slot.key, slot.gamepadIndex) * slot.scale;
                 switch (slot.axis) {
                     case 0U:
                         raw.x += contribution;
@@ -136,7 +142,7 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
 
             if (result.state == TriggerState::Triggered && composite.consumeInput) {
                 for (const InputCompositeSlot& slot : composite.slots) {
-                    consumedKeys[static_cast<std::uint16_t>(slot.key)] = true;
+                    consumedKeys[consumeKey(slot.key, slot.gamepadIndex)] = true;
                 }
             }
         }

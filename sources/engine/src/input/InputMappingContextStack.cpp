@@ -28,6 +28,7 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
         ResolvedMapping resolved;
         resolved.key = mapping.key;
         resolved.scale = mapping.scale;
+        resolved.gamepadIndex = mapping.gamepadIndex;
         resolved.modifiers = mapping.modifiers;
         resolved.triggers = mapping.triggers;
         resolved.triggerStates.resize(mapping.triggers.size());
