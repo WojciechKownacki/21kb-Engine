@@ -77,6 +77,26 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
     return host.RegisterFunction(std::move(desc));
 }
 
+// Reads the action's raw/modified value as a bool (value.AsBool(), i.e. x != 0),
+// distinct from Held/Pressed/Released below: those reflect whether a *trigger*
+// fired (respecting deadzones, Hold thresholds, etc. - see InputMappingEvaluator),
+// while ActionBool reflects the value itself, mirroring Unreal's direct
+// FInputActionValue::Get<bool>() read versus binding to a trigger event.
+bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        return BoolResult("value", value.AsBool());
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -177,6 +197,13 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterValueQueryXYZ(host, "Input.Vector3") && ok;
     ok = RegisterAddMappingContext(host, "Input.AddMappingContext") && ok;
     ok = RegisterRemoveMappingContext(host, "Input.RemoveMappingContext") && ok;
+
+    ok = RegisterActionBoolQuery(host, "Input.ActionBool") && ok;
+    ok = RegisterValueQuery(host, "Input.ActionFloat") && ok;
+    ok = RegisterValueQueryXY(host, "Input.Action2D") && ok;
+    ok = RegisterActionQuery(host, "Input.Pressed", "pressed", &kb::input::InputSubsystem::WasActionStarted) && ok;
+    ok = RegisterActionQuery(host, "Input.Released", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
+    ok = RegisterActionQuery(host, "Input.Held", "held", &kb::input::InputSubsystem::IsActionPressed) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;
