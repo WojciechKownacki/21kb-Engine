@@ -4213,12 +4213,22 @@ void RunScriptInputApiTest() {
     kb::tests::Require(isPressed.Succeeded() && isPressed.Output("pressed")->AsBool(), "Input.IsPressed direct call did not see Jump");
     kb::tests::Require(wasPressed.Succeeded() && wasPressed.Output("pressed")->AsBool(), "Input.WasPressed direct call did not see Jump edge");
 
+    const kb::script::ScriptFunctionCallResult held = host.Functions().Call("Input.Held", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult pressedEdge = host.Functions().Call("Input.Pressed", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult actionBool = host.Functions().Call("Input.ActionBool", jumpArgs, callContext);
+    kb::tests::Require(held.Succeeded() && held.Output("held")->AsBool(), "Input.Held direct call did not see Jump held");
+    kb::tests::Require(pressedEdge.Succeeded() && pressedEdge.Output("pressed")->AsBool(), "Input.Pressed direct call did not see Jump edge");
+    kb::tests::Require(actionBool.Succeeded() && actionBool.Output("value")->AsBool(), "Input.ActionBool direct call did not see Jump as true");
+
     const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Move" } } },
     };
     const kb::script::ScriptFunctionCallResult moveValue = host.Functions().Call("Input.Value", moveArgs, callContext);
     kb::tests::Require(moveValue.Succeeded() && kb::tests::NearlyEqual(moveValue.Output("value")->AsFloat(), 1.0F),
         "Input.Value direct call returned wrong Move value");
+    const kb::script::ScriptFunctionCallResult moveActionFloat = host.Functions().Call("Input.ActionFloat", moveArgs, callContext);
+    kb::tests::Require(moveActionFloat.Succeeded() && kb::tests::NearlyEqual(moveActionFloat.Output("value")->AsFloat(), 1.0F),
+        "Input.ActionFloat direct call returned wrong Move value");
 
     const std::vector<kb::script::ScriptFunctionArgument> lookArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Look" } } },
@@ -4226,6 +4236,9 @@ void RunScriptInputApiTest() {
     const kb::script::ScriptFunctionCallResult lookVector = host.Functions().Call("Input.Vector2", lookArgs, callContext);
     kb::tests::Require(lookVector.Succeeded() && kb::tests::NearlyEqual(lookVector.Output("x")->AsFloat(), 0.25F),
         "Input.Vector2 direct call returned wrong Look value");
+    const kb::script::ScriptFunctionCallResult lookAction2D = host.Functions().Call("Input.Action2D", lookArgs, callContext);
+    kb::tests::Require(lookAction2D.Succeeded() && kb::tests::NearlyEqual(lookAction2D.Output("x")->AsFloat(), 0.25F),
+        "Input.Action2D direct call returned wrong Look value");
 
     const std::vector<kb::script::ScriptFunctionArgument> thrustArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Thrust" } } },
@@ -4236,6 +4249,16 @@ void RunScriptInputApiTest() {
 
     scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, false);
     scene.Input().Evaluate(0.016F);
+
+    const kb::script::ScriptFunctionCallResult releasedEdge = host.Functions().Call("Input.Released", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult heldAfterRelease = host.Functions().Call("Input.Held", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult actionBoolAfterRelease = host.Functions().Call("Input.ActionBool", jumpArgs, callContext);
+    kb::tests::Require(releasedEdge.Succeeded() && releasedEdge.Output("released")->AsBool(),
+        "Input.Released direct call did not see Jump release edge");
+    kb::tests::Require(heldAfterRelease.Succeeded() && !heldAfterRelease.Output("held")->AsBool(),
+        "Input.Held should be false once Jump is released");
+    kb::tests::Require(actionBoolAfterRelease.Succeeded() && !actionBoolAfterRelease.Output("value")->AsBool(),
+        "Input.ActionBool should be false once Jump is released");
 
     const kb::assets::AssetId luaAsset{ 8820U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Input Caller" });
@@ -4253,6 +4276,12 @@ function Tick(self, dt)
     SetShared("input.move", Input.Value("Move"))
     SetShared("input.lookX", look.x)
     SetShared("input.thrustX", thrust.x)
+    SetShared("input.jumpHeld", Input.Held("Jump"))
+    SetShared("input.jumpReleasedCanonical", Input.Released("Jump"))
+    SetShared("input.jumpActionBool", Input.ActionBool("Jump"))
+    SetShared("input.moveActionFloat", Input.ActionFloat("Move"))
+    local look2d = Input.Action2D("Look")
+    SetShared("input.lookAction2DX", look2d.x)
     SetShared("input.removed", Input.RemoveMappingContext(50))
 end
 )");
@@ -4264,6 +4293,11 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.move")->AsFloat(), 1.0F), "Lua Input.Value returned wrong Move value");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.lookX")->AsFloat(), 0.25F), "Lua Input.Vector2 returned wrong Look value");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.thrustX")->AsFloat(), 0.75F), "Lua Input.Vector3 returned wrong Thrust value");
+    kb::tests::Require(!host.SharedState().Get("input.jumpHeld")->AsBool(), "Lua Input.Held should be false after Jump release");
+    kb::tests::Require(host.SharedState().Get("input.jumpReleasedCanonical")->AsBool(), "Lua Input.Released did not see Jump release");
+    kb::tests::Require(!host.SharedState().Get("input.jumpActionBool")->AsBool(), "Lua Input.ActionBool should be false after Jump release");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.moveActionFloat")->AsFloat(), 1.0F), "Lua Input.ActionFloat returned wrong Move value");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.lookAction2DX")->AsFloat(), 0.25F), "Lua Input.Action2D returned wrong Look value");
     kb::tests::Require(host.SharedState().Get("input.removed")->AsBool() && !scene.Input().HasMappingContext(50U),
         "Lua Input.RemoveMappingContext did not remove the active context");
 }

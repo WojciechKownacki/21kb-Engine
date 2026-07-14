@@ -19,6 +19,19 @@ class ScriptRuntimeHost;
 //   Input.AddMappingContext(context:String, priority:Int) -> added:Bool
 //   Input.RemoveMappingContext(context:String)            -> removed:Bool
 //
+// Canonical typed-value + trigger-event names (additive aliases over the above,
+// same underlying InputSubsystem queries - kept as separate registrations rather
+// than renames so existing scripts/graphs using the names above keep working):
+//   Input.ActionBool(action:String)  -> value:Bool   (raw/modified value != 0;
+//                                       differs from Held below when a trigger's
+//                                       threshold/deadzone hasn't fired yet even
+//                                       though the value itself is non-zero)
+//   Input.ActionFloat(action:String) -> value:Float  (= Input.Value)
+//   Input.Action2D(action:String)    -> x:Float, y:Float (= Input.Vector2)
+//   Input.Pressed(action:String)     -> pressed:Bool  (rising edge, first frame only)
+//   Input.Released(action:String)    -> released:Bool (falling edge, first frame only)
+//   Input.Held(action:String)        -> held:Bool     (trigger state this frame; = Input.IsPressed)
+//
 // Legacy aliases kept for existing scripts/graphs:
 //   IsActionPressed(action:String)        -> pressed:Bool
 //   GetActionValue(action:String)         -> value:Float        (axis1D / bool as 0/1)
