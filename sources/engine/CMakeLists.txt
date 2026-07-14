@@ -207,6 +207,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibrary.hpp
     include/engine/library/EngineLibraryArrayView.hpp
     include/engine/library/EngineLibraryAssetRef.hpp
+    include/engine/library/EngineLibraryAsyncResult.hpp
     include/engine/library/EngineLibraryCollections.hpp
     include/engine/library/EngineLibraryCommandApplication.hpp
     include/engine/library/EngineLibraryCommandBatch.hpp
