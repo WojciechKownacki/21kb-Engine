@@ -49,7 +49,7 @@ constexpr std::size_t kMaxCatchUpFiresPerAdvance = 8U;
 
 } // namespace
 
-std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner) noexcept {
+std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner, SceneEntity creator) noexcept {
     if (delaySeconds <= 0.0F) {
         return 0U;
     }
@@ -65,11 +65,12 @@ std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEnt
         .intervalSeconds = 0.0F,
         .repeating = false,
         .paused = false,
+        .creator = creator,
     });
     return id;
 }
 
-std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, SceneEntity owner) noexcept {
+std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, SceneEntity owner, SceneEntity creator) noexcept {
     if (intervalSeconds <= 0.0F) {
         return 0U;
     }
@@ -85,6 +86,7 @@ std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, Sce
         .intervalSeconds = intervalSeconds,
         .repeating = true,
         .paused = false,
+        .creator = creator,
     });
     return id;
 }
@@ -128,6 +130,14 @@ bool SceneTimerService::Exists(const Scene& scene, std::uint64_t id) noexcept {
     return std::any_of(state.timers.begin(), state.timers.end(), [id](const SceneState::TimerRecord& timer) {
         return timer.id == id;
     });
+}
+
+SceneEntity SceneTimerService::Creator(const Scene& scene, std::uint64_t id) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    const auto iterator = std::find_if(state.timers.begin(), state.timers.end(), [id](const SceneState::TimerRecord& timer) {
+        return timer.id == id;
+    });
+    return iterator == state.timers.end() ? SceneEntity{} : iterator->creator;
 }
 
 std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float deltaSeconds) {
