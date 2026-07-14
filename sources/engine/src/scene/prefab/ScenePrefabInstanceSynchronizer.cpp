@@ -66,6 +66,16 @@ namespace {
         return true;
     }
     if (property.propertyPath == "children") {
+        // LIB-092: added/removed child structure (ScenePrefabOverrideFlag::
+        // AddedChild, detected by ScenePrefabInstanceTopology::
+        // HasUntrackedChild) is INTENTIONALLY diff/report-only — it is
+        // never structurally reapplied here, in memory or from disk. This
+        // mirrors LIB-070's own scoping note that ScenePrefabOverride* is
+        // "editor diff+revert tooling," not a full structural sync engine.
+        // Unlike the "parent" override fixed above (reparenting an
+        // EXISTING tracked node), reproducing an added/removed child would
+        // mean creating or destroying entities during override apply — a
+        // materially larger, not-yet-scoped feature.
         return true;
     }
 
@@ -74,7 +84,24 @@ namespace {
         return false;
     }
     if (property.propertyPath == "parent") {
-        return scene.Hierarchy().SetParent(object, property.objectReference);
+        // LIB-092: prefer the stable, within-instance node reference over
+        // the raw `objectReference` SceneObject — the latter is only ever
+        // valid for the SAME live session that detected the override (it
+        // does not survive a save/load round trip). objectReferenceNodeId
+        // resolves against THIS instantiation's own objects, exactly like
+        // `target`/nodeIndex already do via baseline.ResolveNodeIndex.
+        // Falls back to property.objectReference when unresolvable (the
+        // new parent lies outside this instance — not portably
+        // referenceable from the prefab asset, or the override predates
+        // this field) — the same honest limitation as before this fix.
+        SceneObject newParent = property.objectReference;
+        if (property.objectReferenceNodeId != ScenePrefabNodeDesc::InvalidStableId) {
+            const std::uint32_t parentNodeIndex = baseline.FindNodeIndexByStableId(property.objectReferenceNodeId);
+            if (parentNodeIndex != ScenePrefabNodeDesc::NoParent && parentNodeIndex < readObjects.size()) {
+                newParent = readObjects[parentNodeIndex];
+            }
+        }
+        return scene.Hierarchy().SetParent(object, newParent);
     }
 
     const ScenePrefabNodeDesc* baselineNode = baseline.TryGetNode(nodeIndex);
