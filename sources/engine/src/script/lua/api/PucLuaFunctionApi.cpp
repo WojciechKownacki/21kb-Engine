@@ -471,6 +471,22 @@ int LuaInputWasReleased(lua_State* state) {
     return LuaInputBool(state, "Input.WasReleased", "released");
 }
 
+int LuaInputHeld(lua_State* state) {
+    return LuaInputBool(state, "Input.Held", "held");
+}
+
+int LuaInputPressed(lua_State* state) {
+    return LuaInputBool(state, "Input.Pressed", "pressed");
+}
+
+int LuaInputReleased(lua_State* state) {
+    return LuaInputBool(state, "Input.Released", "released");
+}
+
+int LuaInputActionBool(lua_State* state) {
+    return LuaInputBool(state, "Input.ActionBool", "value");
+}
+
 int LuaInputValue(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -482,6 +498,17 @@ int LuaInputValue(lua_State* state) {
     return 1;
 }
 
+int LuaInputActionFloat(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnumber(state, 0.0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.ActionFloat", InputActionArgs(state));
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("value").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    return 1;
+}
+
 int LuaInputVector2(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -489,6 +516,21 @@ int LuaInputVector2(lua_State* state) {
         return 1;
     }
     const ScriptFunctionCallResult result = context->CallFunction("Input.Vector2", InputActionArgs(state));
+    lua_createtable(state, 0, 2);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    return 1;
+}
+
+int LuaInputAction2D(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.Action2D", InputActionArgs(state));
     lua_createtable(state, 0, 2);
     lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
     lua_setfield(state, -2, "x");
@@ -600,7 +642,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     lua_setfield(state, environmentIndex, "Physics");
 
-    lua_createtable(state, 0, 8);
+    lua_createtable(state, 0, 14);
     SetClosure(state, "IsPressed", &LuaInputIsPressed, context);
     SetClosure(state, "WasPressed", &LuaInputWasPressed, context);
     SetClosure(state, "WasReleased", &LuaInputWasReleased, context);
@@ -609,6 +651,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Vector3", &LuaInputVector3, context);
     SetClosure(state, "AddMappingContext", &LuaInputAddMappingContext, context);
     SetClosure(state, "RemoveMappingContext", &LuaInputRemoveMappingContext, context);
+    SetClosure(state, "ActionBool", &LuaInputActionBool, context);
+    SetClosure(state, "ActionFloat", &LuaInputActionFloat, context);
+    SetClosure(state, "Action2D", &LuaInputAction2D, context);
+    SetClosure(state, "Pressed", &LuaInputPressed, context);
+    SetClosure(state, "Released", &LuaInputReleased, context);
+    SetClosure(state, "Held", &LuaInputHeld, context);
     lua_setfield(state, environmentIndex, "Input");
 }
 
