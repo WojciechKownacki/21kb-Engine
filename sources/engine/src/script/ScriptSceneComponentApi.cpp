@@ -18,9 +18,23 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace kb::script {
 namespace {
+
+// LIB-082: every KB_* macro below asserts, at the point the field is
+// registered, that the field's own declared type is not a raw pointer —
+// this is what actually flows into the ScriptValue the read lambda
+// constructs. ScriptValue::Storage itself already static_asserts (LIB-032)
+// that none of its variant ALTERNATIVES is a pointer type, which forecloses
+// storing one directly, but it cannot see what an individual field's C++
+// type is before a macro reads it — this assert closes that gap at the one
+// place a pointer-typed field would first be touched, so accidentally
+// wiring up a pointer/handle-as-address field is a compile error here, not
+// a silent runtime leak to Lua/VisualGraph.
+#define KB_ASSERT_NOT_POINTER(expr) \
+    static_assert(!std::is_pointer_v<decltype(expr)>, "kb::script field accessor must not expose a raw pointer to Lua/VisualGraph (LIB-082)")
 
 // LIB-077: each FieldBinding carries a REAL, per-field accessor function
 // pair — not an offsetof + reinterpret_cast<Field*> pointer walk (the
@@ -54,7 +68,9 @@ struct ComponentAccess {
 // clang-format off
 #define KB_BOOL(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Bool) { return false; } \
             static_cast<Component*>(component)->field = value.AsBool(); \
@@ -63,7 +79,9 @@ struct ComponentAccess {
 
 #define KB_INT(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int) { return false; } \
             static_cast<Component*>(component)->field = value.AsInt(); \
@@ -72,7 +90,9 @@ struct ComponentAccess {
 
 #define KB_UINT32(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int || value.AsInt() < 0) { return false; } \
             static_cast<Component*>(component)->field = static_cast<std::uint32_t>(value.AsInt()); \
@@ -81,7 +101,9 @@ struct ComponentAccess {
 
 #define KB_FLOAT(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<const Component*>(component)->field }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() == ScriptValueType::Float) { static_cast<Component*>(component)->field = value.AsFloat(); return true; } \
             if (value.Type() == ScriptValueType::Int) { static_cast<Component*>(component)->field = static_cast<float>(value.AsInt()); return true; } \
@@ -90,7 +112,9 @@ struct ComponentAccess {
 
 #define KB_NESTED_FLOAT(Component, parent, field) \
     FieldBinding{ #parent "." #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const Component*>(component)->parent.field }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->parent.field); \
+            return ScriptValue{ static_cast<const Component*>(component)->parent.field }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() == ScriptValueType::Float) { static_cast<Component*>(component)->parent.field = value.AsFloat(); return true; } \
             if (value.Type() == ScriptValueType::Int) { static_cast<Component*>(component)->parent.field = static_cast<float>(value.AsInt()); return true; } \
@@ -99,7 +123,9 @@ struct ComponentAccess {
 
 #define KB_TICKGROUP(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::BehaviourTickGroup::Presentation)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::BehaviourTickGroup>(value.AsInt()); \
@@ -108,7 +134,9 @@ struct ComponentAccess {
 
 #define KB_CAMERA_PROJECTION(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::CameraProjection>(value.AsInt()); \
@@ -117,7 +145,9 @@ struct ComponentAccess {
 
 #define KB_LIGHT_KIND(Component, field) \
     FieldBinding{ #field, \
-        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::LightKind>(value.AsInt()); \
@@ -252,6 +282,7 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
 #undef KB_TICKGROUP
 #undef KB_CAMERA_PROJECTION
 #undef KB_LIGHT_KIND
+#undef KB_ASSERT_NOT_POINTER
 
 [[nodiscard]] const FieldBinding* FindField(std::span<const FieldBinding> fields, std::string_view name) noexcept {
     for (const FieldBinding& field : fields) {
