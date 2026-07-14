@@ -9,6 +9,7 @@
 #include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/library/EngineLibraryComponentChangeTracker.hpp"
 #include "engine/library/EngineLibraryComponentDesc.hpp"
+#include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
@@ -1609,6 +1610,52 @@ void RunEngineLibraryComponentRegistryTest() {
     }
 }
 
+// LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
+// new UI-facing metadata catalog (displayName/category per component,
+// displayName/tooltip per field) exactly matches the two existing sources
+// of truth it is keyed against — ScriptSceneComponentApi::ComponentNames()/
+// ComponentProperties() (LIB-077) — with zero drift in either direction
+// (missing entry or stale extra entry both fail this test), and that every
+// entry actually carries non-empty presentation text rather than a
+// placeholder.
+void RunComponentInspectorDescCatalogTest() {
+    const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
+    const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
+
+    kb::tests::Require(catalog.size() == scriptComponentNames.size(),
+        "Engine21kbLibrary component inspector catalog must cover exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
+
+    std::size_t fieldsChecked = 0U;
+    for (const std::string_view scriptName : scriptComponentNames) {
+        const kb::library::LibraryComponentInspectorDesc* componentDesc = kb::library::EngineLibraryComponentInspectorRegistry::Find(scriptName);
+        kb::tests::Require(componentDesc != nullptr, "Engine21kbLibrary component inspector catalog is missing an entry for a component ScriptSceneComponentApi.cpp already gates Lua/VisualGraph access behind");
+        kb::tests::Require(!componentDesc->displayName.empty(), "Engine21kbLibrary component inspector entry must have a non-empty displayName");
+        kb::tests::Require(!componentDesc->category.empty(), "Engine21kbLibrary component inspector entry must have a non-empty category");
+
+        const std::span<const kb::script::ScriptSceneComponentPropertyDesc> scriptProperties = kb::script::ScriptSceneComponentApi::ComponentProperties(scriptName);
+        kb::tests::Require(componentDesc->fields.size() == scriptProperties.size(),
+            "Engine21kbLibrary component inspector entry must catalog exactly the same field count ScriptSceneComponentApi::ComponentProperties() reports for that component");
+        for (const kb::script::ScriptSceneComponentPropertyDesc& property : scriptProperties) {
+            ++fieldsChecked;
+            const kb::library::LibraryComponentInspectorFieldDesc* fieldDesc = kb::library::EngineLibraryComponentInspectorRegistry::FindField(scriptName, property.name);
+            const std::string fieldLabel = std::string{ scriptName } + "." + std::string{ property.name };
+            kb::tests::Require(fieldDesc != nullptr, ("Engine21kbLibrary component inspector catalog is missing a field entry for " + fieldLabel).c_str());
+            kb::tests::Require(!fieldDesc->displayName.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty displayName for " + fieldLabel).c_str());
+            kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
+        }
+    }
+    kb::tests::Require(fieldsChecked == 37U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (37) across all 6 components");
+
+    for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
+        const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
+        kb::tests::Require(foundInScriptNames, "Engine21kbLibrary component inspector catalog names a component ScriptSceneComponentApi.cpp does not gate Lua/VisualGraph access behind — the two must never drift apart");
+    }
+
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::Find("NoSuchComponent") == nullptr, "Engine21kbLibrary component inspector catalog Find() must return nullptr for an unregistered component name");
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::FindField("Camera", "NoSuchField") == nullptr, "Engine21kbLibrary component inspector catalog FindField() must return nullptr for an unregistered field name");
+    kb::tests::Require(kb::library::EngineLibraryComponentInspectorRegistry::FindField("NoSuchComponent", "projection") == nullptr, "Engine21kbLibrary component inspector catalog FindField() must return nullptr for an unregistered component name");
+}
+
 // LIB-078: kb::library::Query<T>::ForEach — proves the phase gate (reusing
 // LIB-007's ClassifyLifecycleContext, not a new classification), that the
 // visitor receives real component data for a real live entity, and that a
@@ -2354,6 +2401,7 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
