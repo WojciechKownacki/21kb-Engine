@@ -8,6 +8,7 @@
 #include "engine/library/EngineLibraryCommandApplication.hpp"
 #include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/library/EngineLibraryComponentChangeTracker.hpp"
+#include "engine/library/EngineLibraryTransformChangeTracker.hpp"
 #include "engine/library/EngineLibraryComponentDesc.hpp"
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
@@ -38,6 +39,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
@@ -1976,6 +1978,117 @@ void RunComponentChangeTrackerTest() {
     kb::tests::Require(true, "Engine21kbLibrary ComponentChangeTracker destructor must not crash on DestroyObserver after scope exit");
 }
 
+// LIB-090: kb::library::TransformChangeTracker — proves the local/world
+// classification is correct against real Set()/hierarchy-cascade
+// scenarios, not just that it compiles: (a) a genuine LOCAL-only change to
+// an entity, BEFORE any sync, classifies Local (the world hasn't been
+// recomputed yet, so it can't be anything else); (b) after a sync, that
+// SAME directly-modified entity has also received its own deferred world
+// recompute and coalesces (widens) to Both; (c) a PARENT move that
+// cascades to its children (whose OWN local data never changed) classifies
+// EACH child as World-only — proving a parent-with-N-children move
+// produces N+1 *coalesced* entries (parent Both, each child World), not
+// N+1 unbounded raw firings, and not silently hidden fan-out either; (d)
+// Drain() resets the baseline; (e) capacity/DroppedCount() mirrors LIB-081's
+// own ComponentChangeTracker test; (f) destructor/RAII safety.
+void RunTransformChangeTrackerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeParent" });
+    const kb::scene::SceneObject childA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeChildA" });
+    const kb::scene::SceneObject childB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeChildB" });
+    kb::tests::Require(scene.Hierarchy().SetParent(childA.Entity(), parentObject.Entity()), "TransformChangeTracker fixture could not parent childA");
+    kb::tests::Require(scene.Hierarchy().SetParent(childB.Entity(), parentObject.Entity()), "TransformChangeTracker fixture could not parent childB");
+    static_cast<void>(scene.Runtime().Update(0.0F)); // Establish a clean, fully-synced baseline before tracking starts.
+
+    kb::library::TransformChangeTracker tracker{ scene, 8U };
+    kb::tests::Require(tracker.Capacity() == 8U, "Engine21kbLibrary TransformChangeTracker::Capacity must report the constructor-provided capacity");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary TransformChangeTracker must start with no pending changes");
+
+    // (a) A genuine local-only change, BEFORE any sync, must classify
+    // Local.
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parentObject.Entity());
+    parentTransform.localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parentObject.Entity(), parentTransform);
+    kb::tests::Require(tracker.PendingChanges().size() == 1U, "Engine21kbLibrary TransformChangeTracker must record exactly one pending entry after one Set()");
+    kb::tests::Require(tracker.PendingChanges()[0].entity == parentObject.Entity() && tracker.PendingChanges()[0].kind == kb::library::TransformChangeKind::Local,
+        "Engine21kbLibrary TransformChangeTracker must classify a pre-sync local write as Local");
+
+    // (b)+(c) Sync — the parent's OWN world recompute (a second, later
+    // firing for the SAME entity) must widen it to Both; the two children,
+    // whose local data never changed, get exactly ONE firing each (World)
+    // from the cascade.
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::span<const kb::library::TransformChangeEntry> afterSync = tracker.PendingChanges();
+    kb::tests::Require(afterSync.size() == 3U, "Engine21kbLibrary TransformChangeTracker must have exactly 3 pending entries after the sync cascades to 2 children (parent + 2 children, coalesced, not raw per-firing counts)");
+
+    const auto findEntry = [&](kb::scene::SceneEntity entity) -> const kb::library::TransformChangeEntry* {
+        for (const kb::library::TransformChangeEntry& entry : afterSync) {
+            if (entry.entity == entity) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    };
+    const kb::library::TransformChangeEntry* parentEntry = findEntry(parentObject.Entity());
+    const kb::library::TransformChangeEntry* childAEntry = findEntry(childA.Entity());
+    const kb::library::TransformChangeEntry* childBEntry = findEntry(childB.Entity());
+    kb::tests::Require(parentEntry != nullptr && parentEntry->kind == kb::library::TransformChangeKind::Both,
+        "Engine21kbLibrary TransformChangeTracker must widen the directly-modified parent to Both once its own deferred world recompute fires");
+    kb::tests::Require(childAEntry != nullptr && childAEntry->kind == kb::library::TransformChangeKind::World,
+        "Engine21kbLibrary TransformChangeTracker must classify a cascade-only child (local data never changed) as World, not Local or Both");
+    kb::tests::Require(childBEntry != nullptr && childBEntry->kind == kb::library::TransformChangeKind::World,
+        "Engine21kbLibrary TransformChangeTracker must classify EVERY cascade-only child as World, not just the first one found");
+
+    // (d) Drain resets the baseline.
+    const std::vector<kb::library::TransformChangeEntry> drained = tracker.Drain();
+    kb::tests::Require(drained.size() == 3U, "Engine21kbLibrary TransformChangeTracker::Drain must return every entry recorded since the last Drain()");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary TransformChangeTracker::Drain must clear the pending list");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary TransformChangeTracker::Drain must reset the dropped count");
+
+    // (e) Capacity/DroppedCount, mirroring LIB-081's own test: a fresh,
+    // small-capacity tracker, 3 distinct entities each get exactly ONE
+    // local write with NO sync in between (so only Local firings occur,
+    // nothing to coalesce) — the 3rd, over capacity, must be honestly
+    // dropped, not silently absorbed or grown into. The 3 entities are
+    // created BEFORE the tracker (entity creation itself fires a genuine
+    // Modified event for TransformComponent — SceneComponentStorage::
+    // SetDefaults calls SceneTransformComponentStore::Set — so creating
+    // them while the tracker is already observing would itself count
+    // toward capacity).
+    const kb::scene::SceneObject leafX = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafX" });
+    const kb::scene::SceneObject leafY = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafY" });
+    const kb::scene::SceneObject leafZ = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TransformChangeLeafZ" });
+    {
+        kb::library::TransformChangeTracker smallTracker{ scene, 2U };
+        kb::scene::TransformComponent leafXTransform = scene.Transforms().Get(leafX.Entity());
+        leafXTransform.localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafX.Entity(), leafXTransform);
+        kb::scene::TransformComponent leafYTransform = scene.Transforms().Get(leafY.Entity());
+        leafYTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafY.Entity(), leafYTransform);
+        kb::tests::Require(smallTracker.PendingChanges().size() == 2U, "Engine21kbLibrary TransformChangeTracker must record distinct entities up to capacity");
+        kb::scene::TransformComponent leafZTransform = scene.Transforms().Get(leafZ.Entity());
+        leafZTransform.localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(leafZ.Entity(), leafZTransform);
+        kb::tests::Require(smallTracker.PendingChanges().size() == 2U, "Engine21kbLibrary TransformChangeTracker must not exceed its capacity");
+        kb::tests::Require(smallTracker.DroppedCount() == 1U, "Engine21kbLibrary TransformChangeTracker must honestly count a modification dropped due to the capacity limit");
+    }
+
+    // (f) Destructor RAII safety — scope a tracker, let it go out of
+    // scope, then mutate the observed component again — must not crash.
+    {
+        kb::library::TransformChangeTracker scopedTracker{ scene, 4U };
+        kb::scene::TransformComponent scopedTransform = scene.Transforms().Get(childA.Entity());
+        scopedTransform.localPosition = kb::scene::Vec3{ 9.0F, 0.0F, 0.0F };
+        scene.Transforms().Set(childA.Entity(), scopedTransform);
+        kb::tests::Require(scopedTracker.PendingChanges().size() == 1U, "Engine21kbLibrary TransformChangeTracker (scoped) must record while alive");
+    }
+    kb::scene::TransformComponent finalTransform = scene.Transforms().Get(childB.Entity());
+    finalTransform.localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(childB.Entity(), finalTransform);
+    kb::tests::Require(true, "Engine21kbLibrary TransformChangeTracker destructor must not crash on DestroyObserver after scope exit");
+}
+
 // LIB-083: three scenarios not covered by LIB-078/079/080's own tests —
 // (1) "query aliasing": kb::ecs::StructuralChangeValidator's
 // activeIterations_ is an ATOMIC COUNTER, not an exclusive lock
@@ -2406,6 +2519,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
     RunComponentChangeTrackerTest();
+    RunTransformChangeTrackerTest();
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
