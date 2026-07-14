@@ -146,6 +146,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
+    include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
     include/engine/scene/SceneSystemContext.hpp
@@ -196,6 +197,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
+    include/engine/script/ScriptTaskApi.hpp
     include/engine/script/ScriptTimeApi.hpp
     include/engine/script/ScriptTimerApi.hpp
     include/engine/script/ScriptTransformApi.hpp
@@ -393,6 +395,7 @@ add_library(kb_engine STATIC
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
+    src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp
     src/scene/SceneTransformIterationService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
@@ -499,6 +502,7 @@ add_library(kb_engine STATIC
     src/scene/modules/ScenePrefabs.cpp
     src/scene/modules/ScenePrefabRegistryModule.cpp
     src/scene/modules/SceneRuntime.cpp
+    src/scene/modules/SceneTasks.cpp
     src/scene/modules/SceneTimers.cpp
     src/scene/modules/SceneTransforms.cpp
     src/scene/modules/SceneTransformIterationModule.cpp
@@ -657,6 +661,7 @@ add_library(kb_engine STATIC
     src/script/ScriptSceneVisualGraphBindings.cpp
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
+    src/script/ScriptTaskApi.cpp
     src/script/ScriptTimeApi.cpp
     src/script/ScriptTimerApi.cpp
     src/script/ScriptTransformApi.cpp
@@ -748,6 +753,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneLoadedContentService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
+    src/private/scene/SceneTaskService.hpp
     src/private/scene/SceneTimerService.hpp
     src/private/scene/SceneTransformService.hpp
     src/private/scene/assets/SceneAssetLoader.hpp

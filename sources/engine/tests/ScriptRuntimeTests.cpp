@@ -20,6 +20,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
@@ -5813,6 +5814,154 @@ void RunSceneTimerAdvanceOrderingAndCatchUpTest() {
     kb::tests::Require(stillNormal.empty(), "A repeating timer must NOT fire before its next full interval has elapsed post-catch-up");
 }
 
+// LIB-097: Task.IsRunning/Task.Cancel through the script registry. A task
+// can only be STARTED from native C++ (kb::scene::SceneTasks::Start — see
+// its own doc comment for the full Coroutine/Task model decision), so this
+// test creates one natively and observes/controls it purely through the
+// script-facing functions, proving that half of the pipeline end-to-end.
+void RunScriptTaskApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script task API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Task.IsRunning") != nullptr, "Task.IsRunning was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Cancel") != nullptr, "Task.Cancel was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Start") == nullptr, "Task.Start must NOT be script-facing (LIB-097's chosen scope — only native C++ can author a task's body)");
+
+    const std::uint64_t taskId = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, kb::scene::SceneEntity{});
+    kb::tests::Require(taskId != 0U, "SceneTasks::Start with a valid poll callback must succeed");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> taskArgs{
+        kb::script::ScriptFunctionArgument{ .name = "task", .value = kb::script::ScriptValue{ taskId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult runningResult = host.Functions().Call("Task.IsRunning", taskArgs, context);
+    kb::tests::Require(runningResult.Succeeded() && runningResult.Output("running")->AsBool(), "Task.IsRunning must report true for a live, still-running task");
+
+    const kb::script::ScriptFunctionCallResult firstCancel = host.Functions().Call("Task.Cancel", taskArgs, context);
+    kb::tests::Require(firstCancel.Succeeded() && firstCancel.Output("cancelled")->AsBool(), "Task.Cancel on a live task must succeed and report cancelled=true");
+    const kb::script::ScriptFunctionCallResult secondCancel = host.Functions().Call("Task.Cancel", taskArgs, context);
+    kb::tests::Require(secondCancel.Succeeded() && !secondCancel.Output("cancelled")->AsBool(), "Task.Cancel must be idempotent — a second cancel of an already-cancelled task must report cancelled=false, not error");
+    const kb::script::ScriptFunctionCallResult runningAfterCancel = host.Functions().Call("Task.IsRunning", taskArgs, context);
+    kb::tests::Require(runningAfterCancel.Succeeded() && !runningAfterCancel.Output("running")->AsBool(), "Task.IsRunning must report false for a cancelled task");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownTaskArgs{
+        kb::script::ScriptFunctionArgument{ .name = "task", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownRunning = host.Functions().Call("Task.IsRunning", unknownTaskArgs, context);
+    kb::tests::Require(unknownRunning.Succeeded() && !unknownRunning.Output("running")->AsBool(), "Task.IsRunning on an unknown handle must honestly report running=false, not error");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneRunning = host.Functions().Call("Task.IsRunning", taskArgs, noSceneContext);
+    kb::tests::Require(!noSceneRunning.Succeeded(), "Task.IsRunning must fail honestly without a scene rather than silently returning false");
+}
+
+// LIB-097: end-to-end Task completion/failure through the real
+// ScriptRuntimeSceneSystem per-frame drive — reuses the exact harness shape
+// RunScriptTimerApiFiringOwnerAndPauseTest established for Timer. Exercises
+// what the script-facing test above cannot: owner-targeted vs. no-owner
+// broadcast TaskCompleted/TaskFailed dispatch, scene-pause freezing poll
+// calls entirely (not just their delta), and dead-owner auto-cancellation.
+void RunScriptTaskApiCompletionOwnerAndPauseTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1230U };
+    constexpr kb::assets::AssetId kOtherAsset{ 1231U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Other" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(otherObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOtherAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t ownerCompleted = 0U;
+    std::size_t ownerFailed = 0U;
+    std::size_t otherCompleted = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&ownerCompleted](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerCompleted;
+                        }),
+        "Task owner TaskCompleted listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskFailed", [&ownerFailed](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerFailed;
+                        }),
+        "Task owner TaskFailed listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOtherAsset, "TaskCompleted", [&otherCompleted](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++otherCompleted;
+                        }),
+        "Task other TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // (A) no owner => broadcast reaches every enabled behaviour, completes
+    // after exactly 3 polls.
+    int broadcastPolls = 0;
+    const std::uint64_t broadcastId = scene.Tasks().Start([&broadcastPolls](float) {
+        ++broadcastPolls;
+        return broadcastPolls >= 3 ? kb::scene::TaskPollResult::Completed : kb::scene::TaskPollResult::Running;
+    },
+        kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastId != 0U, "SceneTasks::Start with no owner must still succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(scene.Tasks().Exists(broadcastId), "A task must remain alive while its poll still reports Running");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(!scene.Tasks().Exists(broadcastId), "A task must be removed the moment its poll reports Completed");
+    kb::tests::Require(ownerCompleted == 1U && otherCompleted == 1U, "A no-owner task's TaskCompleted must broadcast to every enabled behaviour");
+
+    // (B) explicit owner => targeted dispatch reaches ONLY that entity, and
+    // a Failed poll result dispatches TaskFailed, not TaskCompleted.
+    const std::uint64_t targetedFailId = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Failed; }, ownerObject.Entity());
+    kb::tests::Require(targetedFailId != 0U, "SceneTasks::Start with an owner must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFailed == 1U && ownerCompleted == 1U && otherCompleted == 1U, "An owned, failed task must target ONLY its owner's behaviour with TaskFailed, not TaskCompleted, and must not broadcast");
+
+    // (C) scene-level pause freezes poll calls entirely — no poll
+    // invocation happens at all while paused, not even with a zeroed delta.
+    int pausedPollCount = 0;
+    const std::uint64_t pausedId = scene.Tasks().Start([&pausedPollCount](float) {
+        ++pausedPollCount;
+        return kb::scene::TaskPollResult::Running;
+    },
+        ownerObject.Entity());
+    kb::tests::Require(pausedId != 0U, "SceneTasks::Start must succeed for the pause test fixture");
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(pausedPollCount == 0, "A task's poll callback must not be called AT ALL while the scene is paused");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(pausedPollCount == 1, "A task's poll callback must resume being called normally once the scene is unpaused");
+    kb::tests::Require(scene.Tasks().Cancel(pausedId), "Cleaning up the still-running pause test fixture task must succeed");
+
+    // (D) dead owner => silently auto-cancelled, poll never called again,
+    // no completion event, no crash.
+    const kb::scene::SceneObject doomedObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Doomed Owner" });
+    int doomedPollCount = 0;
+    const std::uint64_t doomedId = scene.Tasks().Start([&doomedPollCount](float) {
+        ++doomedPollCount;
+        return kb::scene::TaskPollResult::Running;
+    },
+        doomedObject.Entity());
+    kb::tests::Require(scene.Tasks().Exists(doomedId), "A freshly created task must exist immediately");
+    scene.Entities().Destroy(doomedObject);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(doomedPollCount == 0, "A task whose owner died before the next Advance() must never have its poll callback called");
+    kb::tests::Require(!scene.Tasks().Exists(doomedId), "A dead-owner task must be auto-cancelled (removed), not left dangling");
+    kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5849,6 +5998,8 @@ void RunScriptRuntimeTests() {
     RunScriptTimerApiTest();
     RunScriptTimerApiFiringOwnerAndPauseTest();
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
+    RunScriptTaskApiTest();
+    RunScriptTaskApiCompletionOwnerAndPauseTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();

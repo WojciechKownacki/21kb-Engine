@@ -7,6 +7,7 @@
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
+#include "engine/script/ScriptTaskApi.hpp"
 #include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptTimerApi.hpp"
 #include "engine/script/ScriptTransformApi.hpp"
@@ -24,7 +25,10 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
     // kb::scene::SceneEntities; Time reads the per-dispatch delta already
     // carried on ScriptExecutionContext; Timer (LIB-095, added after the
     // original seven plus Scene) schedules callbacks through the new
-    // kb::scene::SceneTimerService; Physics.Raycast today walks
+    // kb::scene::SceneTimerService; Task (LIB-097, added right after Timer)
+    // polls native-started work through the new kb::scene::SceneTaskService
+    // — Task.Start is deliberately NOT exposed to script (see SceneTasks.hpp
+    // for the full Coroutine/Task model decision); Physics.Raycast today walks
     // kb::scene::SceneTransforms directly (no physics-engine query yet —
     // see LIB-123..134); Transform reads/writes kb::scene::SceneTransforms;
     // Math (LIB-045) has no backing runtime subsystem at all — every
@@ -78,6 +82,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Timer",
             .ownerRuntime = "kb::scene::SceneTimerService",
             .Register = &kb::script::ScriptTimerApi::Register,
+        },
+        // LIB-097: Task.IsRunning/Task.Cancel — the C++ task adapter model
+        // chosen for Coroutine/Task (see kb::scene::SceneTasks' own doc
+        // comment for the full three-model decision); Task.Start is
+        // deliberately NOT script-facing yet, only kb::scene::SceneTasks::
+        // Start (native C++ only) creates a task.
+        LibraryModuleDesc{
+            .name = "Task",
+            .ownerRuntime = "kb::scene::SceneTaskService",
+            .Register = &kb::script::ScriptTaskApi::Register,
         },
         LibraryModuleDesc{
             .name = "Physics",
