@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptBackend.hpp"
 #include "engine/script/ScriptEvent.hpp"
+#include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 #include "engine/script/ScriptSharedState.hpp"
@@ -40,6 +41,15 @@ public:
     [[nodiscard]] const ScriptSharedState& SharedState() const noexcept;
     [[nodiscard]] ScriptFunctionRegistry& Functions() noexcept;
     [[nodiscard]] const ScriptFunctionRegistry& Functions() const noexcept;
+    // LIB-105: the pub/sub bus every Events.Subscribe/Unsubscribe/Emit/
+    // EmitDeferred/Broadcast call site (native via ScriptExecutionContext::
+    // Events(), Lua via the bespoke `Events` table) ultimately reaches —
+    // owned here rather than per-Scene because ScriptRuntimeHost binds
+    // exactly one Scene at construction (confirmed by reading its
+    // constructor), making runtime-scoped and scene-scoped equivalent for
+    // every real call site in this codebase today.
+    [[nodiscard]] ScriptEventBus& Events() noexcept;
+    [[nodiscard]] const ScriptEventBus& Events() const noexcept;
 
     [[nodiscard]] ScriptRuntimeExecutionResult ExecuteLifecycle(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds);
     [[nodiscard]] ScriptRuntimeExecutionResult ExecuteLifecycleForBehaviour(
@@ -79,6 +89,7 @@ private:
     std::array<std::unique_ptr<IScriptBackend>, 3> backends_{};
     ScriptSharedState sharedState_;
     ScriptFunctionRegistry functions_;
+    ScriptEventBus events_;
 };
 
 } // namespace kb::script
