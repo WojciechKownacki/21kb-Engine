@@ -492,6 +492,135 @@ ScriptFunctionCallResult FindChild(const ScriptFunctionCallContext& context, std
     return ChildResult(false, {});
 }
 
+// LIB-088: Transform.Translate ALREADY existed (above) and is unchanged —
+// its reappearance in the LIB-088 task list is documentation grouping
+// with these four genuinely new functions, not a real gap: Translate
+// already adds a delta directly to localPosition, exactly the local-space
+// semantics this task's remaining scope needs no different.
+
+// Rotate: composes a DELTA rotation onto the entity's existing
+// localRotation, in LOCAL space — `local * delta` (not `delta * local`)
+// matches this file's/EngineMath.hpp's own documented Hamilton product
+// convention ("lhs*rhs applies rhs first, then lhs" — the same
+// parent-composes-child order Compose* already uses for world = parent *
+// local), so the delta rotates the entity in its OWN current local frame,
+// not the world's.
+ScriptFunctionCallResult Rotate(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+    const kb::math::Quat delta = kb::math::Normalize(kb::math::Quat{
+        FloatArg(arguments, "x", 0.0F),
+        FloatArg(arguments, "y", 0.0F),
+        FloatArg(arguments, "z", 0.0F),
+        FloatArg(arguments, "w", 1.0F),
+    });
+    transform.localRotation = kb::math::Normalize(transform.localRotation * delta);
+    context.scene->Transforms().Set(entity, transform);
+    return BoolResult("moved", true);
+}
+
+// LookAt: a look target is naturally specified in WORLD space, so this
+// computes a WORLD rotation via the existing kb::math::LookRotation
+// (LIB-049) from the entity's CURRENT world position toward the target,
+// then applies the exact same root-vs-parent branching
+// Transform.SetWorldPose already established — reusing WorldPoseToLocal
+// wholesale with the entity's OWN (freshly synced) world position as the
+// position argument, so position round-trips unchanged and only rotation
+// is genuinely back-solved. Both the entity's own world position and (if
+// present) the parent's world transform are read AFTER a
+// SynchronizeTransforms() call, so a pending change from earlier this same
+// frame is accounted for rather than solving against a stale pose.
+ScriptFunctionCallResult LookAt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return BoolResult("moved", false);
+    }
+    kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+    const kb::math::Vec3 target{
+        FloatArg(arguments, "targetX", transform.worldPosition.x),
+        FloatArg(arguments, "targetY", transform.worldPosition.y),
+        FloatArg(arguments, "targetZ", transform.worldPosition.z),
+    };
+    const kb::math::Vec3 up{
+        FloatArg(arguments, "upX", 0.0F),
+        FloatArg(arguments, "upY", 1.0F),
+        FloatArg(arguments, "upZ", 0.0F),
+    };
+
+    const kb::scene::SceneEntity parent = context.scene->Hierarchy().Parent(entity);
+    if (parent.IsValid()) {
+        context.scene->Runtime().SynchronizeTransforms();
+        transform = context.scene->Transforms().Get(entity);
+    }
+    const kb::math::Vec3 forward = kb::math::Normalize(target - transform.worldPosition);
+    const kb::math::Quat desiredWorldRotation = kb::math::LookRotation(forward, up);
+
+    if (!parent.IsValid()) {
+        transform.localRotation = desiredWorldRotation;
+    } else {
+        const kb::scene::TransformComponent parentTransform = context.scene->Transforms().Get(parent);
+        const LocalPose localPose = WorldPoseToLocal(parentTransform, transform.worldPosition, desiredWorldRotation);
+        transform.localRotation = localPose.rotation;
+    }
+    context.scene->Transforms().Set(entity, transform);
+    context.scene->Runtime().SynchronizeTransforms();
+    return BoolResult("moved", true);
+}
+
+// TransformPoint: converts a point expressed in this entity's OWN local
+// space into world space — the point-only forward half of
+// kb::scene::TransformMath::Compose's formula (TransformMath.cpp),
+// applied directly against the entity's own cached world transform
+// (no parent lookup needed, unlike SetWorldPose/LookAt, since a point is
+// relative to THIS entity, not to a parent). Same "does not force a
+// SynchronizeTransforms() pass" honesty convention as the read-only
+// Transform.WorldPose — may be stale until the next sync point.
+ScriptFunctionCallResult TransformPoint(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return PositionResult(false, {});
+    }
+    const kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+    const kb::math::Vec3 localPoint{
+        FloatArg(arguments, "x", 0.0F),
+        FloatArg(arguments, "y", 0.0F),
+        FloatArg(arguments, "z", 0.0F),
+    };
+    const kb::math::Vec3 scaledLocalPoint{
+        localPoint.x * transform.worldScale.x,
+        localPoint.y * transform.worldScale.y,
+        localPoint.z * transform.worldScale.z,
+    };
+    const kb::math::Vec3 worldPoint = transform.worldPosition + kb::math::Rotate(transform.worldRotation, scaledLocalPoint);
+    return PositionResult(true, worldPoint);
+}
+
+// InverseTransformPoint: the inverse of TransformPoint above — reuses
+// WorldPoseToLocal literally, treating the ENTITY ITSELF as its own
+// reference frame (the same math SetWorldPose/SetParent's keepWorld
+// branch already use for a PARENT, just substituting this entity's own
+// world transform in that role). The returned LocalPose's rotation half
+// is discarded: this converts a POINT, not a pose — a point has no
+// orientation of its own to back-solve — the identity quaternion passed
+// in is only there because WorldPoseToLocal's signature requires one.
+ScriptFunctionCallResult InverseTransformPoint(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
+    if (!Alive(context, entity)) {
+        return PositionResult(false, {});
+    }
+    const kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
+    const kb::math::Vec3 worldPoint{
+        FloatArg(arguments, "x", 0.0F),
+        FloatArg(arguments, "y", 0.0F),
+        FloatArg(arguments, "z", 0.0F),
+    };
+    const LocalPose localPose = WorldPoseToLocal(transform, worldPoint, kb::math::Quat{});
+    return PositionResult(true, localPose.position);
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host,
     std::string name,
@@ -666,6 +795,56 @@ bool ScriptTransformApi::Register(ScriptRuntimeHost& host) {
             ScriptFunctionPin{ "child", ScriptValueType::Entity, true },
         },
         &FindChild) && ok;
+    ok = RegisterFunction(host, "Transform.Rotate",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "w", ScriptValueType::Float, true },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &Rotate) && ok;
+    ok = RegisterFunction(host, "Transform.LookAt",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "targetX", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "targetY", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "targetZ", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "upX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "upY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "upZ", ScriptValueType::Float, false },
+        },
+        { ScriptFunctionPin{ "moved", ScriptValueType::Bool, true } },
+        &LookAt) && ok;
+    ok = RegisterFunction(host, "Transform.TransformPoint",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        &TransformPoint) && ok;
+    ok = RegisterFunction(host, "Transform.InverseTransformPoint",
+        {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        {
+            ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        &InverseTransformPoint) && ok;
     return ok;
 }
 
