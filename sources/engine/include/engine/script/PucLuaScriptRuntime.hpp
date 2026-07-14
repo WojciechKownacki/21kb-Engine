@@ -121,6 +121,7 @@ public:
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(
         const kb::scene::BehaviourComponent& behaviour,
         const ScriptEvent& event,
+        EventId eventId,
         ScriptExecutionContext& context) override;
 
 private:
