@@ -6060,6 +6060,78 @@ void RunSceneTaskFixedStepDomainTest() {
     kb::tests::Require(!scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must resume completing normally once the scene is unpaused");
 }
 
+// LIB-099: cancellation propagation — widens Timer/Task's existing
+// owner-destroyed auto-cancel (LIB-095/097) to also cover owner-deactivated
+// (World.SetActive(owner, false), LIB-068), and proves Scene.Unload needs
+// no separate handling because it already cascades through the same
+// SceneEntityDestructionService destroy path (LIB-070) the owner-alive
+// check observes — tested here directly against the underlying mechanism
+// (destroying a parent cascades to a child), not through a full Scene.Load/
+// Unload fixture, since that mechanism was already independently
+// established and is exercised elsewhere.
+void RunTimerAndTaskCancellationPropagationTest() {
+    kb::scene::Scene scene;
+
+    // (A) Timer: a DEACTIVATED (not destroyed) owner must auto-cancel the
+    // timer just as honestly as a destroyed one — it never fires.
+    const kb::scene::SceneObject deactivatedTimerOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Deactivated Owner" });
+    const std::uint64_t deactivatedTimerId = scene.Timers().Once(1.0F, deactivatedTimerOwner.Entity());
+    kb::tests::Require(deactivatedTimerId != 0U, "Cancellation propagation fixture: Timer.Once must succeed");
+    scene.Entities().SetActive(deactivatedTimerOwner.Entity(), false);
+    const std::vector<kb::scene::TimerFiredRecord> timerFiredAfterDeactivate = scene.Timers().Advance(5.0F);
+    kb::tests::Require(timerFiredAfterDeactivate.empty(), "A timer whose owner was deactivated (not destroyed) must never fire");
+    kb::tests::Require(!scene.Timers().Exists(deactivatedTimerId), "A deactivated owner must auto-cancel (remove) its timer, not merely suppress its firing");
+
+    // (B) Task: same deactivation rule — poll is never called again once
+    // the owner is deactivated, no TaskCompleted/TaskFailed follows.
+    const kb::scene::SceneObject deactivatedTaskOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Deactivated Owner" });
+    int deactivatedTaskPolls = 0;
+    const std::uint64_t deactivatedTaskId = scene.Tasks().Start([&deactivatedTaskPolls](float) {
+                                                 ++deactivatedTaskPolls;
+                                                 return kb::scene::TaskPollResult::Running;
+                                             },
+        deactivatedTaskOwner.Entity());
+    kb::tests::Require(deactivatedTaskId != 0U, "Cancellation propagation fixture: SceneTasks::Start must succeed");
+    scene.Entities().SetActive(deactivatedTaskOwner.Entity(), false);
+    static_cast<void>(scene.Tasks().Advance(1.0F));
+    kb::tests::Require(deactivatedTaskPolls == 0, "A task whose owner was deactivated must never have its poll callback called again");
+    kb::tests::Require(!scene.Tasks().Exists(deactivatedTaskId), "A deactivated owner must auto-cancel (remove) its task");
+
+    // (C) Reactivating does NOT resurrect an already-cancelled timer/task —
+    // cancellation on deactivation is permanent, exactly like destruction.
+    scene.Entities().SetActive(deactivatedTimerOwner.Entity(), true);
+    scene.Entities().SetActive(deactivatedTaskOwner.Entity(), true);
+    kb::tests::Require(!scene.Timers().Exists(deactivatedTimerId) && !scene.Tasks().Exists(deactivatedTaskId), "Reactivating an owner must not resurrect a timer/task that was already cancelled while it was inactive");
+
+    // (D) Scene.Unload's actual mechanism, proven directly: it destroys its
+    // loaded content's root entity (SceneLoadedContentService::Unload calls
+    // scene.Entities().Destroy(root)), which cascades to the WHOLE
+    // hierarchy (SceneEntityDestructionService, LIB-070) — so a timer/task
+    // owned by a CHILD several levels deep is caught by the SAME
+    // owner-alive check the moment the root is destroyed, with no
+    // scene-unload-specific code required anywhere in Timer/Task.
+    const kb::scene::SceneObject cascadeRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Root" });
+    const kb::scene::SceneObject cascadeMiddle = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Middle" });
+    const kb::scene::SceneObject cascadeLeaf = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Leaf" });
+    kb::tests::Require(scene.Hierarchy().SetParent(cascadeMiddle.Entity(), cascadeRoot.Entity()), "Cascade fixture could not attach cascadeMiddle");
+    kb::tests::Require(scene.Hierarchy().SetParent(cascadeLeaf.Entity(), cascadeMiddle.Entity()), "Cascade fixture could not attach cascadeLeaf");
+
+    const std::uint64_t cascadeTimerId = scene.Timers().Once(1.0F, cascadeLeaf.Entity());
+    int cascadeTaskPolls = 0;
+    const std::uint64_t cascadeTaskId = scene.Tasks().Start([&cascadeTaskPolls](float) {
+                                             ++cascadeTaskPolls;
+                                             return kb::scene::TaskPollResult::Running;
+                                         },
+        cascadeLeaf.Entity());
+    kb::tests::Require(cascadeTimerId != 0U && cascadeTaskId != 0U, "Cascade fixture: Timer/Task creation on the leaf entity must succeed");
+
+    scene.Entities().Destroy(cascadeRoot);
+    const std::vector<kb::scene::TimerFiredRecord> timerFiredAfterCascade = scene.Timers().Advance(5.0F);
+    static_cast<void>(scene.Tasks().Advance(1.0F));
+    kb::tests::Require(timerFiredAfterCascade.empty() && !scene.Timers().Exists(cascadeTimerId), "A timer owned by a leaf entity in a destroyed hierarchy (the exact mechanism Scene.Unload uses) must be auto-cancelled, mirroring scene-unload cancellation propagation");
+    kb::tests::Require(cascadeTaskPolls == 0 && !scene.Tasks().Exists(cascadeTaskId), "A task owned by a leaf entity in a destroyed hierarchy must likewise be auto-cancelled, never polled again");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -6100,6 +6172,7 @@ void RunScriptRuntimeTests() {
     RunScriptTaskApiCompletionOwnerAndPauseTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
+    RunTimerAndTaskCancellationPropagationTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
