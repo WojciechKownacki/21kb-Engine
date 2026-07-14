@@ -184,6 +184,7 @@ void TestAssetRoundTrip() {
 
     InputMappingContextAsset context;
     InputKeyMapping mapping;
+    mapping.bindingId = 99U;
     mapping.actionId = 42U;
     mapping.key = InputKey::Space;
     mapping.modifiers.push_back(InputModifierDesc{.type = InputModifierType::Negate, .params = {1.0F, 0.0F, 0.0F}});
@@ -191,17 +192,163 @@ void TestAssetRoundTrip() {
                                                 .params = {0.5F, 1.0F, 0.0F},
                                                 .chordActionId = 7U});
     context.mappings.push_back(std::move(mapping));
+
+    InputCompositeBinding composite;
+    composite.bindingId = 100U;
+    composite.actionId = 43U;
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F});
+    composite.modifiers.push_back(InputModifierDesc{.type = InputModifierType::DeadZone, .params = {0.2F, 1.0F, 0.0F}});
+    context.composites.push_back(std::move(composite));
+
     const auto contextBytes = EncodeInputMappingContext(context);
     const auto decodedContext = DecodeInputMappingContext(contextBytes);
     Require(decodedContext.succeeded, "Mapping context should decode");
     Require(decodedContext.asset.mappings.size() == 1U, "Mapping count should round-trip");
     const InputKeyMapping& roundTripped = decodedContext.asset.mappings.front();
-    Require(roundTripped.actionId == 42U && roundTripped.key == InputKey::Space, "Mapping basics should round-trip");
+    Require(roundTripped.bindingId == 99U && roundTripped.actionId == 42U && roundTripped.key == InputKey::Space,
+            "Mapping basics should round-trip, including the stable binding id");
     Require(roundTripped.modifiers.size() == 1U && roundTripped.triggers.size() == 1U,
             "Modifier/trigger stacks should round-trip");
     Require(roundTripped.triggers.front().type == InputTriggerType::Hold &&
                 roundTripped.triggers.front().chordActionId == 7U,
             "Trigger details should round-trip");
+
+    Require(decodedContext.asset.composites.size() == 1U, "Composite count should round-trip");
+    const InputCompositeBinding& roundTrippedComposite = decodedContext.asset.composites.front();
+    Require(roundTrippedComposite.bindingId == 100U && roundTrippedComposite.actionId == 43U,
+            "Composite basics should round-trip");
+    Require(roundTrippedComposite.slots.size() == 2U, "Composite slot count should round-trip");
+    Require(roundTrippedComposite.slots[0].key == InputKey::D && roundTrippedComposite.slots[0].axis == 0U &&
+                NearlyEqual(roundTrippedComposite.slots[0].scale, 1.0F),
+            "Composite slot 0 should round-trip");
+    Require(roundTrippedComposite.slots[1].key == InputKey::A && NearlyEqual(roundTrippedComposite.slots[1].scale, -1.0F),
+            "Composite slot 1 should round-trip");
+    Require(roundTrippedComposite.modifiers.size() == 1U, "Composite modifier stack should round-trip");
+}
+
+void TestCompositeBinding() {
+    auto move = MakeAction("Move", InputActionValueType::Axis2D, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+
+    // A WASD composite feeding one Axis2D action, with a single radial DeadZone
+    // applied to the *combined* vector - this is the behavior a set of four
+    // independent InputKeyMappings cannot express (each would dead-zone its own
+    // scalar alone, so a diagonal press would report magnitude sqrt(2) instead of
+    // a normalized 1.0).
+    auto lowContext = std::make_shared<InputMappingContextAsset>();
+    InputCompositeBinding moveComposite;
+    moveComposite.bindingId = 1U;
+    moveComposite.actionId = 1U;
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::W, .axis = 1U, .scale = 1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::S, .axis = 1U, .scale = -1.0F});
+    moveComposite.modifiers.push_back(InputModifierDesc{.type = InputModifierType::DeadZone, .params = {0.2F, 1.0F, 0.0F}});
+    lowContext->composites.push_back(std::move(moveComposite));
+
+    // A higher-priority context claims W for Jump, so the composite must still
+    // combine correctly from whichever of its slot keys remain unclaimed.
+    auto highContext = std::make_shared<InputMappingContextAsset>();
+    highContext->mappings.push_back(InputKeyMapping{.bindingId = 2U, .actionId = 2U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}, {2U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        {10U, highContext}, {20U, lowContext}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 10), "High-priority Jump context should resolve");
+    Require(subsystem.AddMappingContext(20U, 0), "Low-priority Move composite context should resolve");
+
+    // D alone: full-magnitude axial press should pass the dead zone at scale 1.
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::D, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue dOnly = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(dOnly.x, 1.0F) && NearlyEqual(dOnly.y, 0.0F), "D alone should give composite value (1, 0)");
+
+    // W+D diagonal: the combined-vector dead zone must normalize the magnitude to
+    // 1.0 (0.7071, 0.7071), proving the modifier ran once on the resultant vector.
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue diagonal = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(diagonal.Magnitude(), 1.0F),
+            "Diagonal W+D should normalize to magnitude 1.0 via the composite's shared dead zone");
+    Require(diagonal.x > 0.0F && diagonal.y == 0.0F,
+            "W's contribution must be excluded: the high-priority context already consumed W for Jump");
+    Require(subsystem.IsActionPressed("Jump"), "Jump should still fire from the higher-priority context's W mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::A, true);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue negDiagonal = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(negDiagonal.Magnitude(), 1.0F), "A+S diagonal should also normalize to magnitude 1.0");
+    Require(negDiagonal.x < 0.0F && negDiagonal.y < 0.0F, "A+S should give a negative x/y composite direction");
+}
+
+void TestBindingIdStableAcrossRebind() {
+    // Proves the asset-level "rebinding" contract LIB-113 defines: a binding is
+    // addressed by its stable bindingId, not by the physical key it currently
+    // points to, so a rebind operation (find-by-id, then mutate .key) works even
+    // though the whole point of rebinding is to change that key. The live runtime
+    // rebind API with conflict validation and settings persistence is LIB-119; this
+    // only proves the asset shape supports it.
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve before rebind");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move should fire on W before rebinding");
+
+    // Find the binding by its stable id (not by key) and rebind it to S.
+    InputKeyMapping* rebound = nullptr;
+    for (InputKeyMapping& candidate : context->mappings) {
+        if (candidate.bindingId == 7U) {
+            rebound = &candidate;
+        }
+    }
+    Require(rebound != nullptr, "Binding should be locatable by its stable id");
+    rebound->key = InputKey::S;
+    Require(subsystem.AddMappingContext(10U, 0), "Re-adding the context should re-resolve the rebound mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Move"), "Move must no longer fire on the old key W after rebinding");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move must fire on the new key S after rebinding");
+    Require(rebound->bindingId == 7U, "The binding id must remain unchanged across the rebind");
 }
 
 void TestAssetDiscoveryAndResolve() {
@@ -255,6 +402,8 @@ void RunInputTests() {
     TestAxisScaleAndContinuous();
     TestAssetRoundTrip();
     TestAssetDiscoveryAndResolve();
+    TestCompositeBinding();
+    TestBindingIdStableAcrossRebind();
 }
 
 } // namespace kb::tests

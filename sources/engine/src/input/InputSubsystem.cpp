@@ -53,7 +53,7 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
             const MappingEvaluationInput evalInput{
                 .valueType = mapping.valueType,
-                .rawValue = deviceState_.GetValue(mapping.key) * mapping.scale,
+                .raw = InputValue{.x = deviceState_.GetValue(mapping.key) * mapping.scale, .type = mapping.valueType},
                 .modifiers = mapping.modifiers,
                 .triggers = mapping.triggers,
                 .chordActionNames = mapping.chordActionNames,
@@ -78,6 +78,62 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
             if (result.state == TriggerState::Triggered && mapping.consumeInput) {
                 consumedKeys[keyIndex] = true;
+            }
+        }
+
+        for (ResolvedComposite& composite : context.composites) {
+            // Skip a slot whose key a higher-priority context already claimed, but
+            // still combine whichever slots remain free (e.g. W free, S consumed).
+            InputValue raw{.type = composite.valueType};
+            bool anyFree = false;
+            for (const InputCompositeSlot& slot : composite.slots) {
+                if (consumedKeys[static_cast<std::uint16_t>(slot.key)]) {
+                    continue;
+                }
+                anyFree = true;
+                const float contribution = deviceState_.GetValue(slot.key) * slot.scale;
+                switch (slot.axis) {
+                    case 0U:
+                        raw.x += contribution;
+                        break;
+                    case 1U:
+                        raw.y += contribution;
+                        break;
+                    default:
+                        raw.z += contribution;
+                        break;
+                }
+            }
+            if (!anyFree) {
+                continue;
+            }
+
+            const MappingEvaluationInput evalInput{
+                .valueType = composite.valueType,
+                .raw = raw,
+                .modifiers = composite.modifiers,
+                .triggers = composite.triggers,
+                .chordActionNames = composite.chordActionNames,
+            };
+            const MappingEvaluationResult result = evaluator.Evaluate(
+                evalInput, deltaSeconds, composite.modifierState, composite.triggerStates, chordSatisfied);
+
+            const bool isAxis = composite.valueType != InputActionValueType::Bool;
+            if (!isAxis && result.state == TriggerState::None) {
+                continue;
+            }
+
+            InputActionState& actionState = actionStates_[composite.actionName];
+            actionState.value.type = composite.valueType;
+            actionState.value.x += result.value.x;
+            actionState.value.y += result.value.y;
+            actionState.value.z += result.value.z;
+            actionState.combined = MaxState(actionState.combined, result.state);
+
+            if (result.state == TriggerState::Triggered && composite.consumeInput) {
+                for (const InputCompositeSlot& slot : composite.slots) {
+                    consumedKeys[static_cast<std::uint16_t>(slot.key)] = true;
+                }
             }
         }
     }
