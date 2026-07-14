@@ -61,6 +61,16 @@ Quat Normalize(Quat value) noexcept {
     return Quat{ value.x * invLength, value.y * invLength, value.z * invLength, value.w * invLength };
 }
 
+Quat Inverse(Quat value) noexcept {
+    const float lengthSquared = value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w;
+    if (lengthSquared <= 0.000001F) {
+        return Quat{};
+    }
+    const Quat conjugate = Conjugate(value);
+    const float invLengthSquared = 1.0F / lengthSquared;
+    return Quat{ conjugate.x * invLengthSquared, conjugate.y * invLengthSquared, conjugate.z * invLengthSquared, conjugate.w * invLengthSquared };
+}
+
 Quat Slerp(Quat a, Quat b, float t) noexcept {
     const float clampedT = Clamp(t, 0.0F, 1.0F);
     float cosOmega = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;

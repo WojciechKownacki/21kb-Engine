@@ -153,6 +153,23 @@ void RunQuatAndMatrixMathTest() {
     kb::tests::Require(
         composed.columns[3].x == translated.columns[3].x && composed.columns[3].y == translated.columns[3].y,
         "Mat4 identity * M must equal M (Mat4 operator* identity)");
+
+    // LIB-085: Conjugate/Inverse — added for Transform.SetWorldPose's
+    // world-to-local back-solve (the first caller in this codebase that
+    // needs to invert an arbitrary quaternion).
+    const Quat conjugated = kb::math::Conjugate(rotateZ90);
+    kb::tests::Require(conjugated.x == -rotateZ90.x && conjugated.y == -rotateZ90.y && conjugated.z == -rotateZ90.z && conjugated.w == rotateZ90.w,
+        "Conjugate must negate the imaginary part and leave w unchanged");
+    const Quat unitInverse = kb::math::Inverse(rotateZ90);
+    const Quat shouldBeIdentity = rotateZ90 * unitInverse;
+    kb::tests::Require(std::abs(shouldBeIdentity.x) < 0.0001F && std::abs(shouldBeIdentity.y) < 0.0001F && std::abs(shouldBeIdentity.z) < 0.0001F && std::abs(shouldBeIdentity.w - 1.0F) < 0.0001F,
+        "q * Inverse(q) must be the identity rotation for a unit quaternion");
+    const Vec3 rotatedThenUnrotated = kb::math::Rotate(kb::math::Inverse(rotateZ90), kb::math::Rotate(rotateZ90, Vec3{ 1.0F, 0.0F, 0.0F }));
+    kb::tests::Require(std::abs(rotatedThenUnrotated.x - 1.0F) < 0.0001F && std::abs(rotatedThenUnrotated.y) < 0.0001F && std::abs(rotatedThenUnrotated.z) < 0.0001F,
+        "Rotate(Inverse(q), Rotate(q, v)) must recover v");
+    const Quat zeroInverse = kb::math::Inverse(Quat{ 0.0F, 0.0F, 0.0F, 0.0F });
+    kb::tests::Require(zeroInverse.x == 0.0F && zeroInverse.y == 0.0F && zeroInverse.z == 0.0F && zeroInverse.w == 1.0F,
+        "Inverse of a zero-length quaternion must return identity, not divide by zero");
 }
 
 // LIB-044: Radians/Degrees must convert correctly against known values,
