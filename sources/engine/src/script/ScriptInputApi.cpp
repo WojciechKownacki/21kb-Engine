@@ -1,5 +1,6 @@
 #include "engine/script/ScriptInputApi.hpp"
 
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
@@ -30,6 +31,21 @@ std::string ActionName(std::span<const ScriptFunctionArgument> arguments) {
     return value != nullptr ? value->AsString() : std::string{};
 }
 
+// Optional; absent (or <= 0) means the primary local user, so every existing
+// call site that predates LIB-115 keeps querying exactly what it always has.
+kb::input::LocalUserId PlayerFromArgs(std::span<const ScriptFunctionArgument> arguments) {
+    const ScriptValue* value = FindArg(arguments, "player");
+    if (value == nullptr) {
+        return kb::input::kPrimaryLocalUser;
+    }
+    const int player = value->AsInt();
+    return player > 0 ? kb::input::LocalUserId{static_cast<std::uint32_t>(player)} : kb::input::kPrimaryLocalUser;
+}
+
+ScriptFunctionPin PlayerPin() {
+    return ScriptFunctionPin{"player", ScriptValueType::Int, false};
+}
+
 ScriptFunctionCallResult NoScene() {
     return ScriptFunctionCallResult{.executed = false, .outputs = {}, .errors = {"input api requires an active scene"}};
 }
@@ -46,14 +62,14 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
                          bool (kb::input::InputSubsystem::*query)(std::string_view) const) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{outputPin, ScriptValueType::Bool, true}};
     desc.callback = [outputPin, query](const ScriptFunctionCallContext& context,
                                        std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const bool value = (context.scene->Input().*query)(ActionName(arguments));
+        const bool value = (context.scene->Input(PlayerFromArgs(arguments)).*query)(ActionName(arguments));
         return BoolResult(outputPin, value);
     };
     return host.RegisterFunction(std::move(desc));
@@ -62,13 +78,13 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
 bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Float, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"value", ScriptValue{value.AsAxis1D()}}},
@@ -85,13 +101,13 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
 bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return BoolResult("value", value.AsBool());
     };
     return host.RegisterFunction(std::move(desc));
@@ -100,14 +116,14 @@ bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
 bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
                               ScriptFunctionPin{"y", ScriptValueType::Float, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -120,7 +136,7 @@ bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
 bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {
         ScriptFunctionPin{"x", ScriptValueType::Float, true},
         ScriptFunctionPin{"y", ScriptValueType::Float, true},
@@ -130,7 +146,7 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -151,7 +167,8 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true},
-                             ScriptFunctionPin{"priority", ScriptValueType::Int, false}};
+                             ScriptFunctionPin{"priority", ScriptValueType::Int, false},
+                             PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"added", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
@@ -161,7 +178,7 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
         const ScriptValue* priorityArg = FindArg(arguments, "priority");
         const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
         const auto priority = static_cast<std::int32_t>(priorityArg != nullptr ? priorityArg->AsInt() : 0);
-        const bool added = context.scene->Input().AddMappingContext(id, priority);
+        const bool added = context.scene->Input(PlayerFromArgs(arguments)).AddMappingContext(id, priority);
         return BoolResult("added", added);
     };
     return host.RegisterFunction(std::move(desc));
@@ -170,7 +187,7 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
 bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"removed", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
@@ -178,8 +195,9 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
         }
         const ScriptValue* contextArg = FindArg(arguments, "context");
         const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
-        const bool had = context.scene->Input().HasMappingContext(id);
-        context.scene->Input().RemoveMappingContext(id);
+        kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
+        const bool had = input.HasMappingContext(id);
+        input.RemoveMappingContext(id);
         return BoolResult("removed", had);
     };
     return host.RegisterFunction(std::move(desc));

@@ -28,6 +28,10 @@ bool InputSubsystem::HasMappingContext(std::uint64_t contextId) const noexcept {
 }
 
 void InputSubsystem::Evaluate(float deltaSeconds) {
+    EvaluateWithDeviceState(deviceState_, deltaSeconds);
+}
+
+void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, float deltaSeconds) {
     // Snapshot last frame's combined states (used for edge events and chords),
     // then rebuild this frame's action states from scratch.
     previousCombined_.clear();
@@ -53,7 +57,7 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
             const MappingEvaluationInput evalInput{
                 .valueType = mapping.valueType,
-                .raw = InputValue{.x = deviceState_.GetValue(mapping.key) * mapping.scale, .type = mapping.valueType},
+                .raw = InputValue{.x = device.GetValue(mapping.key) * mapping.scale, .type = mapping.valueType},
                 .modifiers = mapping.modifiers,
                 .triggers = mapping.triggers,
                 .chordActionNames = mapping.chordActionNames,
@@ -91,7 +95,7 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
                     continue;
                 }
                 anyFree = true;
-                const float contribution = deviceState_.GetValue(slot.key) * slot.scale;
+                const float contribution = device.GetValue(slot.key) * slot.scale;
                 switch (slot.axis) {
                     case 0U:
                         raw.x += contribution;

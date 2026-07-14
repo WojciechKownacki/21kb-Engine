@@ -38,7 +38,8 @@ template <typename T>
 [[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {
     return lhs.mappingContextAssetId == rhs.mappingContextAssetId
         && lhs.priority == rhs.priority
-        && lhs.enabled == rhs.enabled;
+        && lhs.enabled == rhs.enabled
+        && lhs.localUser == rhs.localUser;
 }
 
 [[nodiscard]] bool Equal(const RigidbodyComponent& lhs, const RigidbodyComponent& rhs) noexcept {
@@ -107,6 +108,7 @@ void AppendInput(SceneComponents components, SceneEntity entity, const std::opti
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.mappingContextAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->mappingContextAssetId), ScenePrefabOverrideFlag::Input);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.priority", std::to_string(actual->priority), ScenePrefabOverrideFlag::Input);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::Input);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.localUser", std::to_string(actual->localUser.value), ScenePrefabOverrideFlag::Input);
         return;
     }
     if (actual->mappingContextAssetId != expected->mappingContextAssetId) {
@@ -117,6 +119,9 @@ void AppendInput(SceneComponents components, SceneEntity entity, const std::opti
     }
     if (actual->enabled != expected->enabled) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::Input);
+    }
+    if (actual->localUser != expected->localUser) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "input.localUser", std::to_string(actual->localUser.value), ScenePrefabOverrideFlag::Input);
     }
 }
 

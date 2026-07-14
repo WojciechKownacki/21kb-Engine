@@ -4302,6 +4302,101 @@ end
         "Lua Input.RemoveMappingContext did not remove the active context");
 }
 
+// LIB-115: the same Input.* names, given an explicit player argument, must query
+// a genuinely independent LocalUser InputSubsystem - both through direct native
+// calls and through the Lua wrapper surface (which threads player as an optional
+// 2nd/3rd Lua argument - see PucLuaFunctionApi.cpp's InputActionArgs).
+void RunScriptInputApiPerPlayerTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+
+    auto primaryContext = std::make_shared<InputMappingContextAsset>();
+    primaryContext->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Space });
+    auto player2Context = std::make_shared<InputMappingContextAsset>();
+    player2Context->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Enter });
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{ { 1U, jump } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        { 10U, primaryContext }, { 20U, player2Context } };
+    const auto resolveAction = [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+        const auto found = actions.find(id);
+        return found != actions.end() ? found->second : nullptr;
+    };
+    const auto resolveContext = [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+        const auto found = contexts.find(id);
+        return found != contexts.end() ? found->second : nullptr;
+    };
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(resolveAction, resolveContext);
+    scene.Input(kb::input::LocalUserId{ 2U }).SetResolvers(resolveAction, resolveContext);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Per-player script input API host did not initialize");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const std::vector<kb::script::ScriptFunctionArgument> addPrimaryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "10" } } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> addPlayer2Args{
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "20" } } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
+        kb::script::ScriptFunctionArgument{ .name = "player", .value = kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult addedPrimary = host.Functions().Call("Input.AddMappingContext", addPrimaryArgs, callContext);
+    const kb::script::ScriptFunctionCallResult addedPlayer2 = host.Functions().Call("Input.AddMappingContext", addPlayer2Args, callContext);
+    kb::tests::Require(addedPrimary.Succeeded() && addedPrimary.Output("added")->AsBool(), "Primary Input.AddMappingContext failed");
+    kb::tests::Require(addedPlayer2.Succeeded() && addedPlayer2.Output("added")->AsBool(), "Player-2 Input.AddMappingContext failed");
+    kb::tests::Require(!scene.Input().HasMappingContext(20U), "Primary user must not receive player 2's context via the script API");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+
+    const std::vector<kb::script::ScriptFunctionArgument> jumpPrimaryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> jumpPlayer2Args{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+        kb::script::ScriptFunctionArgument{ .name = "player", .value = kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult primaryJump = host.Functions().Call("Input.IsPressed", jumpPrimaryArgs, callContext);
+    const kb::script::ScriptFunctionCallResult player2JumpBeforeEnter = host.Functions().Call("Input.IsPressed", jumpPlayer2Args, callContext);
+    kb::tests::Require(primaryJump.Succeeded() && primaryJump.Output("pressed")->AsBool(),
+        "Player 1 Input.IsPressed should see Jump while Space is held");
+    kb::tests::Require(player2JumpBeforeEnter.Succeeded() && !player2JumpBeforeEnter.Output("pressed")->AsBool(),
+        "Player 2 must not see Jump from Space - only Enter is bound to their context");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Enter, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    const kb::script::ScriptFunctionCallResult player2JumpAfterEnter = host.Functions().Call("Input.IsPressed", jumpPlayer2Args, callContext);
+    kb::tests::Require(player2JumpAfterEnter.Succeeded() && player2JumpAfterEnter.Output("pressed")->AsBool(),
+        "Player 2 Input.IsPressed should see Jump once Enter (shared device state) is held");
+
+    // Lua round-trip: player=2 as the wrapper's optional 2nd argument.
+    const kb::assets::AssetId luaAsset{ 8821U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Per-Player Input Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("input.player1Jump", Input.IsPressed("Jump"))
+    SetShared("input.player2Jump", Input.IsPressed("Jump", 2))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Per-player Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Per-player Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("input.player1Jump")->AsBool(), "Lua Input.IsPressed(action) should still see player 1's Jump");
+    kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -7777,6 +7872,7 @@ void RunScriptRuntimeTests() {
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
+    RunScriptInputApiPerPlayerTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

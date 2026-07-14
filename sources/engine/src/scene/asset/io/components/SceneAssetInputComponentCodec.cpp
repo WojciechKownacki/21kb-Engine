@@ -4,12 +4,15 @@ namespace kb::scene {
 
 bool SceneAssetInputComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, InputComponent& output) {
     std::uint32_t priority = 0;
+    std::uint32_t localUser = 0;
     if (!input.ReadUInt64(output.mappingContextAssetId) ||
         !input.ReadUInt32(priority) ||
-        !input.ReadBool(output.enabled)) {
+        !input.ReadBool(output.enabled) ||
+        !input.ReadUInt32(localUser)) {
         return false;
     }
     output.priority = static_cast<std::int32_t>(priority);
+    output.localUser = kb::input::LocalUserId{localUser};
     return true;
 }
 
@@ -17,6 +20,7 @@ void SceneAssetInputComponentCodec::Write(std::vector<std::uint8_t>& output, con
     SceneAssetBinaryIO::WriteUInt64(output, input.mappingContextAssetId);
     SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(input.priority));
     SceneAssetBinaryIO::WriteUInt8(output, input.enabled ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, input.localUser.value);
 }
 
 } // namespace kb::scene
