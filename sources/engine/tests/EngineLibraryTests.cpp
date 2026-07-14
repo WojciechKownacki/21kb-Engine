@@ -7,6 +7,7 @@
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/library/EngineLibraryCommandApplication.hpp"
 #include "engine/library/EngineLibraryCommandBatch.hpp"
+#include "engine/library/EngineLibraryComponentChangeTracker.hpp"
 #include "engine/library/EngineLibraryComponentDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
@@ -1855,6 +1856,79 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
 }
 
+// LIB-081: kb::library::ComponentChangeTracker<Component> — proves the
+// wrapper around World::ObserveComponent<T> genuinely adds the three
+// properties that primitive itself does not have: coalescing (repeated
+// Set() calls on the same entity before Drain() collapse into one pending
+// entry, even though ObserveComponent fires once per raw Set — confirmed by
+// EcsEventTests.cpp::RunComponentObserverTest), a hard capacity limit
+// honestly reported via DroppedCount() instead of growing unboundedly or
+// silently discarding, and a Drain() that resets the baseline for the next
+// round.
+void RunComponentChangeTrackerTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerB" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerC" });
+    const kb::scene::SceneObject objectD = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangeTrackerD" });
+
+    kb::library::ComponentChangeTracker<kb::scene::CameraComponent> tracker{ scene, 3U };
+    kb::tests::Require(tracker.Capacity() == 3U, "Engine21kbLibrary ComponentChangeTracker::Capacity must report the constructor-provided capacity");
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary ComponentChangeTracker must start with no pending changes");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary ComponentChangeTracker must start with no dropped changes");
+
+    // Two Set() calls on the SAME entity before Drain() must coalesce into
+    // exactly one pending entry, not two.
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 10.0F });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 20.0F });
+    kb::tests::Require(tracker.PendingChanges().size() == 1U, "Engine21kbLibrary ComponentChangeTracker must coalesce repeated modifications of the same entity into one pending entry");
+    kb::tests::Require(tracker.PendingChanges()[0] == objectA.Entity(), "Engine21kbLibrary ComponentChangeTracker's single coalesced entry must be the modified entity");
+
+    // Filling up to capacity (B, C) must still record; a 4th distinct
+    // entity (D) once capacity is reached must be dropped, honestly
+    // counted rather than silently lost or grown unboundedly.
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.PendingChanges().size() == 3U, "Engine21kbLibrary ComponentChangeTracker must record distinct entities up to capacity");
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.PendingChanges().size() == 3U, "Engine21kbLibrary ComponentChangeTracker must not exceed its capacity");
+    kb::tests::Require(tracker.DroppedCount() == 1U, "Engine21kbLibrary ComponentChangeTracker must honestly count a modification dropped due to the capacity limit");
+
+    // A repeat Set() on an entity that was already dropped this round must
+    // also count as dropped (it is still not being recorded), not silently
+    // ignored without accounting.
+    scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
+    kb::tests::Require(tracker.DroppedCount() == 2U, "Engine21kbLibrary ComponentChangeTracker must count every dropped modification, not just the first one");
+
+    const std::vector<kb::scene::SceneEntity> drained = tracker.Drain();
+    kb::tests::Require(drained.size() == 3U, "Engine21kbLibrary ComponentChangeTracker::Drain must return every distinct pending entity");
+    std::vector<kb::scene::SceneEntity> sortedDrained = drained;
+    std::ranges::sort(sortedDrained);
+    std::vector<kb::scene::SceneEntity> expected{ objectA.Entity(), objectB.Entity(), objectC.Entity() };
+    std::ranges::sort(expected);
+    kb::tests::Require(sortedDrained == expected, "Engine21kbLibrary ComponentChangeTracker::Drain must return exactly the entities recorded since the last Drain (A, B, C — not D, which was dropped)");
+
+    // Drain() must reset the baseline: pending list and dropped count both
+    // clear, and a FRESH change to a previously-drained entity must be
+    // recorded again, not treated as already-seen.
+    kb::tests::Require(tracker.PendingChanges().empty(), "Engine21kbLibrary ComponentChangeTracker::Drain must clear the pending list");
+    kb::tests::Require(tracker.DroppedCount() == 0U, "Engine21kbLibrary ComponentChangeTracker::Drain must reset the dropped count");
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 30.0F });
+    kb::tests::Require(tracker.PendingChanges().size() == 1U && tracker.PendingChanges()[0] == objectA.Entity(),
+        "Engine21kbLibrary ComponentChangeTracker must record a fresh modification to a previously-drained entity as new, using Drain() as the new baseline");
+
+    // Destructor must cleanly DestroyObserver — scoping a second tracker,
+    // letting it go out of scope, then mutating the observed component
+    // again must not crash the process.
+    {
+        kb::library::ComponentChangeTracker<kb::scene::CameraComponent> scopedTracker{ scene, 4U };
+        scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 40.0F });
+        kb::tests::Require(scopedTracker.PendingChanges().size() == 1U, "Engine21kbLibrary ComponentChangeTracker (scoped) must record while alive");
+    }
+    scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 50.0F });
+    kb::tests::Require(true, "Engine21kbLibrary ComponentChangeTracker destructor must not crash on DestroyObserver after scope exit");
+}
+
 // LIB-029: every function the catalog reports must have a real binding in
 // every supported frontend. Native + generic Lua CallFunction reachability
 // are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
@@ -2147,6 +2221,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
+    RunComponentChangeTrackerTest();
     RunCatalogFunctionsHaveVisualGraphBindingsTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
