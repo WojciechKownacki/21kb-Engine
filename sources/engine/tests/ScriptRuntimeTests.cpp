@@ -7,6 +7,7 @@
 #include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputPollingSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/library/EngineLibraryAsyncResult.hpp"
 #include "engine/library/EngineLibraryEventSchema.hpp"
@@ -4616,6 +4617,218 @@ end
     kb::tests::Require(!host.SharedState().Get("focus.gamepad0")->AsBool(), "Lua Input.IsGamepadConnected(0) should report false after disconnect");
 }
 
+// LIB-122, TENTH and last task of section 9. Two related action-state parity
+// contracts proven under the REAL production scheduler (kb::input::
+// InputPollingSystem + kb::script::ScriptRuntimeSceneSystem via ScriptRuntimeHost),
+// not just isolated Evaluate() calls:
+//
+// (A) FixedTick/Tick parity - InputPollingSystem::OnUpdate polls the device
+// and recomputes ALL action state EXACTLY ONCE per Scene::Runtime().Update()
+// call, while ScriptRuntimeSceneSystem::ExecuteFrame runs its OWN internal
+// fixed-step loop (zero or more ScriptLifecycleEvent::FixedTick dispatches)
+// BEFORE exactly one Tick dispatch, all inside that SAME Update() call - so
+// every FixedTick AND the following Tick in one frame must observe
+// byte-identical action state; nothing in the engine re-polls mid-frame.
+// This is a regression guard: were a future change to add a per-fixed-step
+// poll (mirroring how physics advances per fixed step), a Hold-style trigger
+// or any other action state would start drifting between FixedTick calls
+// within a single frame instead of staying frozen for the whole frame.
+//
+// (B) native/Lua/graph parity - mirrors the established
+// RunMathFunctionCrossBackendParityTest pattern: native (ScriptExecutionContext::
+// CallFunction), Lua (the Input.* sugar from LIB-114/115) and VisualGraph
+// (a CallNative "Function.Input.*" node - ScriptFunctionVisualGraphBindings
+// wires every ScriptFunctionRegistry entry generically, confirmed at
+// LIB-114/115) must all resolve to the identical ScriptFunctionRegistry
+// entry and read the identical action-state value within the same Tick.
+void RunInputActionStateFixedTickTickAndBackendParityTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+    auto move = std::make_shared<InputActionAsset>();
+    move->name = "Move";
+    move->valueType = InputActionValueType::Axis1D;
+    auto mappingContext = std::make_shared<InputMappingContextAsset>();
+    mappingContext->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+    mappingContext->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}, {2U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{60U, mappingContext}};
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "Parity test mapping context should resolve");
+    // Mirrors kb::input::InputModule::OnSceneAttach's wiring (Input phase runs
+    // once per Update, before the script runtime's own FixedTick/Tick loop).
+    scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::W, true);
+
+    kb::script::ScriptRuntimeHostOptions options{};
+    options.installSceneSystem = true;
+    options.frameSettings.fixedDeltaSeconds = 0.02F;
+    options.frameSettings.maxFixedStepsPerFrame = 8U;
+    kb::script::ScriptRuntimeHost host{scene, options};
+    kb::tests::Require(host.Succeeded(), "FixedTick/Tick and backend parity host setup failed");
+
+    constexpr kb::assets::AssetId kNativeAsset{5220U};
+    constexpr kb::assets::AssetId kLuaAsset{5221U};
+    constexpr kb::assets::AssetId kVisualAsset{5222U};
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Native"});
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Lua"});
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Graph"});
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true, .executionOrder = 0});
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true, .executionOrder = 10});
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kVisualAsset.value, .backend = kb::scene::BehaviourBackend::VisualGraph, .enabled = true, .executionOrder = 20});
+
+    // --- Part A: native records one reading on every FixedTick AND on the
+    // following Tick, in the same frame.
+    struct Reading {
+        bool jumpPressed = false;
+        float moveValue = 0.0F;
+    };
+    std::vector<Reading> fixedTickReadings;
+    std::vector<Reading> tickReadings;
+    const auto readViaCallFunction = [](kb::script::ScriptExecutionContext& executionContext) -> Reading {
+        const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+            kb::script::ScriptFunctionArgument{.name = "action", .value = kb::script::ScriptValue{std::string{"Jump"}}},
+        };
+        const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
+            kb::script::ScriptFunctionArgument{.name = "action", .value = kb::script::ScriptValue{std::string{"Move"}}},
+        };
+        const kb::script::ScriptFunctionCallResult pressed = executionContext.CallFunction("Input.IsPressed", jumpArgs);
+        const kb::script::ScriptFunctionCallResult value = executionContext.CallFunction("Input.Value", moveArgs);
+        kb::tests::Require(pressed.Succeeded() && value.Succeeded(), "Native FixedTick/Tick Input reads must succeed");
+        return Reading{.jumpPressed = pressed.Output("pressed")->AsBool(), .moveValue = value.Output("value")->AsFloat()};
+    };
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::FixedTick,
+                           [&](kb::script::ScriptExecutionContext& executionContext) { fixedTickReadings.push_back(readViaCallFunction(executionContext)); }),
+        "Parity FixedTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+                           [&](kb::script::ScriptExecutionContext& executionContext) { tickReadings.push_back(readViaCallFunction(executionContext)); }),
+        "Parity Tick registration failed");
+
+    // --- Part B: Lua and VisualGraph callers, reading the same two actions
+    // within that same Tick.
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaJumpPressed", Input.IsPressed("Jump"))
+    SetShared("luaMoveValue", Input.Value("Move"))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Parity Lua caller did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ParityInputGraph";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{.id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick},
+        kb::visual::VisualGraphNode{.id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityJumpActionKey"},
+        kb::visual::VisualGraphNode{.id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityJumpResultKey"},
+        kb::visual::VisualGraphNode{.id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.IsPressed"},
+        kb::visual::VisualGraphNode{.id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Bool"},
+        kb::visual::VisualGraphNode{.id = 6U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityMoveActionKey"},
+        kb::visual::VisualGraphNode{.id = 7U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityMoveResultKey"},
+        kb::visual::VisualGraphNode{.id = 8U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.Value"},
+        kb::visual::VisualGraphNode{.id = 9U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float"},
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{.nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "action", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "pressed", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 6U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 7U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "action", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool},
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{.fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 5U, .fromPin = "then", .toNode = 8U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 8U, .fromPin = "then", .toNode = 9U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 2U, .fromPin = "value", .toNode = 4U, .toPin = "action", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 4U, .fromPin = "pressed", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 6U, .fromPin = "value", .toNode = 8U, .toPin = "action", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 7U, .fromPin = "value", .toNode = 9U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 8U, .fromPin = "value", .toNode = 9U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data},
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Parity input graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{.assetId = kVisualAsset, .graphName = graph.name, .module = compiled.module});
+
+    const auto registerConstantKey = [&host](const std::string& symbol, const std::string& value) {
+        kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                               .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                               .symbol = symbol,
+                               .outputs = {kb::visual::VisualGraphPinSignature{.name = "value", .type = kb::visual::VisualGraphValueType::String}},
+                               .callback = [value](kb::visual::VisualGraphRuntimeExecutionContext& runtimeContext, const kb::visual::VisualGraphIrInstruction& instruction) {
+                                   runtimeContext.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{value});
+                               },
+                           }),
+            "Parity constant-key binding did not register");
+    };
+    registerConstantKey("ParityJumpActionKey", "Jump");
+    registerConstantKey("ParityJumpResultKey", "graphJumpPressed");
+    registerConstantKey("ParityMoveActionKey", "Move");
+    registerConstantKey("ParityMoveResultKey", "graphMoveValue");
+
+    // --- Run one engine frame long enough to force multiple internal
+    // FixedTick steps (0.07s / 0.02s = 3 full steps) before the single Tick.
+    static_cast<void>(scene.Runtime().Update(0.07F));
+
+    // Part A assertions: FixedTick/Tick parity.
+    kb::tests::Require(fixedTickReadings.size() == 3U, "Parity frame should have produced exactly 3 FixedTick readings");
+    kb::tests::Require(tickReadings.size() == 1U, "Parity frame should have produced exactly 1 Tick reading");
+    for (const Reading& reading : fixedTickReadings) {
+        kb::tests::Require(reading.jumpPressed, "Every FixedTick reading must see Jump pressed");
+        kb::tests::Require(kb::tests::NearlyEqual(reading.moveValue, 1.0F), "Every FixedTick reading must see the resolved Move value");
+    }
+    kb::tests::Require(
+        tickReadings[0].jumpPressed == fixedTickReadings[0].jumpPressed && kb::tests::NearlyEqual(tickReadings[0].moveValue, fixedTickReadings[0].moveValue),
+        "Tick must observe the exact same action state as every FixedTick in the same frame - action state must not be re-polled mid-frame");
+
+    // Part B assertions: native/Lua/graph parity, all against that same Tick reading.
+    const std::optional<kb::script::ScriptValue> luaJumpPressed = host.SharedState().Get("luaJumpPressed");
+    const std::optional<kb::script::ScriptValue> luaMoveValue = host.SharedState().Get("luaMoveValue");
+    const std::optional<kb::script::ScriptValue> graphJumpPressed = host.SharedState().Get("graphJumpPressed");
+    const std::optional<kb::script::ScriptValue> graphMoveValue = host.SharedState().Get("graphMoveValue");
+    kb::tests::Require(luaJumpPressed.has_value() && luaMoveValue.has_value(), "Lua backend did not store Input parity results");
+    kb::tests::Require(graphJumpPressed.has_value() && graphMoveValue.has_value(), "Visual Graph backend did not store Input parity results");
+    kb::tests::Require(luaJumpPressed->AsBool() == tickReadings[0].jumpPressed, "Lua and native Jump-pressed parity mismatch");
+    kb::tests::Require(graphJumpPressed->AsBool() == tickReadings[0].jumpPressed, "Visual Graph and native Jump-pressed parity mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(luaMoveValue->AsFloat(), tickReadings[0].moveValue), "Lua and native Move-value parity mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(graphMoveValue->AsFloat(), tickReadings[0].moveValue), "Visual Graph and native Move-value parity mismatch");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -8095,6 +8308,7 @@ void RunScriptRuntimeTests() {
     RunScriptPointerApiTest();
     RunScriptInputPriorityConstantsTest();
     RunScriptInputFocusLossReleasesActionsTest();
+    RunInputActionStateFixedTickTickAndBackendParityTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();
