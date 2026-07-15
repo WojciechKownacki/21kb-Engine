@@ -20,7 +20,6 @@ public:
 
 private:
     kb::ecs::World* world_ = nullptr;
-    std::uint64_t componentId_ = 0;
 };
 
 } // namespace kb::scene

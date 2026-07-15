@@ -8,8 +8,9 @@
 namespace kb::scene {
 
 SceneTransformComponentStore::SceneTransformComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world)
-    , componentId_(componentId) {}
+    : world_(&world) {
+    static_cast<void>(componentId);
+}
 
 const TransformComponent* SceneTransformComponentStore::TryGet(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::TryGet<TransformComponent>(world_, entity);
