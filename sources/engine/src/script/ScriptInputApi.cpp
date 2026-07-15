@@ -1,5 +1,7 @@
 #include "engine/script/ScriptInputApi.hpp"
 
+#include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputKey.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
@@ -203,6 +205,77 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
     return host.RegisterFunction(std::move(desc));
 }
 
+// The mouse is a singular physical device (unlike gamepads), shared by every
+// local user - so unlike Input.* above, Pointer.* takes no player pin and
+// always reads the primary local user's device state (LIB-115's
+// kPrimaryLocalUser), which is where the platform collector writes it.
+bool RegisterPointerPosition(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Position";
+    desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
+                              ScriptFunctionPin{"y", ScriptValueType::Float, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.PointerX()}},
+                        ScriptFunctionArgument{"y", ScriptValue{device.PointerY()}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterPointerDelta(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Delta";
+    desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
+                              ScriptFunctionPin{"y", ScriptValueType::Float, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.GetValue(kb::input::InputKey::MouseX)}},
+                        ScriptFunctionArgument{"y", ScriptValue{device.GetValue(kb::input::InputKey::MouseY)}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// 0=left, 1=right, 2=middle - the same convention as Unity's Input.GetMouseButton.
+[[nodiscard]] kb::input::InputKey MouseButtonKey(int button) noexcept {
+    switch (button) {
+        case 1:
+            return kb::input::InputKey::MouseRight;
+        case 2:
+            return kb::input::InputKey::MouseMiddle;
+        default:
+            return kb::input::InputKey::MouseLeft;
+    }
+}
+
+bool RegisterPointerButton(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Button";
+    desc.signature.inputs = {ScriptFunctionPin{"button", ScriptValueType::Int, true}};
+    desc.signature.outputs = {ScriptFunctionPin{"pressed", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* buttonArg = FindArg(arguments, "button");
+        const kb::input::InputKey key = MouseButtonKey(buttonArg != nullptr ? buttonArg->AsInt() : 0);
+        const bool pressed = context.scene->Input().DeviceState().IsKeyDown(key);
+        return BoolResult("pressed", pressed);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
@@ -222,6 +295,10 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterActionQuery(host, "Input.Pressed", "pressed", &kb::input::InputSubsystem::WasActionStarted) && ok;
     ok = RegisterActionQuery(host, "Input.Released", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
     ok = RegisterActionQuery(host, "Input.Held", "held", &kb::input::InputSubsystem::IsActionPressed) && ok;
+
+    ok = RegisterPointerPosition(host) && ok;
+    ok = RegisterPointerDelta(host) && ok;
+    ok = RegisterPointerButton(host) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;

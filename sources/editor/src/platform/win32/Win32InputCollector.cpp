@@ -110,6 +110,16 @@ void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND edito
         }
         previousMouse_ = cursor;
         hasPreviousMouse_ = true;
+
+        // LIB-117: absolute position, unlike the delta above, has no "avoid a
+        // jump on the first tracked frame" concern - always update it. Reported
+        // in the editor window's client pixel space (not raw desktop screen
+        // coordinates), matching what a windowed game would report for its own
+        // window.
+        POINT client = cursor;
+        if (ScreenToClient(editorWindow, &client) != 0) {
+            state.SetPointerPosition(static_cast<float>(client.x), static_cast<float>(client.y));
+        }
     }
 
     CollectGamepad(state);

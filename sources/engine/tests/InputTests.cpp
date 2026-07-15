@@ -447,6 +447,24 @@ void TestTouchPoints() {
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
 }
 
+// LIB-117: absolute pointer position is independent storage from the existing
+// MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
+// platform collector re-sets it unconditionally every Collect() call rather
+// than diffing against a previous frame.
+void TestPointerPosition() {
+    InputDeviceState device;
+    Require(NearlyEqual(device.PointerX(), 0.0F) && NearlyEqual(device.PointerY(), 0.0F),
+            "Pointer position should start at the origin");
+
+    device.SetPointerPosition(100.0F, 200.0F);
+    Require(NearlyEqual(device.PointerX(), 100.0F) && NearlyEqual(device.PointerY(), 200.0F),
+            "Pointer position should read back what was set");
+
+    device.Reset();
+    Require(NearlyEqual(device.PointerX(), 100.0F) && NearlyEqual(device.PointerY(), 200.0F),
+            "Reset must not clear pointer position - the platform layer re-sets it unconditionally each frame");
+}
+
 // LIB-116: the same physical button (GamepadFaceBottom) on two different
 // gamepad slots must resolve to two independently controllable actions - proving
 // gamepadIndex flows through InputKeyMapping -> ResolvedMapping -> evaluation,
@@ -502,6 +520,7 @@ void RunInputTests() {
     TestMultiGamepadDeviceState();
     TestTouchPoints();
     TestMultiGamepadMapping();
+    TestPointerPosition();
 }
 
 } // namespace kb::tests

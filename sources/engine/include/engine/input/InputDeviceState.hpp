@@ -117,6 +117,24 @@ public:
         return std::span<const InputTouchPoint>{touchPoints_.data(), touchPointCount_};
     }
 
+    // Absolute pointer position (LIB-117), in the host window's client pixel
+    // space - NOT reset by Reset(), so it keeps its last known value across the
+    // Reset()-then-refill cycle every Collect() call does (the platform layer
+    // re-sets it immediately after Reset() whenever it has a reading; unlike a
+    // delta there is no "avoid a jump" reason to zero it first).
+    void SetPointerPosition(float x, float y) noexcept {
+        pointerX_ = x;
+        pointerY_ = y;
+    }
+
+    [[nodiscard]] float PointerX() const noexcept {
+        return pointerX_;
+    }
+
+    [[nodiscard]] float PointerY() const noexcept {
+        return pointerY_;
+    }
+
 private:
     [[nodiscard]] static std::size_t Index(InputKey key) noexcept {
         const auto raw = static_cast<std::size_t>(key);
@@ -142,6 +160,9 @@ private:
 
     std::array<InputTouchPoint, kMaxTouchPoints> touchPoints_{};
     std::size_t touchPointCount_ = 0U;
+
+    float pointerX_ = 0.0F;
+    float pointerY_ = 0.0F;
 };
 
 } // namespace kb::input
