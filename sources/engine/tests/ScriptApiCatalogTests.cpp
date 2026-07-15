@@ -96,7 +96,7 @@ void RunCatalogExportTest() {
 
     const std::string stubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
     kb::tests::Require(Contains(stubs, "---@meta"), "Script API stubs are missing the meta marker");
-    kb::tests::Require(Contains(stubs, "function Input.Vector2(action) end"), "Script API stubs are missing Input.Vector2");
+    kb::tests::Require(Contains(stubs, "function Input.Vector2(action, player) end"), "Script API stubs are missing Input.Vector2");
     kb::tests::Require(Contains(stubs, "---@return KbInputVector2Result"), "Script API stubs are missing multi-output result classes");
     kb::tests::Require(Contains(stubs, "function KbSelf:SetProperty(component, property, value) end"), "Script API stubs are missing self methods");
     // The Lua wrappers do not all mirror CallFunction: GetPosition strips its

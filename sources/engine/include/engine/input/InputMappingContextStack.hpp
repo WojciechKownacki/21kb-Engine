@@ -26,6 +26,23 @@ struct ResolvedMapping {
     bool consumeInput = true;
     InputKey key = InputKey::None;
     float scale = 1.0F;
+    std::uint8_t gamepadIndex = 0U;
+    std::vector<InputModifierDesc> modifiers;
+    std::vector<InputTriggerDesc> triggers;
+    std::vector<std::string> chordActionNames; // parallel to triggers; empty unless Chorded
+    ModifierRuntimeState modifierState{};
+    std::vector<TriggerRuntimeState> triggerStates;
+};
+
+// A resolved composite: several keys combined into one action's value, with the
+// action metadata resolved and per-frame state-machine storage for the combined
+// modifier/trigger stack. See InputCompositeBinding for why this is not just a
+// set of ResolvedMappings summed independently.
+struct ResolvedComposite {
+    std::string actionName;
+    InputActionValueType valueType = InputActionValueType::Bool;
+    bool consumeInput = true;
+    std::vector<InputCompositeSlot> slots;
     std::vector<InputModifierDesc> modifiers;
     std::vector<InputTriggerDesc> triggers;
     std::vector<std::string> chordActionNames; // parallel to triggers; empty unless Chorded
@@ -37,6 +54,7 @@ struct ActiveMappingContext {
     std::uint64_t contextId = 0U;
     std::int32_t priority = 0;
     std::vector<ResolvedMapping> mappings;
+    std::vector<ResolvedComposite> composites;
 };
 
 // Owns the prioritized stack of active mapping contexts and turns mapping-context

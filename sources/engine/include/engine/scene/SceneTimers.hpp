@@ -33,9 +33,13 @@ public:
 
     // Returns 0 (never a valid id) if delaySeconds/intervalSeconds <= 0, or
     // if the scene already holds kDefaultLibraryInputLimits.maxCollectionSize
-    // live timers.
-    [[nodiscard]] std::uint64_t Once(float delaySeconds, SceneEntity owner) noexcept;
-    [[nodiscard]] std::uint64_t Repeat(float intervalSeconds, SceneEntity owner) noexcept;
+    // live timers. `creator` (LIB-101) is an optional creation-site
+    // diagnostic — the entity that CALLED Once/Repeat, distinct from
+    // `owner` (who RECEIVES TimerFired) — see TimerRecord::creator's own
+    // doc comment (SceneState.hpp) for the full reasoning; a native C++
+    // caller that omits it simply gets an unknown (invalid) creator.
+    [[nodiscard]] std::uint64_t Once(float delaySeconds, SceneEntity owner, SceneEntity creator = {}) noexcept;
+    [[nodiscard]] std::uint64_t Repeat(float intervalSeconds, SceneEntity owner, SceneEntity creator = {}) noexcept;
     // Idempotent — false if `id` names no currently live timer (already
     // fired-and-removed one-shot, already cancelled, or never existed).
     [[nodiscard]] bool Cancel(std::uint64_t id) noexcept;
@@ -45,6 +49,9 @@ public:
     [[nodiscard]] bool Pause(std::uint64_t id) noexcept;
     [[nodiscard]] bool Resume(std::uint64_t id) noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
+    // LIB-101: returns an invalid SceneEntity if `id` names no currently
+    // live timer, or if it was created without a creator.
+    [[nodiscard]] SceneEntity Creator(std::uint64_t id) const noexcept;
 
     // LIB-095: called once per frame by kb::script::ScriptRuntimeSceneSystem
     // with the same raw (already non-negative-clamped) deltaSeconds it uses
@@ -52,9 +59,15 @@ public:
     // rule (scale = IsPlaying() ? TimeScale() : 0) before decrementing any
     // timer, so a timer's notion of elapsed time is always identical to
     // what Time.Delta reports for the same frame. A timer whose owner is no
-    // longer alive is silently auto-cancelled (removed, no fire) the moment
-    // that's detected, regardless of remaining time or pause state — no
-    // dangling callback for a dead entity. A one-shot timer is removed from
+    // longer alive OR no longer active (LIB-099: World.SetActive(owner,
+    // false)/LIB-068 — from a gameplay standpoint a deactivated owner is as
+    // "gone" as a destroyed one) is silently auto-cancelled (removed, no
+    // fire) the moment that's detected, regardless of remaining time or
+    // pause state — no dangling callback for a dead/inactive entity.
+    // Scene.Unload needs no separate handling: it destroys its whole
+    // hierarchy through the same SceneEntityDestructionService cascade
+    // (LIB-070), so an owner anywhere inside an unloaded scene is already
+    // caught by the alive-check above. A one-shot timer is removed from
     // storage after firing.
     // LIB-096: same-time ordering — when multiple timers become due within
     // one Advance() call, `fired` lists them in CREATION order (the order

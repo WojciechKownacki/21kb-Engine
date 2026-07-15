@@ -359,7 +359,10 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteLifecycle(const kb::sce
     return ExecuteFunction(behaviour, ToString(context.Lifecycle()), context, nullptr);
 }
 
-ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, ScriptExecutionContext& context) {
+ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId /*eventId*/, ScriptExecutionContext& context) {
+    // LIB-104: Lua resolves the event handler via lua_getglobal(event.name)
+    // — inherently string-keyed by the Lua VM itself, so the typed EventId
+    // has no lookup to replace here (see LuaScriptBackend.hpp's comment).
     return ExecuteFunction(behaviour, event.name, context, &event);
 }
 

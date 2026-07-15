@@ -28,6 +28,7 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
         ResolvedMapping resolved;
         resolved.key = mapping.key;
         resolved.scale = mapping.scale;
+        resolved.gamepadIndex = mapping.gamepadIndex;
         resolved.modifiers = mapping.modifiers;
         resolved.triggers = mapping.triggers;
         resolved.triggerStates.resize(mapping.triggers.size());
@@ -50,6 +51,35 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
 
         if (!resolved.actionName.empty()) {
             active.mappings.push_back(std::move(resolved));
+        }
+    }
+
+    active.composites.reserve(context->composites.size());
+    for (const InputCompositeBinding& composite : context->composites) {
+        ResolvedComposite resolved;
+        resolved.slots = composite.slots;
+        resolved.modifiers = composite.modifiers;
+        resolved.triggers = composite.triggers;
+        resolved.triggerStates.resize(composite.triggers.size());
+        resolved.chordActionNames.resize(composite.triggers.size());
+
+        if (const std::shared_ptr<const InputActionAsset> action = actionResolver_(composite.actionId)) {
+            resolved.actionName = action->name;
+            resolved.valueType = action->valueType;
+            resolved.consumeInput = action->consumeInput;
+        }
+
+        for (std::size_t index = 0U; index < composite.triggers.size(); ++index) {
+            const InputTriggerDesc& trigger = composite.triggers[index];
+            if (trigger.type == InputTriggerType::Chorded && trigger.chordActionId != 0U) {
+                if (const std::shared_ptr<const InputActionAsset> chord = actionResolver_(trigger.chordActionId)) {
+                    resolved.chordActionNames[index] = chord->name;
+                }
+            }
+        }
+
+        if (!resolved.actionName.empty()) {
+            active.composites.push_back(std::move(resolved));
         }
     }
 

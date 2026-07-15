@@ -3,6 +3,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -16,20 +17,27 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -169,6 +177,9 @@ struct BodySignature {
     bool useGravity = true;
     bool lockRotation = false;
     bool trigger = false;
+    float friction = 0.5F;
+    float restitution = 0.0F;
+    std::uint32_t layer = 0x7FFFFFFFU;
 };
 
 struct BodyRecord {
@@ -234,6 +245,9 @@ struct BodyRecord {
         .useGravity = rigidbody.useGravity,
         .lockRotation = rigidbody.lockRotation,
         .trigger = collider.trigger,
+        .friction = collider.friction,
+        .restitution = collider.restitution,
+        .layer = collider.layer,
     };
 }
 
@@ -241,7 +255,9 @@ struct BodyRecord {
     return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && SameVec3(lhs.scale, rhs.scale) &&
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
-        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger;
+        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger &&
+        lhs.layer == rhs.layer &&
+        lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
 
 [[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
@@ -292,9 +308,149 @@ struct PhysicsBodySnapshot {
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
 
+// LIB-125: builds a throwaway query shape (no Body/BodyID involved - Jolt
+// supports constructing a Shape purely to pass to CastShape/CollideShape,
+// the same construction calls CreateShape above already uses for real
+// bodies) from the engine-facing, script-boundary-friendly PhysicsShapeDesc.
+[[nodiscard]] JPH::RefConst<JPH::Shape> CreateQueryShape(const kb::scene::PhysicsShapeDesc& shape) {
+    switch (shape.kind) {
+    case kb::scene::PhysicsShapeKind::Sphere:
+        return new JPH::SphereShape(ClampPositive(shape.radius));
+    case kb::scene::PhysicsShapeKind::Capsule: {
+        const float radius = ClampPositive(shape.radius);
+        const float halfCylinder = std::max(0.0F, (shape.height * 0.5F) - radius);
+        return new JPH::CapsuleShape(halfCylinder, radius);
+    }
+    case kb::scene::PhysicsShapeKind::Box:
+        return new JPH::BoxShape(JPH::Vec3(
+            ClampPositive(shape.boxHalfExtents.x),
+            ClampPositive(shape.boxHalfExtents.y),
+            ClampPositive(shape.boxHalfExtents.z)));
+    }
+    return new JPH::SphereShape(0.5F);
+}
+
+// Query-time layer mask filter (LIB-125): every body's mUserData is set to
+// its ColliderComponent::layer bitmask at creation time (CreateBody below) -
+// Jolt's own ObjectLayer/ObjectLayerFilter is a single coarse value (this
+// engine only has 2: Moving/NonMoving, see Layers:: above) and cannot carry
+// an arbitrary per-body bitmask, so BodyFilter::ShouldCollideLocked (which
+// runs after the body is locked, giving access to GetUserData()) is the
+// correct extension point instead.
+class LayerMaskBodyFilter final : public JPH::BodyFilter {
+public:
+    explicit LayerMaskBodyFilter(std::uint32_t mask) noexcept
+        : mask_(mask) {}
+
+    [[nodiscard]] bool ShouldCollideLocked(const JPH::Body& body) const override {
+        return (static_cast<std::uint32_t>(body.GetUserData()) & mask_) != 0U;
+    }
+
+private:
+    std::uint32_t mask_ = 0U;
+};
+
+// ClosestPoint (LIB-125) targets ONE already-known entity's body specifically
+// (not a broad-phase search), so its query only ever accepts that single body.
+class SingleBodyOnlyFilter final : public JPH::BodyFilter {
+public:
+    explicit SingleBodyOnlyFilter(JPH::BodyID bodyId) noexcept
+        : bodyId_(bodyId) {}
+
+    [[nodiscard]] bool ShouldCollide(const JPH::BodyID& bodyId) const override {
+        return bodyId == bodyId_;
+    }
+
+private:
+    JPH::BodyID bodyId_;
+};
+
+// LIB-127: OnContactAdded/Persisted/Removed genuinely fire from MULTIPLE
+// Jolt job-system threads at once (ContactListener.h's own doc comment:
+// "callbacks... are called from multiple threads at the same time when all
+// bodies are locked"), so the listener may only read the minimum safe data
+// (BodyID/IsSensor/manifold point+normal - never lock/mutate bodies) and
+// must buffer it behind a mutex. Resolving BodyID -> SceneEntity and
+// building the actual queued event both happen later, on the main thread,
+// after Step() returns (entityByBodyId_ is not thread-safe and must never
+// be touched from these callbacks).
+enum class RawContactPhase : std::uint8_t {
+    Added,
+    Persisted,
+    Removed,
+};
+
+struct RawContactEvent {
+    JPH::SubShapeIDPair pair;
+    JPH::BodyID body1;
+    JPH::BodyID body2;
+    bool isSensor1 = false;
+    bool isSensor2 = false;
+    RawContactPhase phase = RawContactPhase::Added;
+    Vec3 point{};
+    Vec3 normal{};
+};
+
+class JoltCollisionContactListener final : public JPH::ContactListener {
+public:
+    void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
+        static_cast<void>(settings);
+        Record(body1, body2, manifold, RawContactPhase::Added);
+    }
+
+    void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
+        static_cast<void>(settings);
+        Record(body1, body2, manifold, RawContactPhase::Persisted);
+    }
+
+    // Cannot access body/manifold data here at all (Jolt's own doc: "You
+    // cannot access the bodies at the time of this callback... the body may
+    // have been removed and destroyed") - point/normal stay zero for Exit
+    // events; only the two BodyIDs (still valid to read from the pair
+    // itself) are available.
+    void OnContactRemoved(const JPH::SubShapeIDPair& subShapePair) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_.push_back(RawContactEvent{
+            .pair = subShapePair,
+            .body1 = subShapePair.GetBody1ID(),
+            .body2 = subShapePair.GetBody2ID(),
+            .phase = RawContactPhase::Removed,
+        });
+    }
+
+    [[nodiscard]] std::vector<RawContactEvent> DrainAndClear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<RawContactEvent> drained;
+        drained.swap(pending_);
+        return drained;
+    }
+
+private:
+    void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, RawContactPhase phase) {
+        Vec3 point{};
+        if (!manifold.mRelativeContactPointsOn1.empty()) {
+            point = FromJoltPosition(manifold.GetWorldSpaceContactPointOn1(0));
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_.push_back(RawContactEvent{
+            .pair = JPH::SubShapeIDPair(body1.GetID(), manifold.mSubShapeID1, body2.GetID(), manifold.mSubShapeID2),
+            .body1 = body1.GetID(),
+            .body2 = body2.GetID(),
+            .isSensor1 = body1.IsSensor(),
+            .isSensor2 = body2.IsSensor(),
+            .phase = phase,
+            .point = point,
+            .normal = FromJolt(manifold.mWorldSpaceNormal),
+        });
+    }
+
+    std::mutex mutex_;
+    std::vector<RawContactEvent> pending_;
+};
+
 } // namespace
 
-class JoltPhysicsSceneSystem::Impl {
+class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend {
 public:
     explicit Impl(JoltPhysicsSceneSystemSettings settings)
         : settings_(settings)
@@ -302,9 +458,14 @@ public:
         , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount()) {
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
+        // LIB-127: only a single ContactListener can be registered per
+        // PhysicsSystem (Jolt's own doc comment) - this Impl owns the one
+        // instance for its own PhysicsSystem, exactly like it owns
+        // broadPhaseLayers_/objectVsBroadPhaseFilter_ above.
+        physicsSystem_.SetContactListener(&contactListener_);
     }
 
-    ~Impl() {
+    ~Impl() override {
         RemoveAllBodies();
     }
 
@@ -312,10 +473,244 @@ public:
         SynchronizeBodies(context);
         Step(context.DeltaSeconds());
         WriteBack(context);
+        DispatchContactEvents(context);
     }
 
     void OnDestroy() {
         RemoveAllBodies();
+    }
+
+    // kb::scene::IPhysicsBackend - LIB-124. Every method looks the entity up
+    // in the SAME bodies_ map SynchronizeBodies already maintains; a miss
+    // (no live body this frame - not yet synchronized, or the entity has no
+    // Rigidbody/Collider at all) is a real, honest "not applied" (false /
+    // found=false), never a crash or silent success.
+    bool AddForce(SceneEntity entity, Vec3 force) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().AddForce(*bodyId, ToJolt(force));
+        return true;
+    }
+
+    bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().AddImpulse(*bodyId, ToJolt(impulse));
+        return true;
+    }
+
+    bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().SetLinearVelocity(*bodyId, ToJolt(velocity));
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(physicsSystem_.GetBodyInterface().GetLinearVelocity(*bodyId)) };
+    }
+
+    bool SetAngularVelocity(SceneEntity entity, Vec3 angularVelocity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().SetAngularVelocity(*bodyId, ToJolt(angularVelocity));
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(physicsSystem_.GetBodyInterface().GetAngularVelocity(*bodyId)) };
+    }
+
+    bool MoveKinematic(SceneEntity entity, Vec3 targetPosition, Quat targetRotation, float deltaSeconds) noexcept override {
+        const auto existing = bodies_.find(entity.Id());
+        if (existing == bodies_.end() || existing->second.signature.bodyType != RigidbodyBodyType::Kinematic || deltaSeconds <= 0.0F) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().MoveKinematic(existing->second.bodyId, ToJoltPosition(targetPosition), ToJolt(targetRotation), deltaSeconds);
+        return true;
+    }
+
+    bool Sleep(SceneEntity entity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().DeactivateBody(*bodyId);
+        return true;
+    }
+
+    bool Wake(SceneEntity entity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().ActivateBody(*bodyId);
+        return true;
+    }
+
+    [[nodiscard]] bool IsSleeping(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        return bodyId != nullptr && !physicsSystem_.GetBodyInterface().IsActive(*bodyId);
+    }
+
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        const JPH::Vec3 joltDirection = ToJolt(direction);
+        const float directionLength = joltDirection.Length();
+        if (maxDistance <= 0.0F || directionLength <= 0.000001F) {
+            return {};
+        }
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        const JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(origin)), (joltDirection / directionLength) * maxDistance);
+        JPH::ShapeCastSettings settings;
+        JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CastShape(shapeCast, settings, ToJoltPosition(origin), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        const auto entityIt = entityByBodyId_.find(collector.mHit.mBodyID2);
+        if (entityIt == entityByBodyId_.end()) {
+            return {};
+        }
+        // mContactPointOn2 is returned RELATIVE to inBaseOffset (origin, as
+        // passed to CastShape above), not an absolute world position - add
+        // it back to get the real hit point.
+        return kb::scene::PhysicsCastResult{
+            .hit = true,
+            .entity = entityIt->second,
+            .distance = collector.mHit.mFraction * maxDistance,
+            .point = Add(origin, FromJolt(collector.mHit.mContactPointOn2)),
+            .normal = FromJolt(-collector.mHit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())),
+        };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept override {
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        JPH::CollideShapeSettings settings;
+        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(center)), settings, ToJoltPosition(center), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        const auto entityIt = entityByBodyId_.find(collector.mHit.mBodyID2);
+        if (entityIt == entityByBodyId_.end()) {
+            return {};
+        }
+        return kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entityIt->second };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        // A tiny point-like sphere at the query point, restricted to collide
+        // ONLY with the target body (SingleBodyOnlyFilter) - with
+        // mMaxSeparationDistance set large, CollideShapeResult::
+        // mContactPointOn2 gives the closest point on the target's real
+        // surface regardless of how far away it is, and mPenetrationDepth
+        // (negative when separated) gives the distance - the documented
+        // Jolt pattern for closest-point queries (no dedicated API exists).
+        constexpr float PointRadius = 0.01F;
+        constexpr float MaxSearchDistance = 1.0e6F;
+        const JPH::SphereShape pointShape(PointRadius);
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = MaxSearchDistance;
+        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const SingleBodyOnlyFilter bodyFilter(*bodyId);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            &pointShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(point)), settings, ToJoltPosition(point), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        // mContactPointOn2 is relative to inBaseOffset (point, as passed to
+        // CollideShape above) - add it back for the absolute world position.
+        const Vec3 closest = Add(point, FromJolt(collector.mHit.mContactPointOn2));
+        const Vec3 delta = Subtract(closest, point);
+        return kb::scene::PhysicsClosestPointResult{
+            .found = true,
+            .point = closest,
+            .distance = std::sqrt((delta.x * delta.x) + (delta.y * delta.y) + (delta.z * delta.z)),
+        };
+    }
+
+    // LIB-126: same query as CastShape/OverlapShape above, but collecting
+    // EVERY hit (JPH::AllHitCollisionCollector, not ClosestHitCollisionCollector)
+    // into the caller's kb::library::ArrayNonAlloc buffer instead of only
+    // the closest one - this implementation owns clearing/filling `results`
+    // completely (PhysicsBackend::CastShapeAll only calls this when a
+    // backend IS registered; the no-backend clear lives there instead).
+    void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        results.Clear();
+        const JPH::Vec3 joltDirection = ToJolt(direction);
+        const float directionLength = joltDirection.Length();
+        if (maxDistance <= 0.0F || directionLength <= 0.000001F) {
+            return;
+        }
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        const JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(origin)), (joltDirection / directionLength) * maxDistance);
+        JPH::ShapeCastSettings settings;
+        JPH::AllHitCollisionCollector<JPH::CastShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CastShape(shapeCast, settings, ToJoltPosition(origin), collector, {}, {}, bodyFilter);
+        collector.Sort();
+        for (const JPH::CastShapeCollector::ResultType& hit : collector.mHits) {
+            const auto entityIt = entityByBodyId_.find(hit.mBodyID2);
+            if (entityIt == entityByBodyId_.end()) {
+                continue;
+            }
+            // mContactPointOn2 is relative to inBaseOffset (origin) - see
+            // CastShape above for the same note.
+            if (!results.PushBack(kb::scene::PhysicsCastResult{
+                    .hit = true,
+                    .entity = entityIt->second,
+                    .distance = hit.mFraction * maxDistance,
+                    .point = Add(origin, FromJolt(hit.mContactPointOn2)),
+                    .normal = FromJolt(-hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())),
+                })) {
+                break; // Buffer full; remaining hits are farther (already sorted), so nothing more would fit anyway.
+            }
+        }
+    }
+
+    void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        results.Clear();
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        JPH::CollideShapeSettings settings;
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(center)), settings, ToJoltPosition(center), collector, {}, {}, bodyFilter);
+        collector.Sort();
+        for (const JPH::CollideShapeCollector::ResultType& hit : collector.mHits) {
+            const auto entityIt = entityByBodyId_.find(hit.mBodyID2);
+            if (entityIt == entityByBodyId_.end()) {
+                continue;
+            }
+            if (!results.PushBack(kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entityIt->second })) {
+                break;
+            }
+        }
     }
 
     void SynchronizeBody(
@@ -336,10 +731,17 @@ public:
             RemoveBody(existing->second.bodyId);
             bodies_.erase(existing);
         }
-        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = CreateBody(rigidbody, collider, transform), .signature = signature });
+        const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform);
+        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = bodyId, .signature = signature });
+        entityByBodyId_.emplace(bodyId, entity);
     }
 
 private:
+    [[nodiscard]] const JPH::BodyID* FindBodyId(SceneEntity entity) const noexcept {
+        const auto existing = bodies_.find(entity.Id());
+        return existing == bodies_.end() ? nullptr : &existing->second.bodyId;
+    }
+
     [[nodiscard]] static std::uint32_t WorkerThreadCount() noexcept {
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
         return hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
@@ -394,6 +796,9 @@ private:
 
         JPH::BodyCreationSettings bodySettings(shape, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), ToMotionType(rigidbody.bodyType), ToObjectLayer(rigidbody.bodyType));
         bodySettings.mIsSensor = collider.trigger;
+        bodySettings.mFriction = collider.friction;
+        bodySettings.mRestitution = collider.restitution;
+        bodySettings.mUserData = collider.layer;
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
@@ -457,6 +862,102 @@ private:
         }
     }
 
+    // LIB-127: drains the raw, thread-buffered contact events Step() above
+    // just collected (safe now - this runs on the main thread, after
+    // physicsSystem_.Update() has returned), reduces them to ONE
+    // authoritative phase per (body1,body2) contact pair for this fixed
+    // step, resolves BodyID -> SceneEntity, and queues two
+    // kb::scene::PendingCollisionEvent per pair (one per side - Jolt's own
+    // ContactListener doc: "Typically this is done on both objects involved
+    // in a collision event") for kb::script::ScriptRuntimeSceneSystem to
+    // drain and dispatch as real, entity-local ScriptEvents.
+    void DispatchContactEvents(SceneSystemContext& context) {
+        std::vector<RawContactEvent> drained = contactListener_.DrainAndClear();
+        if (drained.empty()) {
+            return;
+        }
+
+        // std::map, keyed by JPH::SubShapeIDPair - Jolt documents that
+        // type's operator< as existing specifically "to consistently order
+        // contact points for a deterministic simulation". Reusing it here
+        // gives BOTH the per-step reduction below (Jolt may run several
+        // internal collision sub-steps within one Step() call and report
+        // the same pair more than once: Removed always wins as the step's
+        // final word, Added otherwise wins over Persisted so a genuinely
+        // new contact this step is never downgraded to a mere Stay) AND a
+        // canonical, thread-schedule-independent dispatch order, from a
+        // single data structure.
+        std::map<JPH::SubShapeIDPair, RawContactEvent> reduced;
+        for (const RawContactEvent& contact : drained) {
+            const auto [it, inserted] = reduced.try_emplace(contact.pair, contact);
+            if (inserted) {
+                continue;
+            }
+            const bool shouldReplace = contact.phase == RawContactPhase::Removed ||
+                (contact.phase == RawContactPhase::Added && it->second.phase != RawContactPhase::Removed);
+            if (shouldReplace) {
+                it->second = contact;
+            }
+        }
+
+        kb::scene::Scene& scene = context.GetScene();
+        for (const auto& [pair, contact] : reduced) {
+            const auto entity1It = entityByBodyId_.find(contact.body1);
+            const auto entity2It = entityByBodyId_.find(contact.body2);
+            if (entity1It == entityByBodyId_.end() || entity2It == entityByBodyId_.end()) {
+                continue; // One side already removed/unmapped this frame - honest skip, not a crash.
+            }
+            // Jolt's OnContactRemoved (unlike OnContactAdded/Persisted) gives
+            // no Body access at all, so contact.isSensor1/2 are unset
+            // (default false) for a Removed event - using them directly
+            // here would silently misreport every trigger's Exit as a
+            // non-trigger OnCollisionExit. pairIsTrigger_ remembers the
+            // real answer from the pair's own Added/Persisted callbacks
+            // (this SAME fixed step or an earlier one) and is consulted
+            // (then erased - the pair is gone) on Removed instead.
+            bool isTrigger = false;
+            if (contact.phase == RawContactPhase::Removed) {
+                const auto triggerIt = pairIsTrigger_.find(pair);
+                if (triggerIt != pairIsTrigger_.end()) {
+                    isTrigger = triggerIt->second;
+                    pairIsTrigger_.erase(triggerIt);
+                }
+            } else {
+                isTrigger = contact.isSensor1 || contact.isSensor2;
+                pairIsTrigger_[pair] = isTrigger;
+            }
+            const kb::scene::PhysicsContactPhase phase = contact.phase == RawContactPhase::Added ? kb::scene::PhysicsContactPhase::Enter
+                : contact.phase == RawContactPhase::Removed                                       ? kb::scene::PhysicsContactPhase::Exit
+                                                                                                    : kb::scene::PhysicsContactPhase::Stay;
+            // Body1/Body2 order is already canonical (Jolt guarantees body1
+            // ID < body2 ID for Added/Persisted; SubShapeIDPair ordering
+            // gives the same determinism for Removed), so target=entity1 is
+            // always queued before target=entity2 for a given pair. Both
+            // sides receive the SAME raw point/normal (Jolt's own
+            // body1-relative convention) rather than a per-recipient
+            // flipped normal - a deliberate, documented simplification, not
+            // an oversight: nothing in the plan names per-side normal
+            // flipping, and it is trivially derivable by the receiving
+            // script (negate normal) if a specific use case needs it.
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                                       .target = entity1It->second,
+                                                                       .other = entity2It->second,
+                                                                       .point = contact.point,
+                                                                       .normal = contact.normal,
+                                                                       .isTrigger = isTrigger,
+                                                                       .phase = phase,
+                                                                   });
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                                       .target = entity2It->second,
+                                                                       .other = entity1It->second,
+                                                                       .point = contact.point,
+                                                                       .normal = contact.normal,
+                                                                       .isTrigger = isTrigger,
+                                                                       .phase = phase,
+                                                                   });
+        }
+    }
+
     void RemoveBody(JPH::BodyID bodyId) {
         if (bodyId.IsInvalid()) {
             return;
@@ -464,6 +965,7 @@ private:
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         bodyInterface.RemoveBody(bodyId);
         bodyInterface.DestroyBody(bodyId);
+        entityByBodyId_.erase(bodyId);
     }
 
     void RemoveAllBodies() {
@@ -483,8 +985,14 @@ private:
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
+    JoltCollisionContactListener contactListener_;
+    // LIB-127: which currently-active contact pairs are trigger contacts -
+    // see DispatchContactEvents' own comment on why OnContactRemoved needs
+    // this remembered rather than read directly off the (unavailable) body.
+    std::map<JPH::SubShapeIDPair, bool> pairIsTrigger_;
 };
 
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem()
@@ -500,7 +1008,7 @@ JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystem&&) noexcep
 JoltPhysicsSceneSystem& JoltPhysicsSceneSystem::operator=(JoltPhysicsSceneSystem&&) noexcept = default;
 
 void JoltPhysicsSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
-    static_cast<void>(context);
+    kb::scene::PhysicsBackend::RegisterBackend(context.GetScene(), *impl_);
 }
 
 void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
@@ -508,7 +1016,7 @@ void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& contex
 }
 
 void JoltPhysicsSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
-    static_cast<void>(context);
+    kb::scene::PhysicsBackend::UnregisterBackend(context.GetScene(), *impl_);
     impl_->OnDestroy();
 }
 

@@ -28,6 +28,10 @@ bool InputSubsystem::HasMappingContext(std::uint64_t contextId) const noexcept {
 }
 
 void InputSubsystem::Evaluate(float deltaSeconds) {
+    EvaluateWithDeviceState(deviceState_, deltaSeconds);
+}
+
+void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, float deltaSeconds) {
     // Snapshot last frame's combined states (used for edge events and chords),
     // then rebuild this frame's action states from scratch.
     previousCombined_.clear();
@@ -37,7 +41,13 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
     actionStates_.clear();
     frameEvents_.clear();
 
-    std::unordered_map<std::uint16_t, bool> consumedKeys; // key -> consumed by a higher context
+    // Keyed by (key, gamepadIndex) - the SAME InputKey value on two different
+    // gamepads is a different physical control, so consumption must not alias
+    // across controllers.
+    std::unordered_map<std::uint32_t, bool> consumedKeys;
+    const auto consumeKey = [](InputKey key, std::uint8_t gamepadIndex) noexcept -> std::uint32_t {
+        return (static_cast<std::uint32_t>(gamepadIndex) << 16U) | static_cast<std::uint16_t>(key);
+    };
     const InputMappingEvaluator evaluator;
     const auto chordSatisfied = [this](std::string_view action) {
         const auto found = previousCombined_.find(std::string{action});
@@ -46,14 +56,14 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
     for (ActiveMappingContext& context : stack_.Active()) {
         for (ResolvedMapping& mapping : context.mappings) {
-            const auto keyIndex = static_cast<std::uint16_t>(mapping.key);
+            const std::uint32_t keyIndex = consumeKey(mapping.key, mapping.gamepadIndex);
             if (consumedKeys[keyIndex]) {
                 continue; // A higher-priority context already claimed this key.
             }
 
             const MappingEvaluationInput evalInput{
                 .valueType = mapping.valueType,
-                .rawValue = deviceState_.GetValue(mapping.key) * mapping.scale,
+                .raw = InputValue{.x = device.GetValue(mapping.key, mapping.gamepadIndex) * mapping.scale, .type = mapping.valueType},
                 .modifiers = mapping.modifiers,
                 .triggers = mapping.triggers,
                 .chordActionNames = mapping.chordActionNames,
@@ -78,6 +88,62 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
             if (result.state == TriggerState::Triggered && mapping.consumeInput) {
                 consumedKeys[keyIndex] = true;
+            }
+        }
+
+        for (ResolvedComposite& composite : context.composites) {
+            // Skip a slot whose key a higher-priority context already claimed, but
+            // still combine whichever slots remain free (e.g. W free, S consumed).
+            InputValue raw{.type = composite.valueType};
+            bool anyFree = false;
+            for (const InputCompositeSlot& slot : composite.slots) {
+                if (consumedKeys[consumeKey(slot.key, slot.gamepadIndex)]) {
+                    continue;
+                }
+                anyFree = true;
+                const float contribution = device.GetValue(slot.key, slot.gamepadIndex) * slot.scale;
+                switch (slot.axis) {
+                    case 0U:
+                        raw.x += contribution;
+                        break;
+                    case 1U:
+                        raw.y += contribution;
+                        break;
+                    default:
+                        raw.z += contribution;
+                        break;
+                }
+            }
+            if (!anyFree) {
+                continue;
+            }
+
+            const MappingEvaluationInput evalInput{
+                .valueType = composite.valueType,
+                .raw = raw,
+                .modifiers = composite.modifiers,
+                .triggers = composite.triggers,
+                .chordActionNames = composite.chordActionNames,
+            };
+            const MappingEvaluationResult result = evaluator.Evaluate(
+                evalInput, deltaSeconds, composite.modifierState, composite.triggerStates, chordSatisfied);
+
+            const bool isAxis = composite.valueType != InputActionValueType::Bool;
+            if (!isAxis && result.state == TriggerState::None) {
+                continue;
+            }
+
+            InputActionState& actionState = actionStates_[composite.actionName];
+            actionState.value.type = composite.valueType;
+            actionState.value.x += result.value.x;
+            actionState.value.y += result.value.y;
+            actionState.value.z += result.value.z;
+            actionState.combined = MaxState(actionState.combined, result.state);
+
+            if (result.state == TriggerState::Triggered && composite.consumeInput) {
+                for (const InputCompositeSlot& slot : composite.slots) {
+                    consumedKeys[consumeKey(slot.key, slot.gamepadIndex)] = true;
+                }
             }
         }
     }

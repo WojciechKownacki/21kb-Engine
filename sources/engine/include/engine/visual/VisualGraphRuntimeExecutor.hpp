@@ -4,6 +4,7 @@
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
+#include <cstddef>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -47,13 +48,24 @@ private:
     using NodeSet = std::unordered_set<std::uint32_t>;
 
     [[nodiscard]] VisualGraphRuntimeExecutionResult ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context) const;
+    // LIB-101: `stepBudget` is decremented once per ExecuteNode call
+    // (regardless of whether it's a forward-flow or input-dependency
+    // recursion) and shared by reference across the whole recursive walk —
+    // the existing `executing` NodeSet only catches a node revisiting
+    // itself while still ON THE CALL STACK (a data-dependency cycle); it
+    // does NOT catch a CONTROL-FLOW loop (e.g. a Branch/Sequence wired back
+    // to an already-executed ancestor), since `executing.erase(nodeId)`
+    // runs before every forward-flow recursive call. stepBudget is the
+    // watchdog for that gap — see ExecuteNode's own doc comment in the .cpp
+    // for the full reasoning.
     [[nodiscard]] VisualGraphRuntimeExecutionResult ExecuteNode(
         const InstructionMap& instructions,
         std::uint32_t nodeId,
         VisualGraphRuntimeExecutionContext& context,
         NodeSet& executing,
         NodeSet& evaluatedNodes,
-        bool followExecution) const;
+        bool followExecution,
+        std::size_t& stepBudget) const;
 
     [[nodiscard]] const VisualGraphRuntimeBinding* FindBinding(const VisualGraphIrInstruction& instruction) const noexcept;
     [[nodiscard]] static bool TryExecuteBuiltInInstruction(const VisualGraphIrInstruction& instruction, VisualGraphRuntimeExecutionContext& context);

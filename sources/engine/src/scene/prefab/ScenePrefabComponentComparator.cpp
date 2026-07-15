@@ -44,7 +44,8 @@ namespace {
 [[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {
     return lhs.mappingContextAssetId == rhs.mappingContextAssetId
         && lhs.priority == rhs.priority
-        && lhs.enabled == rhs.enabled;
+        && lhs.enabled == rhs.enabled
+        && lhs.localUser == rhs.localUser;
 }
 
 [[nodiscard]] bool Equal(const RigidbodyComponent& lhs, const RigidbodyComponent& rhs) noexcept {
@@ -63,7 +64,10 @@ namespace {
         && Equal(lhs.boxSize, rhs.boxSize)
         && lhs.radius == rhs.radius
         && lhs.height == rhs.height
-        && lhs.trigger == rhs.trigger;
+        && lhs.trigger == rhs.trigger
+        && lhs.friction == rhs.friction
+        && lhs.restitution == rhs.restitution
+        && lhs.layer == rhs.layer;
 }
 
 [[nodiscard]] bool Equal(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {

@@ -100,7 +100,9 @@ add_library(kb_engine STATIC
     include/engine/scene/AudioListenerComponent.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
+    include/engine/scene/CharacterControllerComponent.hpp
     include/engine/scene/ColliderComponent.hpp
+    include/engine/scene/JointComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/RigidbodyComponent.hpp
@@ -126,9 +128,12 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLightingAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
+    include/engine/scene/SceneCharacterControllerComponents.hpp
     include/engine/scene/SceneColliderComponents.hpp
+    include/engine/scene/SceneJointComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
+    include/engine/scene/PhysicsBackend.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/BehaviourExecutionOrder.hpp
@@ -146,6 +151,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
+    include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
     include/engine/scene/SceneSystemContext.hpp
@@ -179,6 +185,9 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptBehaviourBindingService.hpp
     include/engine/script/ScriptEvent.hpp
+    include/engine/script/ScriptEventBus.hpp
+    include/engine/script/ScriptEventId.hpp
+    include/engine/script/ScriptEventTaxonomy.hpp
     include/engine/script/ScriptExecutionContext.hpp
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
@@ -196,6 +205,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
+    include/engine/script/ScriptTaskApi.hpp
     include/engine/script/ScriptTimeApi.hpp
     include/engine/script/ScriptTimerApi.hpp
     include/engine/script/ScriptTransformApi.hpp
@@ -205,6 +215,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibrary.hpp
     include/engine/library/EngineLibraryArrayView.hpp
     include/engine/library/EngineLibraryAssetRef.hpp
+    include/engine/library/EngineLibraryAsyncResult.hpp
     include/engine/library/EngineLibraryCollections.hpp
     include/engine/library/EngineLibraryCommandApplication.hpp
     include/engine/library/EngineLibraryCommandBatch.hpp
@@ -215,6 +226,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryContext.hpp
     include/engine/library/EngineLibraryEntityHandle.hpp
     include/engine/library/EngineLibraryError.hpp
+    include/engine/library/EngineLibraryEventSchema.hpp
     include/engine/library/EngineLibraryResult.hpp
     include/engine/library/EngineLibraryExecutionOrder.hpp
     include/engine/library/EngineLibraryFunctionDesc.hpp
@@ -231,6 +243,8 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryPropertyDesc.hpp
     include/engine/library/EngineLibraryQuery.hpp
     include/engine/library/EngineLibraryScriptComponentAccess.hpp
+    include/engine/library/EngineLibrarySignal.hpp
+    include/engine/library/EngineLibraryTaskFactories.hpp
     include/engine/library/EngineLibraryTextEncoding.hpp
     include/engine/library/EngineLibraryTextFormat.hpp
     include/engine/library/EngineLibraryTransformChangeTracker.hpp
@@ -382,6 +396,8 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldRestoreMap.cpp
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
+    src/scene/PhysicsBackend.cpp
+    src/scene/PhysicsGeometryQueries.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneBehaviourIterationService.cpp
     src/scene/SceneHierarchy.cpp
@@ -393,6 +409,7 @@ add_library(kb_engine STATIC
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
+    src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp
     src/scene/SceneTransformIterationService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
@@ -430,6 +447,10 @@ add_library(kb_engine STATIC
     src/scene/components/SceneLightIteration.cpp
     src/scene/components/SceneColliderApi.cpp
     src/scene/components/SceneColliderStorage.cpp
+    src/scene/components/SceneCharacterControllerApi.cpp
+    src/scene/components/SceneCharacterControllerStorage.cpp
+    src/scene/components/SceneJointApi.cpp
+    src/scene/components/SceneJointStorage.cpp
     src/scene/components/SceneMeshRendererApi.cpp
     src/scene/components/SceneMeshRendererIterationDispatcher.cpp
     src/scene/components/SceneMeshRendererStorage.cpp
@@ -478,6 +499,8 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneInputModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
     src/scene/modules/components/SceneColliderModule.cpp
+    src/scene/modules/components/SceneCharacterControllerModule.cpp
+    src/scene/modules/components/SceneJointModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneRigidbodyModule.cpp
     src/scene/modules/components/SceneTagsModule.cpp
@@ -499,6 +522,7 @@ add_library(kb_engine STATIC
     src/scene/modules/ScenePrefabs.cpp
     src/scene/modules/ScenePrefabRegistryModule.cpp
     src/scene/modules/SceneRuntime.cpp
+    src/scene/modules/SceneTasks.cpp
     src/scene/modules/SceneTimers.cpp
     src/scene/modules/SceneTransforms.cpp
     src/scene/modules/SceneTransformIterationModule.cpp
@@ -620,6 +644,7 @@ add_library(kb_engine STATIC
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
     src/script/lua/api/PucLuaEventApi.cpp
+    src/script/lua/api/PucLuaEventsApi.cpp
     src/script/lua/api/PucLuaFunctionApi.cpp
     src/script/lua/api/PucLuaModuleApi.cpp
     src/script/lua/api/PucLuaSelfApi.cpp
@@ -640,6 +665,7 @@ add_library(kb_engine STATIC
     src/script/ScriptAssetLoader.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
+    src/script/ScriptEventBus.cpp
     src/script/ScriptExecutionContext.cpp
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
@@ -657,6 +683,7 @@ add_library(kb_engine STATIC
     src/script/ScriptSceneVisualGraphBindings.cpp
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
+    src/script/ScriptTaskApi.cpp
     src/script/ScriptTimeApi.cpp
     src/script/ScriptTimerApi.cpp
     src/script/ScriptTransformApi.cpp
@@ -668,6 +695,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryComponentInspectorDesc.cpp
     src/library/EngineLibraryDeprecation.cpp
     src/library/EngineLibraryEntityHandle.cpp
+    src/library/EngineLibraryEventSchema.cpp
     src/library/EngineLibraryFunctionId.cpp
     src/library/EngineLibraryError.cpp
     src/library/EngineLibraryLifecycle.cpp
@@ -680,6 +708,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryTextEncoding.cpp
     src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
+    src/private/script/lua/api/PucLuaEventsApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp
     src/private/script/lua/api/PucLuaModuleApi.hpp
     src/private/script/lua/api/PucLuaSelfApi.hpp
@@ -715,6 +744,8 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneInputComponentStore.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
     src/private/scene/components/SceneColliderComponentStore.hpp
+    src/private/scene/components/SceneCharacterControllerComponentStore.hpp
+    src/private/scene/components/SceneJointComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneRigidbodyComponentStore.hpp
     src/private/scene/components/SceneTagsComponentStore.hpp
@@ -739,6 +770,7 @@ add_library(kb_engine STATIC
     src/private/scene/hierarchy/SceneHierarchyRootCollector.hpp
     src/private/scene/history/SceneHistoryStack.hpp
     src/private/scene/SceneAccess.hpp
+    src/private/scene/PhysicsGeometryQueries.hpp
     src/private/scene/SceneComponentMutationService.hpp
     src/private/scene/SceneComponentQueryService.hpp
     src/private/scene/SceneEntityService.hpp
@@ -748,6 +780,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneLoadedContentService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
+    src/private/scene/SceneTaskService.hpp
     src/private/scene/SceneTimerService.hpp
     src/private/scene/SceneTransformService.hpp
     src/private/scene/assets/SceneAssetLoader.hpp
@@ -990,7 +1023,10 @@ add_library(kb_engine STATIC
     src/private/ecs/world/WorldComponentReader.hpp
     src/private/ecs/world/WorldComponentRegistrar.hpp
     include/engine/input/InputActionValueType.hpp
+    include/engine/input/InputContextPriority.hpp
     include/engine/input/InputKey.hpp
+    include/engine/input/InputLocalUser.hpp
+    include/engine/input/InputTouchPoint.hpp
     include/engine/input/InputValue.hpp
     include/engine/input/InputDeviceState.hpp
     include/engine/input/InputModifierDesc.hpp
@@ -999,6 +1035,7 @@ add_library(kb_engine STATIC
     include/engine/input/InputMappingContextAsset.hpp
     include/engine/input/InputAssetIO.hpp
     include/engine/input/InputAssetLoaders.hpp
+    include/engine/input/InputRebinding.hpp
     include/engine/input/InputModifiers.hpp
     include/engine/input/InputTriggers.hpp
     include/engine/input/InputSubsystem.hpp
@@ -1006,10 +1043,13 @@ add_library(kb_engine STATIC
     include/engine/input/InputMappingEvaluator.hpp
     include/engine/input/InputPollingSystem.hpp
     include/engine/input/InputModule.hpp
+    include/engine/input/InputRecording.hpp
     src/input/InputModule.cpp
     src/input/InputKey.cpp
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
+    src/input/InputRebinding.cpp
+    src/input/InputRecording.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputSubsystem.cpp

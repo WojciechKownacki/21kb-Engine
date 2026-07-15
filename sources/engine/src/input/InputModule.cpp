@@ -37,7 +37,7 @@ void InputModule::OnSceneAttach(kb::scene::Scene& scene) {
         [&assetManager](std::uint64_t id) {
             return assetManager.Load<InputMappingContextAsset>(kb::assets::AssetId{ id }).Shared();
         });
-    scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>(input));
+    scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
 }
 
 } // namespace kb::input

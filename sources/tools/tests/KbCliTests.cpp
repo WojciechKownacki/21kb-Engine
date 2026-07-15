@@ -279,6 +279,97 @@ void RunPlayerControllerTemplateTests() {
     Require(tickCount == static_cast<std::size_t>(kFrames), "player controller template did not tick exactly once per simulated frame");
 }
 
+void PrepareProjectileTemplateProject() {
+    ResetTestRoot();
+    const std::filesystem::path root = TestRoot();
+    WriteTextFile(root / "Assets" / "Logic" / "Projectile.lua", R"(
+local launched = false
+
+function Ready(self, dt)
+    Log("projectile ready")
+end
+
+-- The launch retries every Tick (not a one-shot in Ready) because a
+-- freshly-spawned entity's Rigidbody/Collider is not guaranteed to have a
+-- live physics body yet by the time Ready fires - the physics and script
+-- scene systems' relative execution order is not guaranteed (see LIB-127's
+-- notes; LIB-128 is where that gets formalized). Retrying until
+-- Physics.SetVelocity actually reports applied=true is the robust,
+-- production-shape way to write this, not merely a test workaround.
+function Tick(self, dt)
+    if not launched then
+        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)
+        if applied then
+            launched = true
+            Emit("ProjectileLaunched", {})
+        end
+    end
+end
+
+function OnCollisionEnter(self, event)
+    Emit("ProjectileHit", {})
+    World.Destroy(self.entity)
+end
+)");
+
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" }));
+    std::error_code error;
+    std::filesystem::create_directories(root / "Assets" / "Scenes", error);
+    Require(!error, "projectile template scene directory could not be created");
+    Require(
+        kb::scene::SceneDocumentService::Save(scene, root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+        "projectile template scene could not be saved");
+}
+
+// LIB-014: a minimal Projectile template - movement via Physics.SetVelocity
+// (LIB-124), collision via OnCollisionEnter (LIB-127), destruction via
+// World.Destroy - run through the SAME editor-independent `kb_cli run`
+// workflow LIB-013's PlayerController template established. `kb_cli run`
+// does not load a project's physics plugin (MountProjectAssets only mounts
+// assets; CliRunCommand.cpp constructs a plain Scene with no
+// ProjectDescriptor at all) - a real, separate, out-of-scope infrastructure
+// gap discovered while writing this test (extending the CLI to load
+// project-configured plugins is a genuinely different task, not "add a
+// template"). This test therefore proves what IS true through this
+// harness: the template is syntactically valid, runs cleanly (0
+// diagnostics) with no physics backend registered, Ready fires every frame
+// it should, and Physics.SetVelocity fails honestly (applied=false, no
+// crash - exactly IPhysicsBackend's documented no-backend contract) rather
+// than ever fabricating a launch. The REAL physics-driven proof - the
+// projectile actually moving, hitting a target, launching, and being
+// destroyed - is in PhysicsSceneSystemTests.cpp's
+// RunPhysicsSceneSystemFallingBodyTest (LIB-014 section), which drives a
+// real Jolt-backed Scene directly (the same ScriptRuntimeHost/frame-loop
+// machinery kb_cli run itself wraps, without the CLI process boundary).
+void RunProjectileTemplateTests() {
+    PrepareProjectileTemplateProject();
+    const std::string root = TestRoot().string();
+
+    const CommandRun validate = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/Projectile.lua" });
+    Require(validate.exitCode == 0, "projectile template script did not validate");
+    Require(Contains(validate.output, "OK"), "projectile template validate did not report OK");
+
+    const CommandRun attach = Run(&kb::cli::RunSceneAttachCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Projectile",
+        "--script", "/Game/Logic/Projectile.lua",
+    });
+    Require(attach.exitCode == 0, "projectile template could not attach to the scene");
+
+    const CommandRun run = Run(&kb::cli::RunRunCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--frames", "5",
+    });
+    Require(run.exitCode == 0, "projectile template run reported diagnostics");
+    Require(Contains(run.output, "[log] projectile ready"), "projectile template did not run Ready");
+    Require(!Contains(run.output, "ProjectileLaunched"),
+        "projectile template must NOT report a launch when kb_cli run has no physics backend loaded - Physics.SetVelocity must keep honestly failing, never fabricate success");
+    Require(Contains(run.output, "0 diagnostics"), "projectile template run was not clean even though Physics.SetVelocity fails every frame");
+}
+
 void RunApiCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -365,6 +456,7 @@ int main() {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
+    RunProjectileTemplateTests();
     RunApiCommandTests();
     RunMcpCommandTests();
     return EXIT_SUCCESS;

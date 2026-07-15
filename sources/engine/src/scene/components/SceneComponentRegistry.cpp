@@ -6,8 +6,10 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -46,6 +48,9 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(ColliderComponent, radius, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(ColliderComponent, height, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(ColliderComponent, trigger, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(ColliderComponent, friction, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(ColliderComponent, restitution, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(ColliderComponent, layer, kb::ecs::ComponentFieldType::UInt32),
         }));
 }
 
@@ -89,6 +94,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , inputComponentId_(RegisterSceneComponent<InputComponent>(world, "kb.scene.InputComponent"))
     , rigidbodyComponentId_(RegisterSceneComponent<RigidbodyComponent>(world, "kb.scene.RigidbodyComponent"))
     , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent"))
+    , characterControllerComponentId_(RegisterSceneComponent<CharacterControllerComponent>(world, "kb.scene.CharacterControllerComponent"))
+    , jointComponentId_(RegisterSceneComponent<JointComponent>(world, "kb.scene.JointComponent"))
     , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, "kb.scene.TagsComponent"))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent")) {
@@ -130,6 +137,14 @@ std::uint64_t SceneComponentRegistry::RigidbodyComponentId() const noexcept {
 
 std::uint64_t SceneComponentRegistry::ColliderComponentId() const noexcept {
     return colliderComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::CharacterControllerComponentId() const noexcept {
+    return characterControllerComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::JointComponentId() const noexcept {
+    return jointComponentId_;
 }
 
 std::uint64_t SceneComponentRegistry::TagsComponentId() const noexcept {

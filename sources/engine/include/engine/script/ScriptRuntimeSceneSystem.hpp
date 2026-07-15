@@ -70,6 +70,35 @@ private:
     // a real, targeted "TimerFired" ScriptEvent — mirrors
     // DispatchPendingSceneLifecycleEvents' own drain-and-broadcast shape.
     void DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-097: polls every native-started Task live in the scene
+    // (kb::scene::SceneTasks::Advance) and turns each one that reached a
+    // terminal state into a real, targeted "TaskCompleted"/"TaskFailed"
+    // ScriptEvent — same shape as DispatchFiredTimers above.
+    void DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-098: identical shape to DispatchCompletedTasks above, but drives
+    // kb::scene::SceneTasks::AdvanceFixedSteps (StartFixedStep tasks)
+    // instead of Advance — called right after the fixed-step loop below
+    // with the number of FixedTick steps this frame actually produced,
+    // the one piece of state that loop previously never surfaced anywhere.
+    void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
+    // LIB-105: delivers every kb::script::ScriptEventBus::EmitDeferred call
+    // queued since the last frame — the deferred half of the pub/sub bus's
+    // sync/deferred pair. Unlike DispatchFiredTimers/DispatchCompletedTasks
+    // above, this does not go through ScriptRuntime::DispatchEventAndDrain
+    // (there is no behaviour to visit — subscriptions are not behaviours);
+    // any subscriber exception surfaces as a ScriptDiagnostic in
+    // lastResult_ instead, since ScriptEventBus::Emit already converts it
+    // to a plain error string rather than letting it escape.
+    void DispatchDeferredEvents(kb::scene::Scene& scene);
+    // LIB-127: drains kb::scene::PhysicsBackend's pending collision/trigger
+    // events (queued by whichever physics plugin is loaded, e.g.
+    // kb_physics_jolt_plugin's contact listener) and turns each into a
+    // real, entity-local ("target"=the entity the callback is for)
+    // "OnCollisionEnter"/"OnCollisionStay"/"OnCollisionExit"/
+    // "OnTriggerEnter"/"OnTriggerStay"/"OnTriggerExit" ScriptEvent — same
+    // drain-and-dispatch shape as DispatchFiredTimers/DispatchCompletedTasks
+    // above.
+    void DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

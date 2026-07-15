@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,9 @@ struct DispatchContext {
     ScriptFunctionRegistry* functions = nullptr;
     ScriptLifecycleEvent lifecycle = ScriptLifecycleEvent::Tick;
     const ScriptEvent* event = nullptr;
+    // LIB-104: computed ONCE per dispatch (DispatchEvent), not once per
+    // behaviour — see ScriptEventId.hpp/IScriptBackend::ExecuteEvent.
+    EventId eventId = 0;
     float deltaSeconds = 0.0F;
     ScriptRuntimeExecutionResult* result = nullptr;
 };
@@ -91,11 +95,12 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
         dispatch.event,
         dispatch.sharedState,
         dispatch.functions,
+        dispatch.runtime == nullptr ? nullptr : &dispatch.runtime->Events(),
     };
 
     const ScriptBackendExecutionResult backendResult = dispatch.event == nullptr
         ? backend->ExecuteLifecycle(behaviour, scriptContext)
-        : backend->ExecuteEvent(behaviour, *dispatch.event, scriptContext);
+        : backend->ExecuteEvent(behaviour, *dispatch.event, dispatch.eventId, scriptContext);
     if (backendResult.executed && backendResult.Succeeded()) {
         ++dispatch.result->executedBehaviours;
     }
@@ -153,6 +158,14 @@ ScriptFunctionRegistry& ScriptRuntime::Functions() noexcept {
 
 const ScriptFunctionRegistry& ScriptRuntime::Functions() const noexcept {
     return functions_;
+}
+
+ScriptEventBus& ScriptRuntime::Events() noexcept {
+    return events_;
+}
+
+const ScriptEventBus& ScriptRuntime::Events() const noexcept {
+    return events_;
 }
 
 ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycle(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
@@ -218,6 +231,21 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
         });
         return result;
     }
+    // LIB-108: reject an oversized payload BEFORE dispatching to any
+    // behaviour — this is the ONE dispatch entry every event delivery path
+    // in the engine funnels through (ScriptExecutionContext::Emit/EmitTo,
+    // Visual Graph EmitEvent/EmitEventTo, and every engine-emitted event —
+    // TimerFired/TaskCompleted/TaskFailed/scene lifecycle — LIB-103's
+    // confirmed "exactly one delivery mechanism"), so one check here covers
+    // all of them; ScriptEventBus::Emit has its own identical check for the
+    // separate bus (LIB-105) delivery path, which does not reach this
+    // function.
+    if (event.arguments.size() > kMaxScriptEventArguments) {
+        result.diagnostics.push_back(ScriptDiagnostic{
+            .message = "script event \"" + event.name + "\" exceeds the maximum of " + std::to_string(kMaxScriptEventArguments) + " arguments (" + std::to_string(event.arguments.size()) + " given)",
+        });
+        return result;
+    }
     DispatchContext context{
         .scene = &scene,
         .runtime = this,
@@ -225,6 +253,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
         .functions = &functions_,
         .lifecycle = ScriptLifecycleEvent::Tick,
         .event = &event,
+        .eventId = event.Id(),
         .deltaSeconds = deltaSeconds,
         .result = &result,
     };

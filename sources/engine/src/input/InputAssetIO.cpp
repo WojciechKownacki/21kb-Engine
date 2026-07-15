@@ -64,9 +64,11 @@ void WriteTrigger(std::vector<std::uint8_t>& output, const InputTriggerDesc& tri
 }
 
 void WriteMapping(std::vector<std::uint8_t>& output, const InputKeyMapping& mapping) {
+    io::WriteUInt64(output, mapping.bindingId);
     io::WriteUInt64(output, mapping.actionId);
     io::WriteUInt32(output, static_cast<std::uint32_t>(mapping.key));
     io::WriteFloat(output, mapping.scale);
+    io::WriteUInt8(output, mapping.gamepadIndex);
     io::WriteUInt32(output, static_cast<std::uint32_t>(mapping.modifiers.size()));
     for (const InputModifierDesc& modifier : mapping.modifiers) {
         WriteModifier(output, modifier);
@@ -79,7 +81,8 @@ void WriteMapping(std::vector<std::uint8_t>& output, const InputKeyMapping& mapp
 
 [[nodiscard]] bool ReadMapping(io::ByteReader& reader, InputKeyMapping& mapping) {
     std::uint32_t key = 0U;
-    if (!reader.ReadUInt64(mapping.actionId) || !reader.ReadUInt32(key) || !reader.ReadFloat(mapping.scale)) {
+    if (!reader.ReadUInt64(mapping.bindingId) || !reader.ReadUInt64(mapping.actionId) ||
+        !reader.ReadUInt32(key) || !reader.ReadFloat(mapping.scale) || !reader.ReadUInt8(mapping.gamepadIndex)) {
         return false;
     }
     mapping.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
@@ -101,6 +104,80 @@ void WriteMapping(std::vector<std::uint8_t>& output, const InputKeyMapping& mapp
     }
     mapping.triggers.resize(triggerCount);
     for (InputTriggerDesc& trigger : mapping.triggers) {
+        if (!ReadTrigger(reader, trigger)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void WriteCompositeSlot(std::vector<std::uint8_t>& output, const InputCompositeSlot& slot) {
+    io::WriteUInt32(output, static_cast<std::uint32_t>(slot.key));
+    io::WriteUInt8(output, slot.axis);
+    io::WriteFloat(output, slot.scale);
+    io::WriteUInt8(output, slot.gamepadIndex);
+}
+
+[[nodiscard]] bool ReadCompositeSlot(io::ByteReader& reader, InputCompositeSlot& slot) {
+    std::uint32_t key = 0U;
+    if (!reader.ReadUInt32(key) || !reader.ReadUInt8(slot.axis) || slot.axis > 2U || !reader.ReadFloat(slot.scale) ||
+        !reader.ReadUInt8(slot.gamepadIndex)) {
+        return false;
+    }
+    slot.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
+    return true;
+}
+
+void WriteComposite(std::vector<std::uint8_t>& output, const InputCompositeBinding& composite) {
+    io::WriteUInt64(output, composite.bindingId);
+    io::WriteUInt64(output, composite.actionId);
+    io::WriteUInt32(output, static_cast<std::uint32_t>(composite.slots.size()));
+    for (const InputCompositeSlot& slot : composite.slots) {
+        WriteCompositeSlot(output, slot);
+    }
+    io::WriteUInt32(output, static_cast<std::uint32_t>(composite.modifiers.size()));
+    for (const InputModifierDesc& modifier : composite.modifiers) {
+        WriteModifier(output, modifier);
+    }
+    io::WriteUInt32(output, static_cast<std::uint32_t>(composite.triggers.size()));
+    for (const InputTriggerDesc& trigger : composite.triggers) {
+        WriteTrigger(output, trigger);
+    }
+}
+
+[[nodiscard]] bool ReadComposite(io::ByteReader& reader, InputCompositeBinding& composite) {
+    if (!reader.ReadUInt64(composite.bindingId) || !reader.ReadUInt64(composite.actionId)) {
+        return false;
+    }
+
+    std::uint32_t slotCount = 0U;
+    if (!reader.ReadUInt32(slotCount) || slotCount > InputAssetFormat::MaxCompositeSlotCount) {
+        return false;
+    }
+    composite.slots.resize(slotCount);
+    for (InputCompositeSlot& slot : composite.slots) {
+        if (!ReadCompositeSlot(reader, slot)) {
+            return false;
+        }
+    }
+
+    std::uint32_t modifierCount = 0U;
+    if (!reader.ReadUInt32(modifierCount) || modifierCount > InputAssetFormat::MaxStackCount) {
+        return false;
+    }
+    composite.modifiers.resize(modifierCount);
+    for (InputModifierDesc& modifier : composite.modifiers) {
+        if (!ReadModifier(reader, modifier)) {
+            return false;
+        }
+    }
+
+    std::uint32_t triggerCount = 0U;
+    if (!reader.ReadUInt32(triggerCount) || triggerCount > InputAssetFormat::MaxStackCount) {
+        return false;
+    }
+    composite.triggers.resize(triggerCount);
+    for (InputTriggerDesc& trigger : composite.triggers) {
         if (!ReadTrigger(reader, trigger)) {
             return false;
         }
@@ -163,6 +240,10 @@ std::vector<std::uint8_t> EncodeInputMappingContext(const InputMappingContextAss
     for (const InputKeyMapping& mapping : asset.mappings) {
         WriteMapping(output, mapping);
     }
+    io::WriteUInt32(output, static_cast<std::uint32_t>(asset.composites.size()));
+    for (const InputCompositeBinding& composite : asset.composites) {
+        WriteComposite(output, composite);
+    }
     return output;
 }
 
@@ -186,6 +267,17 @@ InputAssetLoadResult<InputMappingContextAsset> DecodeInputMappingContext(std::sp
     for (InputKeyMapping& mapping : asset.mappings) {
         if (!ReadMapping(reader, mapping)) {
             return Fail<InputMappingContextAsset>("Corrupt mapping context entry");
+        }
+    }
+
+    std::uint32_t compositeCount = 0U;
+    if (!reader.ReadUInt32(compositeCount) || compositeCount > InputAssetFormat::MaxCompositeCount) {
+        return Fail<InputMappingContextAsset>("Corrupt mapping context payload");
+    }
+    asset.composites.resize(compositeCount);
+    for (InputCompositeBinding& composite : asset.composites) {
+        if (!ReadComposite(reader, composite)) {
+            return Fail<InputMappingContextAsset>("Corrupt mapping context composite entry");
         }
     }
     return InputAssetLoadResult<InputMappingContextAsset>{.succeeded = true, .asset = std::move(asset), .error = {}};

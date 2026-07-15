@@ -4,12 +4,18 @@
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputPollingSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryAsyncResult.hpp"
+#include "engine/library/EngineLibraryEventSchema.hpp"
+#include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -20,6 +26,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
@@ -29,6 +36,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
+#include "engine/script/ScriptEventTaxonomy.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -45,6 +53,7 @@
 #include <array>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -53,6 +62,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -91,6 +101,206 @@ public:
     int stopAllCount = 0;
 };
 
+// LIB-124: mirrors ProbeAudioPlaybackBackend above - a real, deterministic
+// test double for kb::scene::IPhysicsBackend, registered directly (no real
+// Jolt plugin needed) so the script-facing dispatch (ScriptPhysicsApi ->
+// kb::scene::PhysicsBackend -> this backend) can be tested precisely and
+// fast, independent of the real Jolt plugin's own correctness (already
+// covered by PhysicsSceneSystemTests.cpp).
+class ProbePhysicsBackend final : public kb::scene::IPhysicsBackend {
+public:
+    bool AddForce(kb::scene::SceneEntity entity, kb::scene::Vec3 force) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastForce = force;
+        return true;
+    }
+
+    bool AddImpulse(kb::scene::SceneEntity entity, kb::scene::Vec3 impulse) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastImpulse = impulse;
+        return true;
+    }
+
+    bool SetVelocity(kb::scene::SceneEntity entity, kb::scene::Vec3 velocity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        velocity_ = velocity;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = velocity_ };
+    }
+
+    bool SetAngularVelocity(kb::scene::SceneEntity entity, kb::scene::Vec3 angularVelocity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        angularVelocity_ = angularVelocity;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = angularVelocity_ };
+    }
+
+    bool MoveKinematic(kb::scene::SceneEntity entity, kb::scene::Vec3 targetPosition, kb::scene::Quat targetRotation, float deltaSeconds) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastMoveTarget = targetPosition;
+        lastMoveRotation = targetRotation;
+        lastMoveDeltaSeconds = deltaSeconds;
+        return true;
+    }
+
+    bool Sleep(kb::scene::SceneEntity entity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        sleeping_ = true;
+        return true;
+    }
+
+    bool Wake(kb::scene::SceneEntity entity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        sleeping_ = false;
+        return true;
+    }
+
+    [[nodiscard]] bool IsSleeping(kb::scene::SceneEntity entity) const noexcept override {
+        return entity == knownEntity && sleeping_;
+    }
+
+    // LIB-125: cast/overlap/closest-point are const query methods (no live
+    // simulation state to mutate), so the recorded call arguments below are
+    // `mutable` - this proves ScriptPhysicsApi forwards shape/origin/
+    // direction/distance/layerMask through faithfully, and that the
+    // layerMask value it parsed (see castHitMask/overlapHitMask gating
+    // below) actually reaches the backend, without needing a real Jolt
+    // scene (that real-engine proof lives in PhysicsSceneSystemTests.cpp).
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        lastCastShape = shape;
+        lastCastOrigin = origin;
+        lastCastDirection = direction;
+        lastCastMaxDistance = maxDistance;
+        lastCastLayerMask = layerMask;
+        if ((layerMask & castHitMask) == 0U) {
+            return {};
+        }
+        return kb::scene::PhysicsCastResult{
+            .hit = true,
+            .entity = knownEntity,
+            .distance = 4.0F,
+            .point = kb::scene::Vec3{ origin.x + direction.x * 4.0F, origin.y + direction.y * 4.0F, origin.z + direction.z * 4.0F },
+            .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+        };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask) const noexcept override {
+        lastOverlapShape = shape;
+        lastOverlapCenter = center;
+        lastOverlapLayerMask = layerMask;
+        if ((layerMask & overlapHitMask) == 0U) {
+            return {};
+        }
+        return kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = knownEntity };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(kb::scene::SceneEntity entity, kb::scene::Vec3 point) const noexcept override {
+        lastClosestPointEntity = entity;
+        lastClosestPointQuery = point;
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsClosestPointResult{ .found = true, .point = kb::scene::Vec3{ point.x, 0.0F, point.z }, .distance = point.y };
+    }
+
+    // LIB-126: fills `results` from the test-configured `castAllHits`/
+    // `overlapAllEntities` lists (empty by default) - lets a test prove
+    // both "more hits exist than the buffer can hold" (results.Full()==true,
+    // extras silently not written) and "closest-first ordering", without
+    // needing a real Jolt scene.
+    struct AllHitEntry {
+        kb::scene::SceneEntity entity;
+        float distance = 0.0F;
+    };
+    std::vector<AllHitEntry> castAllHits;
+    std::vector<kb::scene::SceneEntity> overlapAllEntities;
+
+    void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        lastCastShape = shape;
+        lastCastOrigin = origin;
+        lastCastDirection = direction;
+        lastCastMaxDistance = maxDistance;
+        lastCastLayerMask = layerMask;
+        results.Clear();
+        if ((layerMask & castHitMask) == 0U) {
+            return;
+        }
+        for (const AllHitEntry& entry : castAllHits) {
+            [[maybe_unused]] const bool pushed = results.PushBack(kb::scene::PhysicsCastResult{
+                .hit = true,
+                .entity = entry.entity,
+                .distance = entry.distance,
+                .point = origin,
+                .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+            });
+        }
+    }
+
+    void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        lastOverlapShape = shape;
+        lastOverlapCenter = center;
+        lastOverlapLayerMask = layerMask;
+        results.Clear();
+        if ((layerMask & overlapHitMask) == 0U) {
+            return;
+        }
+        for (const kb::scene::SceneEntity& entity : overlapAllEntities) {
+            [[maybe_unused]] const bool pushed = results.PushBack(kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entity });
+        }
+    }
+
+    kb::scene::SceneEntity knownEntity{};
+    kb::scene::Vec3 lastForce{};
+    kb::scene::Vec3 lastImpulse{};
+    kb::scene::Vec3 lastMoveTarget{};
+    kb::scene::Quat lastMoveRotation{};
+    float lastMoveDeltaSeconds = 0.0F;
+
+    std::uint32_t castHitMask = 0x1U;
+    std::uint32_t overlapHitMask = 0x1U;
+    mutable kb::scene::PhysicsShapeDesc lastCastShape{};
+    mutable kb::scene::Vec3 lastCastOrigin{};
+    mutable kb::scene::Vec3 lastCastDirection{};
+    mutable float lastCastMaxDistance = 0.0F;
+    mutable std::uint32_t lastCastLayerMask = 0U;
+    mutable kb::scene::PhysicsShapeDesc lastOverlapShape{};
+    mutable kb::scene::Vec3 lastOverlapCenter{};
+    mutable std::uint32_t lastOverlapLayerMask = 0U;
+    mutable kb::scene::SceneEntity lastClosestPointEntity{};
+    mutable kb::scene::Vec3 lastClosestPointQuery{};
+
+private:
+    kb::scene::Vec3 velocity_{};
+    kb::scene::Vec3 angularVelocity_{};
+    bool sleeping_ = false;
+};
+
 class FakeLuaRuntime final : public kb::script::ILuaScriptRuntime {
 public:
     bool emitLifecycleEvent = true;
@@ -120,6 +330,7 @@ public:
     kb::script::ScriptBackendExecutionResult ExecuteEvent(
         const kb::scene::BehaviourComponent&,
         const kb::script::ScriptEvent& event,
+        kb::script::EventId,
         kb::script::ScriptExecutionContext& context) override {
         ++eventExecutionCount;
         eventSelf = context.Self();
@@ -2161,6 +2372,15 @@ void RunScriptWorldTimePhysicsApiTest() {
     kb::tests::Require(ray.Output("entity").has_value() && ray.Output("entity")->AsUInt64() == floor.Entity().Id(), "Physics.Raycast direct call hit the wrong entity");
     kb::tests::Require(ray.Output("distance").has_value() && kb::tests::NearlyEqual(ray.Output("distance")->AsFloat(), 4.5F), "Physics.Raycast direct call returned the wrong distance");
 
+    // LIB-125: "z warstwa maski" in the plan's bullet qualifies Raycast too,
+    // not just the sphere/box/capsule cast/overlap/closest-point queries -
+    // an explicit layerMask=0 must suppress every hit, including a collider
+    // (the floor) whose own layer defaults to kPhysicsAllLayers.
+    std::vector<kb::script::ScriptFunctionArgument> maskedOutRayArgs = rayArgs;
+    maskedOutRayArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0 } });
+    const kb::script::ScriptFunctionCallResult maskedOutRay = host.Functions().Call("Physics.Raycast", maskedOutRayArgs, context);
+    kb::tests::Require(maskedOutRay.Succeeded() && !maskedOutRay.Output("hit")->AsBool(), "Physics.Raycast with layerMask=0 must not hit any collider, including the floor");
+
     const std::vector<kb::script::ScriptFunctionArgument> prefabArgs{
         kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
         kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ -2.0F } },
@@ -2202,6 +2422,7 @@ function Tick(self, dt)
         directionX = 0.0, directionY = -1.0, directionZ = 0.0,
         distance = 10.0
     })
+    local maskedOutHit = Physics.Raycast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0)
     local prefabRoot = World.InstantiatePrefab({ prefab = "/Game/Prefabs/RuntimePrefab.kbprefab", x = 9.0, y = 10.0, z = 11.0 })
     SetShared("world.entity", entity)
     SetShared("world.found", found)
@@ -2222,6 +2443,7 @@ function Tick(self, dt)
     SetShared("world.raycastHit", hit.hit)
     SetShared("world.raycastEntity", hit.entity)
     SetShared("world.raycastDistance", hit.distance)
+    SetShared("world.raycastMaskedOutHit", maskedOutHit.hit)
     SetShared("world.prefabRoot", prefabRoot)
     SetShared("time.delta", Time.delta())
 end
@@ -2252,6 +2474,7 @@ end
     kb::tests::Require(host.SharedState().Get("world.raycastHit")->AsBool(), "Lua Physics.Raycast did not hit the test floor");
     kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("world.raycastEntity")->AsInt()) == floor.Entity().Id(), "Lua Physics.Raycast hit the wrong entity");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("world.raycastDistance")->AsFloat(), 4.5F), "Lua Physics.Raycast returned the wrong distance");
+    kb::tests::Require(!host.SharedState().Get("world.raycastMaskedOutHit")->AsBool(), "Lua Physics.Raycast (positional form) with layerMask=0 must not hit any collider");
     const kb::scene::SceneEntity luaPrefabRoot{ static_cast<std::uint64_t>(host.SharedState().Get("world.prefabRoot")->AsInt()) };
     kb::tests::Require(luaPrefabRoot.IsValid() && scene.Entities().Name(luaPrefabRoot) == "Prefab Root", "Lua World.InstantiatePrefab returned the wrong root entity");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.x, 9.0F)
@@ -2261,6 +2484,611 @@ end
     const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
     kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
+}
+
+// LIB-124: force/impulse/velocity/angular-velocity/kinematic-move/sleep-wake.
+// Uses a fake ProbePhysicsBackend (kb::scene::IPhysicsBackend), the SAME
+// isolated-backend-double approach RunScriptAudioApiTest already uses for
+// kb::audio::IAudioPlaybackBackend - fast, deterministic, independent of the
+// real Jolt plugin's own correctness (PhysicsSceneSystemTests.cpp covers
+// that separately). Proves BOTH the honest "no backend" failure path (no
+// physics plugin loaded, matching a real headless/no-physics project) AND
+// the full dispatch-with-backend path (right arguments reach the backend,
+// right outputs come back, an unknown entity honestly fails rather than
+// silently succeeding).
+void RunScriptPhysicsForceVelocitySleepApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Physics Backend Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Physics" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics force/velocity/sleep API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.AddForce") != nullptr, "Physics.AddForce was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.MoveKinematic") != nullptr, "Physics.MoveKinematic was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> forceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "forceX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceZ", .value = kb::script::ScriptValue{ 3.0F } },
+    };
+
+    // --- No backend registered: every call must honestly report failure,
+    // never crash and never fabricate success.
+    const kb::script::ScriptFunctionCallResult noBackendForce = host.Functions().Call("Physics.AddForce", forceArgs, context);
+    kb::tests::Require(noBackendForce.Succeeded() && !noBackendForce.Output("applied")->AsBool(), "Physics.AddForce must report applied=false when no physics backend is registered");
+    const std::vector<kb::script::ScriptFunctionArgument> velocityQueryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noBackendVelocity = host.Functions().Call("Physics.GetVelocity", velocityQueryArgs, context);
+    kb::tests::Require(noBackendVelocity.Succeeded() && !noBackendVelocity.Output("found")->AsBool(), "Physics.GetVelocity must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `object` is "known" to it.
+    ProbePhysicsBackend backend;
+    backend.knownEntity = object.Entity();
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+    kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report true once a backend is registered");
+
+    const kb::script::ScriptFunctionCallResult forceResult = host.Functions().Call("Physics.AddForce", forceArgs, context);
+    kb::tests::Require(forceResult.Succeeded() && forceResult.Output("applied")->AsBool(), "Physics.AddForce must report applied=true once a backend is registered for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastForce.x, 1.0F) && kb::tests::NearlyEqual(backend.lastForce.y, 2.0F) && kb::tests::NearlyEqual(backend.lastForce.z, 3.0F),
+        "Physics.AddForce must pass the exact force vector through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> impulseArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseX", .value = kb::script::ScriptValue{ 4.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseZ", .value = kb::script::ScriptValue{ 6.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.AddImpulse", impulseArgs, context).Output("applied")->AsBool(), "Physics.AddImpulse must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastImpulse.x, 4.0F) && kb::tests::NearlyEqual(backend.lastImpulse.z, 6.0F), "Physics.AddImpulse must pass the exact impulse vector through");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setVelocityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityX", .value = kb::script::ScriptValue{ 7.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityY", .value = kb::script::ScriptValue{ 8.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityZ", .value = kb::script::ScriptValue{ 9.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.SetVelocity", setVelocityArgs, context).Output("applied")->AsBool(), "Physics.SetVelocity must report applied=true for a known entity");
+    const kb::script::ScriptFunctionCallResult getVelocity = host.Functions().Call("Physics.GetVelocity", velocityQueryArgs, context);
+    kb::tests::Require(getVelocity.Output("found")->AsBool() && kb::tests::NearlyEqual(getVelocity.Output("y")->AsFloat(), 8.0F), "Physics.GetVelocity must read back exactly what Physics.SetVelocity just wrote");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setAngularArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityX", .value = kb::script::ScriptValue{ 0.1F } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityY", .value = kb::script::ScriptValue{ 0.2F } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityZ", .value = kb::script::ScriptValue{ 0.3F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.SetAngularVelocity", setAngularArgs, context).Output("applied")->AsBool(), "Physics.SetAngularVelocity must report applied=true for a known entity");
+    const kb::script::ScriptFunctionCallResult getAngular = host.Functions().Call("Physics.GetAngularVelocity", velocityQueryArgs, context);
+    kb::tests::Require(getAngular.Output("found")->AsBool() && kb::tests::NearlyEqual(getAngular.Output("z")->AsFloat(), 0.3F), "Physics.GetAngularVelocity must read back exactly what Physics.SetAngularVelocity just wrote");
+
+    const std::vector<kb::script::ScriptFunctionArgument> moveKinematicArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "targetX", .value = kb::script::ScriptValue{ 10.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "targetY", .value = kb::script::ScriptValue{ 11.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "targetZ", .value = kb::script::ScriptValue{ 12.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult moveResult = host.Functions().Call("Physics.MoveKinematic", moveKinematicArgs, context);
+    kb::tests::Require(moveResult.Succeeded() && moveResult.Output("applied")->AsBool(), "Physics.MoveKinematic must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastMoveTarget.x, 10.0F) && kb::tests::NearlyEqual(backend.lastMoveDeltaSeconds, 0.02F),
+        "Physics.MoveKinematic must pass the target position through and default deltaSeconds to this call's own frame delta when omitted");
+
+    kb::tests::Require(!host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report false before Physics.Sleep is called");
+    kb::tests::Require(host.Functions().Call("Physics.Sleep", velocityQueryArgs, context).Output("applied")->AsBool(), "Physics.Sleep must report applied=true for a known entity");
+    kb::tests::Require(host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report true immediately after Physics.Sleep");
+    kb::tests::Require(host.Functions().Call("Physics.Wake", velocityQueryArgs, context).Output("applied")->AsBool(), "Physics.Wake must report applied=true for a known entity");
+    kb::tests::Require(!host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report false immediately after Physics.Wake");
+
+    // --- An entity the backend does not know about must honestly fail too
+    // (not merely "no backend" - the backend itself must be able to reject).
+    const std::vector<kb::script::ScriptFunctionArgument> unknownForceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "forceX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.AddForce", unknownForceArgs, context).Output("applied")->AsBool(), "Physics.AddForce must report applied=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: dedicated wrappers (LuaPhysicsAddForce etc.) parse
+    // `entity` via luaL_checkinteger and explicitly tag it Entity-typed
+    // (see CheckEntityArg in PucLuaFunctionApi.cpp) rather than relying on
+    // the generic table-argument path's magnitude-based type inference -
+    // correct regardless of this entity's actual id value.
+    const kb::assets::AssetId luaAsset{ 9410U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Physics Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(object.Entity().Id()) + "\n"
+                                                "    local applied = Physics.AddForce(entityId, 1.0, 2.0, 3.0)\n"
+                                                "    Physics.SetVelocity(entityId, 21.0, 22.0, 23.0)\n"
+                                                "    local velocity = Physics.GetVelocity(entityId)\n"
+                                                "    Physics.Sleep(entityId)\n"
+                                                "    local sleeping = Physics.IsSleeping(entityId)\n"
+                                                "    SetShared(\"luaPhysicsForceApplied\", applied)\n"
+                                                "    SetShared(\"luaPhysicsVelocityY\", velocity.y)\n"
+                                                "    SetShared(\"luaPhysicsSleeping\", sleeping)\n"
+                                                "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics force/velocity/sleep API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics force/velocity/sleep API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaPhysicsForceApplied")->AsBool(), "Lua Physics.AddForce must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaPhysicsVelocityY")->AsFloat(), 22.0F), "Lua Physics.GetVelocity must read back exactly what Lua Physics.SetVelocity just wrote");
+    kb::tests::Require(host.SharedState().Get("luaPhysicsSleeping")->AsBool(), "Lua Physics.IsSleeping must report true after Lua Physics.Sleep");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+    kb::tests::Require(!kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report false after UnregisterBackend");
+}
+
+// LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
+// OverlapCapsule/ClosestPoint. Same isolated fake-backend approach as
+// RunScriptPhysicsForceVelocitySleepApiTest above - proves the honest
+// "no backend"/"unknown entity" failure paths, that ScriptPhysicsApi
+// forwards shape/origin/direction/distance/layerMask through to the
+// backend unmodified, and that a layer mask which does not intersect the
+// backend's hit mask genuinely suppresses a hit (real Jolt-backed layer
+// filtering is proven separately in PhysicsSceneSystemTests.cpp).
+void RunScriptPhysicsCastOverlapClosestPointApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cast Overlap Closest Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Physics" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics cast/overlap/closest-point API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.SphereCast") != nullptr, "Physics.SphereCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.BoxCast") != nullptr, "Physics.BoxCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CapsuleCast") != nullptr, "Physics.CapsuleCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapSphere") != nullptr, "Physics.OverlapSphere was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapBox") != nullptr, "Physics.OverlapBox was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapCapsule") != nullptr, "Physics.OverlapCapsule was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.ClosestPoint") != nullptr, "Physics.ClosestPoint was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> sphereCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ -1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "distance", .value = kb::script::ScriptValue{ 10.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 0.75F } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> overlapSphereArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 1.5F } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> closestPointArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "pointX", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointY", .value = kb::script::ScriptValue{ 4.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointZ", .value = kb::script::ScriptValue{ 5.0F } },
+    };
+
+    // --- No backend registered: every query must honestly report a miss,
+    // never crash and never fabricate a hit.
+    const kb::script::ScriptFunctionCallResult noBackendCast = host.Functions().Call("Physics.SphereCast", sphereCastArgs, context);
+    kb::tests::Require(noBackendCast.Succeeded() && !noBackendCast.Output("hit")->AsBool(), "Physics.SphereCast must report hit=false when no physics backend is registered");
+    const kb::script::ScriptFunctionCallResult noBackendOverlap = host.Functions().Call("Physics.OverlapSphere", overlapSphereArgs, context);
+    kb::tests::Require(noBackendOverlap.Succeeded() && !noBackendOverlap.Output("overlapping")->AsBool(), "Physics.OverlapSphere must report overlapping=false when no physics backend is registered");
+    const kb::script::ScriptFunctionCallResult noBackendClosest = host.Functions().Call("Physics.ClosestPoint", closestPointArgs, context);
+    kb::tests::Require(noBackendClosest.Succeeded() && !noBackendClosest.Output("found")->AsBool(), "Physics.ClosestPoint must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `object` is "known" to it, and
+    // cast/overlap hits are gated on a specific layer bit.
+    ProbePhysicsBackend backend;
+    backend.knownEntity = object.Entity();
+    backend.castHitMask = 0x1U;
+    backend.overlapHitMask = 0x4U;
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    // SphereCast: default layerMask (kPhysicsAllLayers) intersects
+    // castHitMask -> hit. Arguments (origin/direction/distance/radius) must
+    // reach the backend exactly as passed.
+    const kb::script::ScriptFunctionCallResult sphereCast = host.Functions().Call("Physics.SphereCast", sphereCastArgs, context);
+    kb::tests::Require(sphereCast.Succeeded() && sphereCast.Output("hit")->AsBool() && sphereCast.Output("entity")->AsUInt64() == object.Entity().Id(),
+        "Physics.SphereCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Sphere && kb::tests::NearlyEqual(backend.lastCastShape.radius, 0.75F),
+        "Physics.SphereCast must pass the exact shape radius through to the backend");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCastOrigin.y, 5.0F) && kb::tests::NearlyEqual(backend.lastCastMaxDistance, 10.0F),
+        "Physics.SphereCast must pass origin and distance through to the backend");
+
+    // A layerMask that does not intersect castHitMask (0x1) must miss even
+    // though the shape/origin/direction are otherwise identical.
+    std::vector<kb::script::ScriptFunctionArgument> missedSphereCastArgs = sphereCastArgs;
+    missedSphereCastArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x2 } });
+    kb::tests::Require(!host.Functions().Call("Physics.SphereCast", missedSphereCastArgs, context).Output("hit")->AsBool(),
+        "Physics.SphereCast with a non-intersecting layerMask must report hit=false");
+
+    const std::vector<kb::script::ScriptFunctionArgument> boxCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsZ", .value = kb::script::ScriptValue{ 3.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.BoxCast", boxCastArgs, context).Output("hit")->AsBool(), "Physics.BoxCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Box
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.x, 1.0F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.y, 2.0F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.z, 3.0F),
+        "Physics.BoxCast must pass the exact half-extents through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> capsuleCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 0.4F } },
+        kb::script::ScriptFunctionArgument{ .name = "height", .value = kb::script::ScriptValue{ 1.8F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.CapsuleCast", capsuleCastArgs, context).Output("hit")->AsBool(), "Physics.CapsuleCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Capsule
+            && kb::tests::NearlyEqual(backend.lastCastShape.radius, 0.4F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.height, 1.8F),
+        "Physics.CapsuleCast must pass the exact radius/height through to the backend");
+
+    // Overlap: kPhysicsAllLayers (the default when layerMask is omitted)
+    // has every layer bit set, so it always intersects a non-zero
+    // overlapHitMask - the "does not intersect" proof needs an EXPLICIT
+    // non-matching mask instead, mirroring the SphereCast miss case above.
+    std::vector<kb::script::ScriptFunctionArgument> missedOverlapSphereArgs = overlapSphereArgs;
+    missedOverlapSphereArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x1 } });
+    kb::tests::Require(!host.Functions().Call("Physics.OverlapSphere", missedOverlapSphereArgs, context).Output("overlapping")->AsBool(),
+        "Physics.OverlapSphere with a non-intersecting layerMask must report overlapping=false");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastOverlapCenter.x, 1.0F) && kb::tests::NearlyEqual(backend.lastOverlapShape.radius, 1.5F),
+        "Physics.OverlapSphere must pass center/radius through to the backend even on a miss");
+    std::vector<kb::script::ScriptFunctionArgument> matchedOverlapSphereArgs = overlapSphereArgs;
+    matchedOverlapSphereArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } });
+    const kb::script::ScriptFunctionCallResult overlapSphere = host.Functions().Call("Physics.OverlapSphere", matchedOverlapSphereArgs, context);
+    kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
+        "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> overlapBoxArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsX", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsY", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsZ", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.OverlapBox", overlapBoxArgs, context).Output("overlapping")->AsBool(), "Physics.OverlapBox must overlap the known entity with a matching layerMask");
+    kb::tests::Require(backend.lastOverlapShape.kind == kb::scene::PhysicsShapeKind::Box, "Physics.OverlapBox must select a Box shape kind");
+
+    const std::vector<kb::script::ScriptFunctionArgument> overlapCapsuleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.OverlapCapsule", overlapCapsuleArgs, context).Output("overlapping")->AsBool(), "Physics.OverlapCapsule must overlap the known entity with a matching layerMask");
+    kb::tests::Require(backend.lastOverlapShape.kind == kb::scene::PhysicsShapeKind::Capsule, "Physics.OverlapCapsule must select a Capsule shape kind");
+
+    // ClosestPoint: known entity -> found=true with the fake backend's
+    // deterministic {x, 0, z}/distance=y mapping; unknown entity -> honest
+    // found=false (the backend itself rejects it, not just "no backend").
+    const kb::script::ScriptFunctionCallResult closestPoint = host.Functions().Call("Physics.ClosestPoint", closestPointArgs, context);
+    kb::tests::Require(closestPoint.Succeeded() && closestPoint.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(closestPoint.Output("x")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("y")->AsFloat(), 0.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("z")->AsFloat(), 5.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("distance")->AsFloat(), 4.0F),
+        "Physics.ClosestPoint must return the backend's exact point/distance for a known entity");
+    const std::vector<kb::script::ScriptFunctionArgument> unknownClosestPointArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "pointX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.ClosestPoint", unknownClosestPointArgs, context).Output("found")->AsBool(),
+        "Physics.ClosestPoint must report found=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: SphereCast/OverlapSphere use the positional
+    // fallback (no entity argument, so unlike ClosestPoint the generic
+    // table path would have been safe too - positional matches this file's
+    // existing Physics.* Lua coverage style); ClosestPoint uses the
+    // dedicated CheckEntityArg-tagged wrapper like every other entity-taking
+    // Physics.* Lua function.
+    const kb::assets::AssetId luaAsset{ 9411U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Physics Query Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(object.Entity().Id()) + "\n"
+                                                "    local cast = Physics.SphereCast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0.75)\n"
+                                                "    local overlap = Physics.OverlapSphere(1.0, 2.0, 3.0, 1.5, 4)\n"
+                                                "    local closest = Physics.ClosestPoint(entityId, 3.0, 4.0, 5.0)\n"
+                                                "    SetShared(\"luaCastHit\", cast.hit)\n"
+                                                "    SetShared(\"luaCastEntity\", cast.entity)\n"
+                                                "    SetShared(\"luaOverlapEntity\", overlap.entity)\n"
+                                                "    SetShared(\"luaClosestFound\", closest.found)\n"
+                                                "    SetShared(\"luaClosestDistance\", closest.distance)\n"
+                                                "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics cast/overlap/closest-point API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics cast/overlap/closest-point API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaCastHit")->AsBool(), "Lua Physics.SphereCast must report hit=true for the known entity");
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaCastEntity")->AsInt()) == object.Entity().Id(), "Lua Physics.SphereCast must return the known entity id");
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaOverlapEntity")->AsInt()) == object.Entity().Id(), "Lua Physics.OverlapSphere must return the known entity id");
+    kb::tests::Require(host.SharedState().Get("luaClosestFound")->AsBool(), "Lua Physics.ClosestPoint must report found=true for the known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaClosestDistance")->AsFloat(), 4.0F), "Lua Physics.ClosestPoint must return the backend's exact distance");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+}
+
+// LIB-126: NonAlloc "all hits" queries. Deliberately native-C++-only, no
+// script/Lua/VisualGraph surface: ScriptValue is a flat scalar tagged union
+// (LIB-032/041) with no way to carry a caller-owned buffer or a variable-
+// length result list across the script boundary - exactly the same wall
+// LIB-058 already hit and documented for exposing Array<T> itself to
+// scripts, inherited here rather than re-litigated. "wymaganie bufora" is
+// satisfied structurally: RaycastAllNonAlloc/CastShapeAll/OverlapShapeAll
+// all take a kb::library::ArrayNonAlloc<T>& (LIB-059) as a MANDATORY
+// parameter, so there is no allocating alternative to reach for by mistake
+// in a Tick. Proves: closest-first ordering, silent-but-observable buffer-
+// capacity truncation (Full()), layer-mask gating, and that a REUSED buffer
+// is fully cleared on every call (no stale hits from a prior frame),
+// against both pure geometry (Raycast) and a fake IPhysicsBackend.
+void RunPhysicsBackendNonAllocQueriesTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject nearSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "NearSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 7.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(nearSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+
+    const kb::scene::SceneObject midSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "MidSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(midSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x2U });
+
+    const kb::scene::SceneObject farSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "FarSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 3.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(farSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+
+    const kb::scene::Vec3 rayOrigin{ 0.0F, 10.0F, 0.0F };
+    const kb::scene::Vec3 rayDown{ 0.0F, -1.0F, 0.0F };
+
+    // --- RaycastAllNonAlloc: pure geometry, mirrors Physics.Raycast's own
+    // IntersectRayCollider math.
+    std::array<kb::scene::PhysicsCastResult, 4> allCapacityStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> allCapacity(allCapacityStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, allCapacity);
+    kb::tests::Require(allCapacity.Count() == 3U, "RaycastAllNonAlloc must collect all 3 intersecting colliders when the buffer has room");
+    kb::tests::Require(allCapacity.GetAt(0) != nullptr && allCapacity.GetAt(0)->entity == nearSphere.Entity(), "RaycastAllNonAlloc must order the closest hit first");
+    kb::tests::Require(allCapacity.GetAt(1) != nullptr && allCapacity.GetAt(1)->entity == midSphere.Entity(), "RaycastAllNonAlloc must order the middle sphere second");
+    kb::tests::Require(allCapacity.GetAt(2) != nullptr && allCapacity.GetAt(2)->entity == farSphere.Entity(), "RaycastAllNonAlloc must order the far sphere last");
+    kb::tests::Require(kb::tests::NearlyEqual(allCapacity.GetAt(0)->distance, 2.5F), "RaycastAllNonAlloc must report the exact geometric distance to the near sphere");
+
+    std::array<kb::scene::PhysicsCastResult, 1> smallCapacityStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> smallCapacity(smallCapacityStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, smallCapacity);
+    kb::tests::Require(smallCapacity.Count() == 1U && smallCapacity.Full(), "RaycastAllNonAlloc must silently stop at the buffer's capacity rather than overflow or allocate");
+    kb::tests::Require(smallCapacity.GetAt(0) != nullptr && smallCapacity.GetAt(0)->entity == nearSphere.Entity(), "RaycastAllNonAlloc must keep the CLOSEST hit when the buffer can only hold one");
+
+    std::array<kb::scene::PhysicsCastResult, 4> maskedStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> masked(maskedStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, 0x2U, masked);
+    kb::tests::Require(masked.Count() == 1U && masked.GetAt(0) != nullptr && masked.GetAt(0)->entity == midSphere.Entity(), "RaycastAllNonAlloc with layerMask=0x2 must only hit the mid sphere's layer");
+
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }, 20.0F, kb::scene::kPhysicsAllLayers, allCapacity);
+    kb::tests::Require(allCapacity.Count() == 0U, "RaycastAllNonAlloc must clear a reused buffer, not retain stale hits from a previous call that collected 3");
+
+    // --- PhysicsBackend::CastShapeAll/OverlapShapeAll: fake backend proves
+    // dispatch, buffer-reuse honesty, and layer-mask gating without a real
+    // Jolt scene (real-Jolt proof lives in PhysicsSceneSystemTests.cpp).
+    const kb::scene::PhysicsShapeDesc sphereQueryShape{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = 0.5F };
+    std::array<kb::scene::PhysicsCastResult, 4> castAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> castAllBuffer(castAllStorage);
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll must report zero results when no physics backend is registered");
+
+    ProbePhysicsBackend backend;
+    backend.knownEntity = nearSphere.Entity();
+    backend.castHitMask = 0x1U;
+    backend.overlapHitMask = 0x1U;
+    backend.castAllHits = {
+        ProbePhysicsBackend::AllHitEntry{ .entity = nearSphere.Entity(), .distance = 2.5F },
+        ProbePhysicsBackend::AllHitEntry{ .entity = midSphere.Entity(), .distance = 4.5F },
+        ProbePhysicsBackend::AllHitEntry{ .entity = farSphere.Entity(), .distance = 6.5F },
+    };
+    backend.overlapAllEntities = { nearSphere.Entity(), midSphere.Entity() };
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 3U, "PhysicsBackend::CastShapeAll must report all 3 hits the backend configured");
+    kb::tests::Require(castAllBuffer.GetAt(0) != nullptr && castAllBuffer.GetAt(0)->entity == nearSphere.Entity(), "PhysicsBackend::CastShapeAll must preserve the backend's hit order");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCastMaxDistance, 20.0F), "PhysicsBackend::CastShapeAll must pass maxDistance through to the backend");
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, 0x2U, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll with a layerMask not intersecting the backend's castHitMask must report zero results");
+
+    std::array<kb::scene::PhysicsCastResult, 2> smallCastAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> smallCastAllBuffer(smallCastAllStorage);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, smallCastAllBuffer);
+    kb::tests::Require(smallCastAllBuffer.Count() == 2U && smallCastAllBuffer.Full(), "PhysicsBackend::CastShapeAll must silently stop at the buffer's capacity rather than overflow or allocate");
+
+    std::array<kb::scene::PhysicsOverlapResult, 4> overlapAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlapAllBuffer(overlapAllStorage);
+    kb::scene::PhysicsBackend::OverlapShapeAll(scene, sphereQueryShape, kb::scene::Vec3{}, kb::scene::kPhysicsAllLayers, overlapAllBuffer);
+    kb::tests::Require(overlapAllBuffer.Count() == 2U, "PhysicsBackend::OverlapShapeAll must report both entities the backend configured");
+    kb::tests::Require(overlapAllBuffer.GetAt(0) != nullptr && overlapAllBuffer.GetAt(0)->entity == nearSphere.Entity(), "PhysicsBackend::OverlapShapeAll must preserve the backend's hit order");
+    kb::tests::Require(overlapAllBuffer.GetAt(1) != nullptr && overlapAllBuffer.GetAt(1)->entity == midSphere.Entity(), "PhysicsBackend::OverlapShapeAll's second entry must be the second configured entity");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll must clear a reused buffer once the backend is unregistered, not retain the 3 hits from before");
+}
+
+// LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit reach
+// scripts through the SAME named-ScriptEvent pipeline TimerFired/
+// TaskCompleted already use (entity-local target, by-name handler
+// resolution identical across Native/Lua/VisualGraph - LIB-103) - no new
+// script-facing plumbing was needed for this task, only the engine-side
+// production (kb::scene::PhysicsBackend::QueueCollisionEvent ->
+// ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents -> a real,
+// entity-local ScriptEvent, once per Scene::Runtime().Update()). This test
+// proves that engine-side wiring end to end WITHOUT a real Jolt scene
+// (real-Jolt production proof lives in PhysicsSceneSystemTests.cpp) by
+// queuing events directly, exactly what a physics plugin's contact
+// listener does.
+void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
+    kb::scene::Scene scene;
+
+    constexpr kb::assets::AssetId kNativeAsset{ 8801U };
+    const kb::scene::SceneObject nativeSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Collision Subject" });
+    scene.Components().Behaviours().Set(nativeSubject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    const kb::assets::AssetId luaAsset{ 8802U };
+    const kb::scene::SceneObject luaSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Trigger Subject" });
+    scene.Components().Behaviours().Set(luaSubject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::scene::SceneObject otherEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Collision Other" });
+    const kb::scene::SceneObject unrelatedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Unrelated Bystander" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Collision/trigger event dispatch test host did not initialize");
+
+    struct ReceivedEvent {
+        std::string name;
+        kb::scene::SceneEntity target{};
+        std::uint64_t other = 0U;
+        float pointX = 0.0F;
+        float normalY = 0.0F;
+    };
+    std::vector<ReceivedEvent> nativeReceived;
+    const auto recordNativeEvent = [&nativeReceived](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent& event) {
+        ReceivedEvent record{ .name = event.name, .target = context.Self() };
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "other") {
+                record.other = argument.value.AsUInt64();
+            } else if (argument.name == "pointX") {
+                record.pointX = argument.value.AsFloat();
+            } else if (argument.name == "normalY") {
+                record.normalY = argument.value.AsFloat();
+            }
+        }
+        nativeReceived.push_back(record);
+    };
+    for (const char* name : { "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit" }) {
+        kb::tests::Require(host.NativeBackend().RegisterEvent(kNativeAsset, name, recordNativeEvent), "Native RegisterEvent failed for a collision/trigger event name");
+    }
+
+    const std::string luaScript =
+        "function OnTriggerEnter(self, event)\n"
+        "    SetShared(\"luaTriggerEnterOther\", event.args.other)\n"
+        "    SetShared(\"luaTriggerEnterPointX\", event.args.pointX)\n"
+        "end\n"
+        "function OnCollisionStay(self, event)\n"
+        "    SetShared(\"luaCollisionStayFired\", true)\n"
+        "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Collision/trigger event dispatch test Lua script did not load");
+
+    kb::tests::Require(host.InstallSceneSystem(), "Collision/trigger event dispatch test scene system install failed");
+
+    // --- Queue exactly what a physics plugin's contact listener would,
+    // directly through the public facade (no real Jolt needed to prove
+    // dispatch correctness - that proof is PhysicsSceneSystemTests.cpp's
+    // job) - one of each phase, targeting both subjects, plus one event
+    // targeting an entity with no behaviour at all (must be honestly
+    // dropped, not crash).
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .point = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F },
+                                                               .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Stay,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Exit,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = luaSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .point = kb::scene::Vec3{ 4.0F, 5.0F, 6.0F },
+                                                               .isTrigger = true,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+    // Independent-axis proof, not a physically-realistic single contact:
+    // the SAME entity also receiving a non-trigger Stay proves phase and
+    // isTrigger are dispatched independently, not conflated.
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = luaSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Stay,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = unrelatedEntity.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::tests::Require(nativeReceived.size() == 3U, "Native OnCollisionEnter/Stay/Exit must all be dispatched to the target entity's behaviour, and only that entity's");
+    kb::tests::Require(nativeReceived[0].name == "OnCollisionEnter" && nativeReceived[0].target == nativeSubject.Entity()
+            && nativeReceived[0].other == otherEntity.Entity().Id()
+            && kb::tests::NearlyEqual(nativeReceived[0].pointX, 1.0F) && kb::tests::NearlyEqual(nativeReceived[0].normalY, 1.0F),
+        "Native OnCollisionEnter must carry the exact queued other-entity id and point/normal payload");
+    kb::tests::Require(nativeReceived[1].name == "OnCollisionStay", "Native OnCollisionStay must dispatch second, in queued order");
+    kb::tests::Require(nativeReceived[2].name == "OnCollisionExit", "Native OnCollisionExit must dispatch third, in queued order");
+
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaTriggerEnterOther")->AsInt()) == otherEntity.Entity().Id(),
+        "Lua OnTriggerEnter must receive the exact queued other-entity id via event.args.other");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaTriggerEnterPointX")->AsFloat(), 4.0F),
+        "Lua OnTriggerEnter must receive the exact queued contact point via event.args.pointX");
+    kb::tests::Require(host.SharedState().Get("luaCollisionStayFired")->AsBool(),
+        "Lua OnCollisionStay must also fire for the same entity, independent of OnTriggerEnter having fired for it too");
+
+    kb::tests::Require(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene).empty(),
+        "ScriptRuntimeSceneSystem must have fully drained the pending collision event queue during Update()");
 }
 
 // LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
@@ -3274,6 +4102,138 @@ void RunWorldSetPropertyTest() {
     kb::tests::Require(deadEntityResult.Succeeded() && !deadEntityResult.Output("set")->AsBool(), "World.SetPropertyFloat targeting a destroyed entity must report set=false, not throw");
 }
 
+// LIB-123: World.SetPropertyFloat/Entity reaching the four physics
+// components' fields through the SAME generic, string-dispatched
+// ScriptSceneComponentApi mechanism RunWorldSetPropertyTest above already
+// proves for Camera/Behaviour - the risk this guards against is specific to
+// THIS task (a typo'd component name string, e.g. "Ridgidbody", silently
+// resolving to "not found" rather than the intended component), not the
+// generic dispatch machinery itself. Also proves the LIB-082 boundary holds
+// for the new components: Joint.connectedEntity must genuinely be REJECTED
+// by World.SetPropertyEntity (it is deliberately excluded from the
+// FieldBinding property table - see kJointPropertyDescs).
+//
+// World.SetPropertyFloat/Entity have no dedicated Lua sugar (grep of
+// PucLuaFunctionApi.cpp confirms no SetProperty* wrapper exists) and their
+// only entity ARGUMENT (which entity to target) cannot reliably cross Lua's
+// generic CallFunction(name, argsTable) bridge either: PucLuaValueBridge::
+// FromLua infers a table value's ScriptValueType purely from its own Lua
+// representation - an integer becomes Entity-typed only once its magnitude
+// exceeds int32 range, otherwise Int-typed, and EntityArg()/AsUInt64() do
+// not coerce across that boundary. Ordinary entity ids in this engine
+// (including every id these tests create) fit comfortably in int32, so that
+// path would silently mis-marshal, not really test anything - a
+// pre-existing, cross-cutting Lua-bridge gap unrelated to physics
+// components, out of this task's scope to fix. Self.SetProperty/GetProperty
+// (PucLuaSelfApi.cpp) sidesteps this entirely (it targets the calling
+// behaviour's own entity implicitly, no entity argument to marshal) and
+// proves the SAME new component-name dispatch from Lua below. VisualGraph
+// reaches the identical registry entries through the CallNative binding
+// RunCatalogFunctionsHaveVisualGraphBindingsTest already verifies exists for
+// every registered function including World.SetPropertyFloat itself (and
+// VisualGraph's CallNative path does not share Lua's type-inference problem
+// - callers declare pin types explicitly), so a separate graph-authoring
+// test here would only re-prove that already-covered, generic plumbing.
+void RunWorldSetPropertyPhysicsComponentsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetProperty physics components test host setup failed");
+
+    const kb::scene::SceneObject bodyObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Body" });
+    scene.Components().Rigidbodies().Set(bodyObject.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(bodyObject.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(bodyObject.Entity(), kb::scene::CharacterControllerComponent{});
+    const kb::scene::SceneObject jointObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "JointOwner" });
+    scene.Components().Joints().Set(jointObject.Entity(), kb::scene::JointComponent{});
+    const kb::scene::SceneObject targetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "JointTarget" });
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> massArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Rigidbody" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "mass" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 42.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult massResult = host.Functions().Call("World.SetPropertyFloat", massArgs, context);
+    kb::tests::Require(massResult.Succeeded() && massResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for Rigidbody.mass");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Rigidbodies().TryGet(bodyObject.Entity())->mass, 42.0F),
+        "World.SetPropertyFloat must actually change Rigidbody.mass on the live component");
+
+    const std::vector<kb::script::ScriptFunctionArgument> frictionArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Collider" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "friction" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.9F } },
+    };
+    const kb::script::ScriptFunctionCallResult frictionResult = host.Functions().Call("World.SetPropertyFloat", frictionArgs, context);
+    kb::tests::Require(frictionResult.Succeeded() && frictionResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for Collider.friction");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Colliders().TryGet(bodyObject.Entity())->friction, 0.9F),
+        "World.SetPropertyFloat must actually change Collider.friction (a PhysicsMaterial field) on the live component");
+
+    const std::vector<kb::script::ScriptFunctionArgument> capsuleRadiusArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "CharacterController" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "radius" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.35F } },
+    };
+    const kb::script::ScriptFunctionCallResult capsuleRadiusResult = host.Functions().Call("World.SetPropertyFloat", capsuleRadiusArgs, context);
+    kb::tests::Require(capsuleRadiusResult.Succeeded() && capsuleRadiusResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for CharacterController.radius");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().CharacterControllers().TryGet(bodyObject.Entity())->radius, 0.35F),
+        "World.SetPropertyFloat must actually change CharacterController.radius on the live component");
+
+    // LIB-082: Joint.connectedEntity is deliberately NOT reachable through
+    // the generic property mechanism (ScriptSceneComponentApi's FieldBinding
+    // table only ever exposes Bool/Int/Float, audited by
+    // RunScriptSceneComponentPropertiesNeverExposeRawPointerTest, since a
+    // wider type like Entity could in principle carry a raw pointer's bit
+    // pattern) - World.SetPropertyEntity must genuinely reject it rather
+    // than silently no-op or crash. connectedEntity is still fully real and
+    // settable through native kb::library::EntityHandle::Add<JointComponent>
+    // (RunEntityHandlePhysicsComponentAccessTest already proves that path).
+    const std::vector<kb::script::ScriptFunctionArgument> connectedEntityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ jointObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Joint" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "connectedEntity" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ targetObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult connectedEntityResult = host.Functions().Call("World.SetPropertyEntity", connectedEntityArgs, context);
+    kb::tests::Require(connectedEntityResult.Succeeded() && !connectedEntityResult.Output("set")->AsBool(),
+        "World.SetPropertyEntity must report set=false for Joint.connectedEntity - it is not a registered script property (LIB-082)");
+    kb::tests::Require(scene.Components().Joints().TryGet(jointObject.Entity())->connectedEntity != targetObject.Entity(),
+        "World.SetPropertyEntity must NOT have changed Joint.connectedEntity on the live component");
+
+    // Lua leg: self:GetProperty/SetProperty (PucLuaSelfApi.cpp::PushSelf,
+    // passed as the Tick(self, dt) function's first parameter - NOT a
+    // global "Self" table) is ALSO string-dispatched through
+    // ScriptSceneComponentApi, but targets the calling behaviour's own
+    // entity implicitly (context->Self()) - no entity argument to marshal,
+    // so it sidesteps the World.SetPropertyFloat/Entity Lua-marshalling gap
+    // documented above entirely, while still proving the SAME newly-added
+    // component-name dispatch from Lua.
+    scene.Components().Rigidbodies().Set(bodyObject.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Behaviours().Set(bodyObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = 9311U,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::assets::AssetId luaAsset{ 9311U };
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    self:SetProperty("Rigidbody", "mass", 13.0)
+    SetShared("luaRigidbodyMass", self:GetProperty("Rigidbody", "mass"))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "World.SetProperty physics components Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "World.SetProperty physics components Lua wrapper execution failed");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Rigidbodies().TryGet(bodyObject.Entity())->mass, 13.0F),
+        "Lua Self.SetProperty must actually change Rigidbody.mass on the live component");
+    const std::optional<kb::script::ScriptValue> luaMass = host.SharedState().Get("luaRigidbodyMass");
+    kb::tests::Require(luaMass.has_value() && kb::tests::NearlyEqual(luaMass->AsFloat(), 13.0F),
+        "Lua Self.GetProperty must read back the value Self.SetProperty just wrote to Rigidbody.mass");
+}
+
 // LIB-070 ("ownership control"): proves that destroying the entity handle
 // World.InstantiatePrefab/World.Spawn(prefab=...) returns really does
 // relinquish the WHOLE instantiated hierarchy, not just the root — the
@@ -4205,12 +5165,22 @@ void RunScriptInputApiTest() {
     kb::tests::Require(isPressed.Succeeded() && isPressed.Output("pressed")->AsBool(), "Input.IsPressed direct call did not see Jump");
     kb::tests::Require(wasPressed.Succeeded() && wasPressed.Output("pressed")->AsBool(), "Input.WasPressed direct call did not see Jump edge");
 
+    const kb::script::ScriptFunctionCallResult held = host.Functions().Call("Input.Held", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult pressedEdge = host.Functions().Call("Input.Pressed", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult actionBool = host.Functions().Call("Input.ActionBool", jumpArgs, callContext);
+    kb::tests::Require(held.Succeeded() && held.Output("held")->AsBool(), "Input.Held direct call did not see Jump held");
+    kb::tests::Require(pressedEdge.Succeeded() && pressedEdge.Output("pressed")->AsBool(), "Input.Pressed direct call did not see Jump edge");
+    kb::tests::Require(actionBool.Succeeded() && actionBool.Output("value")->AsBool(), "Input.ActionBool direct call did not see Jump as true");
+
     const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Move" } } },
     };
     const kb::script::ScriptFunctionCallResult moveValue = host.Functions().Call("Input.Value", moveArgs, callContext);
     kb::tests::Require(moveValue.Succeeded() && kb::tests::NearlyEqual(moveValue.Output("value")->AsFloat(), 1.0F),
         "Input.Value direct call returned wrong Move value");
+    const kb::script::ScriptFunctionCallResult moveActionFloat = host.Functions().Call("Input.ActionFloat", moveArgs, callContext);
+    kb::tests::Require(moveActionFloat.Succeeded() && kb::tests::NearlyEqual(moveActionFloat.Output("value")->AsFloat(), 1.0F),
+        "Input.ActionFloat direct call returned wrong Move value");
 
     const std::vector<kb::script::ScriptFunctionArgument> lookArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Look" } } },
@@ -4218,6 +5188,9 @@ void RunScriptInputApiTest() {
     const kb::script::ScriptFunctionCallResult lookVector = host.Functions().Call("Input.Vector2", lookArgs, callContext);
     kb::tests::Require(lookVector.Succeeded() && kb::tests::NearlyEqual(lookVector.Output("x")->AsFloat(), 0.25F),
         "Input.Vector2 direct call returned wrong Look value");
+    const kb::script::ScriptFunctionCallResult lookAction2D = host.Functions().Call("Input.Action2D", lookArgs, callContext);
+    kb::tests::Require(lookAction2D.Succeeded() && kb::tests::NearlyEqual(lookAction2D.Output("x")->AsFloat(), 0.25F),
+        "Input.Action2D direct call returned wrong Look value");
 
     const std::vector<kb::script::ScriptFunctionArgument> thrustArgs{
         kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Thrust" } } },
@@ -4228,6 +5201,16 @@ void RunScriptInputApiTest() {
 
     scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, false);
     scene.Input().Evaluate(0.016F);
+
+    const kb::script::ScriptFunctionCallResult releasedEdge = host.Functions().Call("Input.Released", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult heldAfterRelease = host.Functions().Call("Input.Held", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult actionBoolAfterRelease = host.Functions().Call("Input.ActionBool", jumpArgs, callContext);
+    kb::tests::Require(releasedEdge.Succeeded() && releasedEdge.Output("released")->AsBool(),
+        "Input.Released direct call did not see Jump release edge");
+    kb::tests::Require(heldAfterRelease.Succeeded() && !heldAfterRelease.Output("held")->AsBool(),
+        "Input.Held should be false once Jump is released");
+    kb::tests::Require(actionBoolAfterRelease.Succeeded() && !actionBoolAfterRelease.Output("value")->AsBool(),
+        "Input.ActionBool should be false once Jump is released");
 
     const kb::assets::AssetId luaAsset{ 8820U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Input Caller" });
@@ -4245,6 +5228,12 @@ function Tick(self, dt)
     SetShared("input.move", Input.Value("Move"))
     SetShared("input.lookX", look.x)
     SetShared("input.thrustX", thrust.x)
+    SetShared("input.jumpHeld", Input.Held("Jump"))
+    SetShared("input.jumpReleasedCanonical", Input.Released("Jump"))
+    SetShared("input.jumpActionBool", Input.ActionBool("Jump"))
+    SetShared("input.moveActionFloat", Input.ActionFloat("Move"))
+    local look2d = Input.Action2D("Look")
+    SetShared("input.lookAction2DX", look2d.x)
     SetShared("input.removed", Input.RemoveMappingContext(50))
 end
 )");
@@ -4256,8 +5245,538 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.move")->AsFloat(), 1.0F), "Lua Input.Value returned wrong Move value");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.lookX")->AsFloat(), 0.25F), "Lua Input.Vector2 returned wrong Look value");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.thrustX")->AsFloat(), 0.75F), "Lua Input.Vector3 returned wrong Thrust value");
+    kb::tests::Require(!host.SharedState().Get("input.jumpHeld")->AsBool(), "Lua Input.Held should be false after Jump release");
+    kb::tests::Require(host.SharedState().Get("input.jumpReleasedCanonical")->AsBool(), "Lua Input.Released did not see Jump release");
+    kb::tests::Require(!host.SharedState().Get("input.jumpActionBool")->AsBool(), "Lua Input.ActionBool should be false after Jump release");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.moveActionFloat")->AsFloat(), 1.0F), "Lua Input.ActionFloat returned wrong Move value");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.lookAction2DX")->AsFloat(), 0.25F), "Lua Input.Action2D returned wrong Look value");
     kb::tests::Require(host.SharedState().Get("input.removed")->AsBool() && !scene.Input().HasMappingContext(50U),
         "Lua Input.RemoveMappingContext did not remove the active context");
+}
+
+// LIB-115: the same Input.* names, given an explicit player argument, must query
+// a genuinely independent LocalUser InputSubsystem - both through direct native
+// calls and through the Lua wrapper surface (which threads player as an optional
+// 2nd/3rd Lua argument - see PucLuaFunctionApi.cpp's InputActionArgs).
+void RunScriptInputApiPerPlayerTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+
+    auto primaryContext = std::make_shared<InputMappingContextAsset>();
+    primaryContext->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Space });
+    auto player2Context = std::make_shared<InputMappingContextAsset>();
+    player2Context->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Enter });
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{ { 1U, jump } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        { 10U, primaryContext }, { 20U, player2Context } };
+    const auto resolveAction = [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+        const auto found = actions.find(id);
+        return found != actions.end() ? found->second : nullptr;
+    };
+    const auto resolveContext = [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+        const auto found = contexts.find(id);
+        return found != contexts.end() ? found->second : nullptr;
+    };
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(resolveAction, resolveContext);
+    scene.Input(kb::input::LocalUserId{ 2U }).SetResolvers(resolveAction, resolveContext);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Per-player script input API host did not initialize");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const std::vector<kb::script::ScriptFunctionArgument> addPrimaryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "10" } } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> addPlayer2Args{
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "20" } } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
+        kb::script::ScriptFunctionArgument{ .name = "player", .value = kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult addedPrimary = host.Functions().Call("Input.AddMappingContext", addPrimaryArgs, callContext);
+    const kb::script::ScriptFunctionCallResult addedPlayer2 = host.Functions().Call("Input.AddMappingContext", addPlayer2Args, callContext);
+    kb::tests::Require(addedPrimary.Succeeded() && addedPrimary.Output("added")->AsBool(), "Primary Input.AddMappingContext failed");
+    kb::tests::Require(addedPlayer2.Succeeded() && addedPlayer2.Output("added")->AsBool(), "Player-2 Input.AddMappingContext failed");
+    kb::tests::Require(!scene.Input().HasMappingContext(20U), "Primary user must not receive player 2's context via the script API");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+
+    const std::vector<kb::script::ScriptFunctionArgument> jumpPrimaryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> jumpPlayer2Args{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+        kb::script::ScriptFunctionArgument{ .name = "player", .value = kb::script::ScriptValue{ 2 } },
+    };
+    const kb::script::ScriptFunctionCallResult primaryJump = host.Functions().Call("Input.IsPressed", jumpPrimaryArgs, callContext);
+    const kb::script::ScriptFunctionCallResult player2JumpBeforeEnter = host.Functions().Call("Input.IsPressed", jumpPlayer2Args, callContext);
+    kb::tests::Require(primaryJump.Succeeded() && primaryJump.Output("pressed")->AsBool(),
+        "Player 1 Input.IsPressed should see Jump while Space is held");
+    kb::tests::Require(player2JumpBeforeEnter.Succeeded() && !player2JumpBeforeEnter.Output("pressed")->AsBool(),
+        "Player 2 must not see Jump from Space - only Enter is bound to their context");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Enter, true);
+    scene.EvaluateAllLocalUserInput(0.016F);
+    const kb::script::ScriptFunctionCallResult player2JumpAfterEnter = host.Functions().Call("Input.IsPressed", jumpPlayer2Args, callContext);
+    kb::tests::Require(player2JumpAfterEnter.Succeeded() && player2JumpAfterEnter.Output("pressed")->AsBool(),
+        "Player 2 Input.IsPressed should see Jump once Enter (shared device state) is held");
+
+    // Lua round-trip: player=2 as the wrapper's optional 2nd argument.
+    const kb::assets::AssetId luaAsset{ 8821U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Per-Player Input Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("input.player1Jump", Input.IsPressed("Jump"))
+    SetShared("input.player2Jump", Input.IsPressed("Jump", 2))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Per-player Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Per-player Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("input.player1Jump")->AsBool(), "Lua Input.IsPressed(action) should still see player 1's Jump");
+    kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
+}
+
+// LIB-117: Pointer.Position/Delta/Button, both as direct native calls and
+// through the Lua wrapper table - proving the engine-side pointer position
+// storage (InputDeviceState::SetPointerPosition, LIB-117) reaches script.
+void RunScriptPointerApiTest() {
+    using namespace kb::input;
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Pointer script API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Position") != nullptr, "Pointer.Position was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Delta") != nullptr, "Pointer.Delta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Button") != nullptr, "Pointer.Button was not registered");
+
+    scene.Input().MutableDeviceState().SetPointerPosition(120.0F, 340.0F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseX, 5.0F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseY, -2.0F);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::MouseLeft, true);
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const kb::script::ScriptFunctionCallResult position = host.Functions().Call("Pointer.Position", {}, callContext);
+    kb::tests::Require(position.Succeeded() && kb::tests::NearlyEqual(position.Output("x")->AsFloat(), 120.0F) &&
+                            kb::tests::NearlyEqual(position.Output("y")->AsFloat(), 340.0F),
+        "Pointer.Position direct call returned the wrong position");
+
+    const kb::script::ScriptFunctionCallResult delta = host.Functions().Call("Pointer.Delta", {}, callContext);
+    kb::tests::Require(delta.Succeeded() && kb::tests::NearlyEqual(delta.Output("x")->AsFloat(), 5.0F) &&
+                            kb::tests::NearlyEqual(delta.Output("y")->AsFloat(), -2.0F),
+        "Pointer.Delta direct call returned the wrong delta");
+
+    const std::vector<kb::script::ScriptFunctionArgument> leftButtonArgs{
+        kb::script::ScriptFunctionArgument{ .name = "button", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> rightButtonArgs{
+        kb::script::ScriptFunctionArgument{ .name = "button", .value = kb::script::ScriptValue{ 1 } },
+    };
+    const kb::script::ScriptFunctionCallResult leftButton = host.Functions().Call("Pointer.Button", leftButtonArgs, callContext);
+    const kb::script::ScriptFunctionCallResult rightButton = host.Functions().Call("Pointer.Button", rightButtonArgs, callContext);
+    kb::tests::Require(leftButton.Succeeded() && leftButton.Output("pressed")->AsBool(), "Pointer.Button(0) should see the left button held");
+    kb::tests::Require(rightButton.Succeeded() && !rightButton.Output("pressed")->AsBool(), "Pointer.Button(1) must not see the right button as held");
+
+    const kb::assets::AssetId luaAsset{ 8822U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Pointer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local pos = Pointer.Position()
+    local delta = Pointer.Delta()
+    SetShared("pointer.x", pos.x)
+    SetShared("pointer.y", pos.y)
+    SetShared("pointer.dx", delta.x)
+    SetShared("pointer.left", Pointer.Button(0))
+    SetShared("pointer.right", Pointer.Button(1))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Pointer Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Pointer Lua wrapper execution failed");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.x")->AsFloat(), 120.0F), "Lua Pointer.Position returned wrong x");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.y")->AsFloat(), 340.0F), "Lua Pointer.Position returned wrong y");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.dx")->AsFloat(), 5.0F), "Lua Pointer.Delta returned wrong x");
+    kb::tests::Require(host.SharedState().Get("pointer.left")->AsBool(), "Lua Pointer.Button(0) should see the left button held");
+    kb::tests::Require(!host.SharedState().Get("pointer.right")->AsBool(), "Lua Pointer.Button(1) must not see the right button as held");
+}
+
+// LIB-118: the named priority constants must reach script with the exact
+// values InputContextPriority defines, both natively and through Lua - a
+// script pushing Input.AddMappingContext(ctx, Input.PriorityUI()) must
+// actually outrank Input.PriorityGameplay(), which InputTests.cpp::
+// TestNamedContextPriorityBands already proves at the InputSubsystem level;
+// this test only proves the constants survive the trip through script.
+void RunScriptInputPriorityConstantsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Priority constants script host did not initialize");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const kb::script::ScriptFunctionCallResult gameplay = host.Functions().Call("Input.PriorityGameplay", {}, callContext);
+    const kb::script::ScriptFunctionCallResult ui = host.Functions().Call("Input.PriorityUI", {}, callContext);
+    const kb::script::ScriptFunctionCallResult console = host.Functions().Call("Input.PriorityConsole", {}, callContext);
+    const kb::script::ScriptFunctionCallResult debugOverlay = host.Functions().Call("Input.PriorityDebugOverlay", {}, callContext);
+    kb::tests::Require(gameplay.Succeeded() && gameplay.Output("priority")->AsInt() == kb::input::InputContextPriority::Gameplay,
+        "Input.PriorityGameplay direct call returned the wrong value");
+    kb::tests::Require(ui.Succeeded() && ui.Output("priority")->AsInt() == kb::input::InputContextPriority::UI,
+        "Input.PriorityUI direct call returned the wrong value");
+    kb::tests::Require(console.Succeeded() && console.Output("priority")->AsInt() == kb::input::InputContextPriority::Console,
+        "Input.PriorityConsole direct call returned the wrong value");
+    kb::tests::Require(debugOverlay.Succeeded() && debugOverlay.Output("priority")->AsInt() == kb::input::InputContextPriority::DebugOverlay,
+        "Input.PriorityDebugOverlay direct call returned the wrong value");
+    kb::tests::Require(kb::input::InputContextPriority::Gameplay < kb::input::InputContextPriority::UI &&
+                kb::input::InputContextPriority::UI < kb::input::InputContextPriority::Console &&
+                kb::input::InputContextPriority::Console < kb::input::InputContextPriority::DebugOverlay,
+            "Named priority bands must be strictly ordered Gameplay < UI < Console < DebugOverlay");
+
+    const kb::assets::AssetId luaAsset{ 8823U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Priority Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("priority.gameplay", Input.PriorityGameplay())
+    SetShared("priority.ui", Input.PriorityUI())
+    SetShared("priority.console", Input.PriorityConsole())
+    SetShared("priority.debugOverlay", Input.PriorityDebugOverlay())
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Priority constants Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Priority constants Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("priority.gameplay")->AsInt() == kb::input::InputContextPriority::Gameplay,
+        "Lua Input.PriorityGameplay returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.ui")->AsInt() == kb::input::InputContextPriority::UI,
+        "Lua Input.PriorityUI returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.console")->AsInt() == kb::input::InputContextPriority::Console,
+        "Lua Input.PriorityConsole returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.debugOverlay")->AsInt() == kb::input::InputContextPriority::DebugOverlay,
+        "Lua Input.PriorityDebugOverlay returned the wrong value");
+}
+
+// LIB-120: Input.HasFocus/Input.IsGamepadConnected reach script correctly, and
+// - the real point of "reset stanów pressed" - an action a script observed as
+// pressed correctly reports WasReleased once the device goes quiet (focus
+// lost / disconnected), reachable from script exactly as InputTests.cpp::
+// TestPressedStateResetsWhenDeviceGoesQuiet proves at the InputSubsystem
+// level; this test only proves script sees the same thing.
+void RunScriptInputFocusLossReleasesActionsTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(10U, 0), "Context should resolve");
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Focus-loss script host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Input.HasFocus") != nullptr, "Input.HasFocus was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Input.IsGamepadConnected") != nullptr, "Input.IsGamepadConnected was not registered");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    scene.Input().MutableDeviceState().SetHasFocus(true);
+    scene.Input().MutableDeviceState().SetGamepadConnected(0U, true);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.Input().Evaluate(0.016F);
+    const kb::script::ScriptFunctionCallResult focusedResult = host.Functions().Call("Input.HasFocus", {}, callContext);
+    kb::tests::Require(focusedResult.Succeeded() && focusedResult.Output("focus")->AsBool(), "Input.HasFocus should report true while focused");
+    const std::vector<kb::script::ScriptFunctionArgument> gamepad0Args{
+        kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const kb::script::ScriptFunctionCallResult connectedResult = host.Functions().Call("Input.IsGamepadConnected", gamepad0Args, callContext);
+    kb::tests::Require(connectedResult.Succeeded() && connectedResult.Output("connected")->AsBool(), "Input.IsGamepadConnected(0) should report true");
+    const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+    };
+    const kb::script::ScriptFunctionCallResult jumpBefore = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    kb::tests::Require(jumpBefore.Succeeded() && jumpBefore.Output("pressed")->AsBool(), "Jump should be pressed before focus loss");
+
+    // Simulate a focus-loss/disconnect frame (LIB-120): device state goes
+    // quiet, HasFocus/IsGamepadConnected flip to false, and Jump correctly
+    // reports Released rather than staying stuck "pressed" forever.
+    scene.Input().MutableDeviceState().Reset();
+    scene.Input().MutableDeviceState().SetHasFocus(false);
+    scene.Input().MutableDeviceState().SetGamepadConnected(0U, false);
+    scene.Input().Evaluate(0.016F);
+
+    const kb::script::ScriptFunctionCallResult unfocusedResult = host.Functions().Call("Input.HasFocus", {}, callContext);
+    kb::tests::Require(unfocusedResult.Succeeded() && !unfocusedResult.Output("focus")->AsBool(), "Input.HasFocus should report false after losing focus");
+    const kb::script::ScriptFunctionCallResult disconnectedResult = host.Functions().Call("Input.IsGamepadConnected", gamepad0Args, callContext);
+    kb::tests::Require(disconnectedResult.Succeeded() && !disconnectedResult.Output("connected")->AsBool(), "Input.IsGamepadConnected(0) should report false after disconnect");
+    const kb::script::ScriptFunctionCallResult jumpAfter = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    kb::tests::Require(jumpAfter.Succeeded() && !jumpAfter.Output("pressed")->AsBool(), "Jump must no longer report pressed after focus loss");
+    const kb::script::ScriptFunctionCallResult jumpReleased = host.Functions().Call("Input.Released", jumpArgs, callContext);
+    kb::tests::Require(jumpReleased.Succeeded() && jumpReleased.Output("released")->AsBool(),
+        "Input.Released should fire the frame focus is lost while Jump was held");
+
+    // Lua round-trip for HasFocus/IsGamepadConnected.
+    const kb::assets::AssetId luaAsset{ 8824U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Focus Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("focus.hasFocus", Input.HasFocus())
+    SetShared("focus.gamepad0", Input.IsGamepadConnected(0))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Focus-loss Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Focus-loss Lua wrapper execution failed");
+    kb::tests::Require(!host.SharedState().Get("focus.hasFocus")->AsBool(), "Lua Input.HasFocus should report false after focus loss");
+    kb::tests::Require(!host.SharedState().Get("focus.gamepad0")->AsBool(), "Lua Input.IsGamepadConnected(0) should report false after disconnect");
+}
+
+// LIB-122, TENTH and last task of section 9. Two related action-state parity
+// contracts proven under the REAL production scheduler (kb::input::
+// InputPollingSystem + kb::script::ScriptRuntimeSceneSystem via ScriptRuntimeHost),
+// not just isolated Evaluate() calls:
+//
+// (A) FixedTick/Tick parity - InputPollingSystem::OnUpdate polls the device
+// and recomputes ALL action state EXACTLY ONCE per Scene::Runtime().Update()
+// call, while ScriptRuntimeSceneSystem::ExecuteFrame runs its OWN internal
+// fixed-step loop (zero or more ScriptLifecycleEvent::FixedTick dispatches)
+// BEFORE exactly one Tick dispatch, all inside that SAME Update() call - so
+// every FixedTick AND the following Tick in one frame must observe
+// byte-identical action state; nothing in the engine re-polls mid-frame.
+// This is a regression guard: were a future change to add a per-fixed-step
+// poll (mirroring how physics advances per fixed step), a Hold-style trigger
+// or any other action state would start drifting between FixedTick calls
+// within a single frame instead of staying frozen for the whole frame.
+//
+// (B) native/Lua/graph parity - mirrors the established
+// RunMathFunctionCrossBackendParityTest pattern: native (ScriptExecutionContext::
+// CallFunction), Lua (the Input.* sugar from LIB-114/115) and VisualGraph
+// (a CallNative "Function.Input.*" node - ScriptFunctionVisualGraphBindings
+// wires every ScriptFunctionRegistry entry generically, confirmed at
+// LIB-114/115) must all resolve to the identical ScriptFunctionRegistry
+// entry and read the identical action-state value within the same Tick.
+void RunInputActionStateFixedTickTickAndBackendParityTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+    auto move = std::make_shared<InputActionAsset>();
+    move->name = "Move";
+    move->valueType = InputActionValueType::Axis1D;
+    auto mappingContext = std::make_shared<InputMappingContextAsset>();
+    mappingContext->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+    mappingContext->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}, {2U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{60U, mappingContext}};
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "Parity test mapping context should resolve");
+    // Mirrors kb::input::InputModule::OnSceneAttach's wiring (Input phase runs
+    // once per Update, before the script runtime's own FixedTick/Tick loop).
+    scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::W, true);
+
+    kb::script::ScriptRuntimeHostOptions options{};
+    options.installSceneSystem = true;
+    options.frameSettings.fixedDeltaSeconds = 0.02F;
+    options.frameSettings.maxFixedStepsPerFrame = 8U;
+    kb::script::ScriptRuntimeHost host{scene, options};
+    kb::tests::Require(host.Succeeded(), "FixedTick/Tick and backend parity host setup failed");
+
+    constexpr kb::assets::AssetId kNativeAsset{5220U};
+    constexpr kb::assets::AssetId kLuaAsset{5221U};
+    constexpr kb::assets::AssetId kVisualAsset{5222U};
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Native"});
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Lua"});
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Parity Graph"});
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true, .executionOrder = 0});
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true, .executionOrder = 10});
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kVisualAsset.value, .backend = kb::scene::BehaviourBackend::VisualGraph, .enabled = true, .executionOrder = 20});
+
+    // --- Part A: native records one reading on every FixedTick AND on the
+    // following Tick, in the same frame.
+    struct Reading {
+        bool jumpPressed = false;
+        float moveValue = 0.0F;
+    };
+    std::vector<Reading> fixedTickReadings;
+    std::vector<Reading> tickReadings;
+    const auto readViaCallFunction = [](kb::script::ScriptExecutionContext& executionContext) -> Reading {
+        const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+            kb::script::ScriptFunctionArgument{.name = "action", .value = kb::script::ScriptValue{std::string{"Jump"}}},
+        };
+        const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
+            kb::script::ScriptFunctionArgument{.name = "action", .value = kb::script::ScriptValue{std::string{"Move"}}},
+        };
+        const kb::script::ScriptFunctionCallResult pressed = executionContext.CallFunction("Input.IsPressed", jumpArgs);
+        const kb::script::ScriptFunctionCallResult value = executionContext.CallFunction("Input.Value", moveArgs);
+        kb::tests::Require(pressed.Succeeded() && value.Succeeded(), "Native FixedTick/Tick Input reads must succeed");
+        return Reading{.jumpPressed = pressed.Output("pressed")->AsBool(), .moveValue = value.Output("value")->AsFloat()};
+    };
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::FixedTick,
+                           [&](kb::script::ScriptExecutionContext& executionContext) { fixedTickReadings.push_back(readViaCallFunction(executionContext)); }),
+        "Parity FixedTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+                           [&](kb::script::ScriptExecutionContext& executionContext) { tickReadings.push_back(readViaCallFunction(executionContext)); }),
+        "Parity Tick registration failed");
+
+    // --- Part B: Lua and VisualGraph callers, reading the same two actions
+    // within that same Tick.
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaJumpPressed", Input.IsPressed("Jump"))
+    SetShared("luaMoveValue", Input.Value("Move"))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Parity Lua caller did not load");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ParityInputGraph";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{.id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick},
+        kb::visual::VisualGraphNode{.id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityJumpActionKey"},
+        kb::visual::VisualGraphNode{.id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityJumpResultKey"},
+        kb::visual::VisualGraphNode{.id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.IsPressed"},
+        kb::visual::VisualGraphNode{.id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Bool"},
+        kb::visual::VisualGraphNode{.id = 6U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityMoveActionKey"},
+        kb::visual::VisualGraphNode{.id = 7U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "ParityMoveResultKey"},
+        kb::visual::VisualGraphNode{.id = 8U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.Value"},
+        kb::visual::VisualGraphNode{.id = 9U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float"},
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{.nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "action", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "pressed", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool},
+        kb::visual::VisualGraphPin{.nodeId = 6U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 7U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "action", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 8U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 9U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool},
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{.fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 5U, .fromPin = "then", .toNode = 8U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 8U, .fromPin = "then", .toNode = 9U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution},
+        kb::visual::VisualGraphEdge{.fromNode = 2U, .fromPin = "value", .toNode = 4U, .toPin = "action", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 4U, .fromPin = "pressed", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 6U, .fromPin = "value", .toNode = 8U, .toPin = "action", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 7U, .fromPin = "value", .toNode = 9U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data},
+        kb::visual::VisualGraphEdge{.fromNode = 8U, .fromPin = "value", .toNode = 9U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data},
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Parity input graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{.assetId = kVisualAsset, .graphName = graph.name, .module = compiled.module});
+
+    const auto registerConstantKey = [&host](const std::string& symbol, const std::string& value) {
+        kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                               .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                               .symbol = symbol,
+                               .outputs = {kb::visual::VisualGraphPinSignature{.name = "value", .type = kb::visual::VisualGraphValueType::String}},
+                               .callback = [value](kb::visual::VisualGraphRuntimeExecutionContext& runtimeContext, const kb::visual::VisualGraphIrInstruction& instruction) {
+                                   runtimeContext.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{value});
+                               },
+                           }),
+            "Parity constant-key binding did not register");
+    };
+    registerConstantKey("ParityJumpActionKey", "Jump");
+    registerConstantKey("ParityJumpResultKey", "graphJumpPressed");
+    registerConstantKey("ParityMoveActionKey", "Move");
+    registerConstantKey("ParityMoveResultKey", "graphMoveValue");
+
+    // --- Run one engine frame long enough to force multiple internal
+    // FixedTick steps (0.07s / 0.02s = 3 full steps) before the single Tick.
+    static_cast<void>(scene.Runtime().Update(0.07F));
+
+    // Part A assertions: FixedTick/Tick parity.
+    kb::tests::Require(fixedTickReadings.size() == 3U, "Parity frame should have produced exactly 3 FixedTick readings");
+    kb::tests::Require(tickReadings.size() == 1U, "Parity frame should have produced exactly 1 Tick reading");
+    for (const Reading& reading : fixedTickReadings) {
+        kb::tests::Require(reading.jumpPressed, "Every FixedTick reading must see Jump pressed");
+        kb::tests::Require(kb::tests::NearlyEqual(reading.moveValue, 1.0F), "Every FixedTick reading must see the resolved Move value");
+    }
+    kb::tests::Require(
+        tickReadings[0].jumpPressed == fixedTickReadings[0].jumpPressed && kb::tests::NearlyEqual(tickReadings[0].moveValue, fixedTickReadings[0].moveValue),
+        "Tick must observe the exact same action state as every FixedTick in the same frame - action state must not be re-polled mid-frame");
+
+    // Part B assertions: native/Lua/graph parity, all against that same Tick reading.
+    const std::optional<kb::script::ScriptValue> luaJumpPressed = host.SharedState().Get("luaJumpPressed");
+    const std::optional<kb::script::ScriptValue> luaMoveValue = host.SharedState().Get("luaMoveValue");
+    const std::optional<kb::script::ScriptValue> graphJumpPressed = host.SharedState().Get("graphJumpPressed");
+    const std::optional<kb::script::ScriptValue> graphMoveValue = host.SharedState().Get("graphMoveValue");
+    kb::tests::Require(luaJumpPressed.has_value() && luaMoveValue.has_value(), "Lua backend did not store Input parity results");
+    kb::tests::Require(graphJumpPressed.has_value() && graphMoveValue.has_value(), "Visual Graph backend did not store Input parity results");
+    kb::tests::Require(luaJumpPressed->AsBool() == tickReadings[0].jumpPressed, "Lua and native Jump-pressed parity mismatch");
+    kb::tests::Require(graphJumpPressed->AsBool() == tickReadings[0].jumpPressed, "Visual Graph and native Jump-pressed parity mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(luaMoveValue->AsFloat(), tickReadings[0].moveValue), "Lua and native Move-value parity mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(graphMoveValue->AsFloat(), tickReadings[0].moveValue), "Visual Graph and native Move-value parity mismatch");
 }
 
 void RunScriptRuntimeSceneSystemTest() {
@@ -5193,11 +6712,12 @@ void RunScriptSceneComponentApiTest() {
 // LIB-077: exhaustive, name-driven coverage that the generated-accessor
 // FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
 // KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
-// KB_LIGHT_KIND-generated read/write function pairs, replacing the old
+// KB_LIGHT_KIND/KB_RIGIDBODY_BODY_TYPE/KB_COLLIDER_SHAPE/KB_JOINT_TYPE/
+// KB_ENTITY-generated read/write function pairs, replacing the old
 // offsetof+reinterpret_cast path) round-trips every field correctly and
 // rejects a mismatched ScriptValueType — not just the handful of fields
 // RunScriptSceneComponentApiTest already covered. Walks
-// ComponentProperties() for all 6 registered components (37 fields total)
+// ComponentProperties() for all 10 registered components (79 fields total)
 // rather than hand-picking a few, so a future field added to any
 // component's property-desc table is automatically covered here too.
 void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
@@ -5207,6 +6727,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
     scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
+    scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -5262,7 +6786,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
         }
     }
-    kb::tests::Require(fieldsChecked == 37U, "Script component API generated accessor coverage test did not exercise the expected total field count (37) across all 6 components");
+    kb::tests::Require(fieldsChecked == 79U, "Script component API generated accessor coverage test did not exercise the expected total field count (79) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -5287,6 +6811,10 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
     scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
+    scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -5303,7 +6831,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
         }
     }
-    kb::tests::Require(propertiesChecked == 37U, "LIB-082 raw-pointer audit did not exercise the expected total field count (37) across all 6 components");
+    kb::tests::Require(propertiesChecked == 79U, "LIB-082 raw-pointer audit did not exercise the expected total field count (79) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -5813,6 +7341,1848 @@ void RunSceneTimerAdvanceOrderingAndCatchUpTest() {
     kb::tests::Require(stillNormal.empty(), "A repeating timer must NOT fire before its next full interval has elapsed post-catch-up");
 }
 
+// LIB-097: Task.IsRunning/Task.Cancel through the script registry. A task
+// can only be STARTED from native C++ (kb::scene::SceneTasks::Start — see
+// its own doc comment for the full Coroutine/Task model decision), so this
+// test creates one natively and observes/controls it purely through the
+// script-facing functions, proving that half of the pipeline end-to-end.
+void RunScriptTaskApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script task API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Task.IsRunning") != nullptr, "Task.IsRunning was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Cancel") != nullptr, "Task.Cancel was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Start") == nullptr, "Task.Start must NOT be script-facing (LIB-097's chosen scope — only native C++ can author a task's body)");
+
+    const std::uint64_t taskId = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, kb::scene::SceneEntity{});
+    kb::tests::Require(taskId != 0U, "SceneTasks::Start with a valid poll callback must succeed");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.1F,
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> taskArgs{
+        kb::script::ScriptFunctionArgument{ .name = "task", .value = kb::script::ScriptValue{ taskId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult runningResult = host.Functions().Call("Task.IsRunning", taskArgs, context);
+    kb::tests::Require(runningResult.Succeeded() && runningResult.Output("running")->AsBool(), "Task.IsRunning must report true for a live, still-running task");
+
+    const kb::script::ScriptFunctionCallResult firstCancel = host.Functions().Call("Task.Cancel", taskArgs, context);
+    kb::tests::Require(firstCancel.Succeeded() && firstCancel.Output("cancelled")->AsBool(), "Task.Cancel on a live task must succeed and report cancelled=true");
+    const kb::script::ScriptFunctionCallResult secondCancel = host.Functions().Call("Task.Cancel", taskArgs, context);
+    kb::tests::Require(secondCancel.Succeeded() && !secondCancel.Output("cancelled")->AsBool(), "Task.Cancel must be idempotent — a second cancel of an already-cancelled task must report cancelled=false, not error");
+    const kb::script::ScriptFunctionCallResult runningAfterCancel = host.Functions().Call("Task.IsRunning", taskArgs, context);
+    kb::tests::Require(runningAfterCancel.Succeeded() && !runningAfterCancel.Output("running")->AsBool(), "Task.IsRunning must report false for a cancelled task");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unknownTaskArgs{
+        kb::script::ScriptFunctionArgument{ .name = "task", .value = kb::script::ScriptValue{ std::uint64_t{ 999999U }, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownRunning = host.Functions().Call("Task.IsRunning", unknownTaskArgs, context);
+    kb::tests::Require(unknownRunning.Succeeded() && !unknownRunning.Output("running")->AsBool(), "Task.IsRunning on an unknown handle must honestly report running=false, not error");
+
+    const kb::script::ScriptFunctionCallContext noSceneContext{
+        .scene = nullptr,
+        .deltaSeconds = 0.1F,
+    };
+    const kb::script::ScriptFunctionCallResult noSceneRunning = host.Functions().Call("Task.IsRunning", taskArgs, noSceneContext);
+    kb::tests::Require(!noSceneRunning.Succeeded(), "Task.IsRunning must fail honestly without a scene rather than silently returning false");
+}
+
+// LIB-097: end-to-end Task completion/failure through the real
+// ScriptRuntimeSceneSystem per-frame drive — reuses the exact harness shape
+// RunScriptTimerApiFiringOwnerAndPauseTest established for Timer. Exercises
+// what the script-facing test above cannot: owner-targeted vs. no-owner
+// broadcast TaskCompleted/TaskFailed dispatch, scene-pause freezing poll
+// calls entirely (not just their delta), and dead-owner auto-cancellation.
+void RunScriptTaskApiCompletionOwnerAndPauseTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1230U };
+    constexpr kb::assets::AssetId kOtherAsset{ 1231U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Other" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(otherObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOtherAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t ownerCompleted = 0U;
+    std::size_t ownerFailed = 0U;
+    std::size_t otherCompleted = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&ownerCompleted](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerCompleted;
+                        }),
+        "Task owner TaskCompleted listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskFailed", [&ownerFailed](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++ownerFailed;
+                        }),
+        "Task owner TaskFailed listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kOtherAsset, "TaskCompleted", [&otherCompleted](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++otherCompleted;
+                        }),
+        "Task other TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // (A) no owner => broadcast reaches every enabled behaviour, completes
+    // after exactly 3 polls.
+    int broadcastPolls = 0;
+    const std::uint64_t broadcastId = scene.Tasks().Start([&broadcastPolls](float) {
+        ++broadcastPolls;
+        return broadcastPolls >= 3 ? kb::scene::TaskPollResult::Completed : kb::scene::TaskPollResult::Running;
+    },
+        kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastId != 0U, "SceneTasks::Start with no owner must still succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(scene.Tasks().Exists(broadcastId), "A task must remain alive while its poll still reports Running");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(!scene.Tasks().Exists(broadcastId), "A task must be removed the moment its poll reports Completed");
+    kb::tests::Require(ownerCompleted == 1U && otherCompleted == 1U, "A no-owner task's TaskCompleted must broadcast to every enabled behaviour");
+
+    // (B) explicit owner => targeted dispatch reaches ONLY that entity, and
+    // a Failed poll result dispatches TaskFailed, not TaskCompleted.
+    const std::uint64_t targetedFailId = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Failed; }, ownerObject.Entity());
+    kb::tests::Require(targetedFailId != 0U, "SceneTasks::Start with an owner must succeed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(ownerFailed == 1U && ownerCompleted == 1U && otherCompleted == 1U, "An owned, failed task must target ONLY its owner's behaviour with TaskFailed, not TaskCompleted, and must not broadcast");
+
+    // (C) scene-level pause freezes poll calls entirely — no poll
+    // invocation happens at all while paused, not even with a zeroed delta.
+    int pausedPollCount = 0;
+    const std::uint64_t pausedId = scene.Tasks().Start([&pausedPollCount](float) {
+        ++pausedPollCount;
+        return kb::scene::TaskPollResult::Running;
+    },
+        ownerObject.Entity());
+    kb::tests::Require(pausedId != 0U, "SceneTasks::Start must succeed for the pause test fixture");
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(pausedPollCount == 0, "A task's poll callback must not be called AT ALL while the scene is paused");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(pausedPollCount == 1, "A task's poll callback must resume being called normally once the scene is unpaused");
+    kb::tests::Require(scene.Tasks().Cancel(pausedId), "Cleaning up the still-running pause test fixture task must succeed");
+
+    // (D) dead owner => silently auto-cancelled, poll never called again,
+    // no completion event, no crash.
+    const kb::scene::SceneObject doomedObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Doomed Owner" });
+    int doomedPollCount = 0;
+    const std::uint64_t doomedId = scene.Tasks().Start([&doomedPollCount](float) {
+        ++doomedPollCount;
+        return kb::scene::TaskPollResult::Running;
+    },
+        doomedObject.Entity());
+    kb::tests::Require(scene.Tasks().Exists(doomedId), "A freshly created task must exist immediately");
+    scene.Entities().Destroy(doomedObject);
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(doomedPollCount == 0, "A task whose owner died before the next Advance() must never have its poll callback called");
+    kb::tests::Require(!scene.Tasks().Exists(doomedId), "A dead-owner task must be auto-cancelled (removed), not left dangling");
+    kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
+}
+
+// LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
+// std::function objects — no scene needed, these are pure closures.
+void RunEngineLibraryTaskFactoriesTest() {
+    std::function<kb::scene::TaskPollResult(float)> waitSeconds = kb::library::MakeWaitSecondsTask(1.0F);
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Running, "MakeWaitSecondsTask must report Running before its duration has elapsed");
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Running, "MakeWaitSecondsTask must keep accumulating across multiple polls");
+    kb::tests::Require(waitSeconds(0.4F) == kb::scene::TaskPollResult::Completed, "MakeWaitSecondsTask must report Completed once its total duration has elapsed (0.4+0.4+0.4=1.2 >= 1.0)");
+
+    std::function<kb::scene::TaskPollResult(float)> waitZeroSeconds = kb::library::MakeWaitSecondsTask(0.0F);
+    kb::tests::Require(waitZeroSeconds(0.001F) == kb::scene::TaskPollResult::Completed, "MakeWaitSecondsTask(0) must complete on its very first poll");
+
+    std::function<kb::scene::TaskPollResult(float)> waitSteps = kb::library::MakeWaitFixedStepsTask(3U);
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must report Running before its step count has elapsed (1/3)");
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must keep accumulating across multiple polls (2/3)");
+    kb::tests::Require(waitSteps(1.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitFixedStepsTask must report Completed once its total step count has elapsed (3/3)");
+
+    std::function<kb::scene::TaskPollResult(float)> waitStepsBurst = kb::library::MakeWaitFixedStepsTask(5U);
+    kb::tests::Require(waitStepsBurst(2.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must correctly accumulate a multi-step poll (2/5)");
+    kb::tests::Require(waitStepsBurst(10.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitFixedStepsTask must complete when a single poll's step count overshoots the remaining total");
+}
+
+// LIB-098: SceneTasks::StartFixedStep/AdvanceFixedSteps end-to-end through
+// the real ScriptRuntimeSceneSystem — proves the FixedTick-domain plumbing
+// is genuinely independent of the Frame-domain (Advance) path LIB-097
+// already covers: a fixed-step task only completes after real FixedTick
+// steps occur (not wall-clock seconds), pause freezes it via the fixed-step
+// accumulator itself producing zero steps (not a separate pause check),
+// and it coexists correctly with a Frame-domain task driven by the same
+// ExecuteFrame calls.
+void RunSceneTaskFixedStepDomainTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1240U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Fixed Step Task Owner" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t completedCount = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&completedCount](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++completedCount;
+                        }),
+        "Fixed step task TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Fixed step task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    const float fixedStep = system.FrameSettings().fixedDeltaSeconds;
+
+    // A Frame-domain task started alongside the fixed-step one, driven by
+    // the SAME ExecuteFrame calls — proves the two domains don't interfere.
+    int framePollCount = 0;
+    const std::uint64_t frameTaskId = scene.Tasks().Start([&framePollCount](float) {
+                                           ++framePollCount;
+                                           return kb::scene::TaskPollResult::Running;
+                                       },
+        kb::scene::SceneEntity{});
+    kb::tests::Require(frameTaskId != 0U, "Frame-domain fixture task must be created successfully");
+
+    const std::uint64_t fixedTaskId = scene.Tasks().StartFixedStep(kb::library::MakeWaitFixedStepsTask(2U), ownerObject.Entity());
+    kb::tests::Require(fixedTaskId != 0U, "SceneTasks::StartFixedStep must succeed");
+
+    // A frame worth of exactly HALF a fixed step: zero FixedTick steps
+    // occur, so the fixed-step task must not be polled at all yet, even
+    // though wall-clock time (and the Frame-domain task) DID advance.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 0.5F));
+    kb::tests::Require(scene.Tasks().Exists(fixedTaskId), "A fixed-step task must not complete before any real FixedTick step has occurred");
+    kb::tests::Require(framePollCount == 1, "The Frame-domain task must still be polled normally regardless of the fixed-step task's state");
+
+    // The remaining half plus a full step = exactly 1 FixedTick step this
+    // frame — task needs 2, so it must still be Running.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(scene.Tasks().Exists(fixedTaskId), "A fixed-step task waiting for 2 steps must not complete after only 1 real FixedTick step");
+    kb::tests::Require(completedCount == 0U, "TaskCompleted must not fire before the fixed-step task has genuinely finished");
+
+    // One more full step => 2 total => Completed.
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(!scene.Tasks().Exists(fixedTaskId), "A fixed-step task must be removed once its required step count has genuinely elapsed");
+    kb::tests::Require(completedCount == 1U, "TaskCompleted must fire exactly once the fixed-step task's real FixedTick count is satisfied");
+
+    kb::tests::Require(scene.Tasks().Exists(frameTaskId), "The Frame-domain fixture task must still be alive and unaffected throughout");
+    kb::tests::Require(scene.Tasks().Cancel(frameTaskId), "Cleaning up the Frame-domain fixture task must succeed");
+
+    // Pause: the fixed-step accumulator itself freezes during scene pause
+    // (LIB-094), so a huge deltaSeconds while paused produces ZERO fixed
+    // steps, meaning a fixed-step task is silently untouched — no separate
+    // pause check needed in AdvanceFixedSteps itself, this proves it.
+    const std::uint64_t pausedFixedTaskId = scene.Tasks().StartFixedStep(kb::library::MakeWaitFixedStepsTask(1U), ownerObject.Entity());
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 10.0F));
+    kb::tests::Require(scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must not complete while the scene is paused, no matter how much wall-clock time elapses");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
+    kb::tests::Require(!scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must resume completing normally once the scene is unpaused");
+}
+
+// LIB-099: cancellation propagation — widens Timer/Task's existing
+// owner-destroyed auto-cancel (LIB-095/097) to also cover owner-deactivated
+// (World.SetActive(owner, false), LIB-068), and proves Scene.Unload needs
+// no separate handling because it already cascades through the same
+// SceneEntityDestructionService destroy path (LIB-070) the owner-alive
+// check observes — tested here directly against the underlying mechanism
+// (destroying a parent cascades to a child), not through a full Scene.Load/
+// Unload fixture, since that mechanism was already independently
+// established and is exercised elsewhere.
+void RunTimerAndTaskCancellationPropagationTest() {
+    kb::scene::Scene scene;
+
+    // (A) Timer: a DEACTIVATED (not destroyed) owner must auto-cancel the
+    // timer just as honestly as a destroyed one — it never fires.
+    const kb::scene::SceneObject deactivatedTimerOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Deactivated Owner" });
+    const std::uint64_t deactivatedTimerId = scene.Timers().Once(1.0F, deactivatedTimerOwner.Entity());
+    kb::tests::Require(deactivatedTimerId != 0U, "Cancellation propagation fixture: Timer.Once must succeed");
+    scene.Entities().SetActive(deactivatedTimerOwner.Entity(), false);
+    const std::vector<kb::scene::TimerFiredRecord> timerFiredAfterDeactivate = scene.Timers().Advance(5.0F);
+    kb::tests::Require(timerFiredAfterDeactivate.empty(), "A timer whose owner was deactivated (not destroyed) must never fire");
+    kb::tests::Require(!scene.Timers().Exists(deactivatedTimerId), "A deactivated owner must auto-cancel (remove) its timer, not merely suppress its firing");
+
+    // (B) Task: same deactivation rule — poll is never called again once
+    // the owner is deactivated, no TaskCompleted/TaskFailed follows.
+    const kb::scene::SceneObject deactivatedTaskOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Deactivated Owner" });
+    int deactivatedTaskPolls = 0;
+    const std::uint64_t deactivatedTaskId = scene.Tasks().Start([&deactivatedTaskPolls](float) {
+                                                 ++deactivatedTaskPolls;
+                                                 return kb::scene::TaskPollResult::Running;
+                                             },
+        deactivatedTaskOwner.Entity());
+    kb::tests::Require(deactivatedTaskId != 0U, "Cancellation propagation fixture: SceneTasks::Start must succeed");
+    scene.Entities().SetActive(deactivatedTaskOwner.Entity(), false);
+    static_cast<void>(scene.Tasks().Advance(1.0F));
+    kb::tests::Require(deactivatedTaskPolls == 0, "A task whose owner was deactivated must never have its poll callback called again");
+    kb::tests::Require(!scene.Tasks().Exists(deactivatedTaskId), "A deactivated owner must auto-cancel (remove) its task");
+
+    // (C) Reactivating does NOT resurrect an already-cancelled timer/task —
+    // cancellation on deactivation is permanent, exactly like destruction.
+    scene.Entities().SetActive(deactivatedTimerOwner.Entity(), true);
+    scene.Entities().SetActive(deactivatedTaskOwner.Entity(), true);
+    kb::tests::Require(!scene.Timers().Exists(deactivatedTimerId) && !scene.Tasks().Exists(deactivatedTaskId), "Reactivating an owner must not resurrect a timer/task that was already cancelled while it was inactive");
+
+    // (D) Scene.Unload's actual mechanism, proven directly: it destroys its
+    // loaded content's root entity (SceneLoadedContentService::Unload calls
+    // scene.Entities().Destroy(root)), which cascades to the WHOLE
+    // hierarchy (SceneEntityDestructionService, LIB-070) — so a timer/task
+    // owned by a CHILD several levels deep is caught by the SAME
+    // owner-alive check the moment the root is destroyed, with no
+    // scene-unload-specific code required anywhere in Timer/Task.
+    const kb::scene::SceneObject cascadeRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Root" });
+    const kb::scene::SceneObject cascadeMiddle = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Middle" });
+    const kb::scene::SceneObject cascadeLeaf = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cascade Leaf" });
+    kb::tests::Require(scene.Hierarchy().SetParent(cascadeMiddle.Entity(), cascadeRoot.Entity()), "Cascade fixture could not attach cascadeMiddle");
+    kb::tests::Require(scene.Hierarchy().SetParent(cascadeLeaf.Entity(), cascadeMiddle.Entity()), "Cascade fixture could not attach cascadeLeaf");
+
+    const std::uint64_t cascadeTimerId = scene.Timers().Once(1.0F, cascadeLeaf.Entity());
+    int cascadeTaskPolls = 0;
+    const std::uint64_t cascadeTaskId = scene.Tasks().Start([&cascadeTaskPolls](float) {
+                                             ++cascadeTaskPolls;
+                                             return kb::scene::TaskPollResult::Running;
+                                         },
+        cascadeLeaf.Entity());
+    kb::tests::Require(cascadeTimerId != 0U && cascadeTaskId != 0U, "Cascade fixture: Timer/Task creation on the leaf entity must succeed");
+
+    scene.Entities().Destroy(cascadeRoot);
+    const std::vector<kb::scene::TimerFiredRecord> timerFiredAfterCascade = scene.Timers().Advance(5.0F);
+    static_cast<void>(scene.Tasks().Advance(1.0F));
+    kb::tests::Require(timerFiredAfterCascade.empty() && !scene.Timers().Exists(cascadeTimerId), "A timer owned by a leaf entity in a destroyed hierarchy (the exact mechanism Scene.Unload uses) must be auto-cancelled, mirroring scene-unload cancellation propagation");
+    kb::tests::Require(cascadeTaskPolls == 0 && !scene.Tasks().Exists(cascadeTaskId), "A task owned by a leaf entity in a destroyed hierarchy must likewise be auto-cancelled, never polled again");
+}
+
+// LIB-100: kb::library::AsyncResult<T> — success/error/cancellation, the
+// completion callback (both registered-before-completion and
+// registered-after-completion cases), and idempotency. Pure value-type
+// tests, no scene needed.
+void RunEngineLibraryAsyncResultTest() {
+    kb::library::AsyncResult<int> completed;
+    kb::tests::Require(completed.State() == kb::library::AsyncState::Running && completed.IsRunning(), "AsyncResult must start in the Running state");
+    kb::tests::Require(completed.SetCompleted(42), "SetCompleted on a Running AsyncResult must succeed");
+    kb::tests::Require(completed.Succeeded() && completed.State() == kb::library::AsyncState::Completed && completed.Value() == 42, "SetCompleted must transition to Completed and store the value");
+    kb::tests::Require(!completed.SetCompleted(99), "SetCompleted on an already-terminal AsyncResult must be idempotent (return false), not overwrite the value");
+    kb::tests::Require(completed.Value() == 42, "A rejected second SetCompleted must not have overwritten the original value");
+
+    kb::library::AsyncResult<int> failed;
+    kb::tests::Require(failed.SetFailed(kb::library::ScriptError{ .code = kb::library::LibraryErrorCode::Timeout, .operation = "test", .message = "simulated failure" }), "SetFailed on a Running AsyncResult must succeed");
+    kb::tests::Require(!failed.Succeeded() && failed.State() == kb::library::AsyncState::Failed && failed.Error().code == kb::library::LibraryErrorCode::Timeout, "SetFailed must transition to Failed and store the error");
+    kb::tests::Require(!failed.Cancel(), "Cancel on an already-Failed AsyncResult must be idempotent (return false)");
+
+    kb::library::AsyncResult<int> cancelled;
+    kb::tests::Require(cancelled.Cancel(), "Cancel on a Running AsyncResult must succeed");
+    kb::tests::Require(cancelled.State() == kb::library::AsyncState::Cancelled && !cancelled.Succeeded(), "Cancel must transition to Cancelled");
+    kb::tests::Require(!cancelled.SetCompleted(1), "SetCompleted on an already-Cancelled AsyncResult must be idempotent (return false)");
+
+    // Callback registered BEFORE completion — must fire exactly once, at
+    // the moment of completion, with the final state visible.
+    kb::library::AsyncResult<int> beforeCallback;
+    int beforeCallbackFires = 0;
+    int beforeCallbackObservedValue = 0;
+    beforeCallback.OnComplete([&beforeCallbackFires, &beforeCallbackObservedValue](const kb::library::AsyncResult<int>& result) {
+        ++beforeCallbackFires;
+        beforeCallbackObservedValue = result.Value();
+    });
+    kb::tests::Require(beforeCallbackFires == 0, "OnComplete registered before completion must not fire immediately");
+    static_cast<void>(beforeCallback.SetCompleted(7));
+    kb::tests::Require(beforeCallbackFires == 1 && beforeCallbackObservedValue == 7, "OnComplete must fire exactly once, synchronously, the moment SetCompleted is called");
+    static_cast<void>(beforeCallback.SetCompleted(8));
+    kb::tests::Require(beforeCallbackFires == 1, "OnComplete must not fire again for a rejected (idempotent) second SetCompleted");
+
+    // Callback registered AFTER completion — must fire immediately, exactly
+    // once, upon registration itself (a late listener never misses it).
+    kb::library::AsyncResult<int> afterCallback;
+    static_cast<void>(afterCallback.SetCompleted(99));
+    int afterCallbackFires = 0;
+    afterCallback.OnComplete([&afterCallbackFires](const kb::library::AsyncResult<int>&) {
+        ++afterCallbackFires;
+    });
+    kb::tests::Require(afterCallbackFires == 1, "OnComplete registered AFTER completion must fire immediately, exactly once");
+
+    // MakeTaskPollFromAsyncResult — the bridge to SceneTasks' poll model.
+    kb::library::AsyncResult<int> bridged;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedPoll = kb::library::MakeTaskPollFromAsyncResult(bridged);
+    kb::tests::Require(bridgedPoll(0.1F) == kb::scene::TaskPollResult::Running, "MakeTaskPollFromAsyncResult must report Running while the AsyncResult is Running");
+    static_cast<void>(bridged.SetCompleted(5));
+    kb::tests::Require(bridgedPoll(0.1F) == kb::scene::TaskPollResult::Completed, "MakeTaskPollFromAsyncResult must report Completed once the AsyncResult completes");
+
+    kb::library::AsyncResult<int> bridgedFailed;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedFailedPoll = kb::library::MakeTaskPollFromAsyncResult(bridgedFailed);
+    static_cast<void>(bridgedFailed.SetFailed(kb::library::ScriptError{}));
+    kb::tests::Require(bridgedFailedPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must report Failed for AsyncState::Failed");
+
+    kb::library::AsyncResult<int> bridgedCancelled;
+    const std::function<kb::scene::TaskPollResult(float)> bridgedCancelledPoll = kb::library::MakeTaskPollFromAsyncResult(bridgedCancelled);
+    static_cast<void>(bridgedCancelled.Cancel());
+    kb::tests::Require(bridgedCancelledPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must also report Failed for AsyncState::Cancelled (TaskPollResult has no distinct Cancelled state)");
+}
+
+// LIB-100: end-to-end proof that MakeTaskPollFromAsyncResult genuinely
+// drives a real SceneTasks task through ScriptRuntimeSceneSystem — an
+// AsyncResult<T> completed by native code (simulating, e.g., a plugin
+// finishing some native-side work) causes a real TaskCompleted ScriptEvent,
+// exactly like any other Task.
+void RunAsyncResultDrivenTaskEndToEndTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1250U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AsyncResult Task Owner" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    std::size_t completedCount = 0U;
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TaskCompleted", [&completedCount](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                            ++completedCount;
+                        }),
+        "AsyncResult-driven task TaskCompleted listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "AsyncResult-driven task native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    kb::library::AsyncResult<std::string> asyncOperation;
+    const std::uint64_t taskId = scene.Tasks().Start(kb::library::MakeTaskPollFromAsyncResult(asyncOperation), ownerObject.Entity());
+    kb::tests::Require(taskId != 0U, "AsyncResult-driven SceneTasks::Start must succeed");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(scene.Tasks().Exists(taskId) && completedCount == 0U, "An AsyncResult-driven task must stay Running until the AsyncResult itself completes");
+
+    static_cast<void>(asyncOperation.SetCompleted("done"));
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(!scene.Tasks().Exists(taskId) && completedCount == 1U, "Completing the underlying AsyncResult must cause the driven SceneTasks task to report Completed and dispatch TaskCompleted on the very next Advance");
+}
+
+// LIB-101: creation-site diagnostics for Timer/Task — SceneTimers::
+// Once/Repeat and SceneTasks::Start/StartFixedStep's new optional
+// `creator` parameter, plus Timer.Creator/Task.Creator's script-facing
+// query. Native-level: explicit creator round-trips, omitted creator
+// reads back invalid, unknown handle reads back invalid.
+void RunTimerAndTaskCreatorDiagnosticsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject creatorObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer/Task Creator" });
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer/Task Owner" });
+
+    const std::uint64_t timerWithCreator = scene.Timers().Once(1.0F, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(timerWithCreator != 0U, "SceneTimers::Once with an explicit creator must still succeed");
+    kb::tests::Require(scene.Timers().Creator(timerWithCreator) == creatorObject.Entity(), "SceneTimers::Creator must round-trip the explicit creator passed to Once");
+
+    const std::uint64_t timerWithoutCreator = scene.Timers().Once(1.0F, ownerObject.Entity());
+    kb::tests::Require(timerWithoutCreator != 0U, "SceneTimers::Once without a creator must still succeed (creator is optional)");
+    kb::tests::Require(!scene.Timers().Creator(timerWithoutCreator).IsValid(), "SceneTimers::Creator must read back invalid for a timer created without one");
+
+    kb::tests::Require(!scene.Timers().Creator(999999U).IsValid(), "SceneTimers::Creator must read back invalid for an unknown handle, not error");
+
+    const std::uint64_t repeatWithCreator = scene.Timers().Repeat(1.0F, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(scene.Timers().Creator(repeatWithCreator) == creatorObject.Entity(), "SceneTimers::Creator must round-trip the explicit creator passed to Repeat");
+
+    const std::uint64_t taskWithCreator = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(taskWithCreator != 0U, "SceneTasks::Start with an explicit creator must still succeed");
+    kb::tests::Require(scene.Tasks().Creator(taskWithCreator) == creatorObject.Entity(), "SceneTasks::Creator must round-trip the explicit creator passed to Start");
+
+    const std::uint64_t taskWithoutCreator = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity());
+    kb::tests::Require(!scene.Tasks().Creator(taskWithoutCreator).IsValid(), "SceneTasks::Creator must read back invalid for a task created without one");
+
+    const std::uint64_t fixedStepTaskWithCreator = scene.Tasks().StartFixedStep([](float) { return kb::scene::TaskPollResult::Running; }, ownerObject.Entity(), creatorObject.Entity());
+    kb::tests::Require(scene.Tasks().Creator(fixedStepTaskWithCreator) == creatorObject.Entity(), "SceneTasks::Creator must round-trip the explicit creator passed to StartFixedStep");
+
+    kb::tests::Require(!scene.Tasks().Creator(999999U).IsValid(), "SceneTasks::Creator must read back invalid for an unknown handle, not error");
+}
+
+// LIB-101: script-facing proof — a real Timer.Once call through
+// ScriptFunctionRegistry automatically threads ScriptFunctionCallContext::
+// caller through as the timer's creator (no explicit script argument for
+// it, unlike `owner`), and Timer.Creator/Task.Creator are reachable as
+// real registered functions.
+void RunScriptTimerAndTaskCreatorApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script timer/task creator API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Timer.Creator") != nullptr, "Timer.Creator was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Task.Creator") != nullptr, "Task.Creator was not registered");
+
+    const kb::scene::SceneObject callerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Caller" });
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .caller = callerObject.Entity(),
+        .deltaSeconds = 0.1F,
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> onceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "delay", .value = kb::script::ScriptValue{ 1.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult onceResult = host.Functions().Call("Timer.Once", onceArgs, context);
+    kb::tests::Require(onceResult.Succeeded(), "Timer.Once must succeed through the script registry");
+    const std::uint64_t timerId = onceResult.Output("timer")->AsUInt64();
+
+    const std::vector<kb::script::ScriptFunctionArgument> creatorArgs{
+        kb::script::ScriptFunctionArgument{ .name = "timer", .value = kb::script::ScriptValue{ timerId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult creatorResult = host.Functions().Call("Timer.Creator", creatorArgs, context);
+    kb::tests::Require(creatorResult.Succeeded() && creatorResult.Output("creator")->AsUInt64() == callerObject.Entity().Id(),
+        "Timer.Creator must report the ScriptFunctionCallContext::caller that actually invoked Timer.Once, threaded through automatically");
+}
+
+// LIB-102: timer determinism and same-phase cancellation. Part A proves
+// same-time-due ordering (LIB-096) is a genuine deterministic FUNCTION of
+// creation sequence — not an accidental artifact of storage layout — by
+// running the identical 3-timer scenario TWICE with the relative creation
+// order reversed and confirming the fired/dispatched order reverses too.
+// Part B/C prove Timer.Cancel called from WITHIN a TimerFired handler
+// (i.e. from mid-dispatch of the SAME phase/Advance() pass) behaves
+// deterministically for both a timer that already fired THIS phase
+// (already removed from storage before dispatch began — Cancel must
+// honestly report false, and its already-queued event must still
+// deliver, since the fired list was captured before any handler ran) and
+// a timer that has not fired yet (a later phase — Cancel must genuinely
+// prevent it from ever firing, proving no stale/deferred-mutation bug).
+void RunTimerDeterminismAndSamePhaseCancellationTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 1260U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Determinism Listener" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    std::vector<std::uint64_t> firedOrder;
+    std::uint64_t triggerTimerId = 0U;
+    std::uint64_t sameFrameTargetId = 0U;
+    std::uint64_t laterFrameTargetId = 0U;
+    bool cancelledSameFrameTarget = true; // set to the real result once the trigger fires
+    bool sameFrameCancelAttempted = false;
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            std::uint64_t id = 0U;
+                            for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                                if (argument.name == "timer") {
+                                    id = argument.value.AsUInt64();
+                                }
+                            }
+                            firedOrder.push_back(id);
+                            if (id == triggerTimerId && !sameFrameCancelAttempted) {
+                                sameFrameCancelAttempted = true;
+                                // LIB-102: cancelling FROM WITHIN a same-phase
+                                // handler — one target already fired this same
+                                // Advance() pass (its record is already gone,
+                                // its event already queued for dispatch before
+                                // this handler ran), one target is due later.
+                                cancelledSameFrameTarget = scene.Timers().Cancel(sameFrameTargetId);
+                                kb::tests::Require(scene.Timers().Cancel(laterFrameTargetId), "Cancelling a not-yet-due timer from within another timer's same-phase handler must succeed");
+                            }
+                        }),
+        "Timer determinism TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer determinism native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // Part A, forward order: create X, Y, Z with the SAME delay (all due in
+    // the same Advance() call) — expect dispatch order X, Y, Z.
+    const std::uint64_t timerX = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerY = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerZ = scene.Timers().Once(0.1F, object.Entity());
+    kb::tests::Require(timerX != 0U && timerY != 0U && timerZ != 0U, "Determinism fixture: all three same-delay timers must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(firedOrder.size() == 3U && firedOrder[0] == timerX && firedOrder[1] == timerY && firedOrder[2] == timerZ,
+        "Same-time-due timers must dispatch in CREATION order (forward case): X, Y, Z");
+
+    // Part A, reversed order: same scenario, relative creation order
+    // reversed — the DISPATCH order must reverse too, proving order tracks
+    // creation sequence, not e.g. a coincidentally-stable id/hash property.
+    firedOrder.clear();
+    const std::uint64_t timerZ2 = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerY2 = scene.Timers().Once(0.1F, object.Entity());
+    const std::uint64_t timerX2 = scene.Timers().Once(0.1F, object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(firedOrder.size() == 3U && firedOrder[0] == timerZ2 && firedOrder[1] == timerY2 && firedOrder[2] == timerX2,
+        "Same-time-due timers must dispatch in CREATION order (reversed case): Z2, Y2, X2 — proving order is a genuine function of creation sequence");
+
+    // Part B/C: same-phase cancellation, triggered from within a handler.
+    firedOrder.clear();
+    triggerTimerId = scene.Timers().Once(0.2F, object.Entity());
+    sameFrameTargetId = scene.Timers().Once(0.2F, object.Entity()); // due the SAME phase as trigger, dispatched AFTER it
+    laterFrameTargetId = scene.Timers().Once(5.0F, object.Entity()); // due a LATER phase
+    kb::tests::Require(triggerTimerId != 0U && sameFrameTargetId != 0U && laterFrameTargetId != 0U, "Same-phase-cancellation fixture timers must all be created successfully");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.2F));
+    kb::tests::Require(sameFrameCancelAttempted, "The trigger timer's handler must have run and attempted the same-phase cancellations");
+    kb::tests::Require(!cancelledSameFrameTarget, "Cancelling a timer that ALREADY fired this same phase must honestly report false (it no longer exists in storage), not error or silently succeed");
+    kb::tests::Require(firedOrder.size() == 2U && firedOrder[0] == triggerTimerId && firedOrder[1] == sameFrameTargetId,
+        "A timer's already-queued TimerFired dispatch must still deliver even though a DIFFERENT handler in the SAME phase attempted (and failed) to cancel it after the fact");
+    kb::tests::Require(!scene.Timers().Exists(laterFrameTargetId), "A not-yet-due timer cancelled from within another timer's same-phase handler must be genuinely gone");
+
+    // Confirm the later-phase target really never fires, across several
+    // more Advance() calls worth of time.
+    static_cast<void>(system.ExecuteFrame(scene, 10.0F));
+    kb::tests::Require(firedOrder.size() == 2U, "A timer cancelled from within a same-phase handler must never fire later, no matter how much additional time elapses");
+}
+
+// LIB-103: IsEntityLocalEvent/IsWorldEvent — the canonical, named
+// classifier over ScriptEvent::target, mutually exclusive and exhaustive
+// over the two REAL delivery categories (entity-local, world); verified
+// directly against the actual TimerFired events real Timer.Once/owner-less
+// Timer.Once produce through the real dispatch pipeline, not synthetic
+// ScriptEvent construction, so the test also proves the classifier agrees
+// with what ScriptRuntimeSceneSystem::DispatchFiredTimers ACTUALLY builds.
+void RunScriptEventTaxonomyTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kOwnerAsset{ 1270U };
+    constexpr kb::assets::AssetId kBroadcastAsset{ 1271U };
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Taxonomy Owner" });
+    const kb::scene::SceneObject broadcastListener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Taxonomy Broadcast Listener" });
+    scene.Components().Behaviours().Set(ownerObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    scene.Components().Behaviours().Set(broadcastListener.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kBroadcastAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    bool sawEntityLocal = false;
+    bool sawWorldOnOwnerBehaviour = false;
+    bool sawWorldOnBroadcastBehaviour = false;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kOwnerAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            if (kb::script::IsEntityLocalEvent(event)) {
+                                sawEntityLocal = true;
+                                kb::tests::Require(!kb::script::IsWorldEvent(event), "IsEntityLocalEvent and IsWorldEvent must be mutually exclusive for the same event");
+                            } else {
+                                sawWorldOnOwnerBehaviour = true;
+                                kb::tests::Require(kb::script::IsWorldEvent(event), "An event that is not entity-local must be classified as world");
+                            }
+                        }),
+        "Taxonomy owner TimerFired listener registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kBroadcastAsset, "TimerFired", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            kb::tests::Require(kb::script::IsWorldEvent(event) && !kb::script::IsEntityLocalEvent(event), "A broadcast TimerFired reaching an unrelated listener must classify as world, not entity-local");
+                            sawWorldOnBroadcastBehaviour = true;
+                        }),
+        "Taxonomy broadcast TimerFired listener registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Taxonomy native backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    // Entity-local: Timer.Once with an explicit owner — only the owner's
+    // own behaviour observes it, and it must classify as entity-local.
+    const std::uint64_t ownedTimerId = scene.Timers().Once(0.1F, ownerObject.Entity());
+    kb::tests::Require(ownedTimerId != 0U, "Entity-local fixture timer must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(sawEntityLocal, "An owned TimerFired must be observed and classified as entity-local by its owner's own behaviour");
+    kb::tests::Require(!sawWorldOnBroadcastBehaviour, "An owned (entity-local) TimerFired must NOT reach an unrelated behaviour at all");
+
+    // World: Timer.Once with NO owner — reaches every enabled behaviour,
+    // and every one of them must classify it as world.
+    const std::uint64_t broadcastTimerId = scene.Timers().Once(0.1F, kb::scene::SceneEntity{});
+    kb::tests::Require(broadcastTimerId != 0U, "World fixture timer must be created successfully");
+    static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+    kb::tests::Require(sawWorldOnOwnerBehaviour && sawWorldOnBroadcastBehaviour, "An ownerless TimerFired must broadcast to and be classified as world by EVERY enabled behaviour");
+}
+
+// LIB-104: EventId is the typed hot-path dispatch key that replaces the
+// per-behaviour string allocation NativeScriptBackend::ExecuteEvent used to
+// perform (its old EventKey(assetId, event.name) built a new "<id>:<name>"
+// string on every visited behaviour — DispatchSceneBehaviours visits every
+// enabled behaviour for a single dispatched event). This test proves two
+// things a naive migration to a hashed key could get wrong: (1) Compute
+// EventId/ScriptEvent::Id() are deterministic — same name always yields the
+// same id, different names yield different ids, and the method agrees with
+// the free function; (2) the new POD (assetId, EventId) key still
+// disambiguates exactly like the old string key did — behaviours on
+// DIFFERENT assets listening for the SAME event name each only see their
+// own callback fire (not cross-fire another asset's callback), and
+// DIFFERENT event names registered on the SAME asset route to their own
+// distinct callback.
+void RunScriptEventIdHotPathTest() {
+    kb::tests::Require(kb::script::ComputeEventId("Ping") == kb::script::ComputeEventId("Ping"), "ComputeEventId must be deterministic for the same name");
+    kb::tests::Require(kb::script::ComputeEventId("Ping") != kb::script::ComputeEventId("Pong"), "ComputeEventId must differ for different names");
+    const kb::script::ScriptEvent pingEvent{ .name = "Ping" };
+    kb::tests::Require(pingEvent.Id() == kb::script::ComputeEventId("Ping"), "ScriptEvent::Id() must agree with ComputeEventId(name)");
+
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAssetA{ 1280U };
+    constexpr kb::assets::AssetId kAssetB{ 1281U };
+    constexpr kb::assets::AssetId kAssetC{ 1282U };
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId A" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId B" });
+    const kb::scene::SceneObject objectC = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EventId C" });
+    scene.Components().Behaviours().Set(objectA.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetA.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectB.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetB.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAssetC.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    int pingCountA = 0;
+    int pingCountB = 0;
+    int pingCountC = 0;
+    int pongCountA = 0;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetA, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountA; }), "Asset A Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetB, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountB; }), "Asset B Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetC, "Ping", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pingCountC; }), "Asset C Ping registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAssetA, "Pong", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++pongCountA; }), "Asset A Pong registration failed");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "EventId hot-path native backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult ping = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "Ping" }, 0.0F);
+    kb::tests::Require(ping.Succeeded() && ping.executedBehaviours == 3U, "Ping must reach all three same-named-event listeners across different assets");
+    kb::tests::Require(pingCountA == 1 && pingCountB == 1 && pingCountC == 1, "Each asset's own Ping callback must fire exactly once, not cross-fire another asset's callback");
+    kb::tests::Require(pongCountA == 0, "Dispatching Ping must not fire a different event name's callback on the same asset");
+
+    const kb::script::ScriptRuntimeExecutionResult pong = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "Pong" }, 0.0F);
+    kb::tests::Require(pong.Succeeded() && pong.executedBehaviours == 1U, "Pong must reach only its own registered listener");
+    kb::tests::Require(pongCountA == 1, "Asset A's Pong callback must fire when Pong is dispatched");
+    kb::tests::Require(pingCountA == 1 && pingCountB == 1 && pingCountC == 1, "Dispatching Pong must not re-fire any Ping callback");
+}
+
+// LIB-105: kb::script::ScriptEventBus (Events.Subscribe/Unsubscribe/Emit/
+// EmitDeferred/Broadcast) — the engine's first real pub/sub bus, additive
+// to the ScriptEvent/DispatchEvent pipeline (LIB-041..104), not a
+// replacement of it. Pure native-layer test: no ScriptRuntimeSceneSystem,
+// no Lua — exercises kb::script::ScriptEventBus directly, mirroring how
+// LIB-095/097's own bus-level tests preceded their integration tests.
+void RunScriptEventBusNativeSubscribeEmitTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Owner" });
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Other" });
+
+    kb::script::ScriptEventBus bus;
+
+    kb::tests::Require(bus.Subscribe("", [](const kb::script::ScriptEvent&) {}) == kb::script::kInvalidEventSubscriptionHandle, "Subscribe with an empty name must be rejected");
+    kb::tests::Require(bus.Subscribe("X", nullptr) == kb::script::kInvalidEventSubscriptionHandle, "Subscribe with a null callback must be rejected");
+
+    int globalCount = 0;
+    int ownerCount = 0;
+    const kb::script::EventSubscriptionHandle globalHandle = bus.Subscribe("Ping", [&](const kb::script::ScriptEvent&) { ++globalCount; });
+    const kb::script::EventSubscriptionHandle ownerHandle = bus.Subscribe("Ping", [&](const kb::script::ScriptEvent&) { ++ownerCount; }, ownerObject.Entity());
+    kb::tests::Require(globalHandle != kb::script::kInvalidEventSubscriptionHandle && ownerHandle != kb::script::kInvalidEventSubscriptionHandle && globalHandle != ownerHandle, "Two Subscribe calls must return distinct, valid handles");
+    kb::tests::Require(bus.SubscriptionCount() == 2U, "The bus must track both live subscriptions");
+
+    const kb::script::ScriptEvent ping{ .name = "Ping" };
+    const kb::script::ScriptEventDeliveryResult untargeted = bus.Emit(scene, ping);
+    kb::tests::Require(untargeted.delivered == 2U && untargeted.errors.empty(), "An untargeted Emit must reach every live subscriber of the name");
+    kb::tests::Require(globalCount == 1 && ownerCount == 1, "Both subscribers must have fired exactly once");
+
+    const kb::script::ScriptEventDeliveryResult targeted = bus.Emit(scene, ping, ownerObject.Entity());
+    kb::tests::Require(targeted.delivered == 1U, "A targeted Emit must reach only the subscription owned by that entity");
+    kb::tests::Require(globalCount == 1 && ownerCount == 2, "Targeted Emit must not re-fire the ownerless subscriber");
+
+    const kb::script::ScriptEventDeliveryResult unmatched = bus.Emit(scene, ping, otherObject.Entity());
+    kb::tests::Require(unmatched.delivered == 0U, "A targeted Emit at an entity with no matching subscription must deliver nothing, not fall back to the ownerless subscriber");
+
+    const kb::script::ScriptEventDeliveryResult broadcast = bus.Broadcast(scene, ping);
+    kb::tests::Require(broadcast.delivered == 2U, "Broadcast must reach every live subscriber regardless of owner, same as an untargeted Emit");
+
+    const kb::script::ScriptEventDeliveryResult pongResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Pong" });
+    kb::tests::Require(pongResult.delivered == 0U, "Emit for an unrelated event name must not fire any Ping subscriber");
+
+    bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Ping" });
+    kb::tests::Require(globalCount == 2 && ownerCount == 3, "Counts before drain must reflect only the synchronous Emit/Broadcast calls above, not the still-queued deferred one");
+    const kb::script::ScriptEventDeliveryResult drained = bus.DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 2U && globalCount == 3 && ownerCount == 4, "DrainDeferred must deliver exactly what EmitDeferred queued, exactly once");
+    const kb::script::ScriptEventDeliveryResult drainedAgain = bus.DrainDeferred(scene);
+    kb::tests::Require(drainedAgain.delivered == 0U, "DrainDeferred must not re-deliver an already-drained queue");
+
+    kb::tests::Require(bus.Unsubscribe(ownerHandle), "Unsubscribe on a live handle must succeed");
+    kb::tests::Require(!bus.Unsubscribe(ownerHandle), "A second Unsubscribe on the same handle must be idempotent, not error");
+    kb::tests::Require(!bus.Unsubscribe(kb::script::kInvalidEventSubscriptionHandle), "Unsubscribe on the invalid handle must fail cleanly");
+    const kb::script::ScriptEventDeliveryResult afterUnsubscribe = bus.Emit(scene, ping);
+    kb::tests::Require(afterUnsubscribe.delivered == 1U && ownerCount == 4, "An unsubscribed subscription must never fire again");
+
+    // Dead/deactivated owner auto-skips, mirroring Timer/Task's OwnerGone
+    // policy (LIB-095/097/099) — no crash, no delivery.
+    static_cast<void>(bus.Subscribe("Ping", [](const kb::script::ScriptEvent&) {
+        kb::tests::Require(false, "A subscription whose owner died before Emit must never fire");
+    }, otherObject.Entity()));
+    scene.Entities().Destroy(otherObject.Entity());
+    kb::tests::Require(!scene.Entities().IsAlive(otherObject.Entity()), "Fixture entity must be destroyable");
+    const kb::script::ScriptEventDeliveryResult afterOwnerDeath = bus.Emit(scene, ping, otherObject.Entity());
+    kb::tests::Require(afterOwnerDeath.delivered == 0U, "A targeted Emit at a dead owner must deliver nothing and must not crash");
+
+    // A throwing subscriber must not abort delivery to others and must be
+    // reported, not silently swallowed (ScriptEventBus::Emit's try/catch).
+    static_cast<void>(bus.Subscribe("Boom", [](const kb::script::ScriptEvent&) { throw std::runtime_error{ "boom" }; }));
+    const kb::script::ScriptEventDeliveryResult boomResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Boom" });
+    kb::tests::Require(boomResult.delivered == 0U && boomResult.errors.size() == 1U, "A throwing subscriber must be caught, reported as an error, and not counted as delivered");
+}
+
+// LIB-105: real Lua round trip — Events.Subscribe registered from a Lua
+// script receives a native-emitted event (native -> Lua), and Events.
+// Broadcast/EmitDeferred called from Lua reach a native subscriber (Lua ->
+// native), proving the bus is genuinely bidirectional, not native-only with
+// a decorative Lua facade. Events.Unsubscribe is verified end-to-end too.
+void RunPucLuaEventsSubscribeEmitTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 3310U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local doorHandle = nil
+local doorCount = 0
+local lastDoor = nil
+
+function Created(self)
+    doorHandle = Events.Subscribe("DoorOpened", function(event)
+        doorCount = doorCount + 1
+        lastDoor = event.args.door
+    end)
+end
+
+function Tick(self, dt)
+    SetShared("lua.events.doorCount", doorCount)
+    SetShared("lua.events.lastDoor", lastDoor)
+end
+
+function EmitPing(self, event)
+    Events.Broadcast("Ping", { value = 7 })
+end
+
+function EmitDeferredPing(self, event)
+    Events.EmitDeferred("Ping", { value = 9 })
+end
+
+function DoUnsubscribe(self, event)
+    local ok = Events.Unsubscribe(doorHandle)
+    SetShared("lua.events.unsubscribed", ok)
+end
+)",
+        "EventsSubscriber.lua");
+    kb::tests::Require(loaded.succeeded, "Lua Events subscriber script must load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua backend registration failed for Events test");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Lua Subscriber" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult created = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Created, 0.0F);
+    kb::tests::Require(created.Succeeded() && created.executedBehaviours == 1U, "Created dispatch (running Events.Subscribe) must execute cleanly");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 1U, "Events.Subscribe must have registered exactly one subscription");
+
+    int pingValueSeen = -1;
+    const kb::script::EventSubscriptionHandle nativePingHandle = runtime.Events().Subscribe("Ping", [&](const kb::script::ScriptEvent& event) {
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "value") {
+                pingValueSeen = argument.value.AsInt();
+            }
+        }
+    });
+    kb::tests::Require(nativePingHandle != kb::script::kInvalidEventSubscriptionHandle, "Native Ping subscription must register");
+
+    const kb::script::ScriptEvent doorOpened{
+        .name = "DoorOpened",
+        .arguments = { kb::script::ScriptEventArgument{ .name = "door", .value = kb::script::ScriptValue{ 42 } } },
+    };
+    const kb::script::ScriptEventDeliveryResult delivery = runtime.Events().Emit(scene, doorOpened);
+    kb::tests::Require(delivery.delivered == 1U && delivery.errors.empty(), "A native Emit must deliver to the Lua Events.Subscribe callback exactly once");
+
+    const kb::script::ScriptRuntimeExecutionResult afterDoor = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterDoor.Succeeded(), "Tick after DoorOpened must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> doorCount = runtime.SharedState().Get("lua.events.doorCount");
+    kb::tests::Require(doorCount.has_value() && doorCount->AsInt() == 1, "Lua subscriber must have observed exactly one DoorOpened delivery");
+    const std::optional<kb::script::ScriptValue> lastDoor = runtime.SharedState().Get("lua.events.lastDoor");
+    kb::tests::Require(lastDoor.has_value() && lastDoor->AsInt() == 42, "Lua subscriber must have received the correct event argument value");
+
+    const kb::script::ScriptRuntimeExecutionResult emitPing = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "EmitPing" }, 0.0F);
+    kb::tests::Require(emitPing.Succeeded(), "EmitPing custom event dispatch must not produce diagnostics");
+    kb::tests::Require(pingValueSeen == 7, "Lua's own Events.Broadcast must reach the native subscriber with the correct payload");
+
+    pingValueSeen = -1;
+    const kb::script::ScriptRuntimeExecutionResult emitDeferredPing = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "EmitDeferredPing" }, 0.0F);
+    kb::tests::Require(emitDeferredPing.Succeeded(), "EmitDeferredPing custom event dispatch must not produce diagnostics");
+    kb::tests::Require(pingValueSeen == -1, "Lua's Events.EmitDeferred must not deliver synchronously");
+    const kb::script::ScriptEventDeliveryResult drained = runtime.Events().DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 1U, "DrainDeferred must deliver the event Lua queued with EmitDeferred");
+    kb::tests::Require(pingValueSeen == 9, "The deferred Ping must reach the native subscriber with its own payload once drained");
+
+    const kb::script::ScriptRuntimeExecutionResult unsub = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "DoUnsubscribe" }, 0.0F);
+    kb::tests::Require(unsub.Succeeded(), "DoUnsubscribe custom event dispatch must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> unsubscribed = runtime.SharedState().Get("lua.events.unsubscribed");
+    kb::tests::Require(unsubscribed.has_value() && unsubscribed->AsBool(), "Events.Unsubscribe must report success for a live handle");
+    const kb::script::ScriptEventDeliveryResult afterUnsubscribe = runtime.Events().Emit(scene, doorOpened);
+    kb::tests::Require(afterUnsubscribe.delivered == 0U, "DoorOpened must no longer reach the Lua subscriber after Events.Unsubscribe");
+}
+
+// LIB-105: proves EmitDeferred's real timing contract through the actual
+// per-frame drain point (ScriptRuntimeSceneSystem::ExecuteFrame), not just
+// a direct DrainDeferred call — an event queued during one ExecuteFrame
+// must not be visible to a subscriber until the NEXT ExecuteFrame call.
+void RunScriptRuntimeSceneSystemDeferredEventDrainTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntime runtime;
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+    int deliveries = 0;
+    const kb::script::EventSubscriptionHandle handle = runtime.Events().Subscribe("FrameBoundary", [&](const kb::script::ScriptEvent&) { ++deliveries; });
+    kb::tests::Require(handle != kb::script::kInvalidEventSubscriptionHandle, "FrameBoundary subscription must register");
+
+    runtime.Events().EmitDeferred(kb::script::ScriptEvent{ .name = "FrameBoundary" });
+    kb::tests::Require(deliveries == 0, "EmitDeferred must not deliver before any frame executes");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.016F));
+    kb::tests::Require(deliveries == 1, "The first ExecuteFrame after EmitDeferred must drain and deliver the queued event exactly once");
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.016F));
+    kb::tests::Require(deliveries == 1, "A later ExecuteFrame with nothing newly queued must not re-deliver the same event");
+}
+
+// LIB-039: proves ALL FOUR cancellable handle types the plan names
+// (Subscription, TimerHandle, AsyncHandle, TaskHandle) share ONE real,
+// explicit-cancellation contract — idempotent (a second cancel reports
+// false/no-op, never errors or double-fires) and genuinely stops future
+// delivery, not just flips a flag nothing reads. Each type already had its
+// OWN isolated idempotency test from the task that introduced it
+// (RunScriptTimerApiTest/LIB-095, RunScriptTaskApiTest/LIB-097,
+// RunScriptEventBusNativeSubscribeEmitTest/LIB-105,
+// RunEngineLibraryAsyncResultTest/LIB-100) — this is the cross-type proof
+// none of those exercised: all four side by side, in one place, against the
+// SAME contract statement. This also directly covers LIB-040's "callback
+// after cancellation" requirement for TimerHandle/TaskHandle/AsyncHandle at
+// the kb::scene/kb::library layer: since SceneTimers/SceneTasks::Cancel
+// erase the record from storage immediately, a cancelled handle can never
+// again appear in a later Advance() call's returned vector — the
+// ScriptEvent that would carry the callback is never even constructed, a
+// stronger proof than checking one particular behaviour never received it.
+void RunExplicitCancellationCrossTypeContractTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cancellation Contract Owner" });
+
+    // Subscription (LIB-105).
+    kb::script::ScriptEventBus bus;
+    int subscriptionFired = 0;
+    const kb::script::EventSubscriptionHandle subscription = bus.Subscribe("Contract", [&subscriptionFired](const kb::script::ScriptEvent&) { ++subscriptionFired; }, owner.Entity());
+    kb::tests::Require(subscription != kb::script::kInvalidEventSubscriptionHandle, "Subscription fixture must register");
+    kb::tests::Require(bus.Unsubscribe(subscription), "Explicit cancellation of a live Subscription must succeed");
+    kb::tests::Require(!bus.Unsubscribe(subscription), "A second explicit cancellation of the same Subscription must be idempotent (false, not an error)");
+    static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Contract" }, owner.Entity()));
+    kb::tests::Require(subscriptionFired == 0, "A cancelled Subscription must never deliver, even to an event that would otherwise match it");
+
+    // TimerHandle (LIB-095).
+    const std::uint64_t timer = scene.Timers().Once(1.0F, owner.Entity());
+    kb::tests::Require(timer != 0U, "TimerHandle fixture must register");
+    kb::tests::Require(scene.Timers().Cancel(timer), "Explicit cancellation of a live TimerHandle must succeed");
+    kb::tests::Require(!scene.Timers().Cancel(timer), "A second explicit cancellation of the same TimerHandle must be idempotent (false, not an error)");
+    const std::vector<kb::scene::TimerFiredRecord> timerFired = scene.Timers().Advance(10.0F);
+    kb::tests::Require(timerFired.empty(), "A cancelled TimerHandle must never fire, even long after its original delay would have elapsed");
+
+    // TaskHandle (LIB-097).
+    bool taskPolled = false;
+    const std::uint64_t task = scene.Tasks().Start([&taskPolled](float) { taskPolled = true; return kb::scene::TaskPollResult::Completed; }, owner.Entity());
+    kb::tests::Require(task != 0U, "TaskHandle fixture must register");
+    kb::tests::Require(scene.Tasks().Cancel(task), "Explicit cancellation of a live TaskHandle must succeed");
+    kb::tests::Require(!scene.Tasks().Cancel(task), "A second explicit cancellation of the same TaskHandle must be idempotent (false, not an error)");
+    const std::vector<kb::scene::TaskCompletionRecord> taskCompletions = scene.Tasks().Advance(1.0F);
+    kb::tests::Require(taskCompletions.empty() && !taskPolled, "A cancelled TaskHandle must never be polled or reported complete again");
+
+    // AsyncHandle (LIB-100) — kb::library::AsyncResult<T>, a native-only
+    // value type with no separate script-facing handle (the value itself IS
+    // the handle — see EngineLibraryAsyncResult.hpp's class doc comment).
+    int asyncCompletions = 0;
+    kb::library::AsyncResult<int> asyncResult;
+    asyncResult.OnComplete([&asyncCompletions](const kb::library::AsyncResult<int>&) { ++asyncCompletions; });
+    kb::tests::Require(asyncResult.Cancel(), "Explicit cancellation of a live AsyncHandle must succeed");
+    kb::tests::Require(asyncCompletions == 1, "Cancelling an AsyncHandle must invoke its completion callback exactly once");
+    kb::tests::Require(!asyncResult.Cancel(), "A second explicit cancellation of the same AsyncHandle must be idempotent (false, not an error)");
+    kb::tests::Require(asyncCompletions == 1, "A second, no-op cancellation must not re-invoke the completion callback");
+    kb::tests::Require(!asyncResult.SetCompleted(7), "A cancelled AsyncHandle must reject a late SetCompleted rather than resurrecting it");
+    kb::tests::Require(asyncCompletions == 1, "A late SetCompleted after cancellation must not invoke the completion callback again");
+}
+
+// LIB-040 (part 1/2): destroying an entity from WITHIN a Timer/Task/Event
+// callback while a DIFFERENT entity's timer/task/subscription is still due
+// to fire in the very same dispatch batch — genuinely untested by every
+// prior owner-death test in this file (RunScriptTimerApiFiringOwnerAndPauseTest/
+// RunScriptTaskApiCompletionOwnerAndPauseTest/RunScriptEventBusNativeSubscribeEmitTest
+// all destroy the owner BEFORE calling Advance/ExecuteFrame/Emit, never
+// reentrantly from inside an already-running callback). Researched before
+// writing this test (Explore agent, cross-checked directly): Timer/Task
+// survive this safely BY CONSTRUCTION — ScriptRuntime.cpp's
+// DispatchSceneBehaviours re-collects the CURRENT live behaviour set fresh
+// on every single DispatchEvent call (scene.Components().Behaviours().
+// ForEach), so a behaviour whose entity died earlier in the same frame's
+// dispatch sequence simply no longer appears; no explicit IsAlive recheck
+// was needed, confirmed here rather than assumed. ScriptEventBus::Emit did
+// NOT survive this safely — its per-subscriber invoke loop only checked
+// owner liveness ONCE, in an up-front snapshot pass, so a subscriber
+// destroyed by an EARLIER subscriber in the very same Emit call still fired.
+// Fixed in the same change as this test (ScriptEventBus.cpp's invoke loop
+// now re-checks OwnerGone immediately before each invocation) — the third
+// case below is a regression test for that real, previously-shipped bug.
+void RunReentrantEntityDestructionFromCallbackTest() {
+    // --- Timer: destroyer's TimerFired handler destroys the victim's
+    // owner; the victim's own TimerFired (due the SAME frame, created
+    // after the destroyer's so LIB-096 orders the destroyer first) must
+    // never actually invoke the victim's behaviour. ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kDestroyerAsset{ 8801U };
+        constexpr kb::assets::AssetId kVictimAsset{ 8802U };
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Timer Reentrant Victim" });
+        scene.Components().Behaviours().Set(destroyerObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kDestroyerAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(victimObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVictimAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        std::size_t victimFired = 0U;
+        kb::tests::Require(nativeBackend->RegisterEvent(kDestroyerAsset, "TimerFired", [victim](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent&) {
+                                context.GetScene().Entities().Destroy(victim);
+                            }),
+            "Timer reentrant destroyer registration failed");
+        kb::tests::Require(nativeBackend->RegisterEvent(kVictimAsset, "TimerFired", [&victimFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                                ++victimFired;
+                            }),
+            "Timer reentrant victim registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Timer reentrant native backend registration failed");
+
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+        const std::uint64_t destroyerTimer = scene.Timers().Once(0.1F, destroyerObject.Entity());
+        const std::uint64_t victimTimer = scene.Timers().Once(0.1F, victimObject.Entity());
+        kb::tests::Require(destroyerTimer != 0U && victimTimer != 0U, "Reentrant destroy fixture timers must both register");
+
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(victimFired == 0U, "A TimerFired handler dispatched AFTER its owner was destroyed by an earlier handler in the SAME frame must never actually invoke the destroyed owner's behaviour");
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer's callback really ran");
+    }
+
+    // --- Task: same shape as Timer above, through TaskCompleted. ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kDestroyerAsset{ 8803U };
+        constexpr kb::assets::AssetId kVictimAsset{ 8804U };
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task Reentrant Victim" });
+        scene.Components().Behaviours().Set(destroyerObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kDestroyerAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+        scene.Components().Behaviours().Set(victimObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVictimAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        std::size_t victimFired = 0U;
+        kb::tests::Require(nativeBackend->RegisterEvent(kDestroyerAsset, "TaskCompleted", [victim](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent&) {
+                                context.GetScene().Entities().Destroy(victim);
+                            }),
+            "Task reentrant destroyer registration failed");
+        kb::tests::Require(nativeBackend->RegisterEvent(kVictimAsset, "TaskCompleted", [&victimFired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) {
+                                ++victimFired;
+                            }),
+            "Task reentrant victim registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Task reentrant native backend registration failed");
+
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+        const std::uint64_t destroyerTask = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Completed; }, destroyerObject.Entity());
+        const std::uint64_t victimTask = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Completed; }, victimObject.Entity());
+        kb::tests::Require(destroyerTask != 0U && victimTask != 0U, "Reentrant destroy fixture tasks must both register");
+
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(victimFired == 0U, "A TaskCompleted handler dispatched AFTER its owner was destroyed by an earlier handler in the SAME frame must never actually invoke the destroyed owner's behaviour");
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer's callback really ran");
+    }
+
+    // --- Subscription: the real bug this task fixed. Destroyer subscribed
+    // FIRST (ScriptEventBus::Emit invokes matching subscribers in
+    // subscription order), so it runs before the victim within the SAME
+    // Emit call. ---
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Reentrant Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Reentrant Victim" });
+
+        kb::script::ScriptEventBus bus;
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        int victimFired = 0;
+        static_cast<void>(bus.Subscribe("Reentrant", [&scene, victim](const kb::script::ScriptEvent&) {
+            scene.Entities().Destroy(victim);
+        }, destroyerObject.Entity()));
+        static_cast<void>(bus.Subscribe("Reentrant", [&victimFired](const kb::script::ScriptEvent&) { ++victimFired; }, victim));
+
+        const kb::script::ScriptEventDeliveryResult result = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Reentrant" });
+        kb::tests::Require(!scene.Entities().IsAlive(victim), "The victim entity must genuinely be gone, proving the destroyer subscriber really ran first");
+        kb::tests::Require(victimFired == 0, "A subscriber whose owner was destroyed by an EARLIER subscriber in the SAME Emit call must not fire — ScriptEventBus::Emit must re-check owner liveness per-invocation, not just once up front (LIB-040)");
+        kb::tests::Require(result.delivered == 1U, "Emit must report exactly one real delivery (the destroyer) — the skipped dead-owner subscriber must not be counted as delivered");
+    }
+}
+
+// LIB-040 (part 2/2): "error after scene unload" — Scene.Unload's entity-
+// destruction cascade (SceneLoadedContentService::Unload -> Entities().
+// Destroy, the IDENTICAL synchronous path World.Destroy uses — see
+// ScriptWorldApi.cpp's Destroy) must be proven to ACTUALLY reach
+// Timer/Task/Subscription owners belonging to the unloaded content, not
+// just asserted by the doc comments already on SceneTimers::Advance/
+// SceneTasks::Advance. Also proves explicit Cancel/Unsubscribe called on a
+// now-dead handle AFTER the unload stays a clean, idempotent false — never
+// a crash or a stale-owner exception.
+void RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest() {
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "SceneUnloadCancellationProject" / "UnloadableScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "UnloadableRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "UnloadableScene"), "Scene.Unload cancellation test fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Scene.Unload cancellation test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> loadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneFile.string() } },
+    };
+    const kb::script::ScriptFunctionCallResult loadResult = host.Functions().Call("Scene.Load", loadArgs, context);
+    kb::tests::Require(loadResult.Succeeded(), "Scene.Unload cancellation test fixture load failed");
+    const std::uint64_t loadedId = loadResult.Output("id")->AsUInt64();
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 1U, "Scene.Unload cancellation test fixture must load exactly one root entity");
+    const kb::scene::SceneEntity owner = roots.front();
+
+    const std::uint64_t timer = scene.Timers().Once(10.0F, owner);
+    const std::uint64_t task = scene.Tasks().Start([](float) { return kb::scene::TaskPollResult::Running; }, owner);
+    kb::script::ScriptEventBus bus;
+    int subscriptionFired = 0;
+    const kb::script::EventSubscriptionHandle subscription = bus.Subscribe("Contract", [&subscriptionFired](const kb::script::ScriptEvent&) { ++subscriptionFired; }, owner);
+    kb::tests::Require(timer != 0U && task != 0U && subscription != kb::script::kInvalidEventSubscriptionHandle, "Scene.Unload cancellation test fixture handles must all register against the loaded root entity");
+    kb::tests::Require(scene.Timers().Exists(timer) && scene.Tasks().Exists(task) && bus.SubscriptionCount() == 1U, "Fixture handles must be live before Unload");
+
+    const std::vector<kb::script::ScriptFunctionArgument> unloadArgs{
+        kb::script::ScriptFunctionArgument{ .name = "id", .value = kb::script::ScriptValue{ loadedId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult unloadResult = host.Functions().Call("Scene.Unload", unloadArgs, context);
+    kb::tests::Require(unloadResult.Succeeded() && unloadResult.Output("unloaded")->AsBool(), "Scene.Unload must succeed for the fixture's loaded id");
+    kb::tests::Require(!scene.Entities().IsAlive(owner), "Scene.Unload must genuinely destroy the loaded root entity");
+
+    // The timer/task were not yet due, so Scene.Unload's destruction must
+    // have propagated to them THROUGH the normal owner-liveness check
+    // (Advance()'s per-record OwnerGone sweep), not left them dangling
+    // until something else happens to notice.
+    const std::vector<kb::scene::TimerFiredRecord> timerFired = scene.Timers().Advance(20.0F);
+    kb::tests::Require(timerFired.empty(), "A timer owned by a Scene.Unload-destroyed entity must never fire, even long past its original delay");
+    const std::vector<kb::scene::TaskCompletionRecord> taskCompletions = scene.Tasks().Advance(1.0F);
+    kb::tests::Require(taskCompletions.empty(), "A task owned by a Scene.Unload-destroyed entity must never report completion");
+    const kb::script::ScriptEventDeliveryResult afterUnload = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Contract" }, owner);
+    kb::tests::Require(afterUnload.delivered == 0U && subscriptionFired == 0, "A subscription owned by a Scene.Unload-destroyed entity must never deliver");
+
+    // Explicit cancellation of a handle whose owner died via Scene.Unload
+    // must stay a clean, idempotent no-op — never a crash, never a stale-
+    // owner exception — the Advance()/Emit() calls above already lazily
+    // removed all three records, same as any other dead-owner cleanup.
+    kb::tests::Require(!scene.Timers().Cancel(timer), "Explicit Cancel on a timer already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+    kb::tests::Require(!scene.Tasks().Cancel(task), "Explicit Cancel on a task already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+    kb::tests::Require(!bus.Unsubscribe(subscription), "Explicit Unsubscribe on a subscription already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+}
+
+// LIB-106: proves Emit/Broadcast's new recipient filters (tag/component/
+// scene/channel) genuinely narrow delivery, each axis tested independently
+// so a bug in one axis can't hide behind another passing. `entity` (the
+// pre-existing `target` parameter) is not re-tested here —
+// RunScriptEventBusNativeSubscribeEmitTest (LIB-105) already covers it
+// exhaustively. `player` is deliberately absent from EventRecipientFilter
+// entirely (see its own doc comment in ScriptEventBus.hpp) — no Player
+// concept exists anywhere in this engine yet (LIB-195's job).
+void RunScriptEventBusRecipientFilterTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptEventBus bus;
+
+    // --- tag ---
+    {
+        const kb::scene::SceneObject tagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Tagged" });
+        const kb::scene::SceneObject untagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Untagged" });
+        kb::scene::TagsComponent tags;
+        kb::scene::SetTagsText(tags, "Enemy, Boss");
+        scene.Components().Tags().Set(tagged.Entity(), tags);
+
+        int taggedFired = 0;
+        int untaggedFired = 0;
+        static_cast<void>(bus.Subscribe("TagEvent", [&taggedFired](const kb::script::ScriptEvent&) { ++taggedFired; }, tagged.Entity()));
+        static_cast<void>(bus.Subscribe("TagEvent", [&untaggedFired](const kb::script::ScriptEvent&) { ++untaggedFired; }, untagged.Entity()));
+
+        kb::script::EventRecipientFilter tagFilter;
+        tagFilter.tag = "Enemy";
+        const kb::script::ScriptEventDeliveryResult filtered = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "TagEvent" }, tagFilter);
+        kb::tests::Require(filtered.delivered == 1U && taggedFired == 1 && untaggedFired == 0, "A tag filter must reach ONLY the subscription whose owner currently has that tag");
+
+        const kb::script::ScriptEventDeliveryResult unfiltered = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "TagEvent" });
+        kb::tests::Require(unfiltered.delivered == 2U && taggedFired == 2 && untaggedFired == 1, "An Emit/Broadcast with no filter must still reach every subscriber regardless of tag, unchanged from before this task");
+    }
+
+    // --- component ---
+    {
+        const kb::scene::SceneObject withCamera = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Camera Owner" });
+        const kb::scene::SceneObject withoutCamera = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter No Camera" });
+        scene.Components().Cameras().Set(withCamera.Entity(), kb::scene::CameraComponent{});
+
+        int cameraFired = 0;
+        int otherFired = 0;
+        static_cast<void>(bus.Subscribe("ComponentEvent", [&cameraFired](const kb::script::ScriptEvent&) { ++cameraFired; }, withCamera.Entity()));
+        static_cast<void>(bus.Subscribe("ComponentEvent", [&otherFired](const kb::script::ScriptEvent&) { ++otherFired; }, withoutCamera.Entity()));
+
+        kb::script::EventRecipientFilter componentFilter;
+        componentFilter.component = "Camera";
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ComponentEvent" }, componentFilter);
+        kb::tests::Require(result.delivered == 1U && cameraFired == 1 && otherFired == 0, "A component filter must reach ONLY the subscription whose owner currently has that component");
+    }
+
+    // --- scene ---
+    {
+        ResetTestRoot();
+        const std::filesystem::path sceneAFile = TestRoot() / "EventFilterSceneProject" / "FilterSceneA.21kbscene";
+        const std::filesystem::path sceneBFile = TestRoot() / "EventFilterSceneProject" / "FilterSceneB.21kbscene";
+        {
+            kb::scene::Scene sourceA;
+            static_cast<void>(sourceA.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "FilterRootA" }));
+            kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceA, sceneAFile, "FilterSceneA"), "Event filter scene test fixture A was not saved");
+        }
+        {
+            kb::scene::Scene sourceB;
+            static_cast<void>(sourceB.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "FilterRootB" }));
+            kb::tests::Require(kb::scene::SceneDocumentService::Save(sourceB, sceneBFile, "FilterSceneB"), "Event filter scene test fixture B was not saved");
+        }
+
+        kb::scene::Scene filterScene;
+        kb::script::ScriptEventBus sceneBus;
+        kb::script::ScriptRuntimeHost host{ filterScene };
+        kb::tests::Require(host.Succeeded(), "Event filter scene test host setup failed");
+        const kb::script::ScriptFunctionCallContext context{ .scene = &filterScene };
+
+        const std::vector<kb::script::ScriptFunctionArgument> loadAArgs{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneAFile.string() } },
+        };
+        const kb::script::ScriptFunctionCallResult loadAResult = host.Functions().Call("Scene.Load", loadAArgs, context);
+        kb::tests::Require(loadAResult.Succeeded(), "Event filter scene test fixture load A failed");
+        const std::uint64_t idA = loadAResult.Output("id")->AsUInt64();
+
+        const std::vector<kb::script::ScriptFunctionArgument> loadBArgs{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ sceneBFile.string() } },
+            kb::script::ScriptFunctionArgument{ .name = "additive", .value = kb::script::ScriptValue{ true } },
+        };
+        const kb::script::ScriptFunctionCallResult loadBResult = host.Functions().Call("Scene.Load", loadBArgs, context);
+        kb::tests::Require(loadBResult.Succeeded(), "Event filter scene test fixture load B failed");
+        const std::uint64_t idB = loadBResult.Output("id")->AsUInt64();
+        kb::tests::Require(idA != idB, "Event filter scene test fixture must load two distinct scene ids");
+
+        const std::vector<kb::scene::SceneEntity> roots = filterScene.Hierarchy().RootEntities();
+        kb::tests::Require(roots.size() == 2U, "Event filter scene test fixture must have exactly two root entities");
+        const kb::scene::SceneEntity rootA = filterScene.Entities().Name(roots[0]) == "FilterRootA" ? roots[0] : roots[1];
+        const kb::scene::SceneEntity rootB = filterScene.Entities().Name(roots[0]) == "FilterRootB" ? roots[0] : roots[1];
+        kb::tests::Require(filterScene.LoadedContent().OwningScene(rootA) == idA, "SceneLoadedContent::OwningScene must resolve rootA back to scene A's loaded id");
+        kb::tests::Require(filterScene.LoadedContent().OwningScene(rootB) == idB, "SceneLoadedContent::OwningScene must resolve rootB back to scene B's loaded id");
+
+        int aFired = 0;
+        int bFired = 0;
+        static_cast<void>(sceneBus.Subscribe("SceneEvent", [&aFired](const kb::script::ScriptEvent&) { ++aFired; }, rootA));
+        static_cast<void>(sceneBus.Subscribe("SceneEvent", [&bFired](const kb::script::ScriptEvent&) { ++bFired; }, rootB));
+
+        kb::script::EventRecipientFilter sceneFilter;
+        sceneFilter.sceneId = idA;
+        const kb::script::ScriptEventDeliveryResult result = sceneBus.Broadcast(filterScene, kb::script::ScriptEvent{ .name = "SceneEvent" }, sceneFilter);
+        kb::tests::Require(result.delivered == 1U && aFired == 1 && bFired == 0, "A scene filter must reach ONLY the subscription whose owner belongs to that loaded scene id");
+    }
+
+    // --- channel ---
+    {
+        const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Channel Owner" });
+        int chatFired = 0;
+        int combatFired = 0;
+        int defaultFired = 0;
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&chatFired](const kb::script::ScriptEvent&) { ++chatFired; }, owner.Entity(), "chat"));
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&combatFired](const kb::script::ScriptEvent&) { ++combatFired; }, owner.Entity(), "combat"));
+        static_cast<void>(bus.Subscribe("ChannelEvent", [&defaultFired](const kb::script::ScriptEvent&) { ++defaultFired; }, owner.Entity()));
+
+        kb::script::EventRecipientFilter chatFilter;
+        chatFilter.channel = "chat";
+        const kb::script::ScriptEventDeliveryResult chatResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ChannelEvent" }, chatFilter);
+        kb::tests::Require(chatResult.delivered == 1U && chatFired == 1 && combatFired == 0 && defaultFired == 0, "A channel filter must reach ONLY the subscription declared on that exact channel, never the default channel or a different one");
+
+        const kb::script::ScriptEventDeliveryResult unfilteredResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "ChannelEvent" });
+        kb::tests::Require(unfilteredResult.delivered == 3U && chatFired == 2 && combatFired == 1 && defaultFired == 1, "An Emit/Broadcast with no channel filter must still reach subscriptions on EVERY channel, unchanged from before this task");
+    }
+}
+
+// LIB-106: real Lua round trip for the new filters — Events.Subscribe's
+// optional 4th `channel` arg and Events.Emit/Broadcast/EmitDeferred's
+// optional trailing filter table `{tag=,component=,scene=,channel=}`,
+// proving the Lua binding genuinely threads through to ScriptEventBus
+// rather than silently ignoring the new arguments (the same "real
+// bidirectional round trip" bar RunPucLuaEventsSubscribeEmitTest set for
+// LIB-105's base Subscribe/Emit/Broadcast/EmitDeferred/Unsubscribe).
+void RunPucLuaEventsRecipientFilterTest() {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 3320U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
+local chatCount = 0
+local combatCount = 0
+
+function Created(self)
+    Events.Subscribe("Shout", function(event) chatCount = chatCount + 1 end, nil, "chat")
+    Events.Subscribe("Shout", function(event) combatCount = combatCount + 1 end, nil, "combat")
+end
+
+function Tick(self, dt)
+    SetShared("lua.filter.chatCount", chatCount)
+    SetShared("lua.filter.combatCount", combatCount)
+end
+
+function ShoutOnChat(self, event)
+    Events.Broadcast("Shout", nil, { channel = "chat" })
+end
+
+function ShoutDeferredOnCombat(self, event)
+    Events.EmitDeferred("Shout", nil, nil, { channel = "combat" })
+end
+)",
+        "EventsFilterSubscriber.lua");
+    kb::tests::Require(loaded.succeeded, "Lua Events recipient filter subscriber script must load");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua backend registration failed for Events recipient filter test");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Events Filter Lua Subscriber" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult created = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Created, 0.0F);
+    kb::tests::Require(created.Succeeded() && created.executedBehaviours == 1U, "Created dispatch (running two channel-scoped Events.Subscribe calls) must execute cleanly");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 2U, "Events.Subscribe with a channel argument must still register a real subscription");
+
+    const kb::script::ScriptRuntimeExecutionResult shoutChat = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutOnChat" }, 0.0F);
+    kb::tests::Require(shoutChat.Succeeded(), "ShoutOnChat custom event dispatch must not produce diagnostics");
+
+    const kb::script::ScriptRuntimeExecutionResult afterChat = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterChat.Succeeded(), "Tick after ShoutOnChat must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> chatCountAfterChat = runtime.SharedState().Get("lua.filter.chatCount");
+    const std::optional<kb::script::ScriptValue> combatCountAfterChat = runtime.SharedState().Get("lua.filter.combatCount");
+    kb::tests::Require(chatCountAfterChat.has_value() && chatCountAfterChat->AsInt() == 1, "Lua's Events.Broadcast with a {channel=\"chat\"} filter table must reach ONLY the chat-channel subscriber");
+    kb::tests::Require(combatCountAfterChat.has_value() && combatCountAfterChat->AsInt() == 0, "A {channel=\"chat\"} filter must not reach the combat-channel subscriber");
+
+    const kb::script::ScriptRuntimeExecutionResult shoutDeferredCombat = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutDeferredOnCombat" }, 0.0F);
+    kb::tests::Require(shoutDeferredCombat.Succeeded(), "ShoutDeferredOnCombat custom event dispatch must not produce diagnostics");
+    const kb::script::ScriptEventDeliveryResult drained = runtime.Events().DrainDeferred(scene);
+    kb::tests::Require(drained.delivered == 1U, "Lua's Events.EmitDeferred with a {channel=\"combat\"} filter table must deliver to exactly the combat-channel subscriber once drained");
+
+    const kb::script::ScriptRuntimeExecutionResult afterCombat = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(afterCombat.Succeeded(), "Tick after the deferred combat shout must not produce diagnostics");
+    const std::optional<kb::script::ScriptValue> chatCountAfterCombat = runtime.SharedState().Get("lua.filter.chatCount");
+    const std::optional<kb::script::ScriptValue> combatCountAfterCombat = runtime.SharedState().Get("lua.filter.combatCount");
+    kb::tests::Require(chatCountAfterCombat.has_value() && chatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must NOT have reached the chat-channel subscriber");
+    kb::tests::Require(combatCountAfterCombat.has_value() && combatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must have reached the combat-channel subscriber exactly once");
+}
+
+// LIB-107: regression-proves the "Dispatch mode contract" doc comment on
+// ScriptEventBus (ScriptEventBus.hpp) under REENTRANCY — the hardest, and
+// previously entirely untested, case for "no implicit mixing" between
+// synchronous and deferred delivery. Every prior EmitDeferred test called
+// it from the TOP LEVEL (outside any Emit/DrainDeferred call already in
+// progress); none proved what happens when a subscriber ITSELF calls
+// Emit or EmitDeferred while already being dispatched.
+void RunScriptEventBusDispatchModeContractTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptEventBus bus;
+
+    // (a) Sync stays sync under reentrancy: a subscriber to "Outer" calls
+    // Emit("Inner") itself — the inner subscriber must have ALREADY fired
+    // by the time the outer Emit() call returns, proving nested Emit never
+    // silently degrades to anything deferred.
+    int innerFired = 0;
+    static_cast<void>(bus.Subscribe("Inner", [&innerFired](const kb::script::ScriptEvent&) { ++innerFired; }));
+    static_cast<void>(bus.Subscribe("Outer", [&bus, &scene](const kb::script::ScriptEvent&) {
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Inner" }));
+    }));
+    const kb::script::ScriptEventDeliveryResult outerResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "Outer" });
+    kb::tests::Require(outerResult.delivered == 1U, "The outer Emit call itself must report exactly one direct delivery (its own subscriber), independent of any nested Emit it triggers");
+    kb::tests::Require(innerFired == 1, "A reentrant Emit called from within another Emit's subscriber must deliver synchronously — the inner subscriber must have already fired by the time the outer Emit() call returns");
+
+    // (b) EmitDeferred called from within a SYNCHRONOUS Emit's subscriber
+    // must NOT deliver within that same Emit call — it must still wait for
+    // the next DrainDeferred, proving Emit never implicitly triggers a
+    // drain of what it just queued.
+    int deferredFromSyncFired = 0;
+    static_cast<void>(bus.Subscribe("DeferredFromSync", [&deferredFromSyncFired](const kb::script::ScriptEvent&) { ++deferredFromSyncFired; }));
+    static_cast<void>(bus.Subscribe("QueueDuringSync", [&bus](const kb::script::ScriptEvent&) {
+        bus.EmitDeferred(kb::script::ScriptEvent{ .name = "DeferredFromSync" });
+    }));
+    static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "QueueDuringSync" }));
+    kb::tests::Require(deferredFromSyncFired == 0, "EmitDeferred called from within a synchronous Emit's own subscriber must NOT deliver before that Emit call returns — no implicit sync-ification of a deferred call");
+    const kb::script::ScriptEventDeliveryResult drainAfterSync = bus.DrainDeferred(scene);
+    kb::tests::Require(drainAfterSync.delivered == 1U && deferredFromSyncFired == 1, "The event queued during the synchronous Emit must deliver on the NEXT DrainDeferred call, exactly once");
+
+    // (c) EmitDeferred called from within a subscriber THAT DrainDeferred
+    // ITSELF is currently dispatching must queue for the NEXT DrainDeferred
+    // call, not be swept up by the CURRENT one — proving DrainDeferred's
+    // "snapshot the pending list before dispatching any of it" discipline
+    // holds even when dispatch produces MORE deferred work.
+    int reQueuedFired = 0;
+    static_cast<void>(bus.Subscribe("RequeuedDuringDrain", [&reQueuedFired](const kb::script::ScriptEvent&) { ++reQueuedFired; }));
+    static_cast<void>(bus.Subscribe("QueueDuringDrain", [&bus](const kb::script::ScriptEvent&) {
+        bus.EmitDeferred(kb::script::ScriptEvent{ .name = "RequeuedDuringDrain" });
+    }));
+    bus.EmitDeferred(kb::script::ScriptEvent{ .name = "QueueDuringDrain" });
+    const kb::script::ScriptEventDeliveryResult firstDrain = bus.DrainDeferred(scene);
+    kb::tests::Require(firstDrain.delivered == 1U && reQueuedFired == 0, "A deferred event re-queued by a subscriber THAT THIS SAME DrainDeferred call is dispatching must NOT be delivered within that same drain");
+    const kb::script::ScriptEventDeliveryResult secondDrain = bus.DrainDeferred(scene);
+    kb::tests::Require(secondDrain.delivered == 1U && reQueuedFired == 1, "The re-queued-during-drain event must deliver on the FOLLOWING DrainDeferred call, exactly once");
+}
+
+// LIB-108: proves kMaxScriptEventArguments (ScriptEvent.hpp) is genuinely
+// enforced, honestly (via a real error/diagnostic, never silent truncation
+// or silent success), at BOTH real dispatch entry points — ScriptEventBus::
+// Emit (LIB-105's bus) and ScriptRuntime::DispatchEvent (the older context.
+// Emit/EmitTo/Visual Graph path, LIB-103's confirmed single mechanism for
+// everything else). A payload at exactly the limit must still succeed —
+// only a payload that EXCEEDS it is rejected.
+void RunScriptEventPayloadSizeLimitTest() {
+    std::vector<kb::script::ScriptEventArgument> atLimit;
+    std::vector<kb::script::ScriptEventArgument> overLimit;
+    for (std::size_t i = 0; i < kb::script::kMaxScriptEventArguments; ++i) {
+        atLimit.push_back(kb::script::ScriptEventArgument{ .name = "arg", .value = kb::script::ScriptValue{ static_cast<int>(i) } });
+    }
+    overLimit = atLimit;
+    overLimit.push_back(kb::script::ScriptEventArgument{ .name = "oneTooMany", .value = kb::script::ScriptValue{ 0 } });
+    kb::tests::Require(overLimit.size() == kb::script::kMaxScriptEventArguments + 1U, "Test fixture must construct exactly one argument beyond the limit");
+
+    // --- ScriptEventBus::Emit ---
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptEventBus bus;
+        int fired = 0;
+        static_cast<void>(bus.Subscribe("SizeLimit", [&fired](const kb::script::ScriptEvent&) { ++fired; }));
+
+        const kb::script::ScriptEventDeliveryResult atLimitResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = atLimit });
+        kb::tests::Require(atLimitResult.delivered == 1U && atLimitResult.errors.empty() && fired == 1, "An event payload with EXACTLY kMaxScriptEventArguments must still deliver normally, not be rejected");
+
+        const kb::script::ScriptEventDeliveryResult overLimitResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = overLimit });
+        kb::tests::Require(overLimitResult.delivered == 0U && overLimitResult.errors.size() == 1U && fired == 1, "ScriptEventBus::Emit must honestly reject (0 delivered, a real error, no partial delivery) a payload exceeding kMaxScriptEventArguments — not silently truncate arguments or silently deliver anyway");
+    }
+
+    // --- ScriptRuntime::DispatchEvent (the older context.Emit/EmitTo path) ---
+    {
+        kb::script::ScriptRuntime runtime;
+        kb::scene::Scene scene;
+        constexpr kb::assets::AssetId kAsset{ 9010U };
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Size Limit Dispatch Subject" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+        int fired = 0;
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "SizeLimit", [&fired](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent&) { ++fired; }),
+            "Size limit dispatch fixture registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Size limit dispatch backend registration failed");
+
+        const kb::script::ScriptRuntimeExecutionResult atLimitResult = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = atLimit }, 0.0F);
+        kb::tests::Require(atLimitResult.Succeeded() && fired == 1, "DispatchEvent must still dispatch normally for a payload with EXACTLY kMaxScriptEventArguments");
+
+        const kb::script::ScriptRuntimeExecutionResult overLimitResult = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "SizeLimit", .arguments = overLimit }, 0.0F);
+        kb::tests::Require(!overLimitResult.Succeeded() && overLimitResult.diagnostics.size() == 1U && fired == 1, "DispatchEvent must honestly report a diagnostic and skip dispatch entirely for a payload exceeding kMaxScriptEventArguments — not silently truncate or silently dispatch anyway");
+    }
+}
+
+// LIB-108: cross-checks kb::library::EngineLibraryEventRegistry's cataloged
+// schema against a REAL dispatched event's actual arguments (not just the
+// static assertions RunEngineLibraryEventSchemaRegistryTest already makes
+// against the catalog in isolation) — a TimerFired fired through a genuine
+// SceneTimers + ScriptRuntimeSceneSystem::ExecuteFrame pipeline, and a
+// SceneLoaded fired through a genuine Scene.Load call.
+void RunEngineLibraryEventSchemaMatchesRealDispatchTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kAsset{ 9011U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Event Schema Dispatch Subject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+
+    std::vector<kb::script::ScriptEventArgument> capturedTimerArgs;
+    std::vector<kb::script::ScriptEventArgument> capturedSceneLoadedArgs;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "TimerFired", [&capturedTimerArgs](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            capturedTimerArgs = event.arguments;
+                        }),
+        "Event schema dispatch fixture TimerFired registration failed");
+    kb::tests::Require(nativeBackend->RegisterEvent(kAsset, "SceneLoaded", [&capturedSceneLoadedArgs](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                            capturedSceneLoadedArgs = event.arguments;
+                        }),
+        "Event schema dispatch fixture SceneLoaded registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Event schema dispatch fixture backend registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(scene.Timers().Once(0.05F, object.Entity()));
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(!capturedTimerArgs.empty(), "The TimerFired fixture must actually have fired through the real pipeline");
+
+    const kb::library::LibraryEventDesc* timerDesc = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
+    kb::tests::Require(timerDesc != nullptr, "TimerFired must be cataloged");
+    kb::tests::Require(capturedTimerArgs.size() == timerDesc->arguments.size(), "A REAL dispatched TimerFired must carry exactly as many arguments as the catalog declares");
+    for (std::size_t i = 0; i < capturedTimerArgs.size(); ++i) {
+        kb::tests::Require(capturedTimerArgs[i].name == timerDesc->arguments[i].name, "A REAL dispatched TimerFired argument's name must match the catalog's declared argument name, in order");
+        kb::tests::Require(capturedTimerArgs[i].value.Type() == timerDesc->arguments[i].type, "A REAL dispatched TimerFired argument's ScriptValueType must match the catalog's declared type");
+    }
+
+    ResetTestRoot();
+    const std::filesystem::path sceneFile = TestRoot() / "EventSchemaProject" / "SchemaCheckScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "SchemaCheckRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "SchemaCheckScene"), "Event schema SceneLoaded fixture scene was not saved");
+    }
+    // additive=true: a non-additive Load would ClearSceneRoots, destroying
+    // the fixture's own behaviour-holding `object` before it could ever
+    // receive the SceneLoaded broadcast this test needs to observe.
+    static_cast<void>(scene.LoadedContent().Load(sceneFile, true));
+    static_cast<void>(system.ExecuteFrame(scene, 0.05F));
+    kb::tests::Require(!capturedSceneLoadedArgs.empty(), "The SceneLoaded fixture must actually have fired through a real Scene.Load + ExecuteFrame drain");
+
+    const kb::library::LibraryEventDesc* sceneLoadedDesc = kb::library::EngineLibraryEventRegistry::Find("SceneLoaded");
+    kb::tests::Require(sceneLoadedDesc != nullptr, "SceneLoaded must be cataloged");
+    kb::tests::Require(capturedSceneLoadedArgs.size() == sceneLoadedDesc->arguments.size(), "A REAL dispatched SceneLoaded must carry exactly as many arguments as the catalog declares");
+    for (std::size_t i = 0; i < capturedSceneLoadedArgs.size(); ++i) {
+        kb::tests::Require(capturedSceneLoadedArgs[i].name == sceneLoadedDesc->arguments[i].name, "A REAL dispatched SceneLoaded argument's name must match the catalog's declared argument name, in order");
+        kb::tests::Require(capturedSceneLoadedArgs[i].value.Type() == sceneLoadedDesc->arguments[i].type, "A REAL dispatched SceneLoaded argument's ScriptValueType must match the catalog's declared type");
+    }
+}
+
+// LIB-110: proves ScriptEventBusTelemetrySnapshot's counters are genuine
+// measurements, not fabricated placeholders — subscription count, dispatch
+// duration (checked against a deliberately slow subscriber so the
+// assertion can't flake on clock resolution), and dropped/invalid events
+// (empty-name/oversized Emit AND EmitDeferred, plus the deferred queue
+// actually hitting kMaxPendingDeferredEvents capacity).
+void RunScriptEventBusTelemetryTest() {
+    kb::scene::Scene scene;
+
+    // --- subscription count + delivered count ---
+    {
+        kb::script::ScriptEventBus bus;
+        const kb::script::ScriptEventBusTelemetrySnapshot initial = bus.Telemetry();
+        kb::tests::Require(initial.subscriptionCount == 0U && initial.emitCalls == 0U && initial.deliveredCount == 0U && initial.invalidEventCount == 0U && initial.droppedDeferredEventCount == 0U,
+            "A freshly constructed ScriptEventBus must report all-zero telemetry");
+
+        static_cast<void>(bus.Subscribe("Telemetry", [](const kb::script::ScriptEvent&) {}));
+        static_cast<void>(bus.Subscribe("Telemetry", [](const kb::script::ScriptEvent&) {}));
+        kb::tests::Require(bus.Telemetry().subscriptionCount == 2U, "Telemetry().subscriptionCount must match live subscriptions, the same number SubscriptionCount() reports");
+
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Telemetry" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterEmit = bus.Telemetry();
+        kb::tests::Require(afterEmit.emitCalls == 1U && afterEmit.deliveredCount == 2U, "Telemetry must count exactly one Emit call and two real subscriber deliveries");
+    }
+
+    // --- dispatch duration, measured against a deliberately slow subscriber
+    // (avoids asserting on raw clock resolution, which could legitimately
+    // read back as 0 for genuinely fast work on a coarse clock). ---
+    {
+        kb::script::ScriptEventBus bus;
+        static_cast<void>(bus.Subscribe("Slow", [](const kb::script::ScriptEvent&) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }));
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Slow" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterFirst = bus.Telemetry();
+        kb::tests::Require(afterFirst.lastEmitElapsedNanoseconds >= 1'000'000ULL, "lastEmitElapsedNanoseconds must reflect a genuinely measured duration — a 2ms-sleeping subscriber must show up as at least 1ms, not a fabricated/zero placeholder");
+        kb::tests::Require(afterFirst.totalEmitElapsedNanoseconds >= afterFirst.lastEmitElapsedNanoseconds, "totalEmitElapsedNanoseconds must accumulate at least the most recent call's duration");
+
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Slow" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot afterSecond = bus.Telemetry();
+        kb::tests::Require(afterSecond.totalEmitElapsedNanoseconds >= afterFirst.totalEmitElapsedNanoseconds + 1'000'000ULL, "totalEmitElapsedNanoseconds must keep accumulating across multiple Emit calls, not just reflect the latest one");
+    }
+
+    // --- invalid events: empty name, oversized payload, on BOTH Emit and
+    // EmitDeferred. ---
+    {
+        kb::script::ScriptEventBus bus;
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "" }));
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 1U, "An empty-name Emit must count as an invalid event");
+
+        std::vector<kb::script::ScriptEventArgument> overLimit;
+        for (std::size_t i = 0; i < kb::script::kMaxScriptEventArguments + 1U; ++i) {
+            overLimit.push_back(kb::script::ScriptEventArgument{ .name = "arg", .value = kb::script::ScriptValue{ 0 } });
+        }
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Oversized", .arguments = overLimit }));
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 2U && bus.Telemetry().emitCalls == 2U, "An oversized-payload Emit must ALSO count as invalid, and both rejected calls still count as attempted Emit calls");
+
+        kb::tests::Require(!bus.EmitDeferred(kb::script::ScriptEvent{ .name = "" }), "An empty-name EmitDeferred must be rejected (return false)");
+        kb::tests::Require(bus.Telemetry().invalidEventCount == 3U, "An empty-name EmitDeferred must ALSO count as an invalid event, even though it never reaches Emit()");
+        kb::tests::Require(bus.Telemetry().emitCalls == 2U, "A rejected EmitDeferred must NOT increment emitCalls — it never called Emit()");
+    }
+
+    // --- dropped deferred events: queue at capacity. ---
+    {
+        kb::script::ScriptEventBus bus;
+        std::size_t queuedCount = 0U;
+        for (std::size_t i = 0; i < kb::script::ScriptEventBus::kMaxPendingDeferredEvents; ++i) {
+            if (bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Fill" })) {
+                ++queuedCount;
+            }
+        }
+        kb::tests::Require(queuedCount == kb::script::ScriptEventBus::kMaxPendingDeferredEvents, "Filling exactly to capacity must succeed for every call");
+        kb::tests::Require(bus.Telemetry().droppedDeferredEventCount == 0U, "No event should be dropped while still at or under capacity");
+
+        const bool oneTooMany = bus.EmitDeferred(kb::script::ScriptEvent{ .name = "Fill" });
+        kb::tests::Require(!oneTooMany, "An EmitDeferred call once the queue is already at kMaxPendingDeferredEvents must be honestly rejected (false), not silently grow the queue unbounded");
+        kb::tests::Require(bus.Telemetry().droppedDeferredEventCount == 1U, "The rejected over-capacity EmitDeferred must count as a dropped event");
+
+        const kb::script::ScriptEventDeliveryResult drained = bus.DrainDeferred(scene);
+        kb::tests::Require(drained.delivered == 0U, "Draining events with no subscribers must report zero deliveries, not error");
+    }
+}
+
+// LIB-111: the exhaustive edge-case tests LIB-105's own doc comment
+// explicitly deferred to this task — ordering with MANY subscribers (not
+// just two), Unsubscribe called from WITHIN dispatch (self and a
+// not-yet-invoked sibling), a destroyed owner shared by MULTIPLE
+// subscriptions mid-dispatch, and recursive Emit both bounded (works
+// correctly) and unbounded (safely caught, not a stack overflow).
+void RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest() {
+    kb::scene::Scene scene;
+
+    // --- ordering: 6 subscribers, strict connection order. ---
+    {
+        kb::script::ScriptEventBus bus;
+        std::vector<int> order;
+        for (int i = 0; i < 6; ++i) {
+            static_cast<void>(bus.Subscribe("Order", [&order, i](const kb::script::ScriptEvent&) { order.push_back(i); }));
+        }
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "Order" });
+        kb::tests::Require(result.delivered == 6U, "All 6 subscribers must have been delivered to");
+        kb::tests::Require(order.size() == 6U, "All 6 subscribers must have actually run");
+        for (int i = 0; i < 6; ++i) {
+            kb::tests::Require(order[static_cast<std::size_t>(i)] == i, "Delivery order must exactly match connection order for every one of 6 subscribers, not just a lucky first/last pair");
+        }
+    }
+
+    // --- unsubscribe during dispatch: self, and a not-yet-invoked sibling. ---
+    {
+        kb::script::ScriptEventBus bus;
+        int selfFired = 0;
+        kb::script::EventSubscriptionHandle selfHandle = kb::script::kInvalidEventSubscriptionHandle;
+        selfHandle = bus.Subscribe("SelfUnsub", [&bus, &selfFired, &selfHandle](const kb::script::ScriptEvent&) {
+            ++selfFired;
+            kb::tests::Require(bus.Unsubscribe(selfHandle), "A subscriber must be able to Unsubscribe ITSELF from within its own dispatch");
+        });
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "SelfUnsub" }));
+        kb::tests::Require(selfFired == 1, "A self-unsubscribing subscriber must still have run exactly once for the Emit call that triggered the unsubscribe");
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "SelfUnsub" }));
+        kb::tests::Require(selfFired == 1, "After self-unsubscribing, the subscriber must never fire again on a later Emit");
+        kb::tests::Require(bus.SubscriptionCount() == 0U, "The self-unsubscribed subscription must actually be gone");
+    }
+    {
+        kb::script::ScriptEventBus bus;
+        int siblingFired = 0;
+        kb::script::EventSubscriptionHandle siblingHandle = kb::script::kInvalidEventSubscriptionHandle;
+        static_cast<void>(bus.Subscribe("UnsubSibling", [&bus, &siblingHandle](const kb::script::ScriptEvent&) {
+            kb::tests::Require(bus.Unsubscribe(siblingHandle), "A subscriber must be able to Unsubscribe a SIBLING (registered later, not yet invoked) from within its own dispatch");
+        }));
+        siblingHandle = bus.Subscribe("UnsubSibling", [&siblingFired](const kb::script::ScriptEvent&) { ++siblingFired; });
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "UnsubSibling" });
+        kb::tests::Require(result.delivered == 1U && siblingFired == 0, "A sibling unsubscribed by an EARLIER subscriber in the SAME Emit call must never fire, and must not be counted as delivered");
+        kb::tests::Require(bus.SubscriptionCount() == 1U, "Only the unsubscribed sibling should be gone; the unsubscribing subscriber itself remains connected");
+    }
+
+    // --- destroyed owner shared by MULTIPLE subscriptions mid-dispatch:
+    // proves EVERY subscription on the dead owner is skipped, not just the
+    // first one found. ---
+    {
+        kb::script::ScriptEventBus bus;
+        const kb::scene::SceneObject destroyerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Multi Destroyed Owner Destroyer" });
+        const kb::scene::SceneObject victimObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Multi Destroyed Owner Victim" });
+        const kb::scene::SceneEntity victim = victimObject.Entity();
+        int victimAFired = 0;
+        int victimBFired = 0;
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&scene, victim](const kb::script::ScriptEvent&) { scene.Entities().Destroy(victim); }, destroyerObject.Entity()));
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&victimAFired](const kb::script::ScriptEvent&) { ++victimAFired; }, victim));
+        static_cast<void>(bus.Subscribe("MultiDestroyed", [&victimBFired](const kb::script::ScriptEvent&) { ++victimBFired; }, victim));
+        const kb::script::ScriptEventDeliveryResult result = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "MultiDestroyed" });
+        kb::tests::Require(result.delivered == 1U && victimAFired == 0 && victimBFired == 0, "BOTH subscriptions sharing a mid-dispatch-destroyed owner must be skipped, not just the first one encountered");
+    }
+
+    // --- recursive emit: bounded (works correctly), unbounded (safely
+    // caught by kMaxEmitDepth — LIB-111's discovery of a real, previously
+    // unguarded stack-overflow risk, fixed in the same change as this
+    // test). ---
+    {
+        kb::script::ScriptEventBus bus;
+        int pingPongCount = 0;
+        static_cast<void>(bus.Subscribe("PingPong", [&bus, &scene, &pingPongCount](const kb::script::ScriptEvent&) {
+            ++pingPongCount;
+            if (pingPongCount < 10) {
+                static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "PingPong" }));
+            }
+        }));
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "PingPong" }));
+        kb::tests::Require(pingPongCount == 10, "A bounded, self-terminating recursive Emit chain must run to completion normally (10 levels), well under kMaxEmitDepth");
+    }
+    {
+        kb::script::ScriptEventBus bus;
+        std::size_t runawayInvocations = 0;
+        static_cast<void>(bus.Subscribe("Runaway", [&bus, &scene, &runawayInvocations](const kb::script::ScriptEvent&) {
+            ++runawayInvocations;
+            static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Runaway" }));
+        }));
+        const kb::script::ScriptEventBusTelemetrySnapshot before = bus.Telemetry();
+        // If this call doesn't return (or crashes), kMaxEmitDepth's guard
+        // has failed — the whole point of this test.
+        static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Runaway" }));
+        const kb::script::ScriptEventBusTelemetrySnapshot after = bus.Telemetry();
+        kb::tests::Require(runawayInvocations == kb::script::ScriptEventBus::kMaxEmitDepth, "An unconditionally self-recursive Emit chain must run EXACTLY kMaxEmitDepth times before the guard rejects the next nested attempt — not fewer (guard too eager) and not more (guard not actually bounding depth)");
+        kb::tests::Require(after.invalidEventCount == before.invalidEventCount + 1U, "The depth-exceeded rejection deep in the recursive chain must be counted as exactly one invalid event");
+
+        // Prove the depth counter genuinely unwound back to 0 (RAII on
+        // every exit path) rather than staying stuck high after a rejected
+        // deep call — a completely unrelated, ordinary Emit right
+        // afterward must work normally.
+        int normalFired = 0;
+        static_cast<void>(bus.Subscribe("AfterRunaway", [&normalFired](const kb::script::ScriptEvent&) { ++normalFired; }));
+        const kb::script::ScriptEventDeliveryResult normalResult = bus.Emit(scene, kb::script::ScriptEvent{ .name = "AfterRunaway" });
+        kb::tests::Require(normalResult.delivered == 1U && normalFired == 1, "After a rejected runaway-recursion Emit unwinds completely, the bus must behave completely normally for an unrelated event — the depth counter must not be left stuck");
+    }
+}
+
+// LIB-112: EMIT direction of the gameplay event bridge — a Visual Graph
+// EmitEvent node's typed-pin output now ALSO reaches a native Events.
+// Subscribe listener through ScriptEventBus, in ADDITION to (never instead
+// of) the pre-existing old-mechanism DispatchEvent path
+// (RunVisualGraphFullLifecycleOrderTest already proves that path's own
+// ordering contract is unaffected by this task's code).
+void RunVisualGraphEmitEventReachesBusTest() {
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "EmitBridgeGraph";
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "DeltaSeconds" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "BridgeEmitted" });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 3U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "value", .toNode = 3U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Emit bridge graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5410U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)), "Emit bridge backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EmitBridgeSubject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    int busDeliveries = 0;
+    float capturedAmount = -1.0F;
+    static_cast<void>(runtime.Events().Subscribe("BridgeEmitted", [&busDeliveries, &capturedAmount](const kb::script::ScriptEvent& event) {
+        ++busDeliveries;
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "amount") {
+                capturedAmount = argument.value.AsFloat();
+            }
+        }
+    }));
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 0.25F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Emit bridge frame produced diagnostics");
+
+    bool foundInOldMechanism = false;
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        if (event.name == "BridgeEmitted") {
+            foundInOldMechanism = true;
+        }
+    }
+    kb::tests::Require(foundInOldMechanism, "The old DispatchEvent mechanism must still see the EmitEvent node's output, unchanged by this task");
+    kb::tests::Require(busDeliveries == 1 && kb::tests::NearlyEqual(capturedAmount, 0.25F), "The SAME EmitEvent node's output must ALSO reach a native Events.Subscribe listener through the bus, with the correct typed argument value");
+}
+
+// LIB-112: RECEIVE direction of the gameplay event bridge — a native
+// Events.Broadcast (bus-side, LIB-105) now ALSO reaches a Visual Graph
+// behaviour's CustomEvent node, with typed pins flowing through the SAME
+// StoreCustomEventArguments matching the old DispatchEvent mechanism
+// already uses — closing the real gap ScriptEventBus.hpp's own doc
+// comment named this task for. Also proves the auto-subscription is
+// correctly torn down on Destroyed (no leak, no post-destroy invocation).
+void RunScriptEventBusReachesVisualGraphCustomEventTest() {
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "ReceiveBridgeGraph";
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::CustomEvent, .symbol = "BridgeReceived" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "RecordAmount" });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "amount", .toNode = 2U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Receive bridge graph did not compile");
+
+    constexpr kb::assets::AssetId kGraphAsset{ 5411U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
+
+    std::vector<float> recordedAmounts;
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphRuntimeBinding{
+                            .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                            .symbol = "RecordAmount",
+                            .inputs = { kb::visual::VisualGraphNativePinSignature{ .name = "amount", .type = kb::visual::VisualGraphValueType::Float } },
+                            .callback = [&recordedAmounts](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                                recordedAmounts.push_back(context.ReadFloat(instruction.inputs[0].sourceNodeId, instruction.inputs[0].sourcePin));
+                            },
+                        }),
+        "Receive bridge runtime binding registration failed");
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)), "Receive bridge backend registration failed");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ReceiveBridgeSubject" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Receive bridge Created dispatch produced diagnostics");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 1U, "Created must have auto-subscribed exactly one bus subscription for the graph's single CustomEvent node");
+
+    const kb::script::ScriptEventDeliveryResult delivery = runtime.Events().Broadcast(scene, kb::script::ScriptEvent{
+        .name = "BridgeReceived",
+        .arguments = { kb::script::ScriptEventArgument{ .name = "amount", .value = kb::script::ScriptValue{ 0.75F } } },
+    });
+    kb::tests::Require(delivery.delivered == 1U && delivery.errors.empty(), "A native Events.Broadcast must reach the auto-subscribed Visual Graph CustomEvent node");
+    kb::tests::Require(recordedAmounts.size() == 1U && kb::tests::NearlyEqual(recordedAmounts[0], 0.75F), "The bus-delivered event's typed argument must reach the graph's CustomEvent output pin and flow through to CallNative, exactly like the old DispatchEvent mechanism already does");
+
+    scene.Components().Behaviours().Remove(object.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Receive bridge Destroyed dispatch produced diagnostics");
+    kb::tests::Require(runtime.Events().SubscriptionCount() == 0U, "Destroyed must have unsubscribed the bridge subscription — no leaked entry");
+
+    const kb::script::ScriptEventDeliveryResult afterDestroy = runtime.Events().Broadcast(scene, kb::script::ScriptEvent{ .name = "BridgeReceived" });
+    kb::tests::Require(afterDestroy.delivered == 0U && recordedAmounts.size() == 1U, "A Broadcast after the behaviour was destroyed must not re-invoke the graph — the subscription must genuinely be gone, not just skipped once");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -5844,11 +9214,42 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptPhysicsForceVelocitySleepApiTest();
+    RunScriptPhysicsCastOverlapClosestPointApiTest();
+    RunPhysicsBackendNonAllocQueriesTest();
+    RunScriptPhysicsCollisionTriggerEventDispatchTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();
     RunScriptTimerApiFiringOwnerAndPauseTest();
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
+    RunScriptTaskApiTest();
+    RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunEngineLibraryTaskFactoriesTest();
+    RunSceneTaskFixedStepDomainTest();
+    RunTimerAndTaskCancellationPropagationTest();
+    RunEngineLibraryAsyncResultTest();
+    RunAsyncResultDrivenTaskEndToEndTest();
+    RunTimerAndTaskCreatorDiagnosticsTest();
+    RunScriptTimerAndTaskCreatorApiTest();
+    RunTimerDeterminismAndSamePhaseCancellationTest();
+    RunScriptEventTaxonomyTest();
+    RunScriptEventIdHotPathTest();
+    RunScriptEventBusNativeSubscribeEmitTest();
+    RunPucLuaEventsSubscribeEmitTest();
+    RunScriptRuntimeSceneSystemDeferredEventDrainTest();
+    RunExplicitCancellationCrossTypeContractTest();
+    RunReentrantEntityDestructionFromCallbackTest();
+    RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest();
+    RunScriptEventBusRecipientFilterTest();
+    RunPucLuaEventsRecipientFilterTest();
+    RunScriptEventBusDispatchModeContractTest();
+    RunScriptEventPayloadSizeLimitTest();
+    RunEngineLibraryEventSchemaMatchesRealDispatchTest();
+    RunScriptEventBusTelemetryTest();
+    RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest();
+    RunVisualGraphEmitEventReachesBusTest();
+    RunScriptEventBusReachesVisualGraphCustomEventTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
@@ -5858,6 +9259,7 @@ void RunScriptRuntimeTests() {
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();
+    RunWorldSetPropertyPhysicsComponentsTest();
     RunWorldInstantiatePrefabOwnershipTest();
     RunSceneLoadedContentApiTest();
     RunWorldPersistentStateTest();
@@ -5866,6 +9268,11 @@ void RunScriptRuntimeTests() {
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
+    RunScriptInputApiPerPlayerTest();
+    RunScriptPointerApiTest();
+    RunScriptInputPriorityConstantsTest();
+    RunScriptInputFocusLossReleasesActionsTest();
+    RunInputActionStateFixedTickTickAndBackendParityTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

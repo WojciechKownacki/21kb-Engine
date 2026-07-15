@@ -1,5 +1,9 @@
 #include "engine/script/ScriptInputApi.hpp"
 
+#include "engine/input/InputContextPriority.hpp"
+#include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
@@ -30,6 +34,21 @@ std::string ActionName(std::span<const ScriptFunctionArgument> arguments) {
     return value != nullptr ? value->AsString() : std::string{};
 }
 
+// Optional; absent (or <= 0) means the primary local user, so every existing
+// call site that predates LIB-115 keeps querying exactly what it always has.
+kb::input::LocalUserId PlayerFromArgs(std::span<const ScriptFunctionArgument> arguments) {
+    const ScriptValue* value = FindArg(arguments, "player");
+    if (value == nullptr) {
+        return kb::input::kPrimaryLocalUser;
+    }
+    const int player = value->AsInt();
+    return player > 0 ? kb::input::LocalUserId{static_cast<std::uint32_t>(player)} : kb::input::kPrimaryLocalUser;
+}
+
+ScriptFunctionPin PlayerPin() {
+    return ScriptFunctionPin{"player", ScriptValueType::Int, false};
+}
+
 ScriptFunctionCallResult NoScene() {
     return ScriptFunctionCallResult{.executed = false, .outputs = {}, .errors = {"input api requires an active scene"}};
 }
@@ -46,14 +65,14 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
                          bool (kb::input::InputSubsystem::*query)(std::string_view) const) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{outputPin, ScriptValueType::Bool, true}};
     desc.callback = [outputPin, query](const ScriptFunctionCallContext& context,
                                        std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const bool value = (context.scene->Input().*query)(ActionName(arguments));
+        const bool value = (context.scene->Input(PlayerFromArgs(arguments)).*query)(ActionName(arguments));
         return BoolResult(outputPin, value);
     };
     return host.RegisterFunction(std::move(desc));
@@ -62,13 +81,13 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
 bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Float, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"value", ScriptValue{value.AsAxis1D()}}},
@@ -77,17 +96,37 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
     return host.RegisterFunction(std::move(desc));
 }
 
+// Reads the action's raw/modified value as a bool (value.AsBool(), i.e. x != 0),
+// distinct from Held/Pressed/Released below: those reflect whether a *trigger*
+// fired (respecting deadzones, Hold thresholds, etc. - see InputMappingEvaluator),
+// while ActionBool reflects the value itself, mirroring Unreal's direct
+// FInputActionValue::Get<bool>() read versus binding to a trigger event.
+bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
+    desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
+        return BoolResult("value", value.AsBool());
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
                               ScriptFunctionPin{"y", ScriptValueType::Float, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -100,7 +139,7 @@ bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
 bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {
         ScriptFunctionPin{"x", ScriptValueType::Float, true},
         ScriptFunctionPin{"y", ScriptValueType::Float, true},
@@ -110,7 +149,7 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        const kb::input::InputValue value = context.scene->Input(PlayerFromArgs(arguments)).GetActionValue(ActionName(arguments));
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
@@ -131,7 +170,8 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true},
-                             ScriptFunctionPin{"priority", ScriptValueType::Int, false}};
+                             ScriptFunctionPin{"priority", ScriptValueType::Int, false},
+                             PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"added", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
@@ -141,7 +181,7 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
         const ScriptValue* priorityArg = FindArg(arguments, "priority");
         const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
         const auto priority = static_cast<std::int32_t>(priorityArg != nullptr ? priorityArg->AsInt() : 0);
-        const bool added = context.scene->Input().AddMappingContext(id, priority);
+        const bool added = context.scene->Input(PlayerFromArgs(arguments)).AddMappingContext(id, priority);
         return BoolResult("added", added);
     };
     return host.RegisterFunction(std::move(desc));
@@ -150,7 +190,7 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
 bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
-    desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true}};
+    desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true}, PlayerPin()};
     desc.signature.outputs = {ScriptFunctionPin{"removed", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
@@ -158,9 +198,134 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
         }
         const ScriptValue* contextArg = FindArg(arguments, "context");
         const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
-        const bool had = context.scene->Input().HasMappingContext(id);
-        context.scene->Input().RemoveMappingContext(id);
+        kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
+        const bool had = input.HasMappingContext(id);
+        input.RemoveMappingContext(id);
         return BoolResult("removed", had);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// The mouse is a singular physical device (unlike gamepads), shared by every
+// local user - so unlike Input.* above, Pointer.* takes no player pin and
+// always reads the primary local user's device state (LIB-115's
+// kPrimaryLocalUser), which is where the platform collector writes it.
+bool RegisterPointerPosition(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Position";
+    desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
+                              ScriptFunctionPin{"y", ScriptValueType::Float, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.PointerX()}},
+                        ScriptFunctionArgument{"y", ScriptValue{device.PointerY()}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterPointerDelta(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Delta";
+    desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
+                              ScriptFunctionPin{"y", ScriptValueType::Float, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"x", ScriptValue{device.GetValue(kb::input::InputKey::MouseX)}},
+                        ScriptFunctionArgument{"y", ScriptValue{device.GetValue(kb::input::InputKey::MouseY)}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// 0=left, 1=right, 2=middle - the same convention as Unity's Input.GetMouseButton.
+[[nodiscard]] kb::input::InputKey MouseButtonKey(int button) noexcept {
+    switch (button) {
+        case 1:
+            return kb::input::InputKey::MouseRight;
+        case 2:
+            return kb::input::InputKey::MouseMiddle;
+        default:
+            return kb::input::InputKey::MouseLeft;
+    }
+}
+
+bool RegisterPointerButton(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Button";
+    desc.signature.inputs = {ScriptFunctionPin{"button", ScriptValueType::Int, true}};
+    desc.signature.outputs = {ScriptFunctionPin{"pressed", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* buttonArg = FindArg(arguments, "button");
+        const kb::input::InputKey key = MouseButtonKey(buttonArg != nullptr ? buttonArg->AsInt() : 0);
+        const bool pressed = context.scene->Input().DeviceState().IsKeyDown(key);
+        return BoolResult("pressed", pressed);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// Constant-returning functions so scripts reference the named priority bands
+// (LIB-118) by name instead of hardcoding magic numbers into
+// Input.AddMappingContext's priority argument. No existing mechanism in this
+// registry exposes plain constants (only callable functions), so these are
+// zero-input functions returning the int - the same shape every other
+// registration here already uses, not a new kind of registration.
+bool RegisterPriorityConstant(ScriptRuntimeHost& host, std::string name, std::int32_t value) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.outputs = {ScriptFunctionPin{"priority", ScriptValueType::Int, true}};
+    desc.callback = [value](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"priority", ScriptValue{static_cast<int>(value)}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// LIB-120: whether the host window currently has focus - lets gameplay code
+// distinguish "genuinely nothing pressed" from "input is suppressed because
+// the window lost focus / is in the background" and react (e.g. auto-pause).
+bool RegisterHasFocus(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.HasFocus";
+    desc.signature.outputs = {ScriptFunctionPin{"focus", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        return BoolResult("focus", context.scene->Input().DeviceState().HasFocus());
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// LIB-120: hardware presence for a specific gamepad slot, independent of
+// whether it is pressing anything - see InputDeviceState::IsGamepadConnected.
+bool RegisterIsGamepadConnected(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.IsGamepadConnected";
+    desc.signature.inputs = {ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, true}};
+    desc.signature.outputs = {ScriptFunctionPin{"connected", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
+        const auto gamepadIndex = static_cast<std::uint8_t>(indexArg != nullptr ? indexArg->AsInt() : 0);
+        return BoolResult("connected", context.scene->Input().DeviceState().IsGamepadConnected(gamepadIndex));
     };
     return host.RegisterFunction(std::move(desc));
 }
@@ -177,6 +342,25 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterValueQueryXYZ(host, "Input.Vector3") && ok;
     ok = RegisterAddMappingContext(host, "Input.AddMappingContext") && ok;
     ok = RegisterRemoveMappingContext(host, "Input.RemoveMappingContext") && ok;
+
+    ok = RegisterActionBoolQuery(host, "Input.ActionBool") && ok;
+    ok = RegisterValueQuery(host, "Input.ActionFloat") && ok;
+    ok = RegisterValueQueryXY(host, "Input.Action2D") && ok;
+    ok = RegisterActionQuery(host, "Input.Pressed", "pressed", &kb::input::InputSubsystem::WasActionStarted) && ok;
+    ok = RegisterActionQuery(host, "Input.Released", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
+    ok = RegisterActionQuery(host, "Input.Held", "held", &kb::input::InputSubsystem::IsActionPressed) && ok;
+
+    ok = RegisterPointerPosition(host) && ok;
+    ok = RegisterPointerDelta(host) && ok;
+    ok = RegisterPointerButton(host) && ok;
+
+    ok = RegisterPriorityConstant(host, "Input.PriorityGameplay", kb::input::InputContextPriority::Gameplay) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityUI", kb::input::InputContextPriority::UI) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityConsole", kb::input::InputContextPriority::Console) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityDebugOverlay", kb::input::InputContextPriority::DebugOverlay) && ok;
+
+    ok = RegisterHasFocus(host) && ok;
+    ok = RegisterIsGamepadConnected(host) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;

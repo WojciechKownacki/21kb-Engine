@@ -4,10 +4,14 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
+#include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputModifiers.hpp"
+#include "engine/input/InputRebinding.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputTriggers.hpp"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -184,24 +188,173 @@ void TestAssetRoundTrip() {
 
     InputMappingContextAsset context;
     InputKeyMapping mapping;
+    mapping.bindingId = 99U;
     mapping.actionId = 42U;
     mapping.key = InputKey::Space;
+    mapping.gamepadIndex = 3U;
     mapping.modifiers.push_back(InputModifierDesc{.type = InputModifierType::Negate, .params = {1.0F, 0.0F, 0.0F}});
     mapping.triggers.push_back(InputTriggerDesc{.type = InputTriggerType::Hold,
                                                 .params = {0.5F, 1.0F, 0.0F},
                                                 .chordActionId = 7U});
     context.mappings.push_back(std::move(mapping));
+
+    InputCompositeBinding composite;
+    composite.bindingId = 100U;
+    composite.actionId = 43U;
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F, .gamepadIndex = 2U});
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F});
+    composite.modifiers.push_back(InputModifierDesc{.type = InputModifierType::DeadZone, .params = {0.2F, 1.0F, 0.0F}});
+    context.composites.push_back(std::move(composite));
+
     const auto contextBytes = EncodeInputMappingContext(context);
     const auto decodedContext = DecodeInputMappingContext(contextBytes);
     Require(decodedContext.succeeded, "Mapping context should decode");
     Require(decodedContext.asset.mappings.size() == 1U, "Mapping count should round-trip");
     const InputKeyMapping& roundTripped = decodedContext.asset.mappings.front();
-    Require(roundTripped.actionId == 42U && roundTripped.key == InputKey::Space, "Mapping basics should round-trip");
+    Require(roundTripped.bindingId == 99U && roundTripped.actionId == 42U && roundTripped.key == InputKey::Space,
+            "Mapping basics should round-trip, including the stable binding id");
+    Require(roundTripped.gamepadIndex == 3U, "Mapping gamepadIndex should round-trip");
     Require(roundTripped.modifiers.size() == 1U && roundTripped.triggers.size() == 1U,
             "Modifier/trigger stacks should round-trip");
     Require(roundTripped.triggers.front().type == InputTriggerType::Hold &&
                 roundTripped.triggers.front().chordActionId == 7U,
             "Trigger details should round-trip");
+
+    Require(decodedContext.asset.composites.size() == 1U, "Composite count should round-trip");
+    const InputCompositeBinding& roundTrippedComposite = decodedContext.asset.composites.front();
+    Require(roundTrippedComposite.bindingId == 100U && roundTrippedComposite.actionId == 43U,
+            "Composite basics should round-trip");
+    Require(roundTrippedComposite.slots.size() == 2U, "Composite slot count should round-trip");
+    Require(roundTrippedComposite.slots[0].key == InputKey::D && roundTrippedComposite.slots[0].axis == 0U &&
+                NearlyEqual(roundTrippedComposite.slots[0].scale, 1.0F) && roundTrippedComposite.slots[0].gamepadIndex == 2U,
+            "Composite slot 0 should round-trip, including gamepadIndex");
+    Require(roundTrippedComposite.slots[1].key == InputKey::A && NearlyEqual(roundTrippedComposite.slots[1].scale, -1.0F),
+            "Composite slot 1 should round-trip");
+    Require(roundTrippedComposite.modifiers.size() == 1U, "Composite modifier stack should round-trip");
+}
+
+void TestCompositeBinding() {
+    auto move = MakeAction("Move", InputActionValueType::Axis2D, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+
+    // A WASD composite feeding one Axis2D action, with a single radial DeadZone
+    // applied to the *combined* vector - this is the behavior a set of four
+    // independent InputKeyMappings cannot express (each would dead-zone its own
+    // scalar alone, so a diagonal press would report magnitude sqrt(2) instead of
+    // a normalized 1.0).
+    auto lowContext = std::make_shared<InputMappingContextAsset>();
+    InputCompositeBinding moveComposite;
+    moveComposite.bindingId = 1U;
+    moveComposite.actionId = 1U;
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::W, .axis = 1U, .scale = 1.0F});
+    moveComposite.slots.push_back(InputCompositeSlot{.key = InputKey::S, .axis = 1U, .scale = -1.0F});
+    moveComposite.modifiers.push_back(InputModifierDesc{.type = InputModifierType::DeadZone, .params = {0.2F, 1.0F, 0.0F}});
+    lowContext->composites.push_back(std::move(moveComposite));
+
+    // A higher-priority context claims W for Jump, so the composite must still
+    // combine correctly from whichever of its slot keys remain unclaimed.
+    auto highContext = std::make_shared<InputMappingContextAsset>();
+    highContext->mappings.push_back(InputKeyMapping{.bindingId = 2U, .actionId = 2U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}, {2U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        {10U, highContext}, {20U, lowContext}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 10), "High-priority Jump context should resolve");
+    Require(subsystem.AddMappingContext(20U, 0), "Low-priority Move composite context should resolve");
+
+    // D alone: full-magnitude axial press should pass the dead zone at scale 1.
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::D, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue dOnly = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(dOnly.x, 1.0F) && NearlyEqual(dOnly.y, 0.0F), "D alone should give composite value (1, 0)");
+
+    // W+D diagonal: the combined-vector dead zone must normalize the magnitude to
+    // 1.0 (0.7071, 0.7071), proving the modifier ran once on the resultant vector.
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue diagonal = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(diagonal.Magnitude(), 1.0F),
+            "Diagonal W+D should normalize to magnitude 1.0 via the composite's shared dead zone");
+    Require(diagonal.x > 0.0F && diagonal.y == 0.0F,
+            "W's contribution must be excluded: the high-priority context already consumed W for Jump");
+    Require(subsystem.IsActionPressed("Jump"), "Jump should still fire from the higher-priority context's W mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::A, true);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    const InputValue negDiagonal = subsystem.GetActionValue("Move");
+    Require(NearlyEqual(negDiagonal.Magnitude(), 1.0F), "A+S diagonal should also normalize to magnitude 1.0");
+    Require(negDiagonal.x < 0.0F && negDiagonal.y < 0.0F, "A+S should give a negative x/y composite direction");
+}
+
+void TestBindingIdStableAcrossRebind() {
+    // Proves the asset-level "rebinding" contract LIB-113 defines: a binding is
+    // addressed by its stable bindingId, not by the physical key it currently
+    // points to, so a rebind operation (find-by-id, then mutate .key) works even
+    // though the whole point of rebinding is to change that key. The live runtime
+    // rebind API with conflict validation and settings persistence is LIB-119; this
+    // only proves the asset shape supports it.
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve before rebind");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move should fire on W before rebinding");
+
+    // Find the binding by its stable id (not by key) and rebind it to S.
+    InputKeyMapping* rebound = nullptr;
+    for (InputKeyMapping& candidate : context->mappings) {
+        if (candidate.bindingId == 7U) {
+            rebound = &candidate;
+        }
+    }
+    Require(rebound != nullptr, "Binding should be locatable by its stable id");
+    rebound->key = InputKey::S;
+    Require(subsystem.AddMappingContext(10U, 0), "Re-adding the context should re-resolve the rebound mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Move"), "Move must no longer fire on the old key W after rebinding");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move must fire on the new key S after rebinding");
+    Require(rebound->bindingId == 7U, "The binding id must remain unchanged across the rebind");
 }
 
 void TestAssetDiscoveryAndResolve() {
@@ -246,6 +399,506 @@ void TestAssetDiscoveryAndResolve() {
     std::filesystem::remove_all(root, error);
 }
 
+// LIB-116: two gamepad slots must be fully independent storage, and slot 0 must
+// be byte-for-byte the same storage the pre-LIB-116 no-index API always used
+// (proving zero behavior change for every existing single-gamepad caller).
+void TestMultiGamepadDeviceState() {
+    InputDeviceState device;
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true); // implicit slot 0
+    device.SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    device.SetAnalog(InputKey::GamepadLeftStickX, 0.5F);
+    device.SetAnalog(InputKey::GamepadLeftStickX, -0.75F, 1U);
+
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom), "Implicit slot 0 should read back true");
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom, 0U), "Explicit slot 0 should match the implicit no-index API");
+    Require(device.IsKeyDown(InputKey::GamepadFaceBottom, 1U), "Slot 1 should independently read true");
+    Require(!device.IsKeyDown(InputKey::GamepadFaceBottom, 2U), "Slot 2 must not alias slot 0 or 1");
+    Require(NearlyEqual(device.GetValue(InputKey::GamepadLeftStickX), 0.5F), "Slot 0 stick value should read back unchanged");
+    Require(NearlyEqual(device.GetValue(InputKey::GamepadLeftStickX, 1U), -0.75F), "Slot 1 stick value should be independent of slot 0");
+
+    // Keyboard/mouse keys ignore the gamepad index entirely - passing one must
+    // not misroute into per-slot storage that only exists for gamepad keys.
+    device.SetKeyDown(InputKey::W, true, 3U);
+    Require(device.IsKeyDown(InputKey::W), "A non-gamepad key must ignore any gamepad index argument");
+
+    device.Reset();
+    Require(!device.IsKeyDown(InputKey::GamepadFaceBottom, 1U), "Reset should clear every gamepad slot, not just slot 0");
+}
+
+// LIB-116: touch has no fixed key identity, so it is exposed as a raw contact
+// list plus one derived digital key (TouchDown) usable through the same
+// action-binding system as keyboard/mouse/gamepad.
+void TestTouchPoints() {
+    InputDeviceState device;
+    Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should be false with no active contacts");
+    Require(device.TouchPoints().empty(), "TouchPoints should start empty");
+
+    const std::array<InputTouchPoint, 2> points{{
+        InputTouchPoint{.id = 1U, .x = 10.0F, .y = 20.0F, .phase = InputTouchPhase::Began},
+        InputTouchPoint{.id = 2U, .x = 30.0F, .y = 40.0F, .phase = InputTouchPhase::Moved},
+    }};
+    device.SetTouchPoints(points);
+    Require(device.IsKeyDown(InputKey::TouchDown), "TouchDown should be true while any contact is active");
+    Require(NearlyEqual(device.GetValue(InputKey::TouchDown), 1.0F), "TouchDown value should be 1.0 while active");
+    Require(device.TouchPoints().size() == 2U, "TouchPoints should report both active contacts");
+    Require(device.TouchPoints()[0].id == 1U && NearlyEqual(device.TouchPoints()[0].x, 10.0F),
+            "First touch point should round-trip its id/position");
+    Require(device.TouchPoints()[1].phase == InputTouchPhase::Moved, "Second touch point should round-trip its phase");
+
+    device.SetTouchPoints({});
+    Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should go false once every contact ends");
+    Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
+}
+
+// LIB-118: proves the named priority bands (Gameplay < UI < Console <
+// DebugOverlay) hold under the REAL InputMappingContextStack consumption
+// mechanism, not just as declared constants - four contexts, each binding the
+// SAME key to a DIFFERENT action, pushed in a deliberately scrambled order so
+// push order can't accidentally produce the right answer.
+void TestNamedContextPriorityBands() {
+    auto gameplayAction = MakeAction("Gameplay", InputActionValueType::Bool, true);
+    auto uiAction = MakeAction("UI", InputActionValueType::Bool, true);
+    auto consoleAction = MakeAction("Console", InputActionValueType::Bool, true);
+    auto debugAction = MakeAction("DebugOverlay", InputActionValueType::Bool, true);
+
+    auto gameplayContext = std::make_shared<InputMappingContextAsset>();
+    gameplayContext->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Escape});
+    auto uiContext = std::make_shared<InputMappingContextAsset>();
+    uiContext->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::Escape});
+    auto consoleContext = std::make_shared<InputMappingContextAsset>();
+    consoleContext->mappings.push_back(InputKeyMapping{.actionId = 3U, .key = InputKey::Escape});
+    auto debugContext = std::make_shared<InputMappingContextAsset>();
+    debugContext->mappings.push_back(InputKeyMapping{.actionId = 4U, .key = InputKey::Escape});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{
+        {1U, gameplayAction}, {2U, uiAction}, {3U, consoleAction}, {4U, debugAction}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        {10U, gameplayContext}, {20U, uiContext}, {30U, consoleContext}, {40U, debugContext}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+
+    // Scrambled push order: console, gameplay, debug overlay, UI.
+    Require(subsystem.AddMappingContext(30U, InputContextPriority::Console), "Console context should resolve");
+    Require(subsystem.AddMappingContext(10U, InputContextPriority::Gameplay), "Gameplay context should resolve");
+    Require(subsystem.AddMappingContext(40U, InputContextPriority::DebugOverlay), "DebugOverlay context should resolve");
+    Require(subsystem.AddMappingContext(20U, InputContextPriority::UI), "UI context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Escape, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("DebugOverlay"), "DebugOverlay must win over Console/UI/Gameplay");
+    Require(!subsystem.IsActionPressed("Console") && !subsystem.IsActionPressed("UI") && !subsystem.IsActionPressed("Gameplay"),
+            "Lower-priority bands must be fully consumed while DebugOverlay is active");
+
+    subsystem.RemoveMappingContext(40U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Console"), "Console must win over UI/Gameplay once DebugOverlay is removed");
+    Require(!subsystem.IsActionPressed("UI") && !subsystem.IsActionPressed("Gameplay"), "UI/Gameplay still consumed by Console");
+
+    subsystem.RemoveMappingContext(30U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("UI"), "UI must win over Gameplay once Console is removed");
+    Require(!subsystem.IsActionPressed("Gameplay"), "Gameplay still consumed by UI");
+
+    subsystem.RemoveMappingContext(20U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Gameplay"), "Gameplay should finally fire once every higher band is removed");
+}
+
+// LIB-119: FindRebindConflict/ApplyRebind must detect a real collision against
+// BOTH a plain InputKeyMapping and an InputCompositeBinding slot, and must
+// refuse to apply a conflicting rebind unless explicitly overridden.
+void TestRebindConflictDetection() {
+    InputMappingContextAsset context;
+    context.mappings.push_back(InputKeyMapping{.bindingId = 1U, .actionId = 100U, .key = InputKey::W});
+    context.mappings.push_back(InputKeyMapping{.bindingId = 2U, .actionId = 200U, .key = InputKey::Space});
+
+    InputCompositeBinding composite;
+    composite.bindingId = 3U;
+    composite.actionId = 300U;
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F, .gamepadIndex = 1U});
+    context.composites.push_back(std::move(composite));
+
+    // No conflict: Enter is unused anywhere in the context.
+    Require(!FindRebindConflict(context, 2U, InputKey::Enter, 0U).has_value(), "Rebinding Space to Enter should not conflict");
+
+    // Conflicts with the OTHER InputKeyMapping (bindingId 1, key W).
+    const std::optional<InputRebindConflict> mappingConflict = FindRebindConflict(context, 2U, InputKey::W, 0U);
+    Require(mappingConflict.has_value() && mappingConflict->conflictingBindingId == 1U,
+            "Rebinding Space to W should conflict with binding 1");
+
+    // Conflicts with a composite slot on gamepad 1 - gamepadIndex must match
+    // exactly, so the SAME key on gamepad 0 must NOT conflict.
+    Require(!FindRebindConflict(context, 2U, InputKey::A, 0U).has_value(),
+            "Key A on gamepad 0 must not conflict with the composite's A slot, which is on gamepad 1");
+    const std::optional<InputRebindConflict> compositeConflict = FindRebindConflict(context, 2U, InputKey::A, 1U);
+    Require(compositeConflict.has_value() && compositeConflict->conflictingBindingId == 3U,
+            "Key A on gamepad 1 should conflict with the composite binding 3");
+
+    // ApplyRebind refuses a real conflict by default...
+    Require(!ApplyRebind(context, 2U, InputKey::W, 0U), "ApplyRebind must refuse a conflicting rebind by default");
+    Require(context.mappings[1].key == InputKey::Space, "A refused rebind must not mutate the binding");
+
+    // ...but succeeds when the caller explicitly allows it.
+    Require(ApplyRebind(context, 2U, InputKey::W, 0U, /*allowConflict=*/true), "ApplyRebind should succeed with allowConflict=true");
+    Require(context.mappings[1].key == InputKey::W, "An allowed conflicting rebind must still apply");
+
+    // A non-conflicting rebind of an unknown bindingId fails cleanly.
+    Require(!ApplyRebind(context, 999U, InputKey::Enter, 0U), "ApplyRebind must fail for an unknown bindingId");
+}
+
+// LIB-119: a rebind applied through ApplyRebind must actually change which
+// physical key drives the action under a real InputSubsystem - not just
+// mutate the asset in isolation - mirroring LIB-113's
+// TestBindingIdStableAcrossRebind but through the new dedicated API.
+void TestRebindEndToEnd() {
+    auto move = MakeAction("Move", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve before rebind");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move should fire on W before rebinding");
+
+    Require(ApplyRebind(*context, 7U, InputKey::S, 0U), "ApplyRebind should succeed for a known bindingId with no conflict");
+    Require(subsystem.AddMappingContext(10U, 0), "Re-adding the context should re-resolve the rebound mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Move"), "Move must no longer fire on the old key W after rebinding");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move must fire on the new key S after rebinding");
+}
+
+// LIB-119: a rebind profile (the list of user overrides) must round-trip
+// through the real binary format and correctly re-apply to a freshly resolved
+// base asset - including silently skipping a bindingId the base asset no
+// longer has, since content can change between when a profile was saved and
+// when it is loaded.
+void TestRebindProfileRoundTripAndApply() {
+    const std::vector<InputRebindOverride> overrides{
+        InputRebindOverride{.bindingId = 7U, .key = InputKey::S, .gamepadIndex = 0U},
+        InputRebindOverride{.bindingId = 999U, .key = InputKey::Enter, .gamepadIndex = 2U}, // stale, no longer in the base asset
+    };
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_input_rebind_profile_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Rebind profile test root could not be prepared");
+    const std::filesystem::path profilePath = root / ("player" + std::string{InputAssetFormat::RebindProfileExtension});
+
+    Require(WriteRebindProfile(profilePath, overrides), "Writing the rebind profile should succeed");
+    const InputAssetLoadResult<std::vector<InputRebindOverride>> loaded = ReadRebindProfile(profilePath);
+    Require(loaded.succeeded, "Reading the rebind profile should succeed");
+    Require(loaded.asset.size() == 2U, "Rebind profile entry count should round-trip");
+    Require(loaded.asset[0].bindingId == 7U && loaded.asset[0].key == InputKey::S && loaded.asset[0].gamepadIndex == 0U,
+            "Rebind profile entry 0 should round-trip");
+    Require(loaded.asset[1].bindingId == 999U && loaded.asset[1].key == InputKey::Enter && loaded.asset[1].gamepadIndex == 2U,
+            "Rebind profile entry 1 should round-trip");
+
+    InputMappingContextAsset context;
+    context.mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+    ApplyRebindProfile(context, loaded.asset);
+    Require(context.mappings[0].key == InputKey::S, "ApplyRebindProfile should rebind the mapping present in the base asset");
+    Require(context.mappings.size() == 1U, "ApplyRebindProfile must not fabricate a mapping for the stale bindingId 999");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-120: focus and gamepad connectivity are independent status flags, not
+// reset by Reset() (unlike keys/axes/touch), and gamepad connectivity is
+// tracked per-slot exactly like every other per-gamepad piece of state
+// LIB-116 introduced.
+void TestFocusAndGamepadConnectivity() {
+    InputDeviceState device;
+    Require(!device.HasFocus(), "HasFocus should start false");
+    Require(!device.IsGamepadConnected(0U), "Gamepad 0 should start disconnected");
+
+    device.SetHasFocus(true);
+    device.SetGamepadConnected(0U, true);
+    device.SetGamepadConnected(2U, true);
+    Require(device.HasFocus(), "HasFocus should read back true");
+    Require(device.IsGamepadConnected(0U) && device.IsGamepadConnected(2U), "Connected slots should read back true");
+    Require(!device.IsGamepadConnected(1U), "An untouched slot must not appear connected");
+
+    device.Reset();
+    Require(device.HasFocus(), "Reset must not clear focus - it is a status flag, not per-frame input");
+    Require(device.IsGamepadConnected(0U) && device.IsGamepadConnected(2U), "Reset must not clear gamepad connectivity");
+
+    device.SetHasFocus(false);
+    device.SetGamepadConnected(0U, false);
+    Require(!device.HasFocus() && !device.IsGamepadConnected(0U), "Both flags must update to false when the platform reports that");
+}
+
+// LIB-120: proves the engine ALREADY correctly resets "pressed" state when a
+// device goes quiet (focus lost, controller disconnected, or genuinely idle -
+// InputSubsystem cannot distinguish the cause, only that the device stopped
+// reporting the key). This is existing InputSubsystem/Evaluate behavior from
+// well before LIB-120 (the "actions that dropped out entirely" pass in
+// Evaluate already fires Completed/Canceled), verified here as a real
+// regression test rather than left as an unverified assumption.
+void TestPressedStateResetsWhenDeviceGoesQuiet() {
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump"), "Jump should be pressed while Space is held");
+
+    // Simulate a focus-loss/disconnect frame: the platform layer's Reset() (with
+    // no matching re-press, exactly what happens when EditorIsForeground fails
+    // or a gamepad's XInputGetState starts failing) makes every key report false.
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Jump"), "Jump must stop being pressed once the device goes quiet");
+    Require(subsystem.WasActionReleased("Jump"), "Jump must report Released on the exact frame the device goes quiet");
+
+    // The release must not repeat on every subsequent quiet frame - it is an edge.
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.WasActionReleased("Jump"), "Jump must not repeat Released on a second consecutive quiet frame");
+}
+
+// LIB-121: the real point of recording/replay - drive a LIVE subsystem through
+// a scripted sequence of frames (varying digital/analog/dt so both immediate
+// axis values AND dt-dependent trigger timing - Hold - are exercised),
+// capturing a frame snapshot before each Evaluate. Serialize the recording to
+// disk and back, then replay it frame-by-frame against a COMPLETELY FRESH
+// subsystem (zero shared state with the original) and prove the resulting
+// action trace is IDENTICAL frame-by-frame - not just "doesn't crash".
+void TestInputRecordingDeterministicReplay() {
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::W, .scale = 1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::S, .scale = -1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::Space});
+    context->mappings.back().triggers.push_back(
+        InputTriggerDesc{.type = InputTriggerType::Hold, .params = {0.0F, 0.1F, 0.0F}, .chordActionId = 0U});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}, {2U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+    const auto resolveAction = [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+        const auto found = actions.find(id);
+        return found != actions.end() ? found->second : nullptr;
+    };
+    const auto resolveContext = [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+        const auto found = contexts.find(id);
+        return found != contexts.end() ? found->second : nullptr;
+    };
+
+    struct FrameInput {
+        float dt;
+        bool w;
+        bool s;
+        bool space;
+    };
+    const std::array<FrameInput, 6> script{{
+        {.dt = 0.02F, .w = true, .s = false, .space = true},
+        {.dt = 0.02F, .w = true, .s = false, .space = true},
+        {.dt = 0.02F, .w = true, .s = true, .space = true},
+        {.dt = 0.02F, .w = false, .s = true, .space = true},
+        {.dt = 0.05F, .w = false, .s = false, .space = true}, // pushes Hold's cumulative time past 0.1s
+        {.dt = 0.02F, .w = false, .s = false, .space = false},
+    }};
+
+    struct FrameTrace {
+        float moveValue;
+        bool jumpPressed;
+        bool jumpTriggeredThisFrame;
+        bool jumpReleasedThisFrame;
+    };
+
+    // --- "Live" run: drive a real subsystem, capturing a recording as we go. ---
+    InputSubsystem live;
+    live.SetResolvers(resolveAction, resolveContext);
+    Require(live.AddMappingContext(10U, 0), "Live subsystem context should resolve");
+
+    InputRecording recording;
+    std::vector<FrameTrace> originalTrace;
+    for (const FrameInput& input : script) {
+        live.MutableDeviceState().Reset();
+        live.MutableDeviceState().SetKeyDown(InputKey::W, input.w);
+        live.MutableDeviceState().SetKeyDown(InputKey::S, input.s);
+        live.MutableDeviceState().SetKeyDown(InputKey::Space, input.space);
+
+        recording.push_back(CaptureInputFrame(live.DeviceState(), input.dt));
+        live.Evaluate(input.dt);
+
+        originalTrace.push_back(FrameTrace{
+            .moveValue = live.GetActionValue("Move").AsAxis1D(),
+            .jumpPressed = live.IsActionPressed("Jump"),
+            .jumpTriggeredThisFrame = live.WasActionTriggered("Jump"),
+            .jumpReleasedThisFrame = live.WasActionReleased("Jump"),
+        });
+    }
+    // Sanity check the script actually exercised what it claims to (a trace
+    // that never triggers Jump would make the replay comparison meaningless).
+    bool jumpEverTriggered = false;
+    for (const FrameTrace& trace : originalTrace) {
+        jumpEverTriggered = jumpEverTriggered || trace.jumpTriggeredThisFrame;
+    }
+    Require(jumpEverTriggered, "Test script should actually exercise the Hold trigger firing");
+
+    // --- Round-trip the recording through the real binary format. ---
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_input_recording_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Input recording test root could not be prepared");
+    const std::filesystem::path recordingPath = root / ("session" + std::string{InputAssetFormat::RecordingExtension});
+    Require(WriteInputRecording(recordingPath, recording), "Writing the input recording should succeed");
+    const InputAssetLoadResult<InputRecording> loaded = ReadInputRecording(recordingPath);
+    Require(loaded.succeeded, "Reading the input recording should succeed");
+    Require(loaded.asset.size() == script.size(), "Recording frame count should round-trip");
+
+    // --- Replay against a completely independent, freshly-constructed subsystem. ---
+    InputSubsystem replay;
+    replay.SetResolvers(resolveAction, resolveContext);
+    Require(replay.AddMappingContext(10U, 0), "Replay subsystem context should resolve");
+
+    InputDeviceState scratch;
+    std::vector<FrameTrace> replayTrace;
+    for (const InputFrameSnapshot& frame : loaded.asset) {
+        ApplyInputFrame(scratch, frame);
+        replay.EvaluateWithDeviceState(scratch, frame.deltaSeconds);
+        replayTrace.push_back(FrameTrace{
+            .moveValue = replay.GetActionValue("Move").AsAxis1D(),
+            .jumpPressed = replay.IsActionPressed("Jump"),
+            .jumpTriggeredThisFrame = replay.WasActionTriggered("Jump"),
+            .jumpReleasedThisFrame = replay.WasActionReleased("Jump"),
+        });
+    }
+
+    Require(replayTrace.size() == originalTrace.size(), "Replay must produce exactly one trace entry per recorded frame");
+    for (std::size_t index = 0U; index < originalTrace.size(); ++index) {
+        Require(NearlyEqual(replayTrace[index].moveValue, originalTrace[index].moveValue), "Replayed Move value must match the live run frame-by-frame");
+        Require(replayTrace[index].jumpPressed == originalTrace[index].jumpPressed, "Replayed Jump pressed state must match the live run");
+        Require(replayTrace[index].jumpTriggeredThisFrame == originalTrace[index].jumpTriggeredThisFrame,
+                "Replayed Jump Triggered edge must match the live run (proves Hold's dt-dependent timing replayed identically)");
+        Require(replayTrace[index].jumpReleasedThisFrame == originalTrace[index].jumpReleasedThisFrame,
+                "Replayed Jump Released edge must match the live run");
+    }
+
+    // ReplayInputRecording (the convenience whole-recording helper) must reach
+    // the SAME final state as the frame-by-frame loop above.
+    InputSubsystem replayViaHelper;
+    replayViaHelper.SetResolvers(resolveAction, resolveContext);
+    Require(replayViaHelper.AddMappingContext(10U, 0), "Helper-replay subsystem context should resolve");
+    ReplayInputRecording(replayViaHelper, loaded.asset);
+    Require(NearlyEqual(replayViaHelper.GetActionValue("Move").AsAxis1D(), originalTrace.back().moveValue),
+            "ReplayInputRecording should reach the same final Move value as the live run");
+    Require(replayViaHelper.IsActionPressed("Jump") == originalTrace.back().jumpPressed,
+            "ReplayInputRecording should reach the same final Jump state as the live run");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-117: absolute pointer position is independent storage from the existing
+// MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
+// platform collector re-sets it unconditionally every Collect() call rather
+// than diffing against a previous frame.
+void TestPointerPosition() {
+    InputDeviceState device;
+    Require(NearlyEqual(device.PointerX(), 0.0F) && NearlyEqual(device.PointerY(), 0.0F),
+            "Pointer position should start at the origin");
+
+    device.SetPointerPosition(100.0F, 200.0F);
+    Require(NearlyEqual(device.PointerX(), 100.0F) && NearlyEqual(device.PointerY(), 200.0F),
+            "Pointer position should read back what was set");
+
+    device.Reset();
+    Require(NearlyEqual(device.PointerX(), 100.0F) && NearlyEqual(device.PointerY(), 200.0F),
+            "Reset must not clear pointer position - the platform layer re-sets it unconditionally each frame");
+}
+
+// LIB-116: the same physical button (GamepadFaceBottom) on two different
+// gamepad slots must resolve to two independently controllable actions - proving
+// gamepadIndex flows through InputKeyMapping -> ResolvedMapping -> evaluation,
+// and that consume-gating keys by (InputKey, gamepadIndex) rather than InputKey
+// alone (two controllers pressing "the same button enum" must not collide).
+void TestMultiGamepadMapping() {
+    auto jump0 = MakeAction("Jump0", InputActionValueType::Bool, true);
+    auto jump1 = MakeAction("Jump1", InputActionValueType::Bool, true);
+
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 0U});
+    context->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 1U});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump0}, {2U, jump1}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Multi-gamepad context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 0U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump0"), "Gamepad 0's button press should trigger Jump0");
+    Require(!subsystem.IsActionPressed("Jump1"), "Gamepad 0's button press must not trigger Jump1 (gamepad 1)");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump1"), "Gamepad 1's button press should trigger Jump1");
+    Require(!subsystem.IsActionPressed("Jump0"), "Gamepad 1's button press must not trigger Jump0 (gamepad 0)");
+}
+
 } // namespace
 
 void RunInputTests() {
@@ -255,6 +908,19 @@ void RunInputTests() {
     TestAxisScaleAndContinuous();
     TestAssetRoundTrip();
     TestAssetDiscoveryAndResolve();
+    TestCompositeBinding();
+    TestBindingIdStableAcrossRebind();
+    TestMultiGamepadDeviceState();
+    TestTouchPoints();
+    TestMultiGamepadMapping();
+    TestPointerPosition();
+    TestNamedContextPriorityBands();
+    TestRebindConflictDetection();
+    TestRebindEndToEnd();
+    TestRebindProfileRoundTripAndApply();
+    TestFocusAndGamepadConnectivity();
+    TestPressedStateResetsWhenDeviceGoesQuiet();
+    TestInputRecordingDeterministicReplay();
 }
 
 } // namespace kb::tests

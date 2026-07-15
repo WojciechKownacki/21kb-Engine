@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 
 #include <cstdint>
@@ -40,6 +41,10 @@ public:
     [[nodiscard]] static float Progress(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool SetActive(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t ActiveScene(const Scene& scene) noexcept;
+    // LIB-106: which loaded-scene record (Scene.Load's own id) `entity`'s
+    // hierarchy root belongs to; 0 if none (invalid/dead entity, or one
+    // never part of any Scene.Load'ed content).
+    [[nodiscard]] static std::uint64_t OwningScene(const Scene& scene, SceneEntity entity) noexcept;
     // LIB-073: returns and clears SceneState::pendingSceneLifecycleEvents.
     [[nodiscard]] static std::vector<SceneLifecycleEventRecord> DrainPendingLifecycleEvents(Scene& scene);
 };

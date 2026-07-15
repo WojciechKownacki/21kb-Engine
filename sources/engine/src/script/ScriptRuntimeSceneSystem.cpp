@@ -1,12 +1,14 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 
 #include <algorithm>
@@ -88,6 +90,9 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
+    DispatchCompletedTasks(scene, clampedDeltaSeconds);
+    DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
+    DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
     // paused (Runtime().IsPlaying()==false), wall-clock time is NOT
@@ -111,6 +116,11 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
         (fixedSteps == frameSettings_.maxFixedStepsPerFrame && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds)) {
         fixedAccumulatorSeconds_ = 0.0F;
     }
+    // LIB-098: fixedSteps is exactly what StartFixedStep tasks need and
+    // nothing else in ExecuteFrame previously surfaced — dispatched right
+    // after the fixed-step loop so a "wait N fixed steps" task's
+    // TaskCompleted/TaskFailed lands before the variable Tick phase below.
+    DispatchCompletedFixedStepTasks(scene, fixedSteps, clampedDeltaSeconds);
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
@@ -151,6 +161,8 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: a WORLD event (ScriptEvent.hpp's taxonomy) — target is never
+    // set, so this always broadcasts to every enabled behaviour.
     for (kb::scene::SceneLifecycleEventRecord& pending : scene.LoadedContent().DrainPendingLifecycleEvents()) {
         ScriptEvent event;
         event.name = std::move(pending.name);
@@ -161,18 +173,81 @@ void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Sc
 }
 
 void ScriptRuntimeSceneSystem::DispatchFiredTimers(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL if the timer had an owner (fired.owner valid),
+    // WORLD otherwise (ScriptEvent.hpp's taxonomy) — see IsEntityLocalEvent/
+    // IsWorldEvent (ScriptEventTaxonomy.hpp) for the canonical check.
     for (kb::scene::TimerFiredRecord& fired : scene.Timers().Advance(deltaSeconds)) {
         ScriptEvent event;
         event.name = "TimerFired";
-        // Invalid owner (SceneTimers::Once/Repeat called with no owner) =
-        // an untargeted broadcast to every enabled behaviour, the same
-        // convention DispatchPendingSceneLifecycleEvents above already
-        // uses (its ScriptEvent never sets target at all). A valid owner
-        // targets ONLY that entity's own behaviour(s) — DispatchSceneBehaviours
-        // (ScriptRuntime.cpp) already skips any record whose entity does not
-        // match event.target when target is valid.
         event.target = fired.owner;
         event.arguments.push_back(ScriptEventArgument{ .name = "timer", .value = ScriptValue{ fired.id, ScriptValueType::Hash } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL or WORLD depending on completion.owner — same
+    // taxonomy/convention as DispatchFiredTimers above.
+    for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().Advance(deltaSeconds)) {
+        ScriptEvent event;
+        event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
+        event.target = completion.owner;
+        event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL (target is always the entity the callback is
+    // for, exactly like DispatchFiredTimers/DispatchCompletedTasks above).
+    // The event name encodes both the Enter/Stay/Exit phase and whether
+    // either collider involved is a trigger (kb::scene::PendingCollisionEvent::
+    // isTrigger) — the same six names Unity's own OnCollision*/OnTrigger*
+    // callbacks use, so existing Lua/Native/VisualGraph scripts written
+    // against that convention need no translation layer.
+    for (const kb::scene::PendingCollisionEvent& pending : kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene)) {
+        const char* name = nullptr;
+        switch (pending.phase) {
+        case kb::scene::PhysicsContactPhase::Enter:
+            name = pending.isTrigger ? "OnTriggerEnter" : "OnCollisionEnter";
+            break;
+        case kb::scene::PhysicsContactPhase::Stay:
+            name = pending.isTrigger ? "OnTriggerStay" : "OnCollisionStay";
+            break;
+        case kb::scene::PhysicsContactPhase::Exit:
+            name = pending.isTrigger ? "OnTriggerExit" : "OnCollisionExit";
+            break;
+        }
+        ScriptEvent event;
+        event.name = name;
+        event.target = pending.target;
+        event.arguments.push_back(ScriptEventArgument{ .name = "other", .value = ScriptValue{ pending.other.Id(), ScriptValueType::Entity } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointX", .value = ScriptValue{ pending.point.x } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointY", .value = ScriptValue{ pending.point.y } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointZ", .value = ScriptValue{ pending.point.z } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalX", .value = ScriptValue{ pending.normal.x } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalY", .value = ScriptValue{ pending.normal.y } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalZ", .value = ScriptValue{ pending.normal.z } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {
+    const ScriptEventDeliveryResult result = runtime_.Events().DrainDeferred(scene);
+    for (const std::string& error : result.errors) {
+        lastResult_.diagnostics.push_back(ScriptDiagnostic{
+            .message = error,
+        });
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds) {
+    // LIB-103: same ENTITY-LOCAL/WORLD taxonomy as DispatchCompletedTasks.
+    for (kb::scene::TaskCompletionRecord& completion : scene.Tasks().AdvanceFixedSteps(stepCount)) {
+        ScriptEvent event;
+        event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
+        event.target = completion.owner;
+        event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }

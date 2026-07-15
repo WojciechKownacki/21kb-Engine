@@ -31,9 +31,25 @@ constexpr std::size_t kMaxLiveTimers = 4096U;
 // drop the remaining backlog (documented below, not silent).
 constexpr std::size_t kMaxCatchUpFiresPerAdvance = 8U;
 
+// LIB-099: cancellation propagation — a timer's owner being destroyed
+// already auto-cancelled it (LIB-095); this widens the SAME check to also
+// cover the owner being DEACTIVATED (kb::scene::SceneEntityService::
+// IsActive, i.e. World.SetActive(owner, false), LIB-068) — an owner that
+// still exists but is no longer active is, from a gameplay-visible
+// standpoint, exactly as "gone" as a destroyed one, so a timer scheduled
+// on its behalf should stop the same way. Scene.Unload needed NO separate
+// handling: it destroys its root entity's whole hierarchy via the same
+// SceneEntityDestructionService cascade LIB-070 already established, so
+// any timer owned by an entity inside an unloaded scene is caught here via
+// the IsAlive half of this same check on the very next Advance() call —
+// confirmed by RunSceneTimerCancellationPropagationTest, not assumed.
+[[nodiscard]] bool OwnerGone(const Scene& scene, SceneEntity owner) noexcept {
+    return owner.IsValid() && (!SceneEntityService::IsAlive(scene, owner) || !SceneEntityService::IsActive(scene, owner));
+}
+
 } // namespace
 
-std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner) noexcept {
+std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEntity owner, SceneEntity creator) noexcept {
     if (delaySeconds <= 0.0F) {
         return 0U;
     }
@@ -49,11 +65,12 @@ std::uint64_t SceneTimerService::Once(Scene& scene, float delaySeconds, SceneEnt
         .intervalSeconds = 0.0F,
         .repeating = false,
         .paused = false,
+        .creator = creator,
     });
     return id;
 }
 
-std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, SceneEntity owner) noexcept {
+std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, SceneEntity owner, SceneEntity creator) noexcept {
     if (intervalSeconds <= 0.0F) {
         return 0U;
     }
@@ -69,6 +86,7 @@ std::uint64_t SceneTimerService::Repeat(Scene& scene, float intervalSeconds, Sce
         .intervalSeconds = intervalSeconds,
         .repeating = true,
         .paused = false,
+        .creator = creator,
     });
     return id;
 }
@@ -114,6 +132,14 @@ bool SceneTimerService::Exists(const Scene& scene, std::uint64_t id) noexcept {
     });
 }
 
+SceneEntity SceneTimerService::Creator(const Scene& scene, std::uint64_t id) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    const auto iterator = std::find_if(state.timers.begin(), state.timers.end(), [id](const SceneState::TimerRecord& timer) {
+        return timer.id == id;
+    });
+    return iterator == state.timers.end() ? SceneEntity{} : iterator->creator;
+}
+
 std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
     // LIB-095: identical scale/pause rule to Time.Delta (ScriptTimeApi.cpp)
@@ -136,7 +162,7 @@ std::vector<TimerFiredRecord> SceneTimerService::Advance(Scene& scene, float del
     std::size_t index = 0U;
     while (index < state.timers.size()) {
         SceneState::TimerRecord& timer = state.timers[index];
-        if (timer.owner.IsValid() && !SceneEntityService::IsAlive(scene, timer.owner)) {
+        if (OwnerGone(scene, timer.owner)) {
             state.timers.erase(state.timers.begin() + static_cast<std::ptrdiff_t>(index));
             continue;
         }

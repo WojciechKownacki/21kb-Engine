@@ -2,14 +2,22 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneCharacterControllerComponents.hpp"
+#include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -153,15 +161,53 @@ struct ComponentAccess {
             static_cast<Component*>(component)->field = static_cast<kb::scene::LightKind>(value.AsInt()); \
             return true; \
         } }
+
+#define KB_RIGIDBODY_BODY_TYPE(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::RigidbodyBodyType::Kinematic)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::RigidbodyBodyType>(value.AsInt()); \
+            return true; \
+        } }
+
+#define KB_COLLIDER_SHAPE(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Capsule)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
+            return true; \
+        } }
+
+#define KB_JOINT_TYPE(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::JointType::Point)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::JointType>(value.AsInt()); \
+            return true; \
+        } }
+
 // clang-format on
 
-constexpr std::array<std::string_view, 6> kComponentNames{
+constexpr std::array<std::string_view, 10> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
     "Light",
     "MeshRenderer",
     "Behaviour",
+    "Rigidbody",
+    "Collider",
+    "CharacterController",
+    "Joint",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kTransformPropertyDescs{
@@ -219,6 +265,70 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDesc
     ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
 };
 
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "mass", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "linearVelocity.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "linearVelocity.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "linearVelocity.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "angularVelocity.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "angularVelocity.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "angularVelocity.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "lockRotation", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "boxSize.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "boxSize.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "boxSize.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "trigger", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kCharacterControllerPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+};
+
+// LIB-082: connectedEntity is deliberately NOT in this table - Script
+// SceneComponentApi's generic FieldBinding property mechanism is audited
+// (RunScriptSceneComponentPropertiesNeverExposeRawPointerTest) to expose
+// ONLY Bool/Int/Float, since a wider ScriptValueType (Entity included) is
+// capable of carrying a full 64-bit value that could, in principle, encode
+// a raw pointer's bit pattern. connectedEntity is still fully real and
+// script-addressable through native kb::library::EntityHandle::Add<
+// JointComponent>/TryGet<JointComponent> (the whole struct, field access is
+// plain C++, not this string-keyed mechanism) - see
+// RunEntityHandlePhysicsComponentAccessTest.
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kJointPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "anchor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "anchor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "anchor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "connectedAnchor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "connectedAnchor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "connectedAnchor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "axis.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "axis.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "axis.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "minLimit", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxLimit", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enableLimit", ScriptValueType::Bool },
+};
+
 constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, x),
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, y),
@@ -274,6 +384,60 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
     KB_INT(kb::scene::BehaviourComponent, executionOrder),
 };
 
+constexpr std::array<FieldBinding, 11> kRigidbodyFields{
+    KB_RIGIDBODY_BODY_TYPE(kb::scene::RigidbodyComponent, bodyType),
+    KB_FLOAT(kb::scene::RigidbodyComponent, mass),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, x),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, y),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, z),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, angularVelocity, x),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, angularVelocity, y),
+    KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, angularVelocity, z),
+    KB_FLOAT(kb::scene::RigidbodyComponent, gravityScale),
+    KB_BOOL(kb::scene::RigidbodyComponent, useGravity),
+    KB_BOOL(kb::scene::RigidbodyComponent, lockRotation),
+};
+
+constexpr std::array<FieldBinding, 13> kColliderFields{
+    KB_COLLIDER_SHAPE(kb::scene::ColliderComponent, shape),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, x),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, y),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, z),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, boxSize, x),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, boxSize, y),
+    KB_NESTED_FLOAT(kb::scene::ColliderComponent, boxSize, z),
+    KB_FLOAT(kb::scene::ColliderComponent, radius),
+    KB_FLOAT(kb::scene::ColliderComponent, height),
+    KB_BOOL(kb::scene::ColliderComponent, trigger),
+    KB_FLOAT(kb::scene::ColliderComponent, friction),
+    KB_FLOAT(kb::scene::ColliderComponent, restitution),
+    KB_UINT32(kb::scene::ColliderComponent, layer),
+};
+
+constexpr std::array<FieldBinding, 5> kCharacterControllerFields{
+    KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, x),
+    KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, y),
+    KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, z),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, radius),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, height),
+};
+
+constexpr std::array<FieldBinding, 13> kJointFields{
+    KB_JOINT_TYPE(kb::scene::JointComponent, type),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, x),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, y),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, z),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, connectedAnchor, x),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, connectedAnchor, y),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, connectedAnchor, z),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, axis, x),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, axis, y),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, axis, z),
+    KB_FLOAT(kb::scene::JointComponent, minLimit),
+    KB_FLOAT(kb::scene::JointComponent, maxLimit),
+    KB_BOOL(kb::scene::JointComponent, enableLimit),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -282,6 +446,9 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
 #undef KB_TICKGROUP
 #undef KB_CAMERA_PROJECTION
 #undef KB_LIGHT_KIND
+#undef KB_RIGIDBODY_BODY_TYPE
+#undef KB_COLLIDER_SHAPE
+#undef KB_JOINT_TYPE
 #undef KB_ASSERT_NOT_POINTER
 
 [[nodiscard]] const FieldBinding* FindField(std::span<const FieldBinding> fields, std::string_view name) noexcept {
@@ -326,6 +493,22 @@ void MarkBehaviourModified(kb::scene::Scene& scene, kb::scene::SceneEntity entit
     scene.Components().Behaviours().MarkModified(entity);
 }
 
+void MarkRigidbodyModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    scene.Components().Rigidbodies().MarkModified(entity);
+}
+
+void MarkColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    scene.Components().Colliders().MarkModified(entity);
+}
+
+void MarkCharacterControllerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    scene.Components().CharacterControllers().MarkModified(entity);
+}
+
+void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    scene.Components().Joints().MarkModified(entity);
+}
+
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return {};
@@ -354,6 +537,22 @@ void MarkBehaviourModified(kb::scene::Scene& scene, kb::scene::SceneEntity entit
         kb::scene::BehaviourComponent* component = scene.Components().Behaviours().TryGet(entity);
         return ComponentAccess{ component, component, kBehaviourFields, &MarkBehaviourModified };
     }
+    if (componentName == "Rigidbody") {
+        kb::scene::RigidbodyComponent* component = scene.Components().Rigidbodies().TryGet(entity);
+        return ComponentAccess{ component, component, kRigidbodyFields, &MarkRigidbodyModified };
+    }
+    if (componentName == "Collider") {
+        kb::scene::ColliderComponent* component = scene.Components().Colliders().TryGet(entity);
+        return ComponentAccess{ component, component, kColliderFields, &MarkColliderModified };
+    }
+    if (componentName == "CharacterController") {
+        kb::scene::CharacterControllerComponent* component = scene.Components().CharacterControllers().TryGet(entity);
+        return ComponentAccess{ component, component, kCharacterControllerFields, &MarkCharacterControllerModified };
+    }
+    if (componentName == "Joint") {
+        kb::scene::JointComponent* component = scene.Components().Joints().TryGet(entity);
+        return ComponentAccess{ component, component, kJointFields, &MarkJointModified };
+    }
     return {};
 }
 
@@ -381,6 +580,18 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     }
     if (componentName == "Behaviour") {
         return kBehaviourPropertyDescs;
+    }
+    if (componentName == "Rigidbody") {
+        return kRigidbodyPropertyDescs;
+    }
+    if (componentName == "Collider") {
+        return kColliderPropertyDescs;
+    }
+    if (componentName == "CharacterController") {
+        return kCharacterControllerPropertyDescs;
+    }
+    if (componentName == "Joint") {
+        return kJointPropertyDescs;
     }
     return {};
 }

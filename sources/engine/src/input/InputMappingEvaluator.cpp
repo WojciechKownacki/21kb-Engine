@@ -8,7 +8,8 @@ MappingEvaluationResult InputMappingEvaluator::Evaluate(const MappingEvaluationI
                                                         ModifierRuntimeState& modifierState,
                                                         std::span<TriggerRuntimeState> triggerStates,
                                                         const std::function<bool(std::string_view)>& chordSatisfied) const {
-    const InputValue raw{.x = input.rawValue, .y = 0.0F, .z = 0.0F, .type = input.valueType};
+    InputValue raw = input.raw;
+    raw.type = input.valueType;
     const InputValue modified = ApplyModifierStack(raw, input.modifiers, deltaSeconds, modifierState);
     const float magnitude = modified.Magnitude();
 

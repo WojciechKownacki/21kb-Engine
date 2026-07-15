@@ -4,11 +4,14 @@
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -18,6 +21,7 @@
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -34,6 +38,8 @@ class IAudioPlaybackBackend;
 } // namespace kb::audio
 
 namespace kb::scene {
+
+class IPhysicsBackend;
 
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
@@ -74,6 +80,12 @@ public:
     SceneMode mode = SceneMode::Runtime;
     kb::assets::AssetManager assets;
     kb::input::InputSubsystem inputSubsystem;
+    // LIB-115: independent input state for local users other than the primary
+    // (split-screen / shared-keyboard local co-op). Keyed by LocalUserId::value;
+    // lazily created on first access (see Scene::Input(LocalUserId)). unordered_map
+    // never moves/invalidates existing values on insert, so held InputSubsystem&
+    // references stay valid across later insertions.
+    std::unordered_map<std::uint32_t, kb::input::InputSubsystem> secondaryInputSubsystems;
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
     kb::ecs::SystemScheduler systemScheduler;
@@ -136,9 +148,46 @@ public:
         float intervalSeconds = 0.0F;
         bool repeating = false;
         bool paused = false;
+        // LIB-101: creation-site diagnostics — the entity that CALLED
+        // Timer.Once/Repeat (ScriptFunctionCallContext::caller for a script
+        // call, invalid for a native-C++-only SceneTimers::Once/Repeat
+        // call that didn't supply one), distinct from `owner` above (who
+        // RECEIVES TimerFired, not who wrote the call that created the
+        // timer) — lets a hung/leaked/misbehaving timer be traced back to
+        // whatever created it, e.g. via Timer.Creator(handle).
+        SceneEntity creator{};
     };
     std::vector<TimerRecord> timers;
     std::uint64_t nextTimerId = 1U;
+    // LIB-097: one live Task started through kb::scene::SceneTasks::Start —
+    // `poll` is a NATIVE C++-only callable (never script-authored, see
+    // SceneTasks.hpp's class doc comment for the full Coroutine/Task model
+    // decision), called once per frame by SceneTaskService::Advance with
+    // the same scaled/pause-aware deltaSeconds Timer uses, until it
+    // reports anything other than Running — at that point the record is
+    // removed and a TaskCompleted/TaskFailed event is dispatched. `owner`
+    // follows the exact same auto-cancel-on-death convention as
+    // TimerRecord::owner above.
+    struct TaskRecord {
+        std::uint64_t id = 0U;
+        SceneEntity owner{};
+        std::function<TaskPollResult(float)> poll;
+        // LIB-098: false = Frame-domain (SceneTasks::Start, polled by
+        // Advance with elapsed seconds); true = FixedTick-domain
+        // (SceneTasks::StartFixedStep, polled by AdvanceFixedSteps with a
+        // step count) — see SceneTasks.hpp's class doc comment for why
+        // these need two separate Advance call sites.
+        bool fixedStepDomain = false;
+        // LIB-101: creation-site diagnostics — see TimerRecord::creator's
+        // own doc comment above for the full reasoning. A Task is
+        // native-C++-only to create (SceneTasks.hpp), so this is whatever
+        // the native caller explicitly passed, not derived from a
+        // ScriptFunctionCallContext (none exists at a Task's creation
+        // site).
+        SceneEntity creator{};
+    };
+    std::vector<TaskRecord> tasks;
+    std::uint64_t nextTaskId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
@@ -290,7 +339,14 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
+    // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
+    // payload, queued by whichever physics plugin is loaded via
+    // PhysicsBackend::QueueCollisionEvent - mirrors
+    // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
+    // own doc comment on PendingCollisionEvent for the full contract).
+    std::vector<PendingCollisionEvent> pendingCollisionEvents;
 };
 
 } // namespace kb::scene

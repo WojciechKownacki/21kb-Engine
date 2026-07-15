@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace kb::editor {
 namespace {
@@ -59,30 +60,44 @@ struct StickAxes {
     return static_cast<float>(value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) / (255.0F - static_cast<float>(XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
 }
 
+// LIB-116: polls every XInput slot (0..kMaxGamepads-1), not just the first
+// connected controller, so local multiplayer can bind different players to
+// different physical gamepads (see InputDeviceState's gamepadIndex parameter
+// and InputKeyMapping::gamepadIndex). XInputGetState returns
+// ERROR_DEVICE_NOT_CONNECTED for an absent slot, which SetKeyDown/SetAnalog's
+// untouched default (false/0) already represents correctly.
 void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
-    XINPUT_STATE gamepadState{};
-    if (XInputGetState(0, &gamepadState) != ERROR_SUCCESS) {
-        return;
+    static_assert(kb::input::InputDeviceState::kMaxGamepads <= XUSER_MAX_COUNT,
+        "Polling more gamepad slots than XInput supports");
+    for (std::uint8_t index = 0U; index < kb::input::InputDeviceState::kMaxGamepads; ++index) {
+        XINPUT_STATE gamepadState{};
+        const bool connected = XInputGetState(index, &gamepadState) == ERROR_SUCCESS;
+        state.SetGamepadConnected(index, connected);
+        if (!connected) {
+            continue;
+        }
+        const XINPUT_GAMEPAD& pad = gamepadState.Gamepad;
+        for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
+            state.SetKeyDown(binding.key, (pad.wButtons & binding.mask) != 0, index);
+        }
+        const StickAxes left = NormalizeStick(pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+        const StickAxes right = NormalizeStick(pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+        state.SetAnalog(InputKey::GamepadLeftStickX, left.x, index);
+        state.SetAnalog(InputKey::GamepadLeftStickY, left.y, index);
+        state.SetAnalog(InputKey::GamepadRightStickX, right.x, index);
+        state.SetAnalog(InputKey::GamepadRightStickY, right.y, index);
+        state.SetAnalog(InputKey::GamepadLeftTrigger, NormalizeTrigger(pad.bLeftTrigger), index);
+        state.SetAnalog(InputKey::GamepadRightTrigger, NormalizeTrigger(pad.bRightTrigger), index);
     }
-    const XINPUT_GAMEPAD& pad = gamepadState.Gamepad;
-    for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
-        state.SetKeyDown(binding.key, (pad.wButtons & binding.mask) != 0);
-    }
-    const StickAxes left = NormalizeStick(pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-    const StickAxes right = NormalizeStick(pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
-    state.SetAnalog(InputKey::GamepadLeftStickX, left.x);
-    state.SetAnalog(InputKey::GamepadLeftStickY, left.y);
-    state.SetAnalog(InputKey::GamepadRightStickX, right.x);
-    state.SetAnalog(InputKey::GamepadRightStickY, right.y);
-    state.SetAnalog(InputKey::GamepadLeftTrigger, NormalizeTrigger(pad.bLeftTrigger));
-    state.SetAnalog(InputKey::GamepadRightTrigger, NormalizeTrigger(pad.bRightTrigger));
 }
 
 } // namespace
 
 void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND editorWindow) noexcept {
     state.Reset();
-    if (!EditorIsForeground(editorWindow)) {
+    const bool focused = EditorIsForeground(editorWindow);
+    state.SetHasFocus(focused);
+    if (!focused) {
         hasPreviousMouse_ = false;
         return;
     }
@@ -99,6 +114,16 @@ void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND edito
         }
         previousMouse_ = cursor;
         hasPreviousMouse_ = true;
+
+        // LIB-117: absolute position, unlike the delta above, has no "avoid a
+        // jump on the first tracked frame" concern - always update it. Reported
+        // in the editor window's client pixel space (not raw desktop screen
+        // coordinates), matching what a windowed game would report for its own
+        // window.
+        POINT client = cursor;
+        if (ScreenToClient(editorWindow, &client) != 0) {
+            state.SetPointerPosition(static_cast<float>(client.x), static_cast<float>(client.y));
+        }
     }
 
     CollectGamepad(state);

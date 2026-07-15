@@ -16,6 +16,7 @@
 #include "engine/library/EngineLibraryEntityHandle.hpp"
 #include "engine/library/EngineLibraryScriptComponentAccess.hpp"
 #include "engine/library/EngineLibraryError.hpp"
+#include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/library/EngineLibraryFunctionId.hpp"
 #include "engine/library/EngineLibraryInputLimits.hpp"
@@ -29,6 +30,7 @@
 #include "engine/library/EngineLibraryQuery.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/library/EngineLibraryResult.hpp"
+#include "engine/library/EngineLibrarySignal.hpp"
 #include "engine/library/EngineLibraryTextEncoding.hpp"
 #include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
@@ -153,6 +155,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "World.FindByName",
         "Time.Delta",
         "Timer.Once",
+        "Task.IsRunning",
         "Physics.Raycast",
         "Transform.GetPosition",
         "Math.Clamp",
@@ -176,7 +179,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 9U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 10U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -188,8 +191,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Physics", "Transform", "Math", "Scene" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly nine domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly ten domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -756,12 +759,14 @@ void RunEntityHandleTest() {
 }
 
 // LIB-075: EntityHandle::Has<T>/TryGet<T>/GetRequired<T>/Add<T>/Remove<T> —
-// only for the closed set of six component types registered for scripts
+// only for the closed set of ten component types registered for scripts
 // (ScriptComponentAccess<T> specializations), covering both an OPTIONAL
 // component (Camera — has a real Remove) and a MANDATORY one (Transform —
 // present from creation, Remove always reports false), plus the
 // dead/wrong-scene handle contract (false/nullptr/failed Result, never a
-// crash).
+// crash). LIB-123's four physics components (Rigidbody/Collider/
+// CharacterController/Joint) get the same optional-component treatment in
+// RunEntityHandlePhysicsComponentAccessTest below.
 void RunEntityHandleScriptComponentAccessTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ScriptComponentAccessSubject" });
@@ -820,6 +825,67 @@ void RunEntityHandleScriptComponentAccessTest() {
     kb::tests::Require(!deadHandle.GetRequired<kb::scene::CameraComponent>(scene).Succeeded(), "Engine21kbLibrary EntityHandle::GetRequired<T> on a destroyed entity must return a failed Result, not throw");
     kb::tests::Require(!deadHandle.Add<kb::scene::CameraComponent>(scene, kb::scene::CameraComponent{}), "Engine21kbLibrary EntityHandle::Add<T> on a destroyed entity must report false, not throw");
     kb::tests::Require(!deadHandle.Remove<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<T> on a destroyed entity must report false, not throw");
+}
+
+// LIB-123: the same EntityHandle::Has/TryGet/GetRequired/Add/Remove contract
+// RunEntityHandleScriptComponentAccessTest proves for Camera, exercised for
+// all four physics components this task adds — each is optional (never
+// present from entity creation), so each gets the full absent -> add ->
+// mutate-through-the-real-pointer -> remove cycle.
+void RunEntityHandlePhysicsComponentAccessTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PhysicsComponentAccessSubject" });
+    const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+
+    // Rigidbody.
+    kb::tests::Require(!handle.Has<kb::scene::RigidbodyComponent>(scene), "Engine21kbLibrary EntityHandle::Has<RigidbodyComponent> must be false before the component is ever added");
+    kb::tests::Require(!handle.Remove<kb::scene::RigidbodyComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<RigidbodyComponent> must report false when there was nothing to remove");
+    kb::scene::RigidbodyComponent rigidbody{};
+    rigidbody.mass = 5.0F;
+    kb::tests::Require(handle.Add<kb::scene::RigidbodyComponent>(scene, rigidbody), "Engine21kbLibrary EntityHandle::Add<RigidbodyComponent> must succeed for a live handle");
+    const kb::library::Result<kb::scene::RigidbodyComponent> gotRigidbody = handle.GetRequired<kb::scene::RigidbodyComponent>(scene);
+    kb::tests::Require(gotRigidbody.Succeeded() && kb::tests::NearlyEqual(gotRigidbody.Value().mass, 5.0F),
+        "Engine21kbLibrary EntityHandle::GetRequired<RigidbodyComponent> must succeed and return a correct copy once the component exists");
+    kb::scene::RigidbodyComponent* mutableRigidbody = handle.TryGet<kb::scene::RigidbodyComponent>(scene);
+    kb::tests::Require(mutableRigidbody != nullptr, "Engine21kbLibrary EntityHandle::TryGet<RigidbodyComponent> (mutable overload) must return a real pointer once the component exists");
+    mutableRigidbody->mass = 9.0F;
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Rigidbodies().TryGet(object.Entity())->mass, 9.0F),
+        "Engine21kbLibrary EntityHandle::TryGet<RigidbodyComponent> (mutable overload) must return a pointer into the REAL live component, not a copy");
+    kb::tests::Require(handle.Remove<kb::scene::RigidbodyComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<RigidbodyComponent> must report true when the component was actually present");
+    kb::tests::Require(!handle.Has<kb::scene::RigidbodyComponent>(scene), "Engine21kbLibrary EntityHandle::Has<RigidbodyComponent> must be false immediately after Remove<RigidbodyComponent>");
+
+    // Collider (including its embedded PhysicsMaterial fields).
+    kb::tests::Require(!handle.Has<kb::scene::ColliderComponent>(scene), "Engine21kbLibrary EntityHandle::Has<ColliderComponent> must be false before the component is ever added");
+    kb::scene::ColliderComponent collider{};
+    collider.friction = 0.8F;
+    collider.restitution = 0.3F;
+    kb::tests::Require(handle.Add<kb::scene::ColliderComponent>(scene, collider), "Engine21kbLibrary EntityHandle::Add<ColliderComponent> must succeed for a live handle");
+    const kb::scene::ColliderComponent* colliderPointer = handle.TryGet<kb::scene::ColliderComponent>(scene);
+    kb::tests::Require(colliderPointer != nullptr && kb::tests::NearlyEqual(colliderPointer->friction, 0.8F) && kb::tests::NearlyEqual(colliderPointer->restitution, 0.3F),
+        "Engine21kbLibrary EntityHandle::TryGet<ColliderComponent> must return the real, just-added PhysicsMaterial field data");
+    kb::tests::Require(handle.Remove<kb::scene::ColliderComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<ColliderComponent> must report true when the component was actually present");
+
+    // CharacterController.
+    kb::tests::Require(!handle.Has<kb::scene::CharacterControllerComponent>(scene), "Engine21kbLibrary EntityHandle::Has<CharacterControllerComponent> must be false before the component is ever added");
+    kb::scene::CharacterControllerComponent characterController{};
+    characterController.radius = 0.6F;
+    kb::tests::Require(handle.Add<kb::scene::CharacterControllerComponent>(scene, characterController), "Engine21kbLibrary EntityHandle::Add<CharacterControllerComponent> must succeed for a live handle");
+    const kb::scene::CharacterControllerComponent* characterControllerPointer = handle.TryGet<kb::scene::CharacterControllerComponent>(scene);
+    kb::tests::Require(characterControllerPointer != nullptr && kb::tests::NearlyEqual(characterControllerPointer->radius, 0.6F),
+        "Engine21kbLibrary EntityHandle::TryGet<CharacterControllerComponent> must return the real, just-added component data");
+    kb::tests::Require(handle.Remove<kb::scene::CharacterControllerComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<CharacterControllerComponent> must report true when the component was actually present");
+
+    // Joint (including its Entity-typed connectedEntity field).
+    const kb::scene::SceneObject otherObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "JointTarget" });
+    kb::tests::Require(!handle.Has<kb::scene::JointComponent>(scene), "Engine21kbLibrary EntityHandle::Has<JointComponent> must be false before the component is ever added");
+    kb::scene::JointComponent joint{};
+    joint.type = kb::scene::JointType::Distance;
+    joint.connectedEntity = otherObject.Entity();
+    kb::tests::Require(handle.Add<kb::scene::JointComponent>(scene, joint), "Engine21kbLibrary EntityHandle::Add<JointComponent> must succeed for a live handle");
+    const kb::scene::JointComponent* jointPointer = handle.TryGet<kb::scene::JointComponent>(scene);
+    kb::tests::Require(jointPointer != nullptr && jointPointer->type == kb::scene::JointType::Distance && jointPointer->connectedEntity == otherObject.Entity(),
+        "Engine21kbLibrary EntityHandle::TryGet<JointComponent> must return the real, just-added component data, including the connected entity");
+    kb::tests::Require(handle.Remove<kb::scene::JointComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<JointComponent> must report true when the component was actually present");
 }
 
 // LIB-009: AssetRef<T>/SceneRef must be the real kb::assets::AssetHandle<T>
@@ -1568,10 +1634,10 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("Light"),
         "Engine21kbLibrary component id must differ for different names");
 
-    // Honest serializable check: round-trip a scene containing all six
-    // components, then verify only the ones marked serializable=true
-    // actually survive Save+Load, and the one marked false (Visibility)
-    // genuinely does not.
+    // Honest serializable check: round-trip a scene containing every
+    // cataloged component, then verify only the ones marked serializable=true
+    // actually survive Save+Load, and the ones marked false (Visibility is
+    // NOT one of them - see below; Joint is) genuinely do not.
     kb::scene::Scene source;
     const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
     source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .visible = false });
@@ -1579,6 +1645,10 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
     source.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 77U });
     source.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 88U, .enabled = true });
+    source.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{ .mass = 12.5F });
+    source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
+    source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F });
+    source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .minLimit = -45.0F });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -1608,9 +1678,66 @@ void RunEngineLibraryComponentRegistryTest() {
     const kb::scene::VisibilityComponent* restoredVisibility = target.Components().Visibility().TryGet(restored);
     kb::tests::Require(restoredVisibility != nullptr && !restoredVisibility->visible,
         "Engine21kbLibrary component registry: Visibility is marked serializable=true and must survive a save/load round trip (baked unconditionally per prefab node)");
+
+    // LIB-123: Rigidbody/Collider/CharacterController are marked
+    // serializable=true and must actually round-trip, field values included
+    // (not just presence).
+    const kb::scene::RigidbodyComponent* restoredRigidbody = target.Components().Rigidbodies().TryGet(restored);
+    kb::tests::Require(restoredRigidbody != nullptr && kb::tests::NearlyEqual(restoredRigidbody->mass, 12.5F),
+        "Engine21kbLibrary component registry: Rigidbody is marked serializable=true and must survive a save/load round trip");
+    const kb::scene::ColliderComponent* restoredCollider = target.Components().Colliders().TryGet(restored);
+    kb::tests::Require(restoredCollider != nullptr && kb::tests::NearlyEqual(restoredCollider->radius, 0.75F) &&
+                            kb::tests::NearlyEqual(restoredCollider->friction, 0.6F) && kb::tests::NearlyEqual(restoredCollider->restitution, 0.2F),
+        "Engine21kbLibrary component registry: Collider is marked serializable=true and must survive a save/load round trip, including its PhysicsMaterial fields");
+    const kb::scene::CharacterControllerComponent* restoredCharacterController = target.Components().CharacterControllers().TryGet(restored);
+    kb::tests::Require(restoredCharacterController != nullptr && kb::tests::NearlyEqual(restoredCharacterController->radius, 0.4F) &&
+                            kb::tests::NearlyEqual(restoredCharacterController->height, 1.8F),
+        "Engine21kbLibrary component registry: CharacterController is marked serializable=true and must survive a save/load round trip");
+    // Joint is deliberately serializable=false (connectedEntity is a live
+    // runtime handle with no stable cross-node serialization scheme yet) -
+    // this must genuinely NOT survive, the same honesty check Visibility's
+    // comment above already established the precedent for.
+    kb::tests::Require(!target.Components().Joints().Has(restored),
+        "Engine21kbLibrary component registry: Joint is marked serializable=false and must NOT survive a save/load round trip");
+
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
-        kb::tests::Require(desc.serializable, "Engine21kbLibrary component registry: all six currently cataloged components are serializable=true — verified against the real save/load round trip above, not assumed");
+        const bool expectedSerializable = desc.name != "Joint";
+        kb::tests::Require(desc.serializable == expectedSerializable,
+            "Engine21kbLibrary component registry: every cataloged component is serializable=true except Joint — verified against the real save/load round trip above, not assumed");
     }
+}
+
+// LIB-108: kb::library::EngineLibraryEventRegistry — proves the built-in
+// event schema catalog is internally consistent (nonzero deterministic ids
+// matching kb::script::ComputeEventId, all starting at version 1.0, no
+// duplicate names) and that Find() honestly reports an unregistered name as
+// absent rather than fabricating an entry.
+void RunEngineLibraryEventSchemaRegistryTest() {
+    const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
+    kb::tests::Require(catalog.size() == 8U, "Engine21kbLibrary event schema registry must catalog exactly the 8 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed)");
+
+    for (const kb::library::LibraryEventDesc& desc : catalog) {
+        kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
+        kb::tests::Require(desc.id != 0U, "Engine21kbLibrary event schema registry entry must have a nonzero id");
+        kb::tests::Require(desc.id == kb::script::ComputeEventId(desc.name), "Engine21kbLibrary event schema registry entry's id must match kb::script::ComputeEventId(name) — the SAME id ScriptEvent::Id() computes for a real dispatched event of this name");
+        kb::tests::Require(desc.version.major == 1U && desc.version.minor == 0U, "Engine21kbLibrary event schema registry entries must all start at version 1.0 today");
+        kb::tests::Require(!desc.arguments.empty(), "Every currently cataloged built-in event carries at least one argument");
+        const kb::library::LibraryEventDesc* found = kb::library::EngineLibraryEventRegistry::Find(desc.name);
+        kb::tests::Require(found == &desc, "Find() must return a pointer into the SAME catalog storage Catalog() returns, not a copy");
+    }
+
+    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed" };
+    for (const std::string& name : expectedNames) {
+        kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
+    }
+    kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find("NoSuchEvent") == nullptr, "Engine21kbLibrary event schema registry Find() must return nullptr for an unregistered name");
+
+    const kb::library::LibraryEventDesc* sceneLoaded = kb::library::EngineLibraryEventRegistry::Find("SceneLoaded");
+    kb::tests::Require(sceneLoaded != nullptr && sceneLoaded->arguments.size() == 2U && sceneLoaded->arguments[0].name == "sceneId" && sceneLoaded->arguments[0].type == kb::script::ScriptValueType::Hash && sceneLoaded->arguments[1].name == "sceneName" && sceneLoaded->arguments[1].type == kb::script::ScriptValueType::String,
+        "SceneLoaded's cataloged schema must match its real dispatch shape (sceneId: Hash, sceneName: String) — see ScriptRuntimeSceneSystem.cpp::DispatchPendingSceneLifecycleEvents");
+    const kb::library::LibraryEventDesc* timerFired = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
+    kb::tests::Require(timerFired != nullptr && timerFired->arguments.size() == 1U && timerFired->arguments[0].name == "timer" && timerFired->arguments[0].type == kb::script::ScriptValueType::Hash,
+        "TimerFired's cataloged schema must match its real dispatch shape (timer: Hash) — see ScriptRuntimeSceneSystem.cpp::DispatchFiredTimers");
 }
 
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
@@ -1647,7 +1774,7 @@ void RunComponentInspectorDescCatalogTest() {
             kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
         }
     }
-    kb::tests::Require(fieldsChecked == 37U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (37) across all 6 components");
+    kb::tests::Require(fieldsChecked == 79U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (79) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -2474,6 +2601,80 @@ void RunExpandedValueTypesTest() {
     kb::tests::Require(echoedOutput.has_value() && echoedOutput->Type() == ScriptValueType::Hash && echoedOutput->AsUInt64() == 0x1234ULL, "Tests.EchoHash must return the exact Hash value it was given");
 }
 
+// LIB-109: kb::library::Signal<Args...> — the native-only, per-instance,
+// compile-time-typed observer list (no global registry, no string names,
+// no ScriptValue boxing — contrast with kb::script::ScriptEventBus/LIB-105).
+void RunEngineLibrarySignalTest() {
+    // Basic connect/emit, connection order, multi-arg.
+    {
+        kb::library::Signal<int, std::string> signal;
+        kb::tests::Require(signal.SlotCount() == 0U, "A freshly constructed Signal must have zero connected slots");
+
+        std::vector<std::string> order;
+        const kb::library::Signal<int, std::string>::SlotId firstId = signal.Connect([&order](int value, const std::string& text) {
+            order.push_back("first:" + std::to_string(value) + ":" + text);
+        });
+        const kb::library::Signal<int, std::string>::SlotId secondId = signal.Connect([&order](int value, const std::string& text) {
+            order.push_back("second:" + std::to_string(value) + ":" + text);
+        });
+        kb::tests::Require(firstId != 0U && secondId != 0U && firstId != secondId, "Connect must return distinct, nonzero ids for two live slots");
+        kb::tests::Require(signal.SlotCount() == 2U, "SlotCount must reflect both connected slots");
+
+        signal.Emit(7, "hello");
+        kb::tests::Require(order.size() == 2U && order[0] == "first:7:hello" && order[1] == "second:7:hello",
+            "Emit must invoke every connected slot, in connection order, with the exact arguments given");
+
+        kb::tests::Require(signal.Connect(nullptr) == 0U, "Connect with an empty/null slot must return the invalid id (0) and not add a slot");
+        kb::tests::Require(signal.SlotCount() == 2U, "Connect with an empty slot must not increase SlotCount");
+    }
+
+    // Disconnect: idempotent, stops future delivery.
+    {
+        kb::library::Signal<int> signal;
+        int fired = 0;
+        const kb::library::Signal<int>::SlotId id = signal.Connect([&fired](int) { ++fired; });
+        kb::tests::Require(signal.Disconnect(id), "Disconnect on a live slot must succeed");
+        kb::tests::Require(!signal.Disconnect(id), "A second Disconnect on the same id must be idempotent (false, not an error)");
+        kb::tests::Require(!signal.Disconnect(kb::library::Signal<int>::kInvalidSlotId), "Disconnect on the invalid id must fail cleanly");
+        signal.Emit(1);
+        kb::tests::Require(fired == 0, "A disconnected slot must never fire again");
+        kb::tests::Require(signal.SlotCount() == 0U, "SlotCount must reflect the disconnect");
+    }
+
+    // Reentrancy (a): a slot Connecting a NEW slot mid-Emit must not have
+    // that new slot fire within the SAME Emit call — only starting the
+    // next one (mirrors ScriptEventBus::Emit's own snapshot-before-dispatch
+    // discipline, LIB-102/LIB-040).
+    {
+        kb::library::Signal<> signal;
+        int lateFired = 0;
+        kb::library::Signal<>::SlotId lateId = kb::library::Signal<>::kInvalidSlotId;
+        static_cast<void>(signal.Connect([&signal, &lateFired, &lateId]() {
+            lateId = signal.Connect([&lateFired]() { ++lateFired; });
+        }));
+        signal.Emit();
+        kb::tests::Require(lateId != kb::library::Signal<>::kInvalidSlotId && lateFired == 0, "A slot connected DURING an Emit call must not fire within that same Emit call");
+        signal.Emit();
+        kb::tests::Require(lateFired == 1, "A slot connected during a PRIOR Emit call must fire normally on the NEXT Emit call");
+    }
+
+    // Reentrancy (b): a slot Disconnecting a sibling (already snapshotted
+    // for THIS Emit call) mid-dispatch must safely skip that sibling, no
+    // crash, no double-invoke.
+    {
+        kb::library::Signal<> signal;
+        int siblingFired = 0;
+        kb::library::Signal<>::SlotId siblingId = kb::library::Signal<>::kInvalidSlotId;
+        static_cast<void>(signal.Connect([&signal, &siblingId]() {
+            static_cast<void>(signal.Disconnect(siblingId));
+        }));
+        siblingId = signal.Connect([&siblingFired]() { ++siblingFired; });
+        signal.Emit();
+        kb::tests::Require(siblingFired == 0, "A sibling slot disconnected by an EARLIER slot within the SAME Emit call must not fire");
+        kb::tests::Require(signal.SlotCount() == 1U, "Only the disconnected sibling should be gone; the disconnecting slot itself remains connected");
+    }
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -2499,6 +2700,7 @@ void RunEngineLibraryTests() {
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunEntityHandleTest();
     RunEntityHandleScriptComponentAccessTest();
+    RunEntityHandlePhysicsComponentAccessTest();
     RunArrayViewTest();
     RunCollectionsScalarTest();
     RunCollectionsScriptValueTest();
@@ -2515,6 +2717,7 @@ void RunEngineLibraryTests() {
     RunDeprecationTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
@@ -2528,6 +2731,7 @@ void RunEngineLibraryTests() {
     RunErrorCodeTest();
     RunInputLimitsTest();
     RunExpandedValueTypesTest();
+    RunEngineLibrarySignalTest();
 }
 
 } // namespace kb::tests

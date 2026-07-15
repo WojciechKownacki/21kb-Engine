@@ -10,6 +10,7 @@
 namespace kb::input {
 
 class InputSubsystem;
+struct LocalUserId;
 
 } // namespace kb::input
 
@@ -43,6 +44,7 @@ class SceneRuntime;
 class SceneRuntimeQueries;
 class SceneAccess;
 class SceneState;
+class SceneTasks;
 class SceneTimers;
 class SceneTransformQueries;
 class SceneTransforms;
@@ -91,9 +93,24 @@ public:
     [[nodiscard]] SceneLoadedContent LoadedContent() noexcept;
     [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
     [[nodiscard]] SceneTimers Timers() noexcept;
+    [[nodiscard]] SceneTasks Tasks() noexcept;
     void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
+    // Independent input state for a specific local user (LIB-115). Lazily creates
+    // and resolver-wires the user's InputSubsystem on first access; kPrimaryLocalUser
+    // always returns the same subsystem as the no-argument Input() above.
+    [[nodiscard]] kb::input::InputSubsystem& Input(kb::input::LocalUserId user) noexcept;
+    // Read-only lookup that does NOT create a subsystem: nullptr if `user` has
+    // never been accessed via the non-const Input(LocalUserId) overload.
+    [[nodiscard]] const kb::input::InputSubsystem* TryGetInput(kb::input::LocalUserId user) const noexcept;
+    // Evaluates the primary local user's InputSubsystem, then every other local
+    // user's that has been created, all reading the primary's shared physical
+    // device state (see LocalUserId's doc comment for why device state is shared).
+    void EvaluateAllLocalUserInput(float deltaSeconds);
+    // Clears mapping contexts on the primary AND every created secondary local
+    // user's InputSubsystem.
+    void ClearAllLocalUserInputMappingContexts() noexcept;
     [[nodiscard]] std::uint64_t Id() const noexcept;
     [[nodiscard]] SceneMode Mode() const noexcept;
     [[nodiscard]] bool IsPrefabPrivate() const noexcept;

@@ -17,15 +17,32 @@ namespace kb::input {
 struct InputAssetFormat {
     static constexpr std::array<std::uint8_t, 8U> ActionMagic{ '2', '1', 'K', 'B', 'I', 'A', 'C', 0 };
     static constexpr std::array<std::uint8_t, 8U> ContextMagic{ '2', '1', 'K', 'B', 'I', 'M', 'C', 0 };
-    static constexpr std::uint32_t BinaryVersion = 1U;
+    // LIB-119: a user rebind profile - a list of InputRebindOverride, not a full
+    // InputMappingContextAsset. Separate magic (own container shape) but shares
+    // BinaryVersion below (one version number governs every input binary format).
+    static constexpr std::array<std::uint8_t, 8U> RebindProfileMagic{ '2', '1', 'K', 'B', 'I', 'R', 'B', 0 };
+    // LIB-121: a recorded input session - a sequence of per-frame device
+    // snapshots, for deterministic-replay tests. Own magic/container shape,
+    // shares BinaryVersion.
+    static constexpr std::array<std::uint8_t, 8U> RecordingMagic{ '2', '1', 'K', 'B', 'I', 'R', 'C', 0 };
+    // v2 added InputKeyMapping::bindingId and InputMappingContextAsset::composites.
+    // v3 added InputKeyMapping/InputCompositeSlot::gamepadIndex (LIB-116).
+    static constexpr std::uint32_t BinaryVersion = 3U;
     static constexpr std::uint32_t MaxMappingCount = 100'000U;
+    static constexpr std::uint32_t MaxCompositeCount = 100'000U;
+    static constexpr std::uint32_t MaxCompositeSlotCount = 16U; // keys per composite binding
     static constexpr std::uint32_t MaxStackCount = 64U; // modifiers/triggers per mapping
+    static constexpr std::uint32_t MaxRebindOverrideCount = 100'000U;
+    static constexpr std::uint32_t MaxRecordingFrameCount = 10'000'000U; // ~46 hours at 60Hz
+    static constexpr std::uint32_t MaxRecordingKeysPerFrame = 4'096U; // digital/analog/touch, each
     static constexpr std::uint32_t MaxNameBytes = 1U << 16U;
     static constexpr std::string_view ActionExtension = ".21kbinputaction";
     // An Input Axis is an Input Action whose value type is an analog axis; it
     // shares the action binary format + loader, distinguished by file extension.
     static constexpr std::string_view AxisExtension = ".21kbinputaxis";
     static constexpr std::string_view ContextExtension = ".21kbinputcontext";
+    static constexpr std::string_view RebindProfileExtension = ".21kbrebind";
+    static constexpr std::string_view RecordingExtension = ".21kbinputrecording";
 };
 
 template <typename T>
