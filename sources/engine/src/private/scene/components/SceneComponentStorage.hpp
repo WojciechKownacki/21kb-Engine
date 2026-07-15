@@ -7,8 +7,10 @@
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
+#include "scene/components/SceneCharacterControllerComponentStore.hpp"
 #include "scene/components/SceneColliderComponentStore.hpp"
 #include "scene/components/SceneInputComponentStore.hpp"
+#include "scene/components/SceneJointComponentStore.hpp"
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
 #include "scene/components/SceneRigidbodyComponentStore.hpp"
@@ -50,6 +52,10 @@ public:
     [[nodiscard]] SceneRigidbodyComponentStore& Rigidbodies() noexcept;
     [[nodiscard]] const SceneColliderComponentStore& Colliders() const noexcept;
     [[nodiscard]] SceneColliderComponentStore& Colliders() noexcept;
+    [[nodiscard]] const SceneCharacterControllerComponentStore& CharacterControllers() const noexcept;
+    [[nodiscard]] SceneCharacterControllerComponentStore& CharacterControllers() noexcept;
+    [[nodiscard]] const SceneJointComponentStore& Joints() const noexcept;
+    [[nodiscard]] SceneJointComponentStore& Joints() noexcept;
     [[nodiscard]] const SceneTagsComponentStore& Tags() const noexcept;
     [[nodiscard]] SceneTagsComponentStore& Tags() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
@@ -67,6 +73,8 @@ private:
     SceneInputComponentStore inputs_;
     SceneRigidbodyComponentStore rigidbodies_;
     SceneColliderComponentStore colliders_;
+    SceneCharacterControllerComponentStore characterControllers_;
+    SceneJointComponentStore joints_;
     SceneTagsComponentStore tags_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;

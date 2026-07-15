@@ -4,8 +4,10 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -59,6 +61,16 @@ public:
     static void SetCollider(Scene& scene, SceneEntity entity, const ColliderComponent& collider);
     static void RemoveCollider(Scene& scene, SceneEntity entity) noexcept;
     static void MarkColliderModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static CharacterControllerComponent* TryGetCharacterController(Scene& scene, SceneEntity entity) noexcept;
+    static void SetCharacterController(Scene& scene, SceneEntity entity, const CharacterControllerComponent& characterController);
+    static void RemoveCharacterController(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkCharacterControllerModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static JointComponent* TryGetJoint(Scene& scene, SceneEntity entity) noexcept;
+    static void SetJoint(Scene& scene, SceneEntity entity, const JointComponent& joint);
+    static void RemoveJoint(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkJointModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static TagsComponent* TryGetTags(Scene& scene, SceneEntity entity) noexcept;
     static void SetTags(Scene& scene, SceneEntity entity, const TagsComponent& tags);

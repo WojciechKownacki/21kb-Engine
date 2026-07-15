@@ -136,6 +136,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<InputComponent> inputs;
     std::vector<RigidbodyComponent> rigidbodies;
     std::vector<ColliderComponent> colliders;
+    std::vector<CharacterControllerComponent> characterControllers;
     std::vector<TagsComponent> tags;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
@@ -179,6 +180,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider)) {
             RepeatComponents(colliders, std::span<const ColliderComponent>{ archetype.colliders }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const ColliderComponent>{ colliders });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController)) {
+            RepeatComponents(characterControllers, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const CharacterControllerComponent>{ characterControllers });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
             RepeatComponents(tags, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
@@ -232,6 +237,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider)) {
             AddCommandComponentPatternView(views, std::span<const ColliderComponent>{ archetype.colliders }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const ColliderComponent>{ archetype.colliders }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController)) {
+            AddCommandComponentPatternView(views, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
             AddCommandComponentPatternView(views, std::span<const TagsComponent>{ archetype.tags }, instanceCount);

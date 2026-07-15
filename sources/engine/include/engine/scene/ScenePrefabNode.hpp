@@ -4,6 +4,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -28,6 +29,7 @@ struct ScenePrefabNodeComponents {
     std::optional<InputComponent> input;
     std::optional<RigidbodyComponent> rigidbody;
     std::optional<ColliderComponent> collider;
+    std::optional<CharacterControllerComponent> characterController;
     std::optional<TagsComponent> tags;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;

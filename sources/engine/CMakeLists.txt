@@ -100,7 +100,9 @@ add_library(kb_engine STATIC
     include/engine/scene/AudioListenerComponent.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
+    include/engine/scene/CharacterControllerComponent.hpp
     include/engine/scene/ColliderComponent.hpp
+    include/engine/scene/JointComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/RigidbodyComponent.hpp
@@ -126,7 +128,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLightingAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
+    include/engine/scene/SceneCharacterControllerComponents.hpp
     include/engine/scene/SceneColliderComponents.hpp
+    include/engine/scene/SceneJointComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
@@ -440,6 +444,10 @@ add_library(kb_engine STATIC
     src/scene/components/SceneLightIteration.cpp
     src/scene/components/SceneColliderApi.cpp
     src/scene/components/SceneColliderStorage.cpp
+    src/scene/components/SceneCharacterControllerApi.cpp
+    src/scene/components/SceneCharacterControllerStorage.cpp
+    src/scene/components/SceneJointApi.cpp
+    src/scene/components/SceneJointStorage.cpp
     src/scene/components/SceneMeshRendererApi.cpp
     src/scene/components/SceneMeshRendererIterationDispatcher.cpp
     src/scene/components/SceneMeshRendererStorage.cpp
@@ -488,6 +496,8 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneInputModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
     src/scene/modules/components/SceneColliderModule.cpp
+    src/scene/modules/components/SceneCharacterControllerModule.cpp
+    src/scene/modules/components/SceneJointModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneRigidbodyModule.cpp
     src/scene/modules/components/SceneTagsModule.cpp
@@ -731,6 +741,8 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneInputComponentStore.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
     src/private/scene/components/SceneColliderComponentStore.hpp
+    src/private/scene/components/SceneCharacterControllerComponentStore.hpp
+    src/private/scene/components/SceneJointComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneRigidbodyComponentStore.hpp
     src/private/scene/components/SceneTagsComponentStore.hpp
