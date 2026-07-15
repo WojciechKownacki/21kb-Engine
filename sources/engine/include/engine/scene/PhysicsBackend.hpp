@@ -1,10 +1,13 @@
 #pragma once
 
 #include "engine/library/EngineLibraryCollections.hpp"
+#include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -124,6 +127,23 @@ public:
     // exist. Results are ordered closest-first.
     virtual void CastShapeAll(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept = 0;
     virtual void OverlapShapeAll(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) const noexcept = 0;
+
+    // LIB-129: applies a named-layer interaction matrix to this backend's
+    // real collision response (unlike ColliderComponent::layer's existing
+    // query-mask use, this changes whether two overlapping bodies actually
+    // generate a contact at all). Callable at any point in the backend's
+    // lifetime, before or after bodies exist - a later call simply changes
+    // behavior for collisions detected from that point on. Default: false
+    // (not applied) - the same honest "no-op, not a crash" convention as
+    // every other method on this interface when a backend doesn't support
+    // something; every real body still gets a named layer from
+    // ColliderComponent::layer's lowest set bit regardless of whether this
+    // was ever called (default-constructed PhysicsLayersAsset = layer 0,
+    // interacts with everything, i.e. today's behavior).
+    virtual bool ConfigureLayers(const PhysicsLayersAsset& layers) noexcept {
+        static_cast<void>(layers);
+        return false;
+    }
 };
 
 // LIB-127: OnCollisionEnter/Stay/Exit fire for a solid-vs-solid contact;
@@ -192,6 +212,32 @@ public:
     // queued since the last drain, in the exact order they were queued.
     static void QueueCollisionEvent(Scene& scene, PendingCollisionEvent event);
     [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
+
+    // LIB-129: stores `layers` on the scene (so LayerBit below can resolve
+    // names even without a backend) and applies it to the registered
+    // backend's real collision response - the return value reflects ONLY
+    // the latter (false if no backend is registered or the backend doesn't
+    // support it, see IPhysicsBackend::ConfigureLayers); name resolution via
+    // LayerBit is always updated regardless.
+    static bool ConfigureLayers(Scene& scene, const PhysicsLayersAsset& layers) noexcept;
+
+    // Resolves a named layer (as last configured via ConfigureLayers /
+    // LoadAndConfigureLayers) to its bit value (1 << index), ready to OR
+    // into a Physics.*Cast/Overlap layerMask. 0 if the name is unknown.
+    // Every scene starts with layer 0 named "Default" (PhysicsLayersAsset's
+    // own default), so this always resolves at least that one.
+    [[nodiscard]] static std::uint32_t LayerBit(Scene& scene, std::string_view name) noexcept;
+
+    // Convenience: loads a PhysicsLayersAsset by virtual path through the
+    // scene's own asset manager (kb::scene::PhysicsLayersAssetLoader, always
+    // registered - see Scene's constructor) and applies it. Mirrors
+    // kb::project::ProjectDescriptor::physicsLayersAsset - a host calls this
+    // explicitly once the project is mounted (scene.Assets().MountProject),
+    // the same "activate on demand" shape
+    // EditorSceneContext::ActivateProjectInput already uses for
+    // inputMappingContext; kb::library does not call this automatically.
+    // False if the path is empty, fails to load, or no backend is registered.
+    static bool LoadAndConfigureLayers(Scene& scene, const std::string& virtualPath) noexcept;
 };
 
 // LIB-126: Raycast has stayed pure ColliderComponent/TransformComponent
