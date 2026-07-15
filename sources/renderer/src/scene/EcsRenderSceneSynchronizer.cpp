@@ -67,6 +67,18 @@ namespace {
     return RenderCameraProjection::Perspective;
 }
 
+[[nodiscard]] RenderCameraClearMode CameraClearModeOf(kb::scene::CameraClearMode clearMode) noexcept {
+    switch (clearMode) {
+    case kb::scene::CameraClearMode::SolidColor:
+        return RenderCameraClearMode::SolidColor;
+    case kb::scene::CameraClearMode::DepthOnly:
+        return RenderCameraClearMode::DepthOnly;
+    case kb::scene::CameraClearMode::DontClear:
+        return RenderCameraClearMode::DontClear;
+    }
+    return RenderCameraClearMode::SolidColor;
+}
+
 [[nodiscard]] RenderLightKind LightKindOf(kb::scene::LightKind kind) noexcept {
     switch (kind) {
     case kb::scene::LightKind::Directional:
@@ -126,6 +138,9 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
         .visible = IsVisible(*sync->scene, entity),
         .viewportId = camera.viewportId,
         .priority = camera.priority,
+        .cullingMask = camera.cullingMask,
+        .clearMode = CameraClearModeOf(camera.clearMode),
+        .clearColor = { camera.clearColor.x, camera.clearColor.y, camera.clearColor.z },
     }));
     static_cast<void>(transform);
 }
@@ -147,6 +162,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .visible = IsVisible(*sync->scene, entity),
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
+        .layer = renderer.layer,
     }));
     static_cast<void>(transform);
 }

@@ -15,16 +15,19 @@ public:
     [[nodiscard]] static bool CanEverContain(
         MeshPassType pass,
         const SceneRenderMeshInstance& instance,
-        std::span<const std::uint64_t> selectedEntityIds) noexcept;
+        std::span<const std::uint64_t> selectedEntityIds,
+        std::uint32_t cullingMask) noexcept;
     [[nodiscard]] static std::uint32_t CountCandidateInstances(
         MeshPassType pass,
         const SceneMeshBatch& batch,
-        std::span<const std::uint64_t> selectedEntityIds) noexcept;
+        std::span<const std::uint64_t> selectedEntityIds,
+        std::uint32_t cullingMask) noexcept;
     [[nodiscard]] static bool Accepts(
         MeshPassType pass,
         const SceneRenderMeshInstance& instance,
         const RenderMaterialResource* material,
-        std::span<const std::uint64_t> selectedEntityIds) noexcept;
+        std::span<const std::uint64_t> selectedEntityIds,
+        std::uint32_t cullingMask) noexcept;
     [[nodiscard]] static bool UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept;
     [[nodiscard]] static std::uint64_t State(
         MeshPassType pass,

@@ -14,7 +14,8 @@ namespace {
         && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
         && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount
         && lhs.castsShadow == rhs.castsShadow
-        && lhs.receivesShadow == rhs.receivesShadow;
+        && lhs.receivesShadow == rhs.receivesShadow
+        && lhs.layer == rhs.layer;
 }
 
 } // namespace
@@ -41,6 +42,7 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
         }
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.castsShadow", ScenePrefabOverrideValueFormatter::ToString(actual->castsShadow), ScenePrefabOverrideFlag::MeshRenderer);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.receivesShadow", ScenePrefabOverrideValueFormatter::ToString(actual->receivesShadow), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.layer", ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->layer)), ScenePrefabOverrideFlag::MeshRenderer);
         return;
     }
     if (actual->meshAssetId != expected->meshAssetId) {
@@ -62,6 +64,9 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
     }
     if (actual->receivesShadow != expected->receivesShadow) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.receivesShadow", ScenePrefabOverrideValueFormatter::ToString(actual->receivesShadow), ScenePrefabOverrideFlag::MeshRenderer);
+    }
+    if (actual->layer != expected->layer) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.layer", ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->layer)), ScenePrefabOverrideFlag::MeshRenderer);
     }
 }
 
