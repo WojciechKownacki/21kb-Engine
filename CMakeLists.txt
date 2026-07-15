@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.27)
+
+# Must be set before project() to actually take effect. Apple's libc++
+# gates std::from_chars/to_chars for floating-point types (used by
+# kb::library::TryParseDouble, EngineLibraryParsing.cpp) behind an
+# availability macro requiring macOS 13.3+; without this, Clang reports
+# "call to deleted function" on macos-15 CI runners despite the syntax
+# itself being valid C++17.
+if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target")
+endif()
+
 project(Engine21kb LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
