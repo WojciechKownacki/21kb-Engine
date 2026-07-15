@@ -7,6 +7,7 @@
 #include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputModifiers.hpp"
 #include "engine/input/InputRebinding.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputTriggers.hpp"
 
@@ -704,6 +705,141 @@ void TestPressedStateResetsWhenDeviceGoesQuiet() {
     Require(!subsystem.WasActionReleased("Jump"), "Jump must not repeat Released on a second consecutive quiet frame");
 }
 
+// LIB-121: the real point of recording/replay - drive a LIVE subsystem through
+// a scripted sequence of frames (varying digital/analog/dt so both immediate
+// axis values AND dt-dependent trigger timing - Hold - are exercised),
+// capturing a frame snapshot before each Evaluate. Serialize the recording to
+// disk and back, then replay it frame-by-frame against a COMPLETELY FRESH
+// subsystem (zero shared state with the original) and prove the resulting
+// action trace is IDENTICAL frame-by-frame - not just "doesn't crash".
+void TestInputRecordingDeterministicReplay() {
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::W, .scale = 1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::S, .scale = -1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::Space});
+    context->mappings.back().triggers.push_back(
+        InputTriggerDesc{.type = InputTriggerType::Hold, .params = {0.0F, 0.1F, 0.0F}, .chordActionId = 0U});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}, {2U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+    const auto resolveAction = [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+        const auto found = actions.find(id);
+        return found != actions.end() ? found->second : nullptr;
+    };
+    const auto resolveContext = [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+        const auto found = contexts.find(id);
+        return found != contexts.end() ? found->second : nullptr;
+    };
+
+    struct FrameInput {
+        float dt;
+        bool w;
+        bool s;
+        bool space;
+    };
+    const std::array<FrameInput, 6> script{{
+        {.dt = 0.02F, .w = true, .s = false, .space = true},
+        {.dt = 0.02F, .w = true, .s = false, .space = true},
+        {.dt = 0.02F, .w = true, .s = true, .space = true},
+        {.dt = 0.02F, .w = false, .s = true, .space = true},
+        {.dt = 0.05F, .w = false, .s = false, .space = true}, // pushes Hold's cumulative time past 0.1s
+        {.dt = 0.02F, .w = false, .s = false, .space = false},
+    }};
+
+    struct FrameTrace {
+        float moveValue;
+        bool jumpPressed;
+        bool jumpTriggeredThisFrame;
+        bool jumpReleasedThisFrame;
+    };
+
+    // --- "Live" run: drive a real subsystem, capturing a recording as we go. ---
+    InputSubsystem live;
+    live.SetResolvers(resolveAction, resolveContext);
+    Require(live.AddMappingContext(10U, 0), "Live subsystem context should resolve");
+
+    InputRecording recording;
+    std::vector<FrameTrace> originalTrace;
+    for (const FrameInput& input : script) {
+        live.MutableDeviceState().Reset();
+        live.MutableDeviceState().SetKeyDown(InputKey::W, input.w);
+        live.MutableDeviceState().SetKeyDown(InputKey::S, input.s);
+        live.MutableDeviceState().SetKeyDown(InputKey::Space, input.space);
+
+        recording.push_back(CaptureInputFrame(live.DeviceState(), input.dt));
+        live.Evaluate(input.dt);
+
+        originalTrace.push_back(FrameTrace{
+            .moveValue = live.GetActionValue("Move").AsAxis1D(),
+            .jumpPressed = live.IsActionPressed("Jump"),
+            .jumpTriggeredThisFrame = live.WasActionTriggered("Jump"),
+            .jumpReleasedThisFrame = live.WasActionReleased("Jump"),
+        });
+    }
+    // Sanity check the script actually exercised what it claims to (a trace
+    // that never triggers Jump would make the replay comparison meaningless).
+    bool jumpEverTriggered = false;
+    for (const FrameTrace& trace : originalTrace) {
+        jumpEverTriggered = jumpEverTriggered || trace.jumpTriggeredThisFrame;
+    }
+    Require(jumpEverTriggered, "Test script should actually exercise the Hold trigger firing");
+
+    // --- Round-trip the recording through the real binary format. ---
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_input_recording_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Input recording test root could not be prepared");
+    const std::filesystem::path recordingPath = root / ("session" + std::string{InputAssetFormat::RecordingExtension});
+    Require(WriteInputRecording(recordingPath, recording), "Writing the input recording should succeed");
+    const InputAssetLoadResult<InputRecording> loaded = ReadInputRecording(recordingPath);
+    Require(loaded.succeeded, "Reading the input recording should succeed");
+    Require(loaded.asset.size() == script.size(), "Recording frame count should round-trip");
+
+    // --- Replay against a completely independent, freshly-constructed subsystem. ---
+    InputSubsystem replay;
+    replay.SetResolvers(resolveAction, resolveContext);
+    Require(replay.AddMappingContext(10U, 0), "Replay subsystem context should resolve");
+
+    InputDeviceState scratch;
+    std::vector<FrameTrace> replayTrace;
+    for (const InputFrameSnapshot& frame : loaded.asset) {
+        ApplyInputFrame(scratch, frame);
+        replay.EvaluateWithDeviceState(scratch, frame.deltaSeconds);
+        replayTrace.push_back(FrameTrace{
+            .moveValue = replay.GetActionValue("Move").AsAxis1D(),
+            .jumpPressed = replay.IsActionPressed("Jump"),
+            .jumpTriggeredThisFrame = replay.WasActionTriggered("Jump"),
+            .jumpReleasedThisFrame = replay.WasActionReleased("Jump"),
+        });
+    }
+
+    Require(replayTrace.size() == originalTrace.size(), "Replay must produce exactly one trace entry per recorded frame");
+    for (std::size_t index = 0U; index < originalTrace.size(); ++index) {
+        Require(NearlyEqual(replayTrace[index].moveValue, originalTrace[index].moveValue), "Replayed Move value must match the live run frame-by-frame");
+        Require(replayTrace[index].jumpPressed == originalTrace[index].jumpPressed, "Replayed Jump pressed state must match the live run");
+        Require(replayTrace[index].jumpTriggeredThisFrame == originalTrace[index].jumpTriggeredThisFrame,
+                "Replayed Jump Triggered edge must match the live run (proves Hold's dt-dependent timing replayed identically)");
+        Require(replayTrace[index].jumpReleasedThisFrame == originalTrace[index].jumpReleasedThisFrame,
+                "Replayed Jump Released edge must match the live run");
+    }
+
+    // ReplayInputRecording (the convenience whole-recording helper) must reach
+    // the SAME final state as the frame-by-frame loop above.
+    InputSubsystem replayViaHelper;
+    replayViaHelper.SetResolvers(resolveAction, resolveContext);
+    Require(replayViaHelper.AddMappingContext(10U, 0), "Helper-replay subsystem context should resolve");
+    ReplayInputRecording(replayViaHelper, loaded.asset);
+    Require(NearlyEqual(replayViaHelper.GetActionValue("Move").AsAxis1D(), originalTrace.back().moveValue),
+            "ReplayInputRecording should reach the same final Move value as the live run");
+    Require(replayViaHelper.IsActionPressed("Jump") == originalTrace.back().jumpPressed,
+            "ReplayInputRecording should reach the same final Jump state as the live run");
+
+    std::filesystem::remove_all(root, error);
+}
+
 // LIB-117: absolute pointer position is independent storage from the existing
 // MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
 // platform collector re-sets it unconditionally every Collect() call rather
@@ -784,6 +920,7 @@ void RunInputTests() {
     TestRebindProfileRoundTripAndApply();
     TestFocusAndGamepadConnectivity();
     TestPressedStateResetsWhenDeviceGoesQuiet();
+    TestInputRecordingDeterministicReplay();
 }
 
 } // namespace kb::tests
