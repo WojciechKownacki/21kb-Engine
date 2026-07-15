@@ -276,6 +276,60 @@ public:
         }
     }
 
+    // LIB-131: mirrors AddForce/SetVelocity above - a second "known entity" so tests can
+    // prove CharacterMove/CharacterJump/CharacterVelocity/CharacterIsGrounded/
+    // CharacterGroundNormal/CharacterGroundVelocity dispatch correctly through
+    // ScriptPhysicsApi -> kb::scene::PhysicsBackend -> this fake, independent of whether
+    // `knownEntity` (a Rigidbody-shaped fake elsewhere in this file) also exists.
+    bool CharacterMove(kb::scene::SceneEntity entity, kb::scene::Vec3 horizontalVelocity) noexcept override {
+        if (entity != knownCharacterEntity) {
+            return false;
+        }
+        lastCharacterMove = horizontalVelocity;
+        return true;
+    }
+
+    bool CharacterJump(kb::scene::SceneEntity entity, float verticalSpeed) noexcept override {
+        if (entity != knownCharacterEntity) {
+            return false;
+        }
+        lastCharacterJumpSpeed = verticalSpeed;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterVelocity };
+    }
+
+    [[nodiscard]] bool CharacterIsGrounded(kb::scene::SceneEntity entity) const noexcept override {
+        return entity == knownCharacterEntity && characterGrounded;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundNormal(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity || !characterGrounded) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterGroundNormal };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity || !characterGrounded) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterGroundVelocity };
+    }
+
+    kb::scene::SceneEntity knownCharacterEntity{};
+    kb::scene::Vec3 lastCharacterMove{};
+    float lastCharacterJumpSpeed = 0.0F;
+    kb::scene::Vec3 characterVelocity{};
+    bool characterGrounded = false;
+    kb::scene::Vec3 characterGroundNormal{};
+    kb::scene::Vec3 characterGroundVelocity{};
+
     kb::scene::SceneEntity knownEntity{};
     kb::scene::Vec3 lastForce{};
     kb::scene::Vec3 lastImpulse{};
@@ -2651,6 +2705,122 @@ void RunScriptPhysicsForceVelocitySleepApiTest() {
 
     kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
     kb::tests::Require(!kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report false after UnregisterBackend");
+}
+
+// LIB-131: CharacterMove/CharacterJump/CharacterVelocity/CharacterIsGrounded/
+// CharacterGroundNormal/CharacterGroundVelocity dispatch. Same isolated fake-backend
+// approach as RunScriptPhysicsForceVelocitySleepApiTest above - proves the honest
+// "no backend"/"unknown entity" failure paths and that ScriptPhysicsApi forwards
+// arguments/results through to kb::scene::PhysicsBackend unmodified (real Jolt-backed
+// slope/step/grounding/platform/gravity behavior is proven separately in
+// PhysicsSceneSystemTests.cpp).
+void RunScriptPhysicsCharacterApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject character = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Character Backend Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Character Controller" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics character API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CharacterMove") != nullptr, "Physics.CharacterMove was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CharacterIsGrounded") != nullptr, "Physics.CharacterIsGrounded was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "moveX", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "moveZ", .value = kb::script::ScriptValue{ -2.5F } },
+    };
+
+    // --- No backend registered: honest failure, never fabricated success.
+    const kb::script::ScriptFunctionCallResult noBackendMove = host.Functions().Call("Physics.CharacterMove", moveArgs, context);
+    kb::tests::Require(noBackendMove.Succeeded() && !noBackendMove.Output("applied")->AsBool(), "Physics.CharacterMove must report applied=false when no physics backend is registered");
+    const std::vector<kb::script::ScriptFunctionArgument> entityOnlyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noBackendVelocity = host.Functions().Call("Physics.CharacterVelocity", entityOnlyArgs, context);
+    kb::tests::Require(noBackendVelocity.Succeeded() && !noBackendVelocity.Output("found")->AsBool(), "Physics.CharacterVelocity must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `character` is "known" to it.
+    ProbePhysicsBackend backend;
+    backend.knownCharacterEntity = character.Entity();
+    backend.characterVelocity = kb::scene::Vec3{ 0.0F, -1.0F, 0.0F };
+    backend.characterGrounded = true;
+    backend.characterGroundNormal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F };
+    backend.characterGroundVelocity = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    const kb::script::ScriptFunctionCallResult moveResult = host.Functions().Call("Physics.CharacterMove", moveArgs, context);
+    kb::tests::Require(moveResult.Succeeded() && moveResult.Output("applied")->AsBool(), "Physics.CharacterMove must report applied=true once a backend is registered for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterMove.x, 1.5F) && kb::tests::NearlyEqual(backend.lastCharacterMove.z, -2.5F),
+        "Physics.CharacterMove must pass the exact moveX/moveZ vector through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "speed", .value = kb::script::ScriptValue{ 6.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.CharacterJump", jumpArgs, context).Output("applied")->AsBool(), "Physics.CharacterJump must report applied=true for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterJumpSpeed, 6.0F), "Physics.CharacterJump must pass the exact jump speed through to the backend");
+
+    const kb::script::ScriptFunctionCallResult velocity = host.Functions().Call("Physics.CharacterVelocity", entityOnlyArgs, context);
+    kb::tests::Require(velocity.Output("found")->AsBool() && kb::tests::NearlyEqual(velocity.Output("y")->AsFloat(), -1.0F), "Physics.CharacterVelocity must read back the backend's real resulting velocity");
+
+    kb::tests::Require(host.Functions().Call("Physics.CharacterIsGrounded", entityOnlyArgs, context).Output("grounded")->AsBool(), "Physics.CharacterIsGrounded must report true when the backend reports the character grounded");
+
+    const kb::script::ScriptFunctionCallResult groundNormal = host.Functions().Call("Physics.CharacterGroundNormal", entityOnlyArgs, context);
+    kb::tests::Require(groundNormal.Output("found")->AsBool() && kb::tests::NearlyEqual(groundNormal.Output("y")->AsFloat(), 1.0F), "Physics.CharacterGroundNormal must read back the backend's real ground normal");
+
+    const kb::script::ScriptFunctionCallResult groundVelocity = host.Functions().Call("Physics.CharacterGroundVelocity", entityOnlyArgs, context);
+    kb::tests::Require(groundVelocity.Output("found")->AsBool() && kb::tests::NearlyEqual(groundVelocity.Output("x")->AsFloat(), 3.0F), "Physics.CharacterGroundVelocity must read back the backend's real ground velocity (platform motion)");
+
+    // --- An entity the backend does not know about must honestly fail too.
+    const std::vector<kb::script::ScriptFunctionArgument> unknownMoveArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "moveX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "moveZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.CharacterMove", unknownMoveArgs, context).Output("applied")->AsBool(), "Physics.CharacterMove must report applied=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: dedicated wrappers (LuaPhysicsCharacterMove etc.)
+    // parse `entity` via luaL_checkinteger and explicitly tag it
+    // Entity-typed, mirroring CheckEntityArg's use for every other
+    // entity-taking Physics.* wrapper in PucLuaFunctionApi.cpp.
+    const kb::assets::AssetId luaAsset{ 9411U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Character Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(character.Entity().Id()) + "\n"
+                                                    "    local moved = Physics.CharacterMove(entityId, 4.0, 5.0)\n"
+                                                    "    local jumped = Physics.CharacterJump(entityId, 7.0)\n"
+                                                    "    local velocity = Physics.CharacterVelocity(entityId)\n"
+                                                    "    local grounded = Physics.CharacterIsGrounded(entityId)\n"
+                                                    "    local groundNormal = Physics.CharacterGroundNormal(entityId)\n"
+                                                    "    local groundVelocity = Physics.CharacterGroundVelocity(entityId)\n"
+                                                    "    SetShared(\"luaCharacterMoved\", moved)\n"
+                                                    "    SetShared(\"luaCharacterJumped\", jumped)\n"
+                                                    "    SetShared(\"luaCharacterVelocityY\", velocity.y)\n"
+                                                    "    SetShared(\"luaCharacterGrounded\", grounded)\n"
+                                                    "    SetShared(\"luaCharacterGroundNormalY\", groundNormal.y)\n"
+                                                    "    SetShared(\"luaCharacterGroundVelocityX\", groundVelocity.x)\n"
+                                                    "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics character API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics character API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaCharacterMoved")->AsBool(), "Lua Physics.CharacterMove must report applied=true for a known character entity");
+    kb::tests::Require(host.SharedState().Get("luaCharacterJumped")->AsBool(), "Lua Physics.CharacterJump must report applied=true for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterVelocityY")->AsFloat(), -1.0F), "Lua Physics.CharacterVelocity must read back the backend's real resulting velocity");
+    kb::tests::Require(host.SharedState().Get("luaCharacterGrounded")->AsBool(), "Lua Physics.CharacterIsGrounded must report true when the backend reports the character grounded");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterGroundNormalY")->AsFloat(), 1.0F), "Lua Physics.CharacterGroundNormal must read back the backend's real ground normal");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterGroundVelocityX")->AsFloat(), 3.0F), "Lua Physics.CharacterGroundVelocity must read back the backend's real ground velocity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterMove.x, 4.0F) && kb::tests::NearlyEqual(backend.lastCharacterMove.z, 5.0F), "Lua Physics.CharacterMove must pass the exact moveX/moveZ vector through");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterJumpSpeed, 7.0F), "Lua Physics.CharacterJump must pass the exact jump speed through");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
 }
 
 // LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
@@ -6812,7 +6982,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
         }
     }
-    kb::tests::Require(fieldsChecked == 79U, "Script component API generated accessor coverage test did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
+    // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
+    kb::tests::Require(fieldsChecked == 83U, "Script component API generated accessor coverage test did not exercise the expected total field count (83) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -6857,7 +7029,9 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
         }
     }
-    kb::tests::Require(propertiesChecked == 79U, "LIB-082 raw-pointer audit did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields, so the total climbs
+    // from 79 to 83.
+    kb::tests::Require(propertiesChecked == 83U, "LIB-082 raw-pointer audit did not exercise the expected total field count (83) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -9241,6 +9415,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
+    RunScriptPhysicsCharacterApiTest();
     RunScriptPhysicsCastOverlapClosestPointApiTest();
     RunPhysicsBackendNonAllocQueriesTest();
     RunScriptPhysicsCollisionTriggerEventDispatchTest();

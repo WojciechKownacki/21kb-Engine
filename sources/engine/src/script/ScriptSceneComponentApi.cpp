@@ -295,12 +295,16 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDesc
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kCharacterControllerPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "slopeLimitDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "stepOffset", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
 };
 
 // LIB-082: connectedEntity is deliberately NOT in this table - Script
@@ -414,12 +418,16 @@ constexpr std::array<FieldBinding, 13> kColliderFields{
     KB_UINT32(kb::scene::ColliderComponent, layer),
 };
 
-constexpr std::array<FieldBinding, 5> kCharacterControllerFields{
+constexpr std::array<FieldBinding, 9> kCharacterControllerFields{
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, x),
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, y),
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, z),
     KB_FLOAT(kb::scene::CharacterControllerComponent, radius),
     KB_FLOAT(kb::scene::CharacterControllerComponent, height),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, slopeLimitDegrees),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, stepOffset),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, gravityScale),
+    KB_BOOL(kb::scene::CharacterControllerComponent, useGravity),
 };
 
 constexpr std::array<FieldBinding, 13> kJointFields{

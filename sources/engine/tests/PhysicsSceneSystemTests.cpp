@@ -9,7 +9,9 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -733,6 +735,223 @@ void RunPhysicsSceneSystemFallingBodyTest() {
         [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
     }
     kb::tests::Require(scene.Transforms().Get(pointBody).localPosition.y < pointFinal.y - 0.2F, "LIB-130 removing a JointComponent must actually tear down the real Jolt constraint, letting gravity resume");
+
+    // LIB-131: character API - slope limit, step offset, grounding, platform motion, gravity.
+    // All new rigs sit far apart in x (100..380), well clear of every rig above (x=-8..46),
+    // reusing this SAME scene for the same documented reason ("2 sequential Jolt scenes"
+    // limitation - see _temp.md). A default CharacterControllerComponent (radius=0.4,
+    // height=1.8, center=zero) is shared across every rig below, so a character's transform
+    // position IS the capsule's center (halfCapsule=0.9 from the capsule's own bottom).
+    constexpr float kCharacterFixedDelta = 1.0F / 60.0F;
+    constexpr float kHalfCapsule = 0.9F;
+    const kb::scene::CharacterControllerComponent kDefaultCharacter{ .radius = 0.4F, .height = 1.8F };
+
+    // --- Slope limit: a shallow ramp (20 degrees, well inside the default 50-degree limit)
+    // vs. a steep ramp (75 degrees, well beyond it) - a positive/negative control pair
+    // (mirrors LIB-129/130's phase/solid comparison) built by rotating a box collider about
+    // Z, with both characters dropped straight down from directly above (zero horizontal
+    // input), so only the slope angle itself - not walking direction - decides the outcome.
+    const auto rampRotation = [](float degrees) {
+        const float halfAngle = degrees * kb::math::kPi / 180.0F * 0.5F;
+        return kb::scene::Quat{ 0.0F, 0.0F, std::sin(halfAngle), std::cos(halfAngle) };
+    };
+
+    const kb::scene::SceneObject slopeCatchFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SlopeCatchFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 110.0F, -20.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(slopeCatchFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(slopeCatchFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 60.0F, 2.0F, 30.0F } });
+
+    const kb::scene::SceneObject shallowRamp = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ShallowRamp",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 100.0F, 0.0F, 0.0F }, .localRotation = rampRotation(20.0F) },
+    });
+    scene.Components().Rigidbodies().Set(shallowRamp.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(shallowRamp.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 6.0F, 0.5F, 6.0F } });
+
+    const kb::scene::SceneObject steepRamp = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SteepRamp",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 120.0F, 0.0F, 0.0F }, .localRotation = rampRotation(75.0F) },
+    });
+    scene.Components().Rigidbodies().Set(steepRamp.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(steepRamp.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 6.0F, 0.5F, 6.0F } });
+
+    const kb::scene::SceneObject shallowCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ShallowSlopeCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 100.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(shallowCharacter.Entity(), kDefaultCharacter);
+
+    const kb::scene::SceneObject steepCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SteepSlopeCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 120.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(steepCharacter.Entity(), kDefaultCharacter);
+
+    // --- Step offset: the SAME physical step height (0.3) on both rigs, but DIFFERENT
+    // stepOffset field values (0.5 vs 0.1) - proves the FIELD itself drives Jolt's WalkStairs,
+    // not merely Jolt's own built-in default (which the slope test above already exercises
+    // implicitly via kDefaultCharacter). Both characters walk at a constant 2 m/s toward the
+    // step (Physics.CharacterMove's equivalent native call, held for the whole run).
+    const kb::scene::SceneObject walkableFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "WalkableStepFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 160.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(walkableFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(walkableFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 8.0F, 1.0F, 6.0F } });
+
+    const kb::scene::SceneObject walkableStep = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "WalkableStep",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 183.0F, -4.7F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(walkableStep.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(walkableStep.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 40.0F, 10.0F, 6.0F } });
+
+    const kb::scene::SceneObject walkableStepCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "WalkableStepCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 158.0F, kHalfCapsule, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(walkableStepCharacter.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .stepOffset = 0.5F });
+
+    const kb::scene::SceneObject blockedFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "BlockedStepFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 220.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(blockedFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(blockedFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 8.0F, 1.0F, 6.0F } });
+
+    const kb::scene::SceneObject blockedStep = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "BlockedStep",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 243.0F, -4.7F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(blockedStep.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(blockedStep.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 40.0F, 10.0F, 6.0F } });
+
+    const kb::scene::SceneObject blockedStepCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "BlockedStepCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 218.0F, kHalfCapsule, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(blockedStepCharacter.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .stepOffset = 0.1F });
+
+    // --- Grounding + gravity: dropped from mid-air with zero horizontal input - proves
+    // gravity actually accelerates the character downward while airborne, and that it
+    // correctly reports grounded=true only once it has actually landed.
+    const kb::scene::SceneObject groundingFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "GroundingFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 290.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(groundingFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(groundingFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 8.0F, 1.0F, 8.0F } });
+
+    const kb::scene::SceneObject groundingCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "GroundingCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 290.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(groundingCharacter.Entity(), kDefaultCharacter);
+
+    // --- Platform motion: a Kinematic platform driven by directly animating its
+    // TransformComponent every fixed step (exactly how a real game would move one) - a
+    // character standing on it passively (zero move input) must ride along automatically via
+    // Physics.CharacterGroundVelocity's real ground-velocity tracking.
+    const kb::scene::SceneObject platform = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "MovingPlatform",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 320.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(platform.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Kinematic });
+    scene.Components().Colliders().Set(platform.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 4.0F, 1.0F, 4.0F } });
+
+    const kb::scene::SceneObject platformCatchFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "PlatformCatchFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 340.0F, -20.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(platformCatchFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(platformCatchFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 80.0F, 2.0F, 20.0F } });
+
+    const kb::scene::Vec3 platformCharacterStart{ 320.0F, kHalfCapsule, 0.0F };
+    const kb::scene::SceneObject platformCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "PlatformRidingCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = platformCharacterStart },
+    });
+    scene.Components().CharacterControllers().Set(platformCharacter.Entity(), kDefaultCharacter);
+
+    constexpr float kPlatformSpeed = 1.0F;
+    const auto advancePlatformAndStep = [&]() {
+        kb::scene::TransformComponent platformTransform = scene.Transforms().Get(platform);
+        platformTransform.localPosition.x += kPlatformSpeed * kCharacterFixedDelta;
+        scene.Transforms().Set(platform.Entity(), platformTransform);
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(kCharacterFixedDelta);
+    };
+
+    // One priming step so every CharacterControllerComponent above is synchronized into a
+    // real JPH::CharacterVirtual before Physics.CharacterMove targets it - mirrors LIB-014's
+    // documented "a freshly spawned entity's physics object does not exist yet" gotcha.
+    advancePlatformAndStep();
+
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterMove(scene, walkableStepCharacter.Entity(), kb::scene::Vec3{ 2.0F, 0.0F, 0.0F }),
+        "PhysicsBackend::CharacterMove must report true once the walkable step character has a live Jolt character");
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterMove(scene, blockedStepCharacter.Entity(), kb::scene::Vec3{ 2.0F, 0.0F, 0.0F }),
+        "PhysicsBackend::CharacterMove must report true once the blocked step character has a live Jolt character");
+
+    // Phase 1: enough steps to prove the grounding character is genuinely still airborne
+    // (gravity accelerating it downward) before it has had time to reach the floor below it.
+    for (int i = 0; i < 24; ++i) {
+        advancePlatformAndStep();
+    }
+    kb::tests::Require(!kb::scene::PhysicsBackend::CharacterIsGrounded(scene, groundingCharacter.Entity()), "LIB-131 a character dropped from mid-air must not report grounded before it has actually landed");
+    const kb::scene::PhysicsVectorResult earlyFallVelocity = kb::scene::PhysicsBackend::CharacterVelocity(scene, groundingCharacter.Entity());
+    kb::tests::Require(earlyFallVelocity.found && earlyFallVelocity.value.y < -1.0F, "LIB-131 gravity must accelerate an airborne character's real velocity downward");
+
+    // Phase 2: run the rest of the way - lands/settles the slope+grounding+step rigs and
+    // carries the platform rig forward (300 total fixed steps = 5 real seconds).
+    for (int i = 0; i < 275; ++i) {
+        advancePlatformAndStep();
+    }
+
+    // --- Slope limit assertions.
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(scene, shallowCharacter.Entity()), "LIB-131 a character dropped onto a slope within the slope limit must end up grounded");
+    const kb::scene::PhysicsVectorResult shallowGroundNormal = kb::scene::PhysicsBackend::CharacterGroundNormal(scene, shallowCharacter.Entity());
+    kb::tests::Require(shallowGroundNormal.found && shallowGroundNormal.value.y > 0.85F, "LIB-131 the ground normal on the shallow ramp must be close to the ramp's real (mildly tilted) surface normal");
+    const float shallowFinalY = scene.Transforms().Get(shallowCharacter).localPosition.y;
+    const float steepFinalY = scene.Transforms().Get(steepCharacter).localPosition.y;
+    // The steep character is NOT expected to stay ungrounded forever - it slides off the
+    // ramp, keeps falling, and eventually lands (grounded=true again) on the flat catch
+    // floor far below, which is itself well within the slope limit. The decisive proof of
+    // "the ramp itself never counted as ground" is the huge height gap this produces versus
+    // the shallow character, which the slope limit genuinely arrested ON the ramp.
+    kb::tests::Require(steepFinalY < shallowFinalY - 5.0F, "LIB-131 a too-steep slope must let the character slide off and keep falling, ending up far below the shallow ramp's character which the slope limit actually arrested");
+
+    // --- Step offset assertions.
+    const kb::scene::Vec3 walkableFinal = scene.Transforms().Get(walkableStepCharacter).localPosition;
+    kb::tests::Require(walkableFinal.x > 165.0F, "LIB-131 a step shorter than the character's own stepOffset must not block forward progress");
+    kb::tests::Require(walkableFinal.y > 1.0F, "LIB-131 a character that climbed a real step via WalkStairs must end up standing on TOP of it, higher than the lower floor");
+
+    const kb::scene::Vec3 blockedFinal = scene.Transforms().Get(blockedStepCharacter).localPosition;
+    kb::tests::Require(blockedFinal.x < 225.0F, "LIB-131 a step taller than the character's own stepOffset must genuinely block forward progress, not merely slow it");
+    kb::tests::Require(blockedFinal.y < 1.0F, "LIB-131 a character blocked by too-tall a step must stay on the lower floor, never climbing it");
+
+    // --- Grounding + gravity assertions (post-landing).
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(scene, groundingCharacter.Entity()), "LIB-131 a character that fell onto flat ground must report grounded after settling");
+    const float groundedY = scene.Transforms().Get(groundingCharacter).localPosition.y;
+    kb::tests::Require(groundedY > kHalfCapsule - 0.2F && groundedY < kHalfCapsule + 0.5F, "LIB-131 a grounded character must settle to rest on the real floor surface, neither tunneling through nor floating");
+
+    // --- Jump: one-shot vertical kick, only meaningful while grounded.
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterJump(scene, groundingCharacter.Entity(), 5.0F), "PhysicsBackend::CharacterJump must report true for a live, grounded character");
+    [[maybe_unused]] const bool jumpStepProgressed = scene.Runtime().Update(kCharacterFixedDelta);
+    const kb::scene::PhysicsVectorResult postJumpVelocity = kb::scene::PhysicsBackend::CharacterVelocity(scene, groundingCharacter.Entity());
+    kb::tests::Require(postJumpVelocity.found && postJumpVelocity.value.y > 3.0F, "LIB-131 CharacterJump must give the character a real, immediate upward velocity while grounded");
+    kb::tests::Require(!kb::scene::PhysicsBackend::CharacterIsGrounded(scene, groundingCharacter.Entity()), "LIB-131 a character must leave the ground the instant it jumps");
+
+    // --- Platform motion assertions: the platform moved kPlatformSpeed * 300 steps of real
+    // time; the riding character (zero move input the whole run) must have moved along with
+    // it by roughly the same amount, not been left behind.
+    const kb::scene::Vec3 platformFinal = scene.Transforms().Get(platform).localPosition;
+    const kb::scene::Vec3 platformCharacterFinal = scene.Transforms().Get(platformCharacter).localPosition;
+    const float platformTravel = platformFinal.x - 320.0F;
+    const float characterTravel = platformCharacterFinal.x - platformCharacterStart.x;
+    kb::tests::Require(platformTravel > 4.5F, "LIB-131 test setup sanity: the platform itself must have actually moved");
+    kb::tests::Require(std::fabs(characterTravel - platformTravel) < 1.0F, "LIB-131 platform motion: a character riding a moving platform with zero move input must travel along with it, not be left behind");
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(scene, platformCharacter.Entity()), "LIB-131 a character riding a moving platform the whole time must still report grounded");
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,

@@ -363,6 +363,63 @@ ScriptFunctionCallResult IsSleeping(const ScriptFunctionCallContext& context, st
     return BoolResult("sleeping", kb::scene::PhysicsBackend::IsSleeping(*context.scene, EntityArg(arguments, "entity")));
 }
 
+// LIB-131: sets the character's desired HORIZONTAL velocity for the backend's next fixed
+// step(s) - a genuine per-frame input (see kb::scene::IPhysicsBackend::CharacterMove's own
+// doc comment), unlike Rigidbody/Joint data which lives entirely on the component. Only two
+// pins (moveX/moveZ, no Y) - vertical motion is either gravity (automatic) or CharacterJump
+// (below), never a raw Y velocity a script would otherwise be tempted to fight gravity with.
+ScriptFunctionCallResult CharacterMove(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const Vec3 velocity{ FloatArg(arguments, "moveX", 0.0F), 0.0F, FloatArg(arguments, "moveZ", 0.0F) };
+    return BoolResult("applied", kb::scene::PhysicsBackend::CharacterMove(*context.scene, EntityArg(arguments, "entity"), velocity));
+}
+
+// LIB-131: one-shot vertical speed kick, honored only while the character is grounded and
+// not already moving away from the ground (see UpdateCharacters in JoltPhysicsSceneSystem.cpp)
+// - "applied" here means the entity has a live character and the request was queued, not
+// that a jump is guaranteed to happen (the same honest contract every other Physics.* action
+// in this file uses).
+ScriptFunctionCallResult CharacterJump(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const bool applied = kb::scene::PhysicsBackend::CharacterJump(*context.scene, EntityArg(arguments, "entity"), FloatArg(arguments, "speed", 0.0F));
+    return BoolResult("applied", applied);
+}
+
+ScriptFunctionCallResult CharacterVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::CharacterVelocity(*context.scene, EntityArg(arguments, "entity"));
+    return VectorResult(result.found, result.value);
+}
+
+ScriptFunctionCallResult CharacterIsGrounded(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("grounded", kb::scene::PhysicsBackend::CharacterIsGrounded(*context.scene, EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult CharacterGroundNormal(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::CharacterGroundNormal(*context.scene, EntityArg(arguments, "entity"));
+    return VectorResult(result.found, result.value);
+}
+
+ScriptFunctionCallResult CharacterGroundVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::CharacterGroundVelocity(*context.scene, EntityArg(arguments, "entity"));
+    return VectorResult(result.found, result.value);
+}
+
 // LIB-129: resolves a named collision layer (kb::scene::PhysicsLayersAsset,
 // last applied via PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers)
 // to its bit value, ready to OR into any Physics.*Cast/Overlap layerMask
@@ -576,6 +633,32 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     layerBitDesc.signature.outputs = { ScriptFunctionPin{ "bit", ScriptValueType::Int, true } };
     layerBitDesc.callback = &LayerBit;
     ok = host.RegisterFunction(std::move(layerBitDesc)) && ok;
+
+    ScriptFunctionDesc characterMoveDesc;
+    characterMoveDesc.signature.name = "Physics.CharacterMove";
+    characterMoveDesc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "moveX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "moveZ", ScriptValueType::Float, true },
+    };
+    characterMoveDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+    characterMoveDesc.callback = &CharacterMove;
+    ok = host.RegisterFunction(std::move(characterMoveDesc)) && ok;
+
+    ScriptFunctionDesc characterJumpDesc;
+    characterJumpDesc.signature.name = "Physics.CharacterJump";
+    characterJumpDesc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "speed", ScriptValueType::Float, true },
+    };
+    characterJumpDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+    characterJumpDesc.callback = &CharacterJump;
+    ok = host.RegisterFunction(std::move(characterJumpDesc)) && ok;
+
+    ok = RegisterVectorGetter(host, "Physics.CharacterVelocity", &CharacterVelocity) && ok;
+    ok = RegisterEntityBoolQuery(host, "Physics.CharacterIsGrounded", "grounded", &CharacterIsGrounded) && ok;
+    ok = RegisterVectorGetter(host, "Physics.CharacterGroundNormal", &CharacterGroundNormal) && ok;
+    ok = RegisterVectorGetter(host, "Physics.CharacterGroundVelocity", &CharacterGroundVelocity) && ok;
 
     return ok;
 }
