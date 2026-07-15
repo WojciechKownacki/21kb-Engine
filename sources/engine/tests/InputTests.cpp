@@ -6,6 +6,7 @@
 #include "engine/input/InputAssetLoaders.hpp"
 #include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputModifiers.hpp"
+#include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputTriggers.hpp"
 
@@ -511,6 +512,129 @@ void TestNamedContextPriorityBands() {
     Require(subsystem.IsActionPressed("Gameplay"), "Gameplay should finally fire once every higher band is removed");
 }
 
+// LIB-119: FindRebindConflict/ApplyRebind must detect a real collision against
+// BOTH a plain InputKeyMapping and an InputCompositeBinding slot, and must
+// refuse to apply a conflicting rebind unless explicitly overridden.
+void TestRebindConflictDetection() {
+    InputMappingContextAsset context;
+    context.mappings.push_back(InputKeyMapping{.bindingId = 1U, .actionId = 100U, .key = InputKey::W});
+    context.mappings.push_back(InputKeyMapping{.bindingId = 2U, .actionId = 200U, .key = InputKey::Space});
+
+    InputCompositeBinding composite;
+    composite.bindingId = 3U;
+    composite.actionId = 300U;
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::D, .axis = 0U, .scale = 1.0F});
+    composite.slots.push_back(InputCompositeSlot{.key = InputKey::A, .axis = 0U, .scale = -1.0F, .gamepadIndex = 1U});
+    context.composites.push_back(std::move(composite));
+
+    // No conflict: Enter is unused anywhere in the context.
+    Require(!FindRebindConflict(context, 2U, InputKey::Enter, 0U).has_value(), "Rebinding Space to Enter should not conflict");
+
+    // Conflicts with the OTHER InputKeyMapping (bindingId 1, key W).
+    const std::optional<InputRebindConflict> mappingConflict = FindRebindConflict(context, 2U, InputKey::W, 0U);
+    Require(mappingConflict.has_value() && mappingConflict->conflictingBindingId == 1U,
+            "Rebinding Space to W should conflict with binding 1");
+
+    // Conflicts with a composite slot on gamepad 1 - gamepadIndex must match
+    // exactly, so the SAME key on gamepad 0 must NOT conflict.
+    Require(!FindRebindConflict(context, 2U, InputKey::A, 0U).has_value(),
+            "Key A on gamepad 0 must not conflict with the composite's A slot, which is on gamepad 1");
+    const std::optional<InputRebindConflict> compositeConflict = FindRebindConflict(context, 2U, InputKey::A, 1U);
+    Require(compositeConflict.has_value() && compositeConflict->conflictingBindingId == 3U,
+            "Key A on gamepad 1 should conflict with the composite binding 3");
+
+    // ApplyRebind refuses a real conflict by default...
+    Require(!ApplyRebind(context, 2U, InputKey::W, 0U), "ApplyRebind must refuse a conflicting rebind by default");
+    Require(context.mappings[1].key == InputKey::Space, "A refused rebind must not mutate the binding");
+
+    // ...but succeeds when the caller explicitly allows it.
+    Require(ApplyRebind(context, 2U, InputKey::W, 0U, /*allowConflict=*/true), "ApplyRebind should succeed with allowConflict=true");
+    Require(context.mappings[1].key == InputKey::W, "An allowed conflicting rebind must still apply");
+
+    // A non-conflicting rebind of an unknown bindingId fails cleanly.
+    Require(!ApplyRebind(context, 999U, InputKey::Enter, 0U), "ApplyRebind must fail for an unknown bindingId");
+}
+
+// LIB-119: a rebind applied through ApplyRebind must actually change which
+// physical key drives the action under a real InputSubsystem - not just
+// mutate the asset in isolation - mirroring LIB-113's
+// TestBindingIdStableAcrossRebind but through the new dedicated API.
+void TestRebindEndToEnd() {
+    auto move = MakeAction("Move", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve before rebind");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move should fire on W before rebinding");
+
+    Require(ApplyRebind(*context, 7U, InputKey::S, 0U), "ApplyRebind should succeed for a known bindingId with no conflict");
+    Require(subsystem.AddMappingContext(10U, 0), "Re-adding the context should re-resolve the rebound mapping");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Move"), "Move must no longer fire on the old key W after rebinding");
+
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"), "Move must fire on the new key S after rebinding");
+}
+
+// LIB-119: a rebind profile (the list of user overrides) must round-trip
+// through the real binary format and correctly re-apply to a freshly resolved
+// base asset - including silently skipping a bindingId the base asset no
+// longer has, since content can change between when a profile was saved and
+// when it is loaded.
+void TestRebindProfileRoundTripAndApply() {
+    const std::vector<InputRebindOverride> overrides{
+        InputRebindOverride{.bindingId = 7U, .key = InputKey::S, .gamepadIndex = 0U},
+        InputRebindOverride{.bindingId = 999U, .key = InputKey::Enter, .gamepadIndex = 2U}, // stale, no longer in the base asset
+    };
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_input_rebind_profile_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Rebind profile test root could not be prepared");
+    const std::filesystem::path profilePath = root / ("player" + std::string{InputAssetFormat::RebindProfileExtension});
+
+    Require(WriteRebindProfile(profilePath, overrides), "Writing the rebind profile should succeed");
+    const InputAssetLoadResult<std::vector<InputRebindOverride>> loaded = ReadRebindProfile(profilePath);
+    Require(loaded.succeeded, "Reading the rebind profile should succeed");
+    Require(loaded.asset.size() == 2U, "Rebind profile entry count should round-trip");
+    Require(loaded.asset[0].bindingId == 7U && loaded.asset[0].key == InputKey::S && loaded.asset[0].gamepadIndex == 0U,
+            "Rebind profile entry 0 should round-trip");
+    Require(loaded.asset[1].bindingId == 999U && loaded.asset[1].key == InputKey::Enter && loaded.asset[1].gamepadIndex == 2U,
+            "Rebind profile entry 1 should round-trip");
+
+    InputMappingContextAsset context;
+    context.mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+    ApplyRebindProfile(context, loaded.asset);
+    Require(context.mappings[0].key == InputKey::S, "ApplyRebindProfile should rebind the mapping present in the base asset");
+    Require(context.mappings.size() == 1U, "ApplyRebindProfile must not fabricate a mapping for the stale bindingId 999");
+
+    std::filesystem::remove_all(root, error);
+}
+
 // LIB-117: absolute pointer position is independent storage from the existing
 // MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
 // platform collector re-sets it unconditionally every Collect() call rather
@@ -586,6 +710,9 @@ void RunInputTests() {
     TestMultiGamepadMapping();
     TestPointerPosition();
     TestNamedContextPriorityBands();
+    TestRebindConflictDetection();
+    TestRebindEndToEnd();
+    TestRebindProfileRoundTripAndApply();
 }
 
 } // namespace kb::tests
