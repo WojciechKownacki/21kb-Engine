@@ -12,7 +12,7 @@ namespace kb::render {
 class RendererViewConfigurator {
 public:
     static void ApplyViewOrder(std::span<const std::uint16_t> viewOrder);
-    static void ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc);
+    static void ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, std::uint32_t clearRgba);
     static void ConfigureSceneNoClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, const char* name);
     static void ConfigureFramebufferClear(
         bgfx::ViewId viewId,
