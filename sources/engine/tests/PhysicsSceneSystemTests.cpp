@@ -2,24 +2,37 @@
 #include "TestSupport.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/AssetRegistry.hpp"
+#include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -354,6 +367,149 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(projectileHitOther.has_value() && static_cast<std::uint64_t>(projectileHitOther->AsInt()) == target.Entity().Id(),
         "LIB-014 projectile template's OnCollisionEnter must report the real target entity it hit");
     kb::tests::Require(!scene.Entities().IsAlive(projectile.Entity()), "LIB-014 projectile template must destroy itself via World.Destroy after a real collision");
+
+    // LIB-015: sample scene end-to-end - input -> movement -> spawn -> real
+    // collision -> log, chaining LIB-014's Projectile template behind a
+    // real Input action instead of spawning it directly from C++. Reuses
+    // this SAME scene/scriptHost/Target (the "2 sequential Jolt scenes"
+    // constraint - see notes above) - the LIB-014 projectile that used to
+    // occupy (-8,15,-8) is already destroyed, so a freshly spawned one can
+    // safely reuse that same start point and fly at the same still-alive
+    // Target.
+    const std::filesystem::path sampleProjectRoot = std::filesystem::temp_directory_path() / "21kb_engine_physics_scene_tests_lib015";
+    std::error_code sampleResetError;
+    std::filesystem::remove_all(sampleProjectRoot, sampleResetError);
+    std::filesystem::create_directories(sampleProjectRoot / "Assets" / "Logic", sampleResetError);
+    kb::tests::Require(!sampleResetError, "LIB-015 sample scene project root could not be prepared");
+
+    {
+        std::ofstream spawnScriptFile{ sampleProjectRoot / "Assets" / "Logic" / "ProjectileSpawn.lua", std::ios::binary | std::ios::trunc };
+        kb::tests::Require(spawnScriptFile.is_open(), "LIB-015 projectile spawn script could not be opened for writing");
+        spawnScriptFile << "local launched = false\n"
+                           "function Tick(self, dt)\n"
+                           "    if not launched then\n"
+                           "        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)\n"
+                           "        if applied then\n"
+                           "            launched = true\n"
+                           "        end\n"
+                           "    end\n"
+                           "end\n"
+                           "function OnCollisionEnter(self, event)\n"
+                           "    SetShared(\"sampleProjectileHit\", true)\n"
+                           "    SetShared(\"sampleProjectileHitOther\", event.args.other)\n"
+                           "    World.Destroy(self.entity)\n"
+                           "end\n";
+        kb::tests::Require(spawnScriptFile.good(), "LIB-015 projectile spawn script could not be written");
+    }
+
+    // AssetId is a deterministic hash of the virtual path (LIB-009) - a
+    // throwaway discovery scene resolves the SAME id the shared `scene`
+    // will later discover when it mounts this same project, so the
+    // prefab's baked BehaviourComponent can reference it up front.
+    kb::assets::AssetId sampleSpawnScriptAssetId{};
+    {
+        kb::scene::Scene discoveryScene;
+        kb::tests::Require(discoveryScene.Assets().MountProject(sampleProjectRoot), "LIB-015 sample scene project mount (discovery) failed");
+        kb::tests::Require(discoveryScene.Assets().Discover() == 1U, "LIB-015 sample scene did not discover exactly the projectile spawn script");
+        const kb::assets::AssetMetadata* metadata = discoveryScene.Assets().Manager().Registry().FindByPath("/Game/Logic/ProjectileSpawn.lua");
+        kb::tests::Require(metadata != nullptr, "LIB-015 sample scene could not resolve the projectile spawn script's asset id");
+        sampleSpawnScriptAssetId = metadata->id;
+    }
+
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ProjectileSpawn" });
+        prefabSource.Components().Rigidbodies().Set(prefabRoot.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 0.5F, .useGravity = false });
+        prefabSource.Components().Colliders().Set(prefabRoot.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+        prefabSource.Components().Behaviours().Set(prefabRoot.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = sampleSpawnScriptAssetId.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "ProjectileSpawn");
+        std::error_code prefabDirError;
+        std::filesystem::create_directories(sampleProjectRoot / "Assets" / "Prefabs", prefabDirError);
+        kb::tests::Require(!prefabDirError, "LIB-015 sample scene prefab directory could not be created");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, sampleProjectRoot / "Assets" / "Prefabs" / "ProjectileSpawn.kbprefab"), "LIB-015 projectile spawn prefab could not be saved");
+    }
+
+    kb::tests::Require(scene.Assets().MountProject(sampleProjectRoot), "LIB-015 sample scene project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "LIB-015 sample scene did not discover both the script and the prefab");
+
+    // --- Input: a real "Fire" action bound to a real key, evaluated
+    // through the real InputSubsystem - not a fabricated shortcut.
+    using kb::input::InputActionAsset;
+    using kb::input::InputActionValueType;
+    using kb::input::InputKey;
+    using kb::input::InputKeyMapping;
+    using kb::input::InputMappingContextAsset;
+
+    auto fireAction = std::make_shared<InputActionAsset>();
+    fireAction->name = "Fire";
+    fireAction->valueType = InputActionValueType::Bool;
+
+    auto fireContext = std::make_shared<InputMappingContextAsset>();
+    fireContext->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::F });
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> sampleActions{ { 1U, fireAction } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> sampleContexts{ { 60U, fireContext } };
+    scene.Input().SetResolvers(
+        [&sampleActions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = sampleActions.find(id);
+            return found != sampleActions.end() ? found->second : nullptr;
+        },
+        [&sampleContexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = sampleContexts.find(id);
+            return found != sampleContexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "LIB-015 sample scene could not add its Fire mapping context");
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::F, true);
+    scene.Input().Evaluate(1.0F / 60.0F);
+
+    // --- Player: reads the real Fire action and spawns the projectile
+    // prefab exactly once, at the SAME start point/target as LIB-014's
+    // direct-spawn proof above - the "spawn" step this sample adds on top.
+    constexpr kb::assets::AssetId kPlayerAsset{ 9603U };
+    const kb::scene::SceneObject player = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" });
+    scene.Components().Behaviours().Set(player.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kPlayerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string playerLuaScript =
+        "local fired = false\n"
+        "function Tick(self, dt)\n"
+        "    if not fired and Input.ActionBool(\"Fire\") then\n"
+        "        fired = true\n"
+        "        local spawned = World.InstantiatePrefab({ prefab = \"/Game/Prefabs/ProjectileSpawn.kbprefab\", x = -8.0, y = 15.0, z = -8.0 })\n"
+        "        SetShared(\"sampleSpawnedEntity\", spawned)\n"
+        "    end\n"
+        "end\n";
+    kb::tests::Require(scriptHost.LuaRuntime().LoadScript(kPlayerAsset, playerLuaScript).succeeded, "LIB-015 sample scene player script did not load");
+
+    for (int i = 0; i < 150; ++i) {
+        [[maybe_unused]] const bool sampleProgressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+
+    const std::optional<kb::script::ScriptValue> spawnedEntityValue = scriptHost.SharedState().Get("sampleSpawnedEntity");
+    kb::tests::Require(spawnedEntityValue.has_value(), "LIB-015 sample scene player must spawn the projectile once Fire is read as pressed");
+    // LIB-015: SetShared("sampleSpawnedEntity", spawned) re-marshals the
+    // returned entity id through Lua's generic value bridge, which infers
+    // ScriptValueType purely from the Lua number's own magnitude (the SAME
+    // pre-existing gap LIB-123/124/125 documented for entity ARGUMENTS,
+    // hit here for an entity RETURN VALUE instead) - a small entity id
+    // comes back tagged Int, not Entity, so it must be read via AsInt(),
+    // not AsUInt64() (which only reads the Entity/Component/Hash/UInt32
+    // variant slot and would silently return the 0 fallback here).
+    const kb::scene::SceneEntity spawnedProjectile{ static_cast<std::uint64_t>(spawnedEntityValue->AsInt()) };
+    kb::tests::Require(spawnedProjectile.IsValid(), "LIB-015 sample scene World.InstantiatePrefab must return a real spawned entity");
+
+    const std::optional<kb::script::ScriptValue> sampleHit = scriptHost.SharedState().Get("sampleProjectileHit");
+    kb::tests::Require(sampleHit.has_value() && sampleHit->AsBool(), "LIB-015 sample scene's spawned projectile must receive a real OnCollisionEnter when it hits the target");
+    const std::optional<kb::script::ScriptValue> sampleHitOther = scriptHost.SharedState().Get("sampleProjectileHitOther");
+    kb::tests::Require(sampleHitOther.has_value() && static_cast<std::uint64_t>(sampleHitOther->AsInt()) == target.Entity().Id(),
+        "LIB-015 sample scene's spawned projectile must report the real target entity it hit");
+    kb::tests::Require(!scene.Entities().IsAlive(spawnedProjectile), "LIB-015 sample scene's spawned projectile must destroy itself via World.Destroy after a real collision");
 }
 
 } // namespace
