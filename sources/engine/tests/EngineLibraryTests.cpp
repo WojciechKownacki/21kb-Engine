@@ -516,6 +516,14 @@ void RunCommandApplicationContractTest() {
     kb::tests::Require(
         kb::library::CommandApplicationPointFor(kb::library::LifecycleEvent::FixedTick) == kb::library::CommandApplicationPoint::Immediate,
         "Engine21kbLibrary must document FixedTick as an immediate command application point");
+    // LIB-128: the documented marker for the "does FixedTick see this same
+    // Update() call's physics simulation result" question - the real,
+    // empirical proof (a live ScriptRuntimeSceneSystem plus a fake
+    // RequiresFixedStep()==true system) lives in
+    // SceneSystemTransformSyncTests.cpp's RunFixedTickSeesPreviousFramePhysicsResultTest;
+    // this just locks the documented answer to the same value.
+    kb::tests::Require(!kb::library::PhysicsSimulationSeesSameFrameFixedTick(),
+        "Engine21kbLibrary must document that FixedTick does not see the same Update() call's physics simulation result");
 
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
