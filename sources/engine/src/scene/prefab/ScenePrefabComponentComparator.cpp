@@ -64,7 +64,9 @@ namespace {
         && Equal(lhs.boxSize, rhs.boxSize)
         && lhs.radius == rhs.radius
         && lhs.height == rhs.height
-        && lhs.trigger == rhs.trigger;
+        && lhs.trigger == rhs.trigger
+        && lhs.friction == rhs.friction
+        && lhs.restitution == rhs.restitution;
 }
 
 [[nodiscard]] bool Equal(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {

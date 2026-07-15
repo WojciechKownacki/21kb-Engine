@@ -27,17 +27,19 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
     //
     // `serializable` is verified against the REAL scene save/load round
     // trip (RunEngineLibraryComponentRegistryTest actually saves and
-    // reloads all six), not guessed. The mechanism: SceneDocumentService::
-    // Save captures the scene as a prefab (ScenePrefabs::CaptureRegistered)
-    // and ScenePrefabBakedData::Bake (ScenePrefabBakedData.hpp) is what
-    // actually serializes it — Transform and Visibility are baked
-    // UNCONDITIONALLY per node (ScenePrefabBakedArchetype::transforms/
-    // visibility, no mask bit), Camera/MeshRenderer/Light/Behaviour are
-    // baked behind ScenePrefabBakedComponentMask bits. All six survive.
-    // (An earlier version of this catalog wrongly marked Visibility
-    // false, reasoning from SceneAssetComponentCodec — a DIFFERENT,
-    // unrelated serialization path that does not cover Transform or
-    // Visibility either; the round-trip test below caught the mistake.)
+    // reloads every component marked true), not guessed. The mechanism:
+    // SceneDocumentService::Save captures the scene as a prefab
+    // (ScenePrefabs::CaptureRegistered) and ScenePrefabBakedData::Bake
+    // (ScenePrefabBakedData.hpp) is what actually serializes it — Transform
+    // and Visibility are baked UNCONDITIONALLY per node
+    // (ScenePrefabBakedArchetype::transforms/visibility, no mask bit),
+    // Camera/MeshRenderer/Light/Behaviour/Rigidbody/Collider/
+    // CharacterController are baked behind ScenePrefabBakedComponentMask
+    // bits. Joint is the one exception (serializable=false, see its entry
+    // below for why). (An earlier version of this catalog wrongly marked
+    // Visibility false, reasoning from SceneAssetComponentCodec — a
+    // DIFFERENT, unrelated serialization path that does not cover Transform
+    // or Visibility either; the round-trip test below caught the mistake.)
     static const std::vector<LibraryComponentDesc> kCatalog{
         LibraryComponentDesc{
             .name = "Transform",
@@ -68,6 +70,41 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .name = "Behaviour",
             .id = ComputeLibraryComponentId("Behaviour"),
             .serializable = true,
+        },
+        // LIB-123: Rigidbody/Collider already had a real, tested prefab-bake
+        // round trip (ScenePrefabBakedComponentMask::Rigidbody/Collider,
+        // predating this catalog entry) - extending this catalog to them
+        // only adds the script-facing surface, not new serialization.
+        // CharacterController's bake wiring was added alongside this catalog
+        // entry (RunEngineLibraryComponentRegistryTest exercises it below).
+        LibraryComponentDesc{
+            .name = "Rigidbody",
+            .id = ComputeLibraryComponentId("Rigidbody"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Collider",
+            .id = ComputeLibraryComponentId("Collider"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "CharacterController",
+            .id = ComputeLibraryComponentId("CharacterController"),
+            .serializable = true,
+        },
+        // Joint is deliberately serializable=false: JointComponent::
+        // connectedEntity is a live kb::scene::SceneEntity runtime handle,
+        // and this engine has no stable cross-node entity reference scheme
+        // any component can serialize through yet (ScenePrefabNodeDesc::
+        // parentNode is a prefab-local node INDEX, a hierarchy-specific
+        // mechanism, not a general one) - claiming serializable=true here
+        // would be dishonest until that scheme exists. The component is
+        // fully real and script-addressable (Add/Remove/Get/Set, native +
+        // Lua + VisualGraph) within a live, unsaved scene today.
+        LibraryComponentDesc{
+            .name = "Joint",
+            .id = ComputeLibraryComponentId("Joint"),
+            .serializable = false,
         },
     };
     return kCatalog;
