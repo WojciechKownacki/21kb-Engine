@@ -675,6 +675,30 @@ int LuaInputPriorityDebugOverlay(lua_State* state) {
     return LuaInputPriorityConstant(state, "Input.PriorityDebugOverlay");
 }
 
+int LuaInputHasFocus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.HasFocus", {});
+    lua_pushboolean(state, result.Output("focus").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputIsGamepadConnected(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("gamepadIndex", ScriptValue{ gamepadIndex }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.IsGamepadConnected", arguments);
+    lua_pushboolean(state, result.Output("connected").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, function, 1);
@@ -725,7 +749,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     lua_setfield(state, environmentIndex, "Physics");
 
-    lua_createtable(state, 0, 18);
+    lua_createtable(state, 0, 20);
     SetClosure(state, "IsPressed", &LuaInputIsPressed, context);
     SetClosure(state, "WasPressed", &LuaInputWasPressed, context);
     SetClosure(state, "WasReleased", &LuaInputWasReleased, context);
@@ -744,6 +768,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "PriorityUI", &LuaInputPriorityUI, context);
     SetClosure(state, "PriorityConsole", &LuaInputPriorityConsole, context);
     SetClosure(state, "PriorityDebugOverlay", &LuaInputPriorityDebugOverlay, context);
+    SetClosure(state, "HasFocus", &LuaInputHasFocus, context);
+    SetClosure(state, "IsGamepadConnected", &LuaInputIsGamepadConnected, context);
     lua_setfield(state, environmentIndex, "Input");
 
     lua_createtable(state, 0, 3);

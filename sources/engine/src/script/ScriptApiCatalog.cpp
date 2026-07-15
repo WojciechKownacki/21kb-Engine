@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 38> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 40> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -71,6 +71,8 @@ constexpr std::array<LuaBindingSpec, 38> kLuaBindings{ {
     { "Input", "PriorityUI", "Input.PriorityUI", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "PriorityConsole", "Input.PriorityConsole", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "PriorityDebugOverlay", "Input.PriorityDebugOverlay", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "HasFocus", "Input.HasFocus", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "IsGamepadConnected", "Input.IsGamepadConnected", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
