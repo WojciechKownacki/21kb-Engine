@@ -430,6 +430,7 @@ int LuaPhysicsRaycast(lua_State* state) {
             Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
             Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
             Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 8, static_cast<int>(kb::scene::kPhysicsAllLayers))) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.Raycast", arguments);
