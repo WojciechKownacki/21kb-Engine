@@ -135,6 +135,39 @@ public:
         return pointerY_;
     }
 
+    // LIB-120: whether the host window currently has input focus (foreground,
+    // not minimized to the background) - NOT reset by Reset(), same reasoning
+    // as pointer position: the platform layer sets it unconditionally every
+    // Collect() call, including to false, so there is nothing for Reset() to
+    // clear first. Losing focus already zeroes every key/axis/touch point via
+    // Reset() + the platform layer's early return; this flag exists so script/
+    // gameplay code can distinguish "genuinely nothing is pressed" from "input
+    // is suppressed because the window lost focus" and react (e.g. auto-pause).
+    void SetHasFocus(bool focus) noexcept {
+        hasFocus_ = focus;
+    }
+
+    [[nodiscard]] bool HasFocus() const noexcept {
+        return hasFocus_;
+    }
+
+    // LIB-120: hardware presence, independent of whether the gamepad is
+    // currently pressing anything - a disconnected controller and an idle one
+    // both report all-zero button/axis values, so this is the only way to tell
+    // them apart. NOT reset by Reset(): like pointer position, it keeps its
+    // last known value except when the platform layer actually has a fresh
+    // reading to report (e.g. only while the host window has focus, mirroring
+    // when gamepad polling itself happens).
+    void SetGamepadConnected(std::uint8_t gamepadIndex, bool connected) noexcept {
+        if (gamepadIndex < kMaxGamepads) {
+            gamepadConnected_[gamepadIndex] = connected;
+        }
+    }
+
+    [[nodiscard]] bool IsGamepadConnected(std::uint8_t gamepadIndex) const noexcept {
+        return gamepadIndex < kMaxGamepads && gamepadConnected_[gamepadIndex];
+    }
+
 private:
     [[nodiscard]] static std::size_t Index(InputKey key) noexcept {
         const auto raw = static_cast<std::size_t>(key);
@@ -163,6 +196,9 @@ private:
 
     float pointerX_ = 0.0F;
     float pointerY_ = 0.0F;
+
+    bool hasFocus_ = false;
+    std::array<bool, kMaxGamepads> gamepadConnected_{};
 };
 
 } // namespace kb::input

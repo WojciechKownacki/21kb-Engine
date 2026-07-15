@@ -296,6 +296,40 @@ bool RegisterPriorityConstant(ScriptRuntimeHost& host, std::string name, std::in
     return host.RegisterFunction(std::move(desc));
 }
 
+// LIB-120: whether the host window currently has focus - lets gameplay code
+// distinguish "genuinely nothing pressed" from "input is suppressed because
+// the window lost focus / is in the background" and react (e.g. auto-pause).
+bool RegisterHasFocus(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.HasFocus";
+    desc.signature.outputs = {ScriptFunctionPin{"focus", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        return BoolResult("focus", context.scene->Input().DeviceState().HasFocus());
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// LIB-120: hardware presence for a specific gamepad slot, independent of
+// whether it is pressing anything - see InputDeviceState::IsGamepadConnected.
+bool RegisterIsGamepadConnected(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.IsGamepadConnected";
+    desc.signature.inputs = {ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, true}};
+    desc.signature.outputs = {ScriptFunctionPin{"connected", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
+        const auto gamepadIndex = static_cast<std::uint8_t>(indexArg != nullptr ? indexArg->AsInt() : 0);
+        return BoolResult("connected", context.scene->Input().DeviceState().IsGamepadConnected(gamepadIndex));
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
@@ -324,6 +358,9 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterPriorityConstant(host, "Input.PriorityUI", kb::input::InputContextPriority::UI) && ok;
     ok = RegisterPriorityConstant(host, "Input.PriorityConsole", kb::input::InputContextPriority::Console) && ok;
     ok = RegisterPriorityConstant(host, "Input.PriorityDebugOverlay", kb::input::InputContextPriority::DebugOverlay) && ok;
+
+    ok = RegisterHasFocus(host) && ok;
+    ok = RegisterIsGamepadConnected(host) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;
