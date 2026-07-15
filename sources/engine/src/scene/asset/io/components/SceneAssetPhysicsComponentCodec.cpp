@@ -43,7 +43,9 @@ bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReade
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.boxSize) ||
         !input.ReadFloat(output.radius) ||
         !input.ReadFloat(output.height) ||
-        !input.ReadBool(trigger)) {
+        !input.ReadBool(trigger) ||
+        !input.ReadFloat(output.friction) ||
+        !input.ReadFloat(output.restitution)) {
         return false;
     }
     output.shape = static_cast<ColliderShape>(shape);
@@ -58,6 +60,20 @@ void SceneAssetPhysicsComponentCodec::WriteCollider(std::vector<std::uint8_t>& o
     SceneAssetBinaryIO::WriteFloat(output, collider.radius);
     SceneAssetBinaryIO::WriteFloat(output, collider.height);
     SceneAssetBinaryIO::WriteUInt8(output, collider.trigger ? 1U : 0U);
+    SceneAssetBinaryIO::WriteFloat(output, collider.friction);
+    SceneAssetBinaryIO::WriteFloat(output, collider.restitution);
+}
+
+bool SceneAssetPhysicsComponentCodec::ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output) {
+    return SceneAssetPrimitiveCodec::ReadVec3(input, output.center) &&
+        input.ReadFloat(output.radius) &&
+        input.ReadFloat(output.height);
+}
+
+void SceneAssetPhysicsComponentCodec::WriteCharacterController(std::vector<std::uint8_t>& output, const CharacterControllerComponent& characterController) {
+    SceneAssetPrimitiveCodec::WriteVec3(output, characterController.center);
+    SceneAssetBinaryIO::WriteFloat(output, characterController.radius);
+    SceneAssetBinaryIO::WriteFloat(output, characterController.height);
 }
 
 } // namespace kb::scene

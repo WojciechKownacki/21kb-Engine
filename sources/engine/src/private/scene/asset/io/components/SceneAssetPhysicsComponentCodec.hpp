@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
@@ -18,6 +19,9 @@ public:
 
     [[nodiscard]] static bool ReadCollider(SceneAssetBinaryIO::ByteReader& input, ColliderComponent& output);
     static void WriteCollider(std::vector<std::uint8_t>& output, const ColliderComponent& collider);
+
+    [[nodiscard]] static bool ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output);
+    static void WriteCharacterController(std::vector<std::uint8_t>& output, const CharacterControllerComponent& characterController);
 };
 
 } // namespace kb::scene

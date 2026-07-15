@@ -5,8 +5,12 @@
 #include "engine/library/EngineLibraryResult.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -58,7 +62,7 @@ template <typename Component>
 struct ScriptComponentAccess {
     static_assert(detail::ScriptComponentAccessUnregistered<Component>::value,
         "kb::library::EntityHandle::Has/TryGet/GetRequired/Add/Remove: this component type is not registered for scripts (LIB-075) — "
-        "only Transform/Visibility/Camera/Light/MeshRenderer/Behaviour (ScriptComponentAccess specializations in "
+        "only Transform/Visibility/Camera/Light/MeshRenderer/Behaviour/Rigidbody/Collider/CharacterController/Joint (ScriptComponentAccess specializations in "
         "EngineLibraryScriptComponentAccess.hpp) are exposed to native script code, matching ScriptSceneComponentApi.cpp's "
         "kComponentNames used by Lua/Visual Graph");
 };
@@ -178,6 +182,86 @@ struct ScriptComponentAccess<kb::scene::BehaviourComponent> {
             return false;
         }
         scene.Components().Behaviours().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::RigidbodyComponent> {
+    [[nodiscard]] static const kb::scene::RigidbodyComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Rigidbodies().TryGet(entity);
+    }
+    [[nodiscard]] static kb::scene::RigidbodyComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Rigidbodies().TryGet(entity);
+    }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::RigidbodyComponent& value) {
+        scene.Components().Rigidbodies().Set(entity, value);
+    }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Rigidbodies().Has(entity)) {
+            return false;
+        }
+        scene.Components().Rigidbodies().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::ColliderComponent> {
+    [[nodiscard]] static const kb::scene::ColliderComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Colliders().TryGet(entity);
+    }
+    [[nodiscard]] static kb::scene::ColliderComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Colliders().TryGet(entity);
+    }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::ColliderComponent& value) {
+        scene.Components().Colliders().Set(entity, value);
+    }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Colliders().Has(entity)) {
+            return false;
+        }
+        scene.Components().Colliders().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::CharacterControllerComponent> {
+    [[nodiscard]] static const kb::scene::CharacterControllerComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().CharacterControllers().TryGet(entity);
+    }
+    [[nodiscard]] static kb::scene::CharacterControllerComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().CharacterControllers().TryGet(entity);
+    }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::CharacterControllerComponent& value) {
+        scene.Components().CharacterControllers().Set(entity, value);
+    }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().CharacterControllers().Has(entity)) {
+            return false;
+        }
+        scene.Components().CharacterControllers().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::JointComponent> {
+    [[nodiscard]] static const kb::scene::JointComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Joints().TryGet(entity);
+    }
+    [[nodiscard]] static kb::scene::JointComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        return scene.Components().Joints().TryGet(entity);
+    }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::JointComponent& value) {
+        scene.Components().Joints().Set(entity, value);
+    }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Joints().Has(entity)) {
+            return false;
+        }
+        scene.Components().Joints().Remove(entity);
         return true;
     }
 };

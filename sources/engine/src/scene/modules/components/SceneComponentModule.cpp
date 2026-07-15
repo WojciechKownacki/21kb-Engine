@@ -41,6 +41,14 @@ SceneColliderComponentQueries SceneComponentQueries::Colliders() const noexcept 
     return SceneColliderComponentQueries{ scene_ };
 }
 
+SceneCharacterControllerComponentQueries SceneComponentQueries::CharacterControllers() const noexcept {
+    return SceneCharacterControllerComponentQueries{ scene_ };
+}
+
+SceneJointComponentQueries SceneComponentQueries::Joints() const noexcept {
+    return SceneJointComponentQueries{ scene_ };
+}
+
 SceneTagsComponentQueries SceneComponentQueries::Tags() const noexcept {
     return SceneTagsComponentQueries{ scene_ };
 }
@@ -87,6 +95,14 @@ SceneRigidbodyComponents SceneComponents::Rigidbodies() const noexcept {
 
 SceneColliderComponents SceneComponents::Colliders() const noexcept {
     return SceneColliderComponents{ scene_ };
+}
+
+SceneCharacterControllerComponents SceneComponents::CharacterControllers() const noexcept {
+    return SceneCharacterControllerComponents{ scene_ };
+}
+
+SceneJointComponents SceneComponents::Joints() const noexcept {
+    return SceneJointComponents{ scene_ };
 }
 
 SceneTagsComponents SceneComponents::Tags() const noexcept {

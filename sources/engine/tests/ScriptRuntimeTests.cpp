@@ -3284,6 +3284,138 @@ void RunWorldSetPropertyTest() {
     kb::tests::Require(deadEntityResult.Succeeded() && !deadEntityResult.Output("set")->AsBool(), "World.SetPropertyFloat targeting a destroyed entity must report set=false, not throw");
 }
 
+// LIB-123: World.SetPropertyFloat/Entity reaching the four physics
+// components' fields through the SAME generic, string-dispatched
+// ScriptSceneComponentApi mechanism RunWorldSetPropertyTest above already
+// proves for Camera/Behaviour - the risk this guards against is specific to
+// THIS task (a typo'd component name string, e.g. "Ridgidbody", silently
+// resolving to "not found" rather than the intended component), not the
+// generic dispatch machinery itself. Also proves the LIB-082 boundary holds
+// for the new components: Joint.connectedEntity must genuinely be REJECTED
+// by World.SetPropertyEntity (it is deliberately excluded from the
+// FieldBinding property table - see kJointPropertyDescs).
+//
+// World.SetPropertyFloat/Entity have no dedicated Lua sugar (grep of
+// PucLuaFunctionApi.cpp confirms no SetProperty* wrapper exists) and their
+// only entity ARGUMENT (which entity to target) cannot reliably cross Lua's
+// generic CallFunction(name, argsTable) bridge either: PucLuaValueBridge::
+// FromLua infers a table value's ScriptValueType purely from its own Lua
+// representation - an integer becomes Entity-typed only once its magnitude
+// exceeds int32 range, otherwise Int-typed, and EntityArg()/AsUInt64() do
+// not coerce across that boundary. Ordinary entity ids in this engine
+// (including every id these tests create) fit comfortably in int32, so that
+// path would silently mis-marshal, not really test anything - a
+// pre-existing, cross-cutting Lua-bridge gap unrelated to physics
+// components, out of this task's scope to fix. Self.SetProperty/GetProperty
+// (PucLuaSelfApi.cpp) sidesteps this entirely (it targets the calling
+// behaviour's own entity implicitly, no entity argument to marshal) and
+// proves the SAME new component-name dispatch from Lua below. VisualGraph
+// reaches the identical registry entries through the CallNative binding
+// RunCatalogFunctionsHaveVisualGraphBindingsTest already verifies exists for
+// every registered function including World.SetPropertyFloat itself (and
+// VisualGraph's CallNative path does not share Lua's type-inference problem
+// - callers declare pin types explicitly), so a separate graph-authoring
+// test here would only re-prove that already-covered, generic plumbing.
+void RunWorldSetPropertyPhysicsComponentsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "World.SetProperty physics components test host setup failed");
+
+    const kb::scene::SceneObject bodyObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Body" });
+    scene.Components().Rigidbodies().Set(bodyObject.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(bodyObject.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(bodyObject.Entity(), kb::scene::CharacterControllerComponent{});
+    const kb::scene::SceneObject jointObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "JointOwner" });
+    scene.Components().Joints().Set(jointObject.Entity(), kb::scene::JointComponent{});
+    const kb::scene::SceneObject targetObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "JointTarget" });
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const std::vector<kb::script::ScriptFunctionArgument> massArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Rigidbody" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "mass" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 42.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult massResult = host.Functions().Call("World.SetPropertyFloat", massArgs, context);
+    kb::tests::Require(massResult.Succeeded() && massResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for Rigidbody.mass");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Rigidbodies().TryGet(bodyObject.Entity())->mass, 42.0F),
+        "World.SetPropertyFloat must actually change Rigidbody.mass on the live component");
+
+    const std::vector<kb::script::ScriptFunctionArgument> frictionArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Collider" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "friction" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.9F } },
+    };
+    const kb::script::ScriptFunctionCallResult frictionResult = host.Functions().Call("World.SetPropertyFloat", frictionArgs, context);
+    kb::tests::Require(frictionResult.Succeeded() && frictionResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for Collider.friction");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Colliders().TryGet(bodyObject.Entity())->friction, 0.9F),
+        "World.SetPropertyFloat must actually change Collider.friction (a PhysicsMaterial field) on the live component");
+
+    const std::vector<kb::script::ScriptFunctionArgument> capsuleRadiusArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ bodyObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "CharacterController" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "radius" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.35F } },
+    };
+    const kb::script::ScriptFunctionCallResult capsuleRadiusResult = host.Functions().Call("World.SetPropertyFloat", capsuleRadiusArgs, context);
+    kb::tests::Require(capsuleRadiusResult.Succeeded() && capsuleRadiusResult.Output("set")->AsBool(), "World.SetPropertyFloat must report set=true for CharacterController.radius");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().CharacterControllers().TryGet(bodyObject.Entity())->radius, 0.35F),
+        "World.SetPropertyFloat must actually change CharacterController.radius on the live component");
+
+    // LIB-082: Joint.connectedEntity is deliberately NOT reachable through
+    // the generic property mechanism (ScriptSceneComponentApi's FieldBinding
+    // table only ever exposes Bool/Int/Float, audited by
+    // RunScriptSceneComponentPropertiesNeverExposeRawPointerTest, since a
+    // wider type like Entity could in principle carry a raw pointer's bit
+    // pattern) - World.SetPropertyEntity must genuinely reject it rather
+    // than silently no-op or crash. connectedEntity is still fully real and
+    // settable through native kb::library::EntityHandle::Add<JointComponent>
+    // (RunEntityHandlePhysicsComponentAccessTest already proves that path).
+    const std::vector<kb::script::ScriptFunctionArgument> connectedEntityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ jointObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Joint" } } },
+        kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "connectedEntity" } } },
+        kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ targetObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult connectedEntityResult = host.Functions().Call("World.SetPropertyEntity", connectedEntityArgs, context);
+    kb::tests::Require(connectedEntityResult.Succeeded() && !connectedEntityResult.Output("set")->AsBool(),
+        "World.SetPropertyEntity must report set=false for Joint.connectedEntity - it is not a registered script property (LIB-082)");
+    kb::tests::Require(scene.Components().Joints().TryGet(jointObject.Entity())->connectedEntity != targetObject.Entity(),
+        "World.SetPropertyEntity must NOT have changed Joint.connectedEntity on the live component");
+
+    // Lua leg: self:GetProperty/SetProperty (PucLuaSelfApi.cpp::PushSelf,
+    // passed as the Tick(self, dt) function's first parameter - NOT a
+    // global "Self" table) is ALSO string-dispatched through
+    // ScriptSceneComponentApi, but targets the calling behaviour's own
+    // entity implicitly (context->Self()) - no entity argument to marshal,
+    // so it sidesteps the World.SetPropertyFloat/Entity Lua-marshalling gap
+    // documented above entirely, while still proving the SAME newly-added
+    // component-name dispatch from Lua.
+    scene.Components().Rigidbodies().Set(bodyObject.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Behaviours().Set(bodyObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = 9311U,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::assets::AssetId luaAsset{ 9311U };
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    self:SetProperty("Rigidbody", "mass", 13.0)
+    SetShared("luaRigidbodyMass", self:GetProperty("Rigidbody", "mass"))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "World.SetProperty physics components Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "World.SetProperty physics components Lua wrapper execution failed");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().Rigidbodies().TryGet(bodyObject.Entity())->mass, 13.0F),
+        "Lua Self.SetProperty must actually change Rigidbody.mass on the live component");
+    const std::optional<kb::script::ScriptValue> luaMass = host.SharedState().Get("luaRigidbodyMass");
+    kb::tests::Require(luaMass.has_value() && kb::tests::NearlyEqual(luaMass->AsFloat(), 13.0F),
+        "Lua Self.GetProperty must read back the value Self.SetProperty just wrote to Rigidbody.mass");
+}
+
 // LIB-070 ("ownership control"): proves that destroying the entity handle
 // World.InstantiatePrefab/World.Spawn(prefab=...) returns really does
 // relinquish the WHOLE instantiated hierarchy, not just the root — the
@@ -5762,11 +5894,12 @@ void RunScriptSceneComponentApiTest() {
 // LIB-077: exhaustive, name-driven coverage that the generated-accessor
 // FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
 // KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
-// KB_LIGHT_KIND-generated read/write function pairs, replacing the old
+// KB_LIGHT_KIND/KB_RIGIDBODY_BODY_TYPE/KB_COLLIDER_SHAPE/KB_JOINT_TYPE/
+// KB_ENTITY-generated read/write function pairs, replacing the old
 // offsetof+reinterpret_cast path) round-trips every field correctly and
 // rejects a mismatched ScriptValueType — not just the handful of fields
 // RunScriptSceneComponentApiTest already covered. Walks
-// ComponentProperties() for all 6 registered components (37 fields total)
+// ComponentProperties() for all 10 registered components (79 fields total)
 // rather than hand-picking a few, so a future field added to any
 // component's property-desc table is automatically covered here too.
 void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
@@ -5776,6 +5909,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
     scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
+    scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -5831,7 +5968,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
         }
     }
-    kb::tests::Require(fieldsChecked == 37U, "Script component API generated accessor coverage test did not exercise the expected total field count (37) across all 6 components");
+    kb::tests::Require(fieldsChecked == 78U, "Script component API generated accessor coverage test did not exercise the expected total field count (78) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -5856,6 +5993,10 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
     scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
+    scene.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
+    scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
+    scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -5872,7 +6013,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
         }
     }
-    kb::tests::Require(propertiesChecked == 37U, "LIB-082 raw-pointer audit did not exercise the expected total field count (37) across all 6 components");
+    kb::tests::Require(propertiesChecked == 78U, "LIB-082 raw-pointer audit did not exercise the expected total field count (78) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -8296,6 +8437,7 @@ void RunScriptRuntimeTests() {
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();
+    RunWorldSetPropertyPhysicsComponentsTest();
     RunWorldInstantiatePrefabOwnershipTest();
     RunSceneLoadedContentApiTest();
     RunWorldPersistentStateTest();

@@ -22,6 +22,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     AudioListenerBit = 1U << 7U,
     BehaviourBit = 1U << 8U,
     TagsBit = 1U << 9U,
+    CharacterControllerBit = 1U << 10U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -33,7 +34,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     AudioSourceBit |
     AudioListenerBit |
     BehaviourBit |
-    TagsBit;
+    TagsBit |
+    CharacterControllerBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -47,6 +49,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.audioListener.has_value() ? AudioListenerBit : 0U;
     componentBits |= components.behaviour.has_value() ? BehaviourBit : 0U;
     componentBits |= components.tags.has_value() ? TagsBit : 0U;
+    componentBits |= components.characterController.has_value() ? CharacterControllerBit : 0U;
     return componentBits;
 }
 
@@ -100,6 +103,13 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.collider = collider;
     }
+    if ((componentBits & CharacterControllerBit) != 0U) {
+        CharacterControllerComponent characterController;
+        if (!SceneAssetPhysicsComponentCodec::ReadCharacterController(input, characterController)) {
+            return false;
+        }
+        output.characterController = characterController;
+    }
     if ((componentBits & TagsBit) != 0U) {
         TagsComponent tags;
         if (!SceneAssetTagsComponentCodec::Read(input, tags)) {
@@ -150,6 +160,9 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (components.collider.has_value()) {
         SceneAssetPhysicsComponentCodec::WriteCollider(output, *components.collider);
+    }
+    if (components.characterController.has_value()) {
+        SceneAssetPhysicsComponentCodec::WriteCharacterController(output, *components.characterController);
     }
     if (components.tags.has_value()) {
         SceneAssetTagsComponentCodec::Write(output, *components.tags);

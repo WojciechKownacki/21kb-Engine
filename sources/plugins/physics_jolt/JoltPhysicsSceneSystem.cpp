@@ -169,6 +169,8 @@ struct BodySignature {
     bool useGravity = true;
     bool lockRotation = false;
     bool trigger = false;
+    float friction = 0.5F;
+    float restitution = 0.0F;
 };
 
 struct BodyRecord {
@@ -234,6 +236,8 @@ struct BodyRecord {
         .useGravity = rigidbody.useGravity,
         .lockRotation = rigidbody.lockRotation,
         .trigger = collider.trigger,
+        .friction = collider.friction,
+        .restitution = collider.restitution,
     };
 }
 
@@ -241,7 +245,8 @@ struct BodyRecord {
     return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && SameVec3(lhs.scale, rhs.scale) &&
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
-        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger;
+        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger &&
+        lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
 
 [[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
@@ -394,6 +399,8 @@ private:
 
         JPH::BodyCreationSettings bodySettings(shape, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), ToMotionType(rigidbody.bodyType), ToObjectLayer(rigidbody.bodyType));
         bodySettings.mIsSensor = collider.trigger;
+        bodySettings.mFriction = collider.friction;
+        bodySettings.mRestitution = collider.restitution;
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
