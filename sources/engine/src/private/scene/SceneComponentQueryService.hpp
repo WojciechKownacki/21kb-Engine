@@ -4,8 +4,10 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -44,6 +46,12 @@ public:
 
     [[nodiscard]] static bool HasCollider(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const ColliderComponent* TryGetCollider(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasCharacterController(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const CharacterControllerComponent* TryGetCharacterController(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasJoint(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const JointComponent* TryGetJoint(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasTags(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const TagsComponent* TryGetTags(const Scene& scene, SceneEntity entity) noexcept;

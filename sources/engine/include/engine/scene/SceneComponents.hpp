@@ -4,9 +4,11 @@
 #include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneCharacterControllerComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
@@ -29,6 +31,8 @@ public:
     [[nodiscard]] SceneInputComponents Inputs() const noexcept;
     [[nodiscard]] SceneRigidbodyComponents Rigidbodies() const noexcept;
     [[nodiscard]] SceneColliderComponents Colliders() const noexcept;
+    [[nodiscard]] SceneCharacterControllerComponents CharacterControllers() const noexcept;
+    [[nodiscard]] SceneJointComponents Joints() const noexcept;
     [[nodiscard]] SceneTagsComponents Tags() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
