@@ -10,6 +10,8 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -98,6 +100,126 @@ ScriptFunctionCallResult MeshRendererSetMesh(const ScriptFunctionCallContext& co
     };
 }
 
+// LIB-138: slot -> section mapping is entirely the renderer's own responsibility
+// (MeshPipelineResourceResolver::MaterialAssetForSectionInstance consults
+// materialSlotAssetIds[section.materialSlot], where each imported mesh section already
+// declares its own materialSlot index) - kb::scene/kb::script deliberately have no mesh
+// section/slot-count query of their own (kb::scene never depends on kb::render, so it has
+// no way to know how many sections a given meshAssetId actually has). Setting slot N here
+// "matches mesh sections" by construction: whichever sections declared materialSlot==N pick
+// up this override, and slots no section references are harmless no-ops (the resolver only
+// ever reads slots sections actually reference).
+[[nodiscard]] bool ParseSlotIndex(std::span<const ScriptFunctionArgument> arguments, std::uint32_t& outSlot) noexcept {
+    const ScriptValue* slotArgument = FindArg(arguments, "slot");
+    if (slotArgument == nullptr || slotArgument->Type() != ScriptValueType::Int) {
+        return false;
+    }
+    const int slot = slotArgument->AsInt();
+    if (slot < 0 || static_cast<std::uint32_t>(slot) >= kb::scene::kMaxMeshRendererMaterialSlotOverrides) {
+        return false;
+    }
+    outSlot = static_cast<std::uint32_t>(slot);
+    return true;
+}
+
+ScriptFunctionCallResult MeshRendererSetMaterialSlot(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("mesh renderer api requires an active scene");
+    }
+    const kb::scene::SceneEntity entity = TargetEntity(context, arguments);
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("mesh renderer target entity is not alive");
+    }
+    std::uint32_t slot = 0;
+    if (!ParseSlotIndex(arguments, slot)) {
+        return Error("mesh renderer material slot index is missing or out of range");
+    }
+
+    const ScriptValue* materialArgument = FindArg(arguments, "material");
+    const std::string material = materialArgument == nullptr ? std::string{} : materialArgument->AsString();
+    const kb::assets::AssetId materialAssetId = ResolveAssetId(*context.scene, material, &IsRenderMaterialAsset);
+    if (!materialAssetId.IsValid()) {
+        return Error("material asset could not be resolved");
+    }
+
+    kb::scene::SceneMeshRendererComponents renderers = context.scene->Components().MeshRenderers();
+    kb::scene::MeshRendererComponent* existing = renderers.TryGet(entity);
+    if (existing != nullptr) {
+        existing->materialSlotAssetIds[slot] = materialAssetId.value;
+        existing->materialSlotOverrideCount = std::max(existing->materialSlotOverrideCount, slot + 1U);
+        renderers.MarkModified(entity);
+    } else {
+        kb::scene::MeshRendererComponent component{};
+        component.materialSlotAssetIds[slot] = materialAssetId.value;
+        component.materialSlotOverrideCount = slot + 1U;
+        renderers.Set(entity, component);
+    }
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult MeshRendererGetMaterialSlot(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("mesh renderer api requires an active scene");
+    }
+    const kb::scene::SceneEntity entity = TargetEntity(context, arguments);
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("mesh renderer target entity is not alive");
+    }
+    std::uint32_t slot = 0;
+    if (!ParseSlotIndex(arguments, slot)) {
+        return Error("mesh renderer material slot index is missing or out of range");
+    }
+
+    const kb::scene::MeshRendererComponent* existing = context.scene->Components().MeshRenderers().TryGet(entity);
+    const bool hasOverride = existing != nullptr && slot < existing->materialSlotOverrideCount && existing->materialSlotAssetIds[slot] != 0U;
+    const std::string material = hasOverride ? kb::assets::ToString(kb::assets::AssetId{ existing->materialSlotAssetIds[slot] }) : std::string{};
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "material", ScriptValue{ material } },
+            ScriptFunctionArgument{ "hasOverride", ScriptValue{ hasOverride } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult MeshRendererClearMaterialSlot(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("mesh renderer api requires an active scene");
+    }
+    const kb::scene::SceneEntity entity = TargetEntity(context, arguments);
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("mesh renderer target entity is not alive");
+    }
+    std::uint32_t slot = 0;
+    if (!ParseSlotIndex(arguments, slot)) {
+        return Error("mesh renderer material slot index is missing or out of range");
+    }
+
+    kb::scene::MeshRendererComponent* existing = context.scene->Components().MeshRenderers().TryGet(entity);
+    if (existing == nullptr) {
+        return Error("mesh renderer component does not exist on this entity");
+    }
+    // A zero id is exactly what MeshPipelineResourceResolver::MaterialAssetForSectionInstance
+    // treats as "no override for this slot" (falls through to materialAssetId, then the
+    // mesh's own default) - clearing does not need to shrink materialSlotOverrideCount, since
+    // other slots below it may still be genuinely overridden.
+    existing->materialSlotAssetIds[slot] = 0U;
+    context.scene->Components().MeshRenderers().MarkModified(entity);
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
 ScriptFunctionCallResult MeshRendererSetMaterial(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("mesh renderer api requires an active scene");
@@ -159,7 +281,51 @@ bool ScriptMeshRendererApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "assigned", ScriptValueType::Bool, true },
     };
     setMaterial.callback = &MeshRendererSetMaterial;
-    return host.RegisterFunction(std::move(setMaterial));
+    if (!host.RegisterFunction(std::move(setMaterial))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setMaterialSlot;
+    setMaterialSlot.signature.name = "MeshRenderer.SetMaterialSlot";
+    setMaterialSlot.signature.inputs = {
+        ScriptFunctionPin{ "slot", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "material", ScriptValueType::String, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+    };
+    setMaterialSlot.signature.outputs = {
+        ScriptFunctionPin{ "assigned", ScriptValueType::Bool, true },
+    };
+    setMaterialSlot.callback = &MeshRendererSetMaterialSlot;
+    if (!host.RegisterFunction(std::move(setMaterialSlot))) {
+        return false;
+    }
+
+    ScriptFunctionDesc getMaterialSlot;
+    getMaterialSlot.signature.name = "MeshRenderer.GetMaterialSlot";
+    getMaterialSlot.signature.inputs = {
+        ScriptFunctionPin{ "slot", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+    };
+    getMaterialSlot.signature.outputs = {
+        ScriptFunctionPin{ "material", ScriptValueType::String, true },
+        ScriptFunctionPin{ "hasOverride", ScriptValueType::Bool, true },
+    };
+    getMaterialSlot.callback = &MeshRendererGetMaterialSlot;
+    if (!host.RegisterFunction(std::move(getMaterialSlot))) {
+        return false;
+    }
+
+    ScriptFunctionDesc clearMaterialSlot;
+    clearMaterialSlot.signature.name = "MeshRenderer.ClearMaterialSlot";
+    clearMaterialSlot.signature.inputs = {
+        ScriptFunctionPin{ "slot", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+    };
+    clearMaterialSlot.signature.outputs = {
+        ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true },
+    };
+    clearMaterialSlot.callback = &MeshRendererClearMaterialSlot;
+    return host.RegisterFunction(std::move(clearMaterialSlot));
 }
 
 } // namespace kb::script

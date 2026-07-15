@@ -152,6 +152,10 @@ int LuaAudioPlay(lua_State* state) {
     return 2;
 }
 
+[[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value) {
+    return ScriptFunctionArgument{ std::move(name), std::move(value) };
+}
+
 // LIB-137: shared shape for MeshRenderer.SetMesh/SetMaterial - a single required asset
 // reference (virtual path or numeric/hex id string, resolved server-side exactly like
 // Audio.Play's "clip" argument) plus an optional {entity=...} table, mirroring LuaAudioPlay's
@@ -195,12 +199,95 @@ int LuaMeshRendererSetMesh(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMesh", "mesh");
 }
 
-int LuaMeshRendererSetMaterial(lua_State* state) {
-    return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
+// LIB-138: MeshRenderer.SetMaterialSlot(slot, material, {entity=...}) - a leading integer
+// slot index ahead of the same asset-reference-plus-optional-options shape LuaMeshRendererAssign
+// already uses for SetMesh/SetMaterial.
+int LuaMeshRendererSetMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::size_t length = 0;
+    const char* material = luaL_tolstring(state, 2, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("slot", ScriptValue{ slot }),
+        ScriptFunctionArgument{
+            .name = "material",
+            .value = ScriptValue{ std::string{ material != nullptr ? material : "", material != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (material != nullptr) {
+        lua_pop(state, 1);
+    }
+    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.SetMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
 }
 
-[[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value) {
-    return ScriptFunctionArgument{ std::move(name), std::move(value) };
+int LuaMeshRendererGetMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.GetMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot query failed");
+    }
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaMeshRendererClearMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.ClearMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot clear failed");
+    }
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererSetMaterial(lua_State* state) {
+    return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
 
 int LuaWorldFindByName(lua_State* state) {
@@ -1310,9 +1397,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_setfield(state, -2, "Play");
     lua_setfield(state, environmentIndex, "Audio");
 
-    lua_createtable(state, 0, 2);
+    lua_createtable(state, 0, 5);
     SetClosure(state, "SetMesh", &LuaMeshRendererSetMesh, context);
     SetClosure(state, "SetMaterial", &LuaMeshRendererSetMaterial, context);
+    SetClosure(state, "SetMaterialSlot", &LuaMeshRendererSetMaterialSlot, context);
+    SetClosure(state, "GetMaterialSlot", &LuaMeshRendererGetMaterialSlot, context);
+    SetClosure(state, "ClearMaterialSlot", &LuaMeshRendererClearMaterialSlot, context);
     lua_setfield(state, environmentIndex, "MeshRenderer");
 
     lua_createtable(state, 0, 10);
