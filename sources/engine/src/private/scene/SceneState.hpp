@@ -7,6 +7,7 @@
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -354,6 +355,12 @@ public:
     // constructed (layer 0 = "Default", every pair interacts) matches every
     // pre-LIB-129 scene exactly.
     PhysicsLayersAsset physicsLayers;
+    // LIB-132: off by default, and never touched by kb_standalone_player's own code path
+    // (only the editor's Scene Viewport ever calls PhysicsDebugDraw::SetEnabled/CollectLines)
+    // - see PhysicsDebugDraw.hpp's own doc comment for the full "zero release-path impact"
+    // argument.
+    bool physicsDebugDrawEnabled = false;
+    PhysicsDebugQueryTrace physicsDebugQueryTrace{};
 };
 
 } // namespace kb::scene

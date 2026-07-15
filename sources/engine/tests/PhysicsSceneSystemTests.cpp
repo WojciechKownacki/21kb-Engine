@@ -15,6 +15,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -27,6 +28,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
@@ -995,12 +997,197 @@ void RunPhysicsLayersAssetIOTest() {
     kb::tests::Require(loaded->layerNames[3] == "Enemy" && !loaded->LayersInteract(3, 4), "LIB-129 PhysicsLayersAssetLoader must load the real file contents through the AssetManager");
 }
 
+// LIB-132: pure ECS-side coverage (collider/character-controller/joint wireframe geometry,
+// enable/disable, single-query trace recording) - unlike RunPhysicsSceneSystemFallingBodyTest
+// above, needs no physics plugin at all (kb::scene::PhysicsDebugDraw has zero dependency on
+// any specific backend - see PhysicsDebugDraw.hpp's own doc comment), so this always runs.
+void RunPhysicsDebugDrawTest() {
+    kb::scene::Scene scene;
+
+    kb::tests::Require(!kb::scene::PhysicsDebugDraw::IsEnabled(scene), "LIB-132 physics debug draw must be off by default");
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, true);
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::IsEnabled(scene), "LIB-132 PhysicsDebugDraw::SetEnabled(true) must be observable through IsEnabled");
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, false);
+    kb::tests::Require(!kb::scene::PhysicsDebugDraw::IsEnabled(scene), "LIB-132 PhysicsDebugDraw::SetEnabled(false) must be observable through IsEnabled");
+
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).empty(), "LIB-132 an empty scene must collect zero debug lines");
+
+    // --- Box collider: exactly 12 wireframe edges, with a corner at the expected world
+    // position (proves the geometry is genuinely derived from boxSize/center/scale, not a
+    // placeholder).
+    const kb::scene::SceneObject boxObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "DebugDrawBox",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(boxObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 2.0F, 4.0F, 6.0F } });
+
+    // PhysicsDebugDraw::CollectLines deliberately does NOT synchronize transforms itself
+    // (it takes a const Scene& - rendering must stay read-only w.r.t. the scene, matching
+    // ScenePanelContentRenderer.cpp's own const EditorSceneContext& call chain); in real
+    // usage this is a non-issue because rendering always runs after the scene's own
+    // Update() has already synchronized worldPosition for the frame. This test replicates
+    // that ordering explicitly.
+    scene.Runtime().SynchronizeTransforms();
+    const std::vector<kb::scene::PhysicsDebugLineDesc> boxLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(boxLines.size() == 12U, "LIB-132 a box collider must produce exactly 12 wireframe edges");
+    bool foundBoxCorner = false;
+    for (const kb::scene::PhysicsDebugLineDesc& line : boxLines) {
+        for (const kb::scene::Vec3& point : { line.from, line.to }) {
+            if (kb::tests::NearlyEqual(point.x, 11.0F) && kb::tests::NearlyEqual(point.y, 2.0F) && kb::tests::NearlyEqual(point.z, 3.0F)) {
+                foundBoxCorner = true;
+            }
+        }
+    }
+    kb::tests::Require(foundBoxCorner, "LIB-132 a box collider's wireframe must include its real half-extent corner (center + boxSize/2)");
+    kb::tests::Require(boxLines.front().color.y > boxLines.front().color.x && boxLines.front().color.y > boxLines.front().color.z, "LIB-132 a non-trigger collider must use the solid (green-dominant) debug color");
+
+    // --- Trigger collider gets a visually distinct color from a solid one.
+    scene.Components().Colliders().Set(boxObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 2.0F, 4.0F, 6.0F }, .trigger = true });
+    const std::vector<kb::scene::PhysicsDebugLineDesc> triggerLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(triggerLines.size() == 12U && !kb::tests::NearlyEqual(triggerLines.front().color.x, boxLines.front().color.x), "LIB-132 a trigger collider must render with a visually distinct debug color from a solid collider");
+    scene.Components().Colliders().Remove(boxObject.Entity());
+
+    // --- Sphere collider: 3 orthogonal circles.
+    const kb::scene::SceneObject sphereObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DebugDrawSphere" });
+    scene.Components().Colliders().Set(sphereObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 1.5F });
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 72U, "LIB-132 a sphere collider must produce 3 orthogonal 24-segment circles (72 lines)");
+    scene.Components().Colliders().Remove(sphereObject.Entity());
+
+    // --- Capsule collider: 2 equatorial circles + 4 side lines + 8 quarter-arc hemisphere caps.
+    scene.Components().Colliders().Set(sphereObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Capsule, .radius = 0.5F, .height = 2.0F });
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 116U, "LIB-132 a capsule collider must produce the expected wireframe line count (2 circles + 4 sides + 8 cap arcs)");
+    scene.Components().Colliders().Remove(sphereObject.Entity());
+
+    // --- CharacterControllerComponent uses the SAME capsule wireframe as a Collider capsule.
+    scene.Components().CharacterControllers().Set(sphereObject.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.5F, .height = 2.0F });
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).size() == 116U, "LIB-132 a CharacterControllerComponent must produce the same capsule wireframe line count as an equivalent Collider capsule");
+    scene.Components().CharacterControllers().Remove(sphereObject.Entity());
+
+    // --- JointComponent: exactly one line from the owner's world anchor to the connected
+    // world anchor (world-jointed, per LIB-130's own "connectedAnchor is already a world
+    // position when connectedEntity is invalid" convention).
+    scene.Components().Joints().Set(sphereObject.Entity(), kb::scene::JointComponent{
+                                                                .type = kb::scene::JointType::Point,
+                                                                .connectedEntity = {},
+                                                                .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+                                                                .connectedAnchor = kb::scene::Vec3{ 5.0F, 5.0F, 5.0F },
+                                                            });
+    const std::vector<kb::scene::PhysicsDebugLineDesc> jointLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(jointLines.size() == 1U, "LIB-132 a JointComponent must produce exactly one debug line");
+    kb::tests::Require(kb::tests::NearlyEqual(jointLines.front().to.x, 5.0F) && kb::tests::NearlyEqual(jointLines.front().to.y, 5.0F) && kb::tests::NearlyEqual(jointLines.front().to.z, 5.0F),
+        "LIB-132 a world-jointed JointComponent's debug line must end at its real connectedAnchor world position");
+    scene.Components().Joints().Remove(sphereObject.Entity());
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::CollectLines(scene).empty(), "LIB-132 removing every physics component must leave zero debug lines");
+
+    // --- Single-query trace: honest no-op while disabled, real recording once enabled, and
+    // folded into CollectLines as extra lines.
+    const kb::scene::PhysicsDebugQueryTrace hitTrace{
+        .valid = true,
+        .hit = true,
+        .origin = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F },
+        .endpoint = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+    };
+    kb::tests::Require(!kb::scene::PhysicsDebugDraw::IsEnabled(scene), "LIB-132 test setup sanity: debug draw must still be disabled at this point");
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(scene, hitTrace);
+    kb::tests::Require(!kb::scene::PhysicsDebugDraw::QueryTrace(scene).valid, "LIB-132 RecordQueryTrace must be an honest no-op while debug draw is disabled");
+
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, true);
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(scene, hitTrace);
+    const kb::scene::PhysicsDebugQueryTrace recordedHit = kb::scene::PhysicsDebugDraw::QueryTrace(scene);
+    kb::tests::Require(recordedHit.valid && recordedHit.hit && kb::tests::NearlyEqual(recordedHit.origin.y, 5.0F), "LIB-132 RecordQueryTrace must actually store the trace once debug draw is enabled");
+    const std::vector<kb::scene::PhysicsDebugLineDesc> hitTraceLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(hitTraceLines.size() == 2U, "LIB-132 a hit query trace must add exactly 2 debug lines (the ray and a normal spike at the hit point)");
+
+    const kb::scene::PhysicsDebugQueryTrace missTrace{
+        .valid = true,
+        .hit = false,
+        .origin = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F },
+        .endpoint = kb::scene::Vec3{ 0.0F, -10.0F, 0.0F },
+    };
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(scene, missTrace);
+    const std::vector<kb::scene::PhysicsDebugLineDesc> missTraceLines = kb::scene::PhysicsDebugDraw::CollectLines(scene);
+    kb::tests::Require(missTraceLines.size() == 1U, "LIB-132 a missed query trace must add exactly 1 debug line (no normal spike - nothing was hit)");
+    kb::tests::Require(!kb::tests::NearlyEqual(missTraceLines.front().color.x, hitTraceLines.front().color.x) || !kb::tests::NearlyEqual(missTraceLines.front().color.y, hitTraceLines.front().color.y),
+        "LIB-132 a missed query trace must render with a visually distinct color from a hit trace");
+
+    // --- Real integration: Physics.Raycast (pure-geometry, no physics plugin needed - see
+    // LIB-125/126's own "Raycast stays pure ColliderComponent geometry" decision) must
+    // actually record the single-query trace when debug draw is enabled, and must NOT when
+    // it is disabled.
+    const kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "DebugDrawRaycastFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F } });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "LIB-132 physics debug draw raycast integration host did not initialize");
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const std::vector<kb::script::ScriptFunctionArgument> raycastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ -1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+
+    // "Honest no-op while disabled" means the PREVIOUSLY recorded trace (the miss trace from
+    // the section above) is left completely unmutated, not merely "not overwritten with
+    // something new" - captured explicitly rather than asserting an unconditional
+    // "invalid", since a prior trace can legitimately still be sitting there.
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, false);
+    const kb::scene::PhysicsDebugQueryTrace beforeDisabledRaycast = kb::scene::PhysicsDebugDraw::QueryTrace(scene);
+    static_cast<void>(host.Functions().Call("Physics.Raycast", raycastArgs, callContext));
+    const kb::scene::PhysicsDebugQueryTrace afterDisabledRaycast = kb::scene::PhysicsDebugDraw::QueryTrace(scene);
+    kb::tests::Require(afterDisabledRaycast.valid == beforeDisabledRaycast.valid && afterDisabledRaycast.hit == beforeDisabledRaycast.hit &&
+                            kb::tests::NearlyEqual(afterDisabledRaycast.origin.y, beforeDisabledRaycast.origin.y),
+        "LIB-132 Physics.Raycast must not mutate the recorded query trace at all while debug draw is disabled");
+
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, true);
+    const kb::script::ScriptFunctionCallResult raycastResult = host.Functions().Call("Physics.Raycast", raycastArgs, callContext);
+    kb::tests::Require(raycastResult.Succeeded() && raycastResult.Output("hit")->AsBool(), "LIB-132 physics debug draw raycast integration test's own raycast must actually hit the real floor collider");
+    const kb::scene::PhysicsDebugQueryTrace raycastTrace = kb::scene::PhysicsDebugDraw::QueryTrace(scene);
+    kb::tests::Require(raycastTrace.valid && raycastTrace.hit, "LIB-132 Physics.Raycast must record a real query trace once debug draw is enabled");
+    kb::tests::Require(kb::tests::NearlyEqual(raycastTrace.origin.y, 5.0F), "LIB-132 the recorded query trace's origin must match the real Physics.Raycast call's origin");
+    kb::tests::Require(raycastTrace.endpoint.y > -1.0F && raycastTrace.endpoint.y < 0.5F, "LIB-132 the recorded query trace's endpoint must land on the real floor collider's surface");
+
+    // --- Physics.SetDebugDrawEnabled/IsDebugDrawEnabled dispatch (native + Lua).
+    kb::tests::Require(host.Functions().FindSignature("Physics.SetDebugDrawEnabled") != nullptr, "Physics.SetDebugDrawEnabled was not registered");
+    kb::scene::PhysicsDebugDraw::SetEnabled(scene, false);
+    const std::vector<kb::script::ScriptFunctionArgument> setDebugDrawArgs{ kb::script::ScriptFunctionArgument{ .name = "enabled", .value = kb::script::ScriptValue{ true } } };
+    static_cast<void>(host.Functions().Call("Physics.SetDebugDrawEnabled", setDebugDrawArgs, callContext));
+    kb::tests::Require(kb::scene::PhysicsDebugDraw::IsEnabled(scene), "Physics.SetDebugDrawEnabled(true) must actually enable debug draw on the real scene");
+    const std::vector<kb::script::ScriptFunctionArgument> noArgs{};
+    const kb::script::ScriptFunctionCallResult isEnabledResult = host.Functions().Call("Physics.IsDebugDrawEnabled", noArgs, callContext);
+    kb::tests::Require(isEnabledResult.Succeeded() && isEnabledResult.Output("enabled")->AsBool(), "Physics.IsDebugDrawEnabled must read back what Physics.SetDebugDrawEnabled just set");
+
+    const kb::assets::AssetId luaAsset{ 9412U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Debug Draw Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = luaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    Physics.SetDebugDrawEnabled(false)\n"
+                                  "    local disabled = Physics.IsDebugDrawEnabled()\n"
+                                  "    Physics.SetDebugDrawEnabled(true)\n"
+                                  "    local enabled = Physics.IsDebugDrawEnabled()\n"
+                                  "    SetShared(\"luaDebugDrawDisabled\", disabled)\n"
+                                  "    SetShared(\"luaDebugDrawEnabled\", enabled)\n"
+                                  "end\n";
+    kb::tests::Require(host.LuaRuntime().LoadScript(luaAsset, luaScript).succeeded, "LIB-132 Lua debug draw wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "LIB-132 Lua debug draw wrapper execution failed");
+    kb::tests::Require(!host.SharedState().Get("luaDebugDrawDisabled")->AsBool(), "Lua Physics.SetDebugDrawEnabled(false) must actually disable debug draw");
+    kb::tests::Require(host.SharedState().Get("luaDebugDrawEnabled")->AsBool(), "Lua Physics.SetDebugDrawEnabled(true) must actually enable debug draw");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunPhysicsSceneSystemTests() {
     RunPhysicsLayersAssetIOTest();
+    RunPhysicsDebugDrawTest();
     RunPhysicsSceneSystemFallingBodyTest();
 }
 

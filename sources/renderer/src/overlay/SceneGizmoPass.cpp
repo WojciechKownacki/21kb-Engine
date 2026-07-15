@@ -589,6 +589,17 @@ void AppendLightWireframes(std::vector<Vertex>& output, std::span<const EditorLi
     }
 }
 
+// LIB-132: reuses the exact same unlit line-list rendering already proven by
+// AppendLightWireframes above (same program/layout/BGFX_STATE_PT_LINES submission) - a flat
+// list of independent segments needs no thickness/circle construction, just AppendLine per
+// entry.
+void AppendPhysicsDebugLines(std::vector<Vertex>& output, std::span<const PhysicsDebugLine> lines) {
+    output.reserve(output.size() + lines.size() * 2U);
+    for (const PhysicsDebugLine& line : lines) {
+        AppendLine(output, line.from, line.to, line.color, line.alpha);
+    }
+}
+
 [[nodiscard]] float AxisBoost(GizmoAxis axis, int hoveredAxis, int draggedAxis) noexcept {
     const int axisIndex = static_cast<int>(axis);
     if (axisIndex == draggedAxis) {
@@ -653,7 +664,8 @@ void SceneGizmoPass::Shutdown() noexcept {
 }
 
 bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
-    if (!IsInitialized() || !desc.IsValid() || ((!desc.visible || desc.worldScale <= 0.0F) && desc.lightWireframes.empty())) {
+    if (!IsInitialized() || !desc.IsValid() ||
+        ((!desc.visible || desc.worldScale <= 0.0F) && desc.lightWireframes.empty() && desc.physicsDebugLines.empty())) {
         return false;
     }
 
@@ -707,9 +719,10 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         }
     }
 
-    if (!desc.lightWireframes.empty()) {
+    if (!desc.lightWireframes.empty() || !desc.physicsDebugLines.empty()) {
         std::vector<Vertex> lineVertices;
         AppendLightWireframes(lineVertices, desc.lightWireframes);
+        AppendPhysicsDebugLines(lineVertices, desc.physicsDebugLines);
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(lineVertices.size());
         if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
             bgfx::TransientVertexBuffer buffer{};
