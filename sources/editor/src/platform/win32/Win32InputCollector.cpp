@@ -71,7 +71,9 @@ void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
         "Polling more gamepad slots than XInput supports");
     for (std::uint8_t index = 0U; index < kb::input::InputDeviceState::kMaxGamepads; ++index) {
         XINPUT_STATE gamepadState{};
-        if (XInputGetState(index, &gamepadState) != ERROR_SUCCESS) {
+        const bool connected = XInputGetState(index, &gamepadState) == ERROR_SUCCESS;
+        state.SetGamepadConnected(index, connected);
+        if (!connected) {
             continue;
         }
         const XINPUT_GAMEPAD& pad = gamepadState.Gamepad;
@@ -93,7 +95,9 @@ void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
 
 void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND editorWindow) noexcept {
     state.Reset();
-    if (!EditorIsForeground(editorWindow)) {
+    const bool focused = EditorIsForeground(editorWindow);
+    state.SetHasFocus(focused);
+    if (!focused) {
         hasPreviousMouse_ = false;
         return;
     }

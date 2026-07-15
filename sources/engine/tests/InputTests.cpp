@@ -635,6 +635,75 @@ void TestRebindProfileRoundTripAndApply() {
     std::filesystem::remove_all(root, error);
 }
 
+// LIB-120: focus and gamepad connectivity are independent status flags, not
+// reset by Reset() (unlike keys/axes/touch), and gamepad connectivity is
+// tracked per-slot exactly like every other per-gamepad piece of state
+// LIB-116 introduced.
+void TestFocusAndGamepadConnectivity() {
+    InputDeviceState device;
+    Require(!device.HasFocus(), "HasFocus should start false");
+    Require(!device.IsGamepadConnected(0U), "Gamepad 0 should start disconnected");
+
+    device.SetHasFocus(true);
+    device.SetGamepadConnected(0U, true);
+    device.SetGamepadConnected(2U, true);
+    Require(device.HasFocus(), "HasFocus should read back true");
+    Require(device.IsGamepadConnected(0U) && device.IsGamepadConnected(2U), "Connected slots should read back true");
+    Require(!device.IsGamepadConnected(1U), "An untouched slot must not appear connected");
+
+    device.Reset();
+    Require(device.HasFocus(), "Reset must not clear focus - it is a status flag, not per-frame input");
+    Require(device.IsGamepadConnected(0U) && device.IsGamepadConnected(2U), "Reset must not clear gamepad connectivity");
+
+    device.SetHasFocus(false);
+    device.SetGamepadConnected(0U, false);
+    Require(!device.HasFocus() && !device.IsGamepadConnected(0U), "Both flags must update to false when the platform reports that");
+}
+
+// LIB-120: proves the engine ALREADY correctly resets "pressed" state when a
+// device goes quiet (focus lost, controller disconnected, or genuinely idle -
+// InputSubsystem cannot distinguish the cause, only that the device stopped
+// reporting the key). This is existing InputSubsystem/Evaluate behavior from
+// well before LIB-120 (the "actions that dropped out entirely" pass in
+// Evaluate already fires Completed/Canceled), verified here as a real
+// regression test rather than left as an unverified assumption.
+void TestPressedStateResetsWhenDeviceGoesQuiet() {
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Jump"), "Jump should be pressed while Space is held");
+
+    // Simulate a focus-loss/disconnect frame: the platform layer's Reset() (with
+    // no matching re-press, exactly what happens when EditorIsForeground fails
+    // or a gamepad's XInputGetState starts failing) makes every key report false.
+    subsystem.MutableDeviceState().Reset();
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.IsActionPressed("Jump"), "Jump must stop being pressed once the device goes quiet");
+    Require(subsystem.WasActionReleased("Jump"), "Jump must report Released on the exact frame the device goes quiet");
+
+    // The release must not repeat on every subsequent quiet frame - it is an edge.
+    subsystem.Evaluate(0.016F);
+    Require(!subsystem.WasActionReleased("Jump"), "Jump must not repeat Released on a second consecutive quiet frame");
+}
+
 // LIB-117: absolute pointer position is independent storage from the existing
 // MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
 // platform collector re-sets it unconditionally every Collect() call rather
@@ -713,6 +782,8 @@ void RunInputTests() {
     TestRebindConflictDetection();
     TestRebindEndToEnd();
     TestRebindProfileRoundTripAndApply();
+    TestFocusAndGamepadConnectivity();
+    TestPressedStateResetsWhenDeviceGoesQuiet();
 }
 
 } // namespace kb::tests

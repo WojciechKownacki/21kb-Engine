@@ -87,6 +87,17 @@ class ScriptRuntimeHost;
 // at these bands - that is LIB-173/226/224-225's job. This only establishes
 // the shared priority contract they will all use, and is verified against the
 // real InputMappingContextStack consumption mechanism (not just declared).
+//
+// Focus / device presence (LIB-120):
+//   Input.HasFocus()                      -> focus:Bool
+//   Input.IsGamepadConnected(gamepadIndex:Int) -> connected:Bool
+// Losing window focus already zeroes every key/axis/touch point (Reset() +
+// the platform layer's early return), which already correctly fires
+// WasReleased/action-Completed for anything that was down - proven by
+// ScriptRuntimeTests.cpp's RunScriptInputFocusLossReleasesActionsTest, not new
+// production behavior. HasFocus/IsGamepadConnected exist so script can tell
+// *why* input went quiet (focus lost vs. genuinely idle vs. controller
+// unplugged) and react, e.g. auto-pause or show a reconnect prompt.
 struct ScriptInputApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
 };

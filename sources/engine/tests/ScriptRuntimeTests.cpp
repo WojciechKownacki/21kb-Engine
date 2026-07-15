@@ -4523,6 +4523,99 @@ end
         "Lua Input.PriorityDebugOverlay returned the wrong value");
 }
 
+// LIB-120: Input.HasFocus/Input.IsGamepadConnected reach script correctly, and
+// - the real point of "reset stanów pressed" - an action a script observed as
+// pressed correctly reports WasReleased once the device goes quiet (focus
+// lost / disconnected), reachable from script exactly as InputTests.cpp::
+// TestPressedStateResetsWhenDeviceGoesQuiet proves at the InputSubsystem
+// level; this test only proves script sees the same thing.
+void RunScriptInputFocusLossReleasesActionsTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Space});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, jump}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(10U, 0), "Context should resolve");
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Focus-loss script host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Input.HasFocus") != nullptr, "Input.HasFocus was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Input.IsGamepadConnected") != nullptr, "Input.IsGamepadConnected was not registered");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+
+    scene.Input().MutableDeviceState().SetHasFocus(true);
+    scene.Input().MutableDeviceState().SetGamepadConnected(0U, true);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.Input().Evaluate(0.016F);
+    const kb::script::ScriptFunctionCallResult focusedResult = host.Functions().Call("Input.HasFocus", {}, callContext);
+    kb::tests::Require(focusedResult.Succeeded() && focusedResult.Output("focus")->AsBool(), "Input.HasFocus should report true while focused");
+    const std::vector<kb::script::ScriptFunctionArgument> gamepad0Args{
+        kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const kb::script::ScriptFunctionCallResult connectedResult = host.Functions().Call("Input.IsGamepadConnected", gamepad0Args, callContext);
+    kb::tests::Require(connectedResult.Succeeded() && connectedResult.Output("connected")->AsBool(), "Input.IsGamepadConnected(0) should report true");
+    const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+    };
+    const kb::script::ScriptFunctionCallResult jumpBefore = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    kb::tests::Require(jumpBefore.Succeeded() && jumpBefore.Output("pressed")->AsBool(), "Jump should be pressed before focus loss");
+
+    // Simulate a focus-loss/disconnect frame (LIB-120): device state goes
+    // quiet, HasFocus/IsGamepadConnected flip to false, and Jump correctly
+    // reports Released rather than staying stuck "pressed" forever.
+    scene.Input().MutableDeviceState().Reset();
+    scene.Input().MutableDeviceState().SetHasFocus(false);
+    scene.Input().MutableDeviceState().SetGamepadConnected(0U, false);
+    scene.Input().Evaluate(0.016F);
+
+    const kb::script::ScriptFunctionCallResult unfocusedResult = host.Functions().Call("Input.HasFocus", {}, callContext);
+    kb::tests::Require(unfocusedResult.Succeeded() && !unfocusedResult.Output("focus")->AsBool(), "Input.HasFocus should report false after losing focus");
+    const kb::script::ScriptFunctionCallResult disconnectedResult = host.Functions().Call("Input.IsGamepadConnected", gamepad0Args, callContext);
+    kb::tests::Require(disconnectedResult.Succeeded() && !disconnectedResult.Output("connected")->AsBool(), "Input.IsGamepadConnected(0) should report false after disconnect");
+    const kb::script::ScriptFunctionCallResult jumpAfter = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    kb::tests::Require(jumpAfter.Succeeded() && !jumpAfter.Output("pressed")->AsBool(), "Jump must no longer report pressed after focus loss");
+    const kb::script::ScriptFunctionCallResult jumpReleased = host.Functions().Call("Input.Released", jumpArgs, callContext);
+    kb::tests::Require(jumpReleased.Succeeded() && jumpReleased.Output("released")->AsBool(),
+        "Input.Released should fire the frame focus is lost while Jump was held");
+
+    // Lua round-trip for HasFocus/IsGamepadConnected.
+    const kb::assets::AssetId luaAsset{ 8824U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Focus Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("focus.hasFocus", Input.HasFocus())
+    SetShared("focus.gamepad0", Input.IsGamepadConnected(0))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Focus-loss Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Focus-loss Lua wrapper execution failed");
+    kb::tests::Require(!host.SharedState().Get("focus.hasFocus")->AsBool(), "Lua Input.HasFocus should report false after focus loss");
+    kb::tests::Require(!host.SharedState().Get("focus.gamepad0")->AsBool(), "Lua Input.IsGamepadConnected(0) should report false after disconnect");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -8001,6 +8094,7 @@ void RunScriptRuntimeTests() {
     RunScriptInputApiPerPlayerTest();
     RunScriptPointerApiTest();
     RunScriptInputPriorityConstantsTest();
+    RunScriptInputFocusLossReleasesActionsTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();
