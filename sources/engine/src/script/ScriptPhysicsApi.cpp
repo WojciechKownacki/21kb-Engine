@@ -2,6 +2,7 @@
 
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -56,8 +57,43 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     };
 }
 
+[[nodiscard]] kb::math::Quat QuatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix, kb::math::Quat fallback = {}) noexcept {
+    return kb::math::Quat{
+        FloatArg(arguments, std::string{ prefix } + "X", fallback.x),
+        FloatArg(arguments, std::string{ prefix } + "Y", fallback.y),
+        FloatArg(arguments, std::string{ prefix } + "Z", fallback.z),
+        FloatArg(arguments, std::string{ prefix } + "W", fallback.w),
+    };
+}
+
+[[nodiscard]] kb::scene::SceneEntity EntityArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? kb::scene::SceneEntity{} : kb::scene::SceneEntity{ value->AsUInt64() };
+}
+
 ScriptFunctionCallResult Error(std::string message) {
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
+}
+
+ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ value } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult VectorResult(bool found, Vec3 value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "x", ScriptValue{ value.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ value.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ value.z } },
+        },
+        .errors = {},
+    };
 }
 
 struct RaycastHit {
@@ -241,6 +277,128 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
     };
 }
 
+// LIB-124: force/impulse/velocity/kinematic-move/sleep-wake are one-shot or
+// instantaneous-read operations against whatever live physics simulation is
+// actually running - unlike Raycast above (pure geometry against
+// ColliderComponent/TransformComponent, no simulation needed), these MUST
+// reach a real backend (kb::scene::PhysicsBackend, registered by whichever
+// physics plugin is loaded - e.g. kb_physics_jolt_plugin) or fail honestly.
+// Writing RigidbodyComponent.linearVelocity directly (as LIB-123's
+// World.SetPropertyFloat already permits) is NOT equivalent to SetVelocity:
+// for a live Dynamic body it is silently overwritten by the physics
+// backend's own per-fixed-step write-back before it ever takes effect.
+ScriptFunctionCallResult AddForce(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::AddForce(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "force")));
+}
+
+ScriptFunctionCallResult AddImpulse(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::AddImpulse(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "impulse")));
+}
+
+ScriptFunctionCallResult SetVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::SetVelocity(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "velocity")));
+}
+
+ScriptFunctionCallResult GetVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::GetVelocity(*context.scene, EntityArg(arguments, "entity"));
+    return VectorResult(result.found, result.value);
+}
+
+ScriptFunctionCallResult SetAngularVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::SetAngularVelocity(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "angularVelocity")));
+}
+
+ScriptFunctionCallResult GetAngularVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::GetAngularVelocity(*context.scene, EntityArg(arguments, "entity"));
+    return VectorResult(result.found, result.value);
+}
+
+ScriptFunctionCallResult MoveKinematic(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const float deltaSeconds = FloatArg(arguments, "deltaSeconds", context.deltaSeconds);
+    const bool applied = kb::scene::PhysicsBackend::MoveKinematic(
+        *context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "target"), QuatArg(arguments, "rotation"), deltaSeconds);
+    return BoolResult("applied", applied);
+}
+
+ScriptFunctionCallResult Sleep(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::Sleep(*context.scene, EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult Wake(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::Wake(*context.scene, EntityArg(arguments, "entity")));
+}
+
+ScriptFunctionCallResult IsSleeping(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("sleeping", kb::scene::PhysicsBackend::IsSleeping(*context.scene, EntityArg(arguments, "entity")));
+}
+
+[[nodiscard]] bool RegisterVectorSetter(ScriptRuntimeHost& host, std::string name, std::string vectorPin, ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ vectorPin + "X", ScriptValueType::Float, true },
+        ScriptFunctionPin{ vectorPin + "Y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ vectorPin + "Z", ScriptValueType::Float, true },
+    };
+    desc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+    desc.callback = callback;
+    return host.RegisterFunction(std::move(desc));
+}
+
+[[nodiscard]] bool RegisterVectorGetter(ScriptRuntimeHost& host, std::string name, ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } };
+    desc.signature.outputs = {
+        ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+    };
+    desc.callback = callback;
+    return host.RegisterFunction(std::move(desc));
+}
+
+[[nodiscard]] bool RegisterEntityBoolQuery(ScriptRuntimeHost& host, std::string name, std::string outputPin, ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } };
+    desc.signature.outputs = { ScriptFunctionPin{ std::move(outputPin), ScriptValueType::Bool, true } };
+    desc.callback = callback;
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
@@ -267,7 +425,39 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "normalZ", ScriptValueType::Float, true },
     };
     desc.callback = &Raycast;
-    return host.RegisterFunction(std::move(desc));
+    bool ok = host.RegisterFunction(std::move(desc));
+
+    ok = RegisterVectorSetter(host, "Physics.AddForce", "force", &AddForce) && ok;
+    ok = RegisterVectorSetter(host, "Physics.AddImpulse", "impulse", &AddImpulse) && ok;
+    ok = RegisterVectorSetter(host, "Physics.SetVelocity", "velocity", &SetVelocity) && ok;
+    ok = RegisterVectorGetter(host, "Physics.GetVelocity", &GetVelocity) && ok;
+    ok = RegisterVectorSetter(host, "Physics.SetAngularVelocity", "angularVelocity", &SetAngularVelocity) && ok;
+    ok = RegisterVectorGetter(host, "Physics.GetAngularVelocity", &GetAngularVelocity) && ok;
+    ok = RegisterEntityBoolQuery(host, "Physics.Sleep", "applied", &Sleep) && ok;
+    ok = RegisterEntityBoolQuery(host, "Physics.Wake", "applied", &Wake) && ok;
+    ok = RegisterEntityBoolQuery(host, "Physics.IsSleeping", "sleeping", &IsSleeping) && ok;
+
+    ScriptFunctionDesc moveKinematicDesc;
+    moveKinematicDesc.signature.name = "Physics.MoveKinematic";
+    moveKinematicDesc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "targetX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "targetY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "targetZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "rotationX", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "rotationY", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "rotationZ", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "rotationW", ScriptValueType::Float, false },
+        // Optional; defaults to this call's own frame delta (the same
+        // deltaSeconds Jolt's MoveKinematic needs to derive a velocity from
+        // the position delta) - a script normally never needs to pass this.
+        ScriptFunctionPin{ "deltaSeconds", ScriptValueType::Float, false },
+    };
+    moveKinematicDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+    moveKinematicDesc.callback = &MoveKinematic;
+    ok = host.RegisterFunction(std::move(moveKinematicDesc)) && ok;
+
+    return ok;
 }
 
 } // namespace kb::script
