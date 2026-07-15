@@ -8,6 +8,7 @@ bool SceneAssetPhysicsComponentCodec::ReadRigidbody(SceneAssetBinaryIO::ByteRead
     std::uint32_t bodyType = 0;
     bool useGravity = true;
     bool lockRotation = false;
+    bool useContinuousCollision = false;
     if (!input.ReadUInt32(bodyType) ||
         bodyType > static_cast<std::uint32_t>(RigidbodyBodyType::Kinematic) ||
         !input.ReadFloat(output.mass) ||
@@ -15,12 +16,14 @@ bool SceneAssetPhysicsComponentCodec::ReadRigidbody(SceneAssetBinaryIO::ByteRead
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.angularVelocity) ||
         !input.ReadFloat(output.gravityScale) ||
         !input.ReadBool(useGravity) ||
-        !input.ReadBool(lockRotation)) {
+        !input.ReadBool(lockRotation) ||
+        !input.ReadBool(useContinuousCollision)) {
         return false;
     }
     output.bodyType = static_cast<RigidbodyBodyType>(bodyType);
     output.useGravity = useGravity;
     output.lockRotation = lockRotation;
+    output.useContinuousCollision = useContinuousCollision;
     return true;
 }
 
@@ -32,6 +35,7 @@ void SceneAssetPhysicsComponentCodec::WriteRigidbody(std::vector<std::uint8_t>& 
     SceneAssetBinaryIO::WriteFloat(output, rigidbody.gravityScale);
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.useGravity ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.lockRotation ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt8(output, rigidbody.useContinuousCollision ? 1U : 0U);
 }
 
 bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReader& input, ColliderComponent& output) {
