@@ -562,6 +562,66 @@ public:
         };
     }
 
+    // LIB-126: same query as CastShape/OverlapShape above, but collecting
+    // EVERY hit (JPH::AllHitCollisionCollector, not ClosestHitCollisionCollector)
+    // into the caller's kb::library::ArrayNonAlloc buffer instead of only
+    // the closest one - this implementation owns clearing/filling `results`
+    // completely (PhysicsBackend::CastShapeAll only calls this when a
+    // backend IS registered; the no-backend clear lives there instead).
+    void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        results.Clear();
+        const JPH::Vec3 joltDirection = ToJolt(direction);
+        const float directionLength = joltDirection.Length();
+        if (maxDistance <= 0.0F || directionLength <= 0.000001F) {
+            return;
+        }
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        const JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(origin)), (joltDirection / directionLength) * maxDistance);
+        JPH::ShapeCastSettings settings;
+        JPH::AllHitCollisionCollector<JPH::CastShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CastShape(shapeCast, settings, ToJoltPosition(origin), collector, {}, {}, bodyFilter);
+        collector.Sort();
+        for (const JPH::CastShapeCollector::ResultType& hit : collector.mHits) {
+            const auto entityIt = entityByBodyId_.find(hit.mBodyID2);
+            if (entityIt == entityByBodyId_.end()) {
+                continue;
+            }
+            // mContactPointOn2 is relative to inBaseOffset (origin) - see
+            // CastShape above for the same note.
+            if (!results.PushBack(kb::scene::PhysicsCastResult{
+                    .hit = true,
+                    .entity = entityIt->second,
+                    .distance = hit.mFraction * maxDistance,
+                    .point = Add(origin, FromJolt(hit.mContactPointOn2)),
+                    .normal = FromJolt(-hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())),
+                })) {
+                break; // Buffer full; remaining hits are farther (already sorted), so nothing more would fit anyway.
+            }
+        }
+    }
+
+    void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        results.Clear();
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        JPH::CollideShapeSettings settings;
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(center)), settings, ToJoltPosition(center), collector, {}, {}, bodyFilter);
+        collector.Sort();
+        for (const JPH::CollideShapeCollector::ResultType& hit : collector.mHits) {
+            const auto entityIt = entityByBodyId_.find(hit.mBodyID2);
+            if (entityIt == entityByBodyId_.end()) {
+                continue;
+            }
+            if (!results.PushBack(kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entityIt->second })) {
+                break;
+            }
+        }
+    }
+
     void SynchronizeBody(
         SceneEntity entity,
         const TransformComponent& transform,
