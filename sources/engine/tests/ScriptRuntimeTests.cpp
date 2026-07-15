@@ -4397,6 +4397,74 @@ end
     kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
 }
 
+// LIB-117: Pointer.Position/Delta/Button, both as direct native calls and
+// through the Lua wrapper table - proving the engine-side pointer position
+// storage (InputDeviceState::SetPointerPosition, LIB-117) reaches script.
+void RunScriptPointerApiTest() {
+    using namespace kb::input;
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Pointer script API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Position") != nullptr, "Pointer.Position was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Delta") != nullptr, "Pointer.Delta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Button") != nullptr, "Pointer.Button was not registered");
+
+    scene.Input().MutableDeviceState().SetPointerPosition(120.0F, 340.0F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseX, 5.0F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseY, -2.0F);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::MouseLeft, true);
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const kb::script::ScriptFunctionCallResult position = host.Functions().Call("Pointer.Position", {}, callContext);
+    kb::tests::Require(position.Succeeded() && kb::tests::NearlyEqual(position.Output("x")->AsFloat(), 120.0F) &&
+                            kb::tests::NearlyEqual(position.Output("y")->AsFloat(), 340.0F),
+        "Pointer.Position direct call returned the wrong position");
+
+    const kb::script::ScriptFunctionCallResult delta = host.Functions().Call("Pointer.Delta", {}, callContext);
+    kb::tests::Require(delta.Succeeded() && kb::tests::NearlyEqual(delta.Output("x")->AsFloat(), 5.0F) &&
+                            kb::tests::NearlyEqual(delta.Output("y")->AsFloat(), -2.0F),
+        "Pointer.Delta direct call returned the wrong delta");
+
+    const std::vector<kb::script::ScriptFunctionArgument> leftButtonArgs{
+        kb::script::ScriptFunctionArgument{ .name = "button", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> rightButtonArgs{
+        kb::script::ScriptFunctionArgument{ .name = "button", .value = kb::script::ScriptValue{ 1 } },
+    };
+    const kb::script::ScriptFunctionCallResult leftButton = host.Functions().Call("Pointer.Button", leftButtonArgs, callContext);
+    const kb::script::ScriptFunctionCallResult rightButton = host.Functions().Call("Pointer.Button", rightButtonArgs, callContext);
+    kb::tests::Require(leftButton.Succeeded() && leftButton.Output("pressed")->AsBool(), "Pointer.Button(0) should see the left button held");
+    kb::tests::Require(rightButton.Succeeded() && !rightButton.Output("pressed")->AsBool(), "Pointer.Button(1) must not see the right button as held");
+
+    const kb::assets::AssetId luaAsset{ 8822U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Pointer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local pos = Pointer.Position()
+    local delta = Pointer.Delta()
+    SetShared("pointer.x", pos.x)
+    SetShared("pointer.y", pos.y)
+    SetShared("pointer.dx", delta.x)
+    SetShared("pointer.left", Pointer.Button(0))
+    SetShared("pointer.right", Pointer.Button(1))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Pointer Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Pointer Lua wrapper execution failed");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.x")->AsFloat(), 120.0F), "Lua Pointer.Position returned wrong x");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.y")->AsFloat(), 340.0F), "Lua Pointer.Position returned wrong y");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.dx")->AsFloat(), 5.0F), "Lua Pointer.Delta returned wrong x");
+    kb::tests::Require(host.SharedState().Get("pointer.left")->AsBool(), "Lua Pointer.Button(0) should see the left button held");
+    kb::tests::Require(!host.SharedState().Get("pointer.right")->AsBool(), "Lua Pointer.Button(1) must not see the right button as held");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -7873,6 +7941,7 @@ void RunScriptRuntimeTests() {
     RunMathFunctionCrossBackendParityTest();
     RunScriptInputApiTest();
     RunScriptInputApiPerPlayerTest();
+    RunScriptPointerApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

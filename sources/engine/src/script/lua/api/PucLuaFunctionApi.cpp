@@ -605,6 +605,49 @@ int LuaInputRemoveMappingContext(lua_State* state) {
     return 1;
 }
 
+int LuaPointerPosition(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Position", {});
+    lua_createtable(state, 0, 2);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    return 1;
+}
+
+int LuaPointerDelta(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Delta", {});
+    lua_createtable(state, 0, 2);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    return 1;
+}
+
+int LuaPointerButton(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const int button = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("button", ScriptValue{ button }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Button", arguments);
+    lua_pushboolean(state, result.Output("pressed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, function, 1);
@@ -671,6 +714,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Released", &LuaInputReleased, context);
     SetClosure(state, "Held", &LuaInputHeld, context);
     lua_setfield(state, environmentIndex, "Input");
+
+    lua_createtable(state, 0, 3);
+    SetClosure(state, "Position", &LuaPointerPosition, context);
+    SetClosure(state, "Delta", &LuaPointerDelta, context);
+    SetClosure(state, "Button", &LuaPointerButton, context);
+    lua_setfield(state, environmentIndex, "Pointer");
 }
 
 } // namespace kb::script
