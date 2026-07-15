@@ -47,6 +47,31 @@ class ScriptRuntimeHost;
 //   AddMappingContext(context:String, priority:Int)  -> added:Bool
 //   RemoveMappingContext(context:String)             -> removed:Bool
 // (context is the decimal string form of the mapping-context asset id.)
+//
+// Pointer (LIB-117) - the mouse is a singular physical device (unlike
+// gamepads), shared by every local user, so these take NO player pin and
+// always read the primary local user's device state:
+//   Pointer.Position()       -> x:Float, y:Float (absolute, host window client pixels)
+//   Pointer.Delta()          -> x:Float, y:Float (= Input.Value semantics on MouseX/MouseY)
+//   Pointer.Button(button:Int) -> pressed:Bool   (0=left, 1=right, 2=middle)
+//
+// Pointer.Scroll and Pointer.Ray are deliberately NOT implemented yet:
+//   - Scroll needs real wheel delta, which is message-driven (WM_MOUSEWHEEL),
+//     not pollable like GetAsyncKeyState/GetCursorPos/XInputGetState. Wiring it
+//     requires adding a side effect to the editor's existing, currently
+//     zero-test-coverage EditorMouseWheelRouter (sources/editor/src/app/
+//     EditorMouseWheelRouter.cpp) *and* respecting play-vs-edit-mode routing
+//     (over the scene viewport, wheel already drives edit-camera zoom) -
+//     deferred with the same reasoning as LIB-116's touch WM_TOUCH gap; see
+//     others/_temp.md's POWRÓT list.
+//   - Ray needs a screen-space-to-world unproject through the active camera's
+//     view/projection matrices. Those matrices are assembled today only in
+//     kb::render (RenderSceneCameraBuilder), not at the kb::scene/kb::script
+//     layer this API lives in, and CameraComponent has no viewport/priority
+//     fields yet - both are explicitly LIB-135's and LIB-145's scope
+//     ("Camera z pose/projection/viewport/priority" and "screen/world
+//     conversions, ray z kamery"), so implementing it here would either
+//     duplicate that work or require a new kb::scene -> kb::render dependency.
 struct ScriptInputApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
 };
