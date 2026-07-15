@@ -277,6 +277,13 @@ void RunSceneSystemTransformSyncTest() {
 // Update() itself returns (RunSceneSystemTransformSyncTest above already
 // proves that half; this test contrasts the two).
 void RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest() {
+    // Declared before `scene`: destructor order is the REVERSE of
+    // declaration order, and MoveEntitySceneSystem::OnDestroy (which scene
+    // owns and invokes during its own destructor) reads counters_ - a
+    // stack-use-after-scope caught by AddressSanitizer when this was
+    // declared after `scene` instead (counters destroyed first, then read
+    // by scene's own, later, teardown).
+    SceneSystemCounters counters;
     kb::scene::Scene scene;
     const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "ContractParent",
@@ -291,7 +298,6 @@ void RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest() {
     static_cast<void>(scene.Runtime().Update(0.016F));
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(child).worldPosition.x, 3.0F), "Contract test fixture baseline world position must be 3 before the test proper");
 
-    SceneSystemCounters counters;
     float observedChildWorldXDuringLaterSystem = -1.0F;
     // Registration order matters: MoveEntitySceneSystem must run BEFORE
     // ObserveWorldXSceneSystem within the same Update() call's scheduler
@@ -316,6 +322,12 @@ void RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest() {
 // calls SynchronizeTransformHierarchy immediately before entering the
 // fixed-step loop (in addition to before/after every individual step).
 void RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest() {
+    // Declared before `scene` - see the identical reasoning on
+    // RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest
+    // above (destructor order is the reverse of declaration order;
+    // MoveEntitySceneSystem::OnDestroy reads counters_ during scene's own
+    // teardown).
+    SceneSystemCounters counters;
     kb::scene::Scene scene;
     scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
         .fixedDeltaSeconds = 0.02F,
@@ -329,7 +341,6 @@ void RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest() {
         .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F } },
     });
 
-    SceneSystemCounters counters;
     float observedChildWorldXDuringFixedUpdate = -1.0F;
     scene.Runtime().AddSceneSystem(std::make_unique<MoveEntitySceneSystem>(counters, parent.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
     scene.Runtime().AddSceneSystem(std::make_unique<ObserveWorldXFixedSceneSystem>(child.Entity(), observedChildWorldXDuringFixedUpdate));
@@ -511,6 +522,12 @@ void RunSceneRuntimeFixedStepTest() {
 // reuses the exact fixture from RunSceneRuntimeFixedStepTest so the
 // expected cumulative fixed-step counts are directly comparable.
 void RunSceneRuntimeFrameAndPlayStateTest() {
+    // Declared before `scene` for consistency with the fix on
+    // RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest
+    // above - CountingFixedSceneSystem does not currently override
+    // OnDestroy, so this specific ordering is not an active bug today, but
+    // matches the safer pattern rather than relying on that staying true.
+    SceneSystemCounters counters;
     kb::scene::Scene scene;
     kb::tests::Require(scene.Runtime().IsPlaying(), "A scene must report IsPlaying() == true by default");
     scene.Runtime().SetPlaying(false);
@@ -526,7 +543,6 @@ void RunSceneRuntimeFrameAndPlayStateTest() {
         .maxFrameDeltaSeconds = 0.25F,
         .maxFixedStepsPerFrame = 4U,
     });
-    SceneSystemCounters counters;
     scene.Runtime().AddSceneSystem(std::make_unique<CountingFixedSceneSystem>(counters));
 
     static_cast<void>(scene.Runtime().Update(0.01F));
