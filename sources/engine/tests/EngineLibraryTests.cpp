@@ -1794,7 +1794,9 @@ void RunComponentInspectorDescCatalogTest() {
     // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
     // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
     // from 83 to 84.
-    kb::tests::Require(fieldsChecked == 84U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (84) across all 10 components");
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    kb::tests::Require(fieldsChecked == 86U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (86) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

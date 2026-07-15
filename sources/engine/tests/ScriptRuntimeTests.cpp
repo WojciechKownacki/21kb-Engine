@@ -6986,7 +6986,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
     // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
     // from 83 to 84.
-    kb::tests::Require(fieldsChecked == 84U, "Script component API generated accessor coverage test did not exercise the expected total field count (84) across all 10 components");
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    kb::tests::Require(fieldsChecked == 86U, "Script component API generated accessor coverage test did not exercise the expected total field count (86) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -7035,7 +7037,9 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // from 79 to 83.
     // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
     // from 83 to 84.
-    kb::tests::Require(propertiesChecked == 84U, "LIB-082 raw-pointer audit did not exercise the expected total field count (84) across all 10 components");
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    kb::tests::Require(propertiesChecked == 86U, "LIB-082 raw-pointer audit did not exercise the expected total field count (86) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

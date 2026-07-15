@@ -213,15 +213,25 @@ void RenderScene::ClearDirty() noexcept {
     }
 }
 
-std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight) const {
+std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight, std::uint32_t targetViewportId) const {
+    const CameraRenderProxyDesc* selected = nullptr;
     for (const auto& [entityId, proxy] : cameras_) {
         const CameraRenderProxyDesc& camera = proxy.desc;
-        if (camera.visible && camera.primary) {
-            return RenderSceneCameraBuilder::Build(camera, viewportWidth, viewportHeight);
+        if (!camera.visible || !camera.primary) {
+            continue;
         }
-        static_cast<void>(entityId);
+        if (camera.viewportId != 0U && camera.viewportId != targetViewportId) {
+            continue;
+        }
+        if (selected == nullptr || camera.priority > selected->priority ||
+            (camera.priority == selected->priority && camera.entityId < selected->entityId)) {
+            selected = &camera;
+        }
     }
-    return std::nullopt;
+    if (selected == nullptr) {
+        return std::nullopt;
+    }
+    return RenderSceneCameraBuilder::Build(*selected, viewportWidth, viewportHeight);
 }
 
 const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
@@ -249,8 +259,8 @@ std::size_t RenderScene::DrawGroupLookupScratchCapacity() const noexcept {
     return drawGroupLookupScratch_.bucket_count();
 }
 
-void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t viewportHeight, SceneRenderSnapshot& outSnapshot) const {
-    outSnapshot.camera = BuildPrimaryCamera(viewportWidth, viewportHeight);
+void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t viewportHeight, SceneRenderSnapshot& outSnapshot, std::uint32_t targetViewportId) const {
+    outSnapshot.camera = BuildPrimaryCamera(viewportWidth, viewportHeight, targetViewportId);
     outSnapshot.meshes.clear();
     outSnapshot.lights.clear();
 

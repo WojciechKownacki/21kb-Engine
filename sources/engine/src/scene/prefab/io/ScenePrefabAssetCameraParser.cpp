@@ -32,7 +32,9 @@ bool ScenePrefabAssetCameraParser::Parse(const ScenePrefabAssetFieldMap& fields,
         || !ParseField(fields, "camera.orthographicHeight", camera.orthographicHeight)
         || !ParseField(fields, "camera.nearClip", camera.nearClip)
         || !ParseField(fields, "camera.farClip", camera.farClip)
-        || !ScenePrefabAssetFieldParser::ParseBool(fields, "camera.primary", primary)) {
+        || !ScenePrefabAssetFieldParser::ParseBool(fields, "camera.primary", primary)
+        || !ParseField(fields, "camera.viewportId", camera.viewportId)
+        || !ParseField(fields, "camera.priority", camera.priority)) {
         return false;
     }
 
