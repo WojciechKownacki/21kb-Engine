@@ -17,6 +17,7 @@
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "scene/RenderSceneProxyConverters.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "kb/render/scene/RenderBridgeTelemetry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
@@ -83,6 +84,69 @@ void RunCreatesStableRenderProxiesTest() {
     Require(snapshot.camera.has_value(), "RenderScene snapshot did not include the primary ECS camera");
     Require(snapshot.meshes.size() == 1U, "RenderScene snapshot did not include the visible ECS mesh");
     Require(snapshot.meshes[0].entityId == mesh.Id(), "RenderScene snapshot mesh entity id does not match ECS");
+}
+
+// LIB-135: proves CameraRenderProxyDesc::viewportId/priority actually change which camera
+// RenderScene::BuildPrimaryCamera picks, not just that the fields exist and compile. Also
+// proves the tie-break (highest priority, then lowest entityId) is deterministic - it used to
+// be "first match in unordered_map iteration order", i.e. undefined between two primary
+// cameras.
+void RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest() {
+    RenderScene renderScene;
+
+    // Camera A: viewportId=0 ("any viewport"), low priority - only candidate for viewport 0,
+    // and the lowest-priority fallback candidate for every other viewport.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 1U,
+        .verticalFovDegrees = 30.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 0U,
+        .priority = 0,
+    }));
+    // Camera B: targets viewport 5 specifically, mid priority.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 2U,
+        .verticalFovDegrees = 50.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 5U,
+        .priority = 10,
+    }));
+    // Camera C: also targets viewport 5, highest priority - must win over B on viewport 5.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 3U,
+        .verticalFovDegrees = 70.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 5U,
+        .priority = 20,
+    }));
+
+    const std::optional<SceneRenderCamera> forDefaultViewport = renderScene.BuildPrimaryCamera(1280U, 720U, 0U);
+    Require(forDefaultViewport.has_value(), "RenderScene did not select a camera for the default (0) viewport");
+    const SceneRenderCamera expectedForDefaultViewport = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 30.0F, .primary = true, .visible = true, .viewportId = 0U, .priority = 0 }, 1280U, 720U);
+    Require(forDefaultViewport->projection == expectedForDefaultViewport.projection, "RenderScene BuildPrimaryCamera(viewport=0) did not select the only viewport-0 camera (A)");
+
+    const std::optional<SceneRenderCamera> forViewportFive = renderScene.BuildPrimaryCamera(1280U, 720U, 5U);
+    Require(forViewportFive.has_value(), "RenderScene did not select a camera for viewport 5");
+    const SceneRenderCamera expectedForViewportFive = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 70.0F, .primary = true, .visible = true, .viewportId = 5U, .priority = 20 }, 1280U, 720U);
+    Require(forViewportFive->projection == expectedForViewportFive.projection, "RenderScene BuildPrimaryCamera(viewport=5) did not select the higher-priority camera (C) over the lower-priority one (B) targeting the same viewport");
+
+    const std::optional<SceneRenderCamera> forUnrelatedViewport = renderScene.BuildPrimaryCamera(1280U, 720U, 99U);
+    Require(forUnrelatedViewport.has_value(), "RenderScene did not fall back to the any-viewport camera for a viewport nothing specifically targets");
+    Require(forUnrelatedViewport->projection == expectedForDefaultViewport.projection, "RenderScene BuildPrimaryCamera(viewport=99) did not fall back to the viewport-0 (any-viewport) camera (A)");
+
+    // Deterministic tie-break: two cameras, same priority, both targeting viewport 0 - the
+    // lower entityId must consistently win, proving selection no longer depends on
+    // unordered_map iteration order.
+    RenderScene tieBreakScene;
+    static_cast<void>(tieBreakScene.UpsertCamera(CameraRenderProxyDesc{ .entityId = 200U, .verticalFovDegrees = 40.0F, .primary = true, .visible = true }));
+    static_cast<void>(tieBreakScene.UpsertCamera(CameraRenderProxyDesc{ .entityId = 100U, .verticalFovDegrees = 90.0F, .primary = true, .visible = true }));
+    const std::optional<SceneRenderCamera> tieBreakResult = tieBreakScene.BuildPrimaryCamera(1280U, 720U, 0U);
+    Require(tieBreakResult.has_value(), "RenderScene tie-break scenario did not select a camera");
+    const SceneRenderCamera expectedTieBreakWinner = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 90.0F, .primary = true, .visible = true }, 1280U, 720U);
+    Require(tieBreakResult->projection == expectedTieBreakWinner.projection, "RenderScene BuildPrimaryCamera priority tie-break did not deterministically pick the lowest entityId");
 }
 
 void RunRenderSceneSyncsLightPipelineFieldsTest() {
@@ -1891,6 +1955,7 @@ void RunSyncFallsBackToResolveForDirtyTransformTest() {
 
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
+    RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
