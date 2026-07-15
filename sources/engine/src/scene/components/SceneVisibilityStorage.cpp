@@ -6,8 +6,9 @@
 namespace kb::scene {
 
 SceneVisibilityComponentStore::SceneVisibilityComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world)
-    , componentId_(componentId) {}
+    : world_(&world) {
+    static_cast<void>(componentId);
+}
 
 const VisibilityComponent* SceneVisibilityComponentStore::TryGet(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::TryGet<VisibilityComponent>(world_, entity);

@@ -6,8 +6,9 @@
 namespace kb::scene {
 
 SceneCharacterControllerComponentStore::SceneCharacterControllerComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world)
-    , componentId_(componentId) {}
+    : world_(&world) {
+    static_cast<void>(componentId);
+}
 
 bool SceneCharacterControllerComponentStore::Has(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::Has<CharacterControllerComponent>(world_, entity);
