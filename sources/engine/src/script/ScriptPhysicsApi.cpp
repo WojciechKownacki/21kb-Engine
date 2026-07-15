@@ -71,6 +71,15 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? kb::scene::SceneEntity{} : kb::scene::SceneEntity{ value->AsUInt64() };
 }
 
+// LIB-125: shared by Raycast (pure geometry) and the sphere/box/capsule
+// cast/overlap functions below (real-backend-routed) - "z warstwa maski"
+// in the plan's LIB-125 bullet qualifies the whole listed group (Raycast
+// included), not just the newly added queries.
+[[nodiscard]] std::uint32_t LayerMaskArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
+    const ScriptValue* value = FindArg(arguments, "layerMask");
+    return value == nullptr ? kb::scene::kPhysicsAllLayers : static_cast<std::uint32_t>(std::max(0, value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers))));
+}
+
 ScriptFunctionCallResult Error(std::string message) {
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
 }
@@ -215,6 +224,7 @@ struct RaycastContext {
     Vec3 origin{};
     Vec3 direction{};
     float maxDistance = 0.0F;
+    std::uint32_t layerMask = kb::scene::kPhysicsAllLayers;
     RaycastHit best{};
 };
 
@@ -224,7 +234,7 @@ void RaycastVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformCom
         return;
     }
     const kb::scene::ColliderComponent* collider = context->scene->Components().Colliders().TryGet(entity);
-    if (collider == nullptr) {
+    if (collider == nullptr || (collider->layer & context->layerMask) == 0U) {
         return;
     }
     float distance = 0.0F;
@@ -255,6 +265,7 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
         .origin = origin,
         .direction = direction,
         .maxDistance = maxDistance,
+        .layerMask = LayerMaskArg(arguments),
         .best = {},
     };
     context.scene->Runtime().SynchronizeTransforms();
@@ -284,11 +295,6 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
 // real backend already solves correctly, so LIB-125 routes through it
 // instead of duplicating that math. Honest false/not-found when no physics
 // backend is registered, same contract as every LIB-124 function.
-[[nodiscard]] std::uint32_t LayerMaskArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
-    const ScriptValue* value = FindArg(arguments, "layerMask");
-    return value == nullptr ? kb::scene::kPhysicsAllLayers : static_cast<std::uint32_t>(std::max(0, value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers))));
-}
-
 ScriptFunctionCallResult CastShapeResult(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, const kb::scene::PhysicsShapeDesc& shape) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
@@ -578,6 +584,7 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "directionY", ScriptValueType::Float, true },
         ScriptFunctionPin{ "directionZ", ScriptValueType::Float, true },
         ScriptFunctionPin{ "distance", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false },
     };
     desc.signature.outputs = {
         ScriptFunctionPin{ "hit", ScriptValueType::Bool, true },
