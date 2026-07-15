@@ -90,6 +90,15 @@ private:
     // lastResult_ instead, since ScriptEventBus::Emit already converts it
     // to a plain error string rather than letting it escape.
     void DispatchDeferredEvents(kb::scene::Scene& scene);
+    // LIB-127: drains kb::scene::PhysicsBackend's pending collision/trigger
+    // events (queued by whichever physics plugin is loaded, e.g.
+    // kb_physics_jolt_plugin's contact listener) and turns each into a
+    // real, entity-local ("target"=the entity the callback is for)
+    // "OnCollisionEnter"/"OnCollisionStay"/"OnCollisionExit"/
+    // "OnTriggerEnter"/"OnTriggerStay"/"OnTriggerExit" ScriptEvent — same
+    // drain-and-dispatch shape as DispatchFiredTimers/DispatchCompletedTasks
+    // above.
+    void DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

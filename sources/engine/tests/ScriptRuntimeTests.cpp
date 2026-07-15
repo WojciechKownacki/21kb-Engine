@@ -2946,6 +2946,151 @@ void RunPhysicsBackendNonAllocQueriesTest() {
     kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll must clear a reused buffer once the backend is unregistered, not retain the 3 hits from before");
 }
 
+// LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit reach
+// scripts through the SAME named-ScriptEvent pipeline TimerFired/
+// TaskCompleted already use (entity-local target, by-name handler
+// resolution identical across Native/Lua/VisualGraph - LIB-103) - no new
+// script-facing plumbing was needed for this task, only the engine-side
+// production (kb::scene::PhysicsBackend::QueueCollisionEvent ->
+// ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents -> a real,
+// entity-local ScriptEvent, once per Scene::Runtime().Update()). This test
+// proves that engine-side wiring end to end WITHOUT a real Jolt scene
+// (real-Jolt production proof lives in PhysicsSceneSystemTests.cpp) by
+// queuing events directly, exactly what a physics plugin's contact
+// listener does.
+void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
+    kb::scene::Scene scene;
+
+    constexpr kb::assets::AssetId kNativeAsset{ 8801U };
+    const kb::scene::SceneObject nativeSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Collision Subject" });
+    scene.Components().Behaviours().Set(nativeSubject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kNativeAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    const kb::assets::AssetId luaAsset{ 8802U };
+    const kb::scene::SceneObject luaSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Trigger Subject" });
+    scene.Components().Behaviours().Set(luaSubject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::scene::SceneObject otherEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Collision Other" });
+    const kb::scene::SceneObject unrelatedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Unrelated Bystander" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Collision/trigger event dispatch test host did not initialize");
+
+    struct ReceivedEvent {
+        std::string name;
+        kb::scene::SceneEntity target{};
+        std::uint64_t other = 0U;
+        float pointX = 0.0F;
+        float normalY = 0.0F;
+    };
+    std::vector<ReceivedEvent> nativeReceived;
+    const auto recordNativeEvent = [&nativeReceived](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent& event) {
+        ReceivedEvent record{ .name = event.name, .target = context.Self() };
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "other") {
+                record.other = argument.value.AsUInt64();
+            } else if (argument.name == "pointX") {
+                record.pointX = argument.value.AsFloat();
+            } else if (argument.name == "normalY") {
+                record.normalY = argument.value.AsFloat();
+            }
+        }
+        nativeReceived.push_back(record);
+    };
+    for (const char* name : { "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit" }) {
+        kb::tests::Require(host.NativeBackend().RegisterEvent(kNativeAsset, name, recordNativeEvent), "Native RegisterEvent failed for a collision/trigger event name");
+    }
+
+    const std::string luaScript =
+        "function OnTriggerEnter(self, event)\n"
+        "    SetShared(\"luaTriggerEnterOther\", event.args.other)\n"
+        "    SetShared(\"luaTriggerEnterPointX\", event.args.pointX)\n"
+        "end\n"
+        "function OnCollisionStay(self, event)\n"
+        "    SetShared(\"luaCollisionStayFired\", true)\n"
+        "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Collision/trigger event dispatch test Lua script did not load");
+
+    kb::tests::Require(host.InstallSceneSystem(), "Collision/trigger event dispatch test scene system install failed");
+
+    // --- Queue exactly what a physics plugin's contact listener would,
+    // directly through the public facade (no real Jolt needed to prove
+    // dispatch correctness - that proof is PhysicsSceneSystemTests.cpp's
+    // job) - one of each phase, targeting both subjects, plus one event
+    // targeting an entity with no behaviour at all (must be honestly
+    // dropped, not crash).
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .point = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F },
+                                                               .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Stay,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = nativeSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Exit,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = luaSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .point = kb::scene::Vec3{ 4.0F, 5.0F, 6.0F },
+                                                               .isTrigger = true,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+    // Independent-axis proof, not a physically-realistic single contact:
+    // the SAME entity also receiving a non-trigger Stay proves phase and
+    // isTrigger are dispatched independently, not conflated.
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = luaSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Stay,
+                                                           });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = unrelatedEntity.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .isTrigger = false,
+                                                               .phase = kb::scene::PhysicsContactPhase::Enter,
+                                                           });
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::tests::Require(nativeReceived.size() == 3U, "Native OnCollisionEnter/Stay/Exit must all be dispatched to the target entity's behaviour, and only that entity's");
+    kb::tests::Require(nativeReceived[0].name == "OnCollisionEnter" && nativeReceived[0].target == nativeSubject.Entity()
+            && nativeReceived[0].other == otherEntity.Entity().Id()
+            && kb::tests::NearlyEqual(nativeReceived[0].pointX, 1.0F) && kb::tests::NearlyEqual(nativeReceived[0].normalY, 1.0F),
+        "Native OnCollisionEnter must carry the exact queued other-entity id and point/normal payload");
+    kb::tests::Require(nativeReceived[1].name == "OnCollisionStay", "Native OnCollisionStay must dispatch second, in queued order");
+    kb::tests::Require(nativeReceived[2].name == "OnCollisionExit", "Native OnCollisionExit must dispatch third, in queued order");
+
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaTriggerEnterOther")->AsInt()) == otherEntity.Entity().Id(),
+        "Lua OnTriggerEnter must receive the exact queued other-entity id via event.args.other");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaTriggerEnterPointX")->AsFloat(), 4.0F),
+        "Lua OnTriggerEnter must receive the exact queued contact point via event.args.pointX");
+    kb::tests::Require(host.SharedState().Get("luaCollisionStayFired")->AsBool(),
+        "Lua OnCollisionStay must also fire for the same entity, independent of OnTriggerEnter having fired for it too");
+
+    kb::tests::Require(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene).empty(),
+        "ScriptRuntimeSceneSystem must have fully drained the pending collision event queue during Update()");
+}
+
 // LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
 // Transform.WorldPose/SetWorldPose. Deliberately its own fresh Scene/host
 // (isolated fixture pattern, LIB-067) rather than folding into
@@ -9072,6 +9217,7 @@ void RunScriptRuntimeTests() {
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCastOverlapClosestPointApiTest();
     RunPhysicsBackendNonAllocQueriesTest();
+    RunScriptPhysicsCollisionTriggerEventDispatchTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();
