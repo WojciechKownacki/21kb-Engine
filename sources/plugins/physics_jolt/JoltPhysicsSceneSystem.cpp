@@ -3,6 +3,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -299,7 +300,7 @@ using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, 
 
 } // namespace
 
-class JoltPhysicsSceneSystem::Impl {
+class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend {
 public:
     explicit Impl(JoltPhysicsSceneSystemSettings settings)
         : settings_(settings)
@@ -309,7 +310,7 @@ public:
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
     }
 
-    ~Impl() {
+    ~Impl() override {
         RemoveAllBodies();
     }
 
@@ -321,6 +322,95 @@ public:
 
     void OnDestroy() {
         RemoveAllBodies();
+    }
+
+    // kb::scene::IPhysicsBackend - LIB-124. Every method looks the entity up
+    // in the SAME bodies_ map SynchronizeBodies already maintains; a miss
+    // (no live body this frame - not yet synchronized, or the entity has no
+    // Rigidbody/Collider at all) is a real, honest "not applied" (false /
+    // found=false), never a crash or silent success.
+    bool AddForce(SceneEntity entity, Vec3 force) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().AddForce(*bodyId, ToJolt(force));
+        return true;
+    }
+
+    bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().AddImpulse(*bodyId, ToJolt(impulse));
+        return true;
+    }
+
+    bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().SetLinearVelocity(*bodyId, ToJolt(velocity));
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(physicsSystem_.GetBodyInterface().GetLinearVelocity(*bodyId)) };
+    }
+
+    bool SetAngularVelocity(SceneEntity entity, Vec3 angularVelocity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().SetAngularVelocity(*bodyId, ToJolt(angularVelocity));
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(physicsSystem_.GetBodyInterface().GetAngularVelocity(*bodyId)) };
+    }
+
+    bool MoveKinematic(SceneEntity entity, Vec3 targetPosition, Quat targetRotation, float deltaSeconds) noexcept override {
+        const auto existing = bodies_.find(entity.Id());
+        if (existing == bodies_.end() || existing->second.signature.bodyType != RigidbodyBodyType::Kinematic || deltaSeconds <= 0.0F) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().MoveKinematic(existing->second.bodyId, ToJoltPosition(targetPosition), ToJolt(targetRotation), deltaSeconds);
+        return true;
+    }
+
+    bool Sleep(SceneEntity entity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().DeactivateBody(*bodyId);
+        return true;
+    }
+
+    bool Wake(SceneEntity entity) noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return false;
+        }
+        physicsSystem_.GetBodyInterface().ActivateBody(*bodyId);
+        return true;
+    }
+
+    [[nodiscard]] bool IsSleeping(SceneEntity entity) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        return bodyId != nullptr && !physicsSystem_.GetBodyInterface().IsActive(*bodyId);
     }
 
     void SynchronizeBody(
@@ -345,6 +435,11 @@ public:
     }
 
 private:
+    [[nodiscard]] const JPH::BodyID* FindBodyId(SceneEntity entity) const noexcept {
+        const auto existing = bodies_.find(entity.Id());
+        return existing == bodies_.end() ? nullptr : &existing->second.bodyId;
+    }
+
     [[nodiscard]] static std::uint32_t WorkerThreadCount() noexcept {
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
         return hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
@@ -507,7 +602,7 @@ JoltPhysicsSceneSystem::JoltPhysicsSceneSystem(JoltPhysicsSceneSystem&&) noexcep
 JoltPhysicsSceneSystem& JoltPhysicsSceneSystem::operator=(JoltPhysicsSceneSystem&&) noexcept = default;
 
 void JoltPhysicsSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
-    static_cast<void>(context);
+    kb::scene::PhysicsBackend::RegisterBackend(context.GetScene(), *impl_);
 }
 
 void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
@@ -515,7 +610,7 @@ void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& contex
 }
 
 void JoltPhysicsSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
-    static_cast<void>(context);
+    kb::scene::PhysicsBackend::UnregisterBackend(context.GetScene(), *impl_);
     impl_->OnDestroy();
 }
 

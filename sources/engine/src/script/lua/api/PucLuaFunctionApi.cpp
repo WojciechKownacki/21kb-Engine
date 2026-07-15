@@ -443,6 +443,174 @@ int LuaPhysicsRaycast(lua_State* state) {
     return 1;
 }
 
+// LIB-124: entity is ALWAYS read via luaL_checkinteger and explicitly tagged
+// ScriptValueType::Entity here - NOT through the generic table/
+// ArgumentsFromTable path other wrappers above also support, which infers a
+// Lua integer's ScriptValueType purely from its own magnitude
+// (PucLuaValueBridge::FromLua: only becomes Entity-typed once the value
+// exceeds int32 range) and would silently mis-marshal a small-magnitude
+// entity id as Int instead (see LIB-123's World.SetPropertyEntity notes).
+[[nodiscard]] std::uint64_t CheckEntityArg(lua_State* state, int index) {
+    return static_cast<std::uint64_t>(luaL_checkinteger(state, index));
+}
+
+int LuaPhysicsAddForce(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("forceX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("forceY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("forceZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.AddForce", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsAddImpulse(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("impulseX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("impulseY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("impulseZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.AddImpulse", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsSetVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("velocityX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("velocityY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("velocityZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.SetVelocity", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsGetVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.GetVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsSetAngularVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("angularVelocityX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("angularVelocityY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("angularVelocityZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.SetAngularVelocity", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsGetAngularVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.GetAngularVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsMoveKinematic(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("targetX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("targetY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("targetZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("rotationX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 0.0)) }),
+        Arg("rotationY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 6, 0.0)) }),
+        Arg("rotationZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 0.0)) }),
+        Arg("rotationW", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 1.0)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.MoveKinematic", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsSleep(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.Sleep", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsWake(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.Wake", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsIsSleeping(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.IsSleeping", arguments);
+    lua_pushboolean(state, result.Output("sleeping").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 [[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
     const char* action = luaL_checkstring(state, 1);
     std::vector<ScriptFunctionArgument> arguments{ Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
@@ -745,8 +913,18 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 1);
+    lua_createtable(state, 0, 11);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
+    SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
+    SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
+    SetClosure(state, "SetVelocity", &LuaPhysicsSetVelocity, context);
+    SetClosure(state, "GetVelocity", &LuaPhysicsGetVelocity, context);
+    SetClosure(state, "SetAngularVelocity", &LuaPhysicsSetAngularVelocity, context);
+    SetClosure(state, "GetAngularVelocity", &LuaPhysicsGetAngularVelocity, context);
+    SetClosure(state, "MoveKinematic", &LuaPhysicsMoveKinematic, context);
+    SetClosure(state, "Sleep", &LuaPhysicsSleep, context);
+    SetClosure(state, "Wake", &LuaPhysicsWake, context);
+    SetClosure(state, "IsSleeping", &LuaPhysicsIsSleeping, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);

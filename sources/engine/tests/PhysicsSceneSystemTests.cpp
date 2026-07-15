@@ -3,6 +3,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -80,6 +81,36 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     }
     kb::tests::Require(transform.localPosition.y < 4.0F, "PhysicsSceneSystem did not move the dynamic body");
     kb::tests::Require(transform.localPosition.y > 0.35F, "PhysicsSceneSystem let the dynamic body tunnel through the floor");
+
+    // LIB-124: prove kb::scene::PhysicsBackend actually reaches the REAL
+    // Jolt backend (JoltPhysicsSceneSystem::Impl), not just that the
+    // interface plumbing compiles - reusing the SAME already-settled scene
+    // rather than a second Scene (a second sequential Jolt-backed Scene in
+    // one process is a known, separately-documented limitation - see
+    // _temp.md's "Nierozwiazane ryzyko").
+    kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report true once the real Jolt plugin is loaded and has run at least one fixed step");
+
+    kb::tests::Require(kb::scene::PhysicsBackend::SetVelocity(scene, box.Entity(), kb::scene::Vec3{ 0.0F, 0.0F, 0.0F }),
+        "PhysicsBackend::SetVelocity must report true for the real, live dynamic body");
+    const kb::scene::PhysicsVectorResult stoppedVelocity = kb::scene::PhysicsBackend::GetVelocity(scene, box.Entity());
+    kb::tests::Require(stoppedVelocity.found && kb::tests::NearlyEqual(stoppedVelocity.value.y, 0.0F),
+        "PhysicsBackend::GetVelocity must read back what SetVelocity just wrote through the real Jolt BodyInterface");
+
+    kb::tests::Require(kb::scene::PhysicsBackend::AddImpulse(scene, box.Entity(), kb::scene::Vec3{ 0.0F, 5.0F, 0.0F }),
+        "PhysicsBackend::AddImpulse must report true for the real, live dynamic body");
+    const kb::scene::PhysicsVectorResult launchedVelocity = kb::scene::PhysicsBackend::GetVelocity(scene, box.Entity());
+    kb::tests::Require(launchedVelocity.found && launchedVelocity.value.y > 1.0F,
+        "PhysicsBackend::AddImpulse must actually change the real Jolt body's velocity, not just round-trip data - a 5 Ns upward impulse on a mass=1 body must produce a real upward velocity");
+
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "PhysicsBackend::IsSleeping must report false for a body that was just given velocity");
+    kb::tests::Require(kb::scene::PhysicsBackend::Sleep(scene, box.Entity()), "PhysicsBackend::Sleep must report true for the real, live dynamic body");
+    kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "PhysicsBackend::IsSleeping must report true immediately after PhysicsBackend::Sleep, through the real Jolt BodyInterface");
+    kb::tests::Require(kb::scene::PhysicsBackend::Wake(scene, box.Entity()), "PhysicsBackend::Wake must report true for the real, live dynamic body");
+    kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "PhysicsBackend::IsSleeping must report false immediately after PhysicsBackend::Wake");
+
+    const kb::scene::SceneEntity unknownEntity = scene.Entities().CreateEntity();
+    kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, unknownEntity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+        "PhysicsBackend::AddForce must report false for an entity with no live Jolt body");
 }
 
 } // namespace

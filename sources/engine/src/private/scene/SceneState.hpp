@@ -38,6 +38,8 @@ class IAudioPlaybackBackend;
 
 namespace kb::scene {
 
+class IPhysicsBackend;
+
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
     TransformComponent transform{};
@@ -336,6 +338,7 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
 };
 

@@ -15,6 +15,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -98,6 +99,103 @@ public:
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
+};
+
+// LIB-124: mirrors ProbeAudioPlaybackBackend above - a real, deterministic
+// test double for kb::scene::IPhysicsBackend, registered directly (no real
+// Jolt plugin needed) so the script-facing dispatch (ScriptPhysicsApi ->
+// kb::scene::PhysicsBackend -> this backend) can be tested precisely and
+// fast, independent of the real Jolt plugin's own correctness (already
+// covered by PhysicsSceneSystemTests.cpp).
+class ProbePhysicsBackend final : public kb::scene::IPhysicsBackend {
+public:
+    bool AddForce(kb::scene::SceneEntity entity, kb::scene::Vec3 force) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastForce = force;
+        return true;
+    }
+
+    bool AddImpulse(kb::scene::SceneEntity entity, kb::scene::Vec3 impulse) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastImpulse = impulse;
+        return true;
+    }
+
+    bool SetVelocity(kb::scene::SceneEntity entity, kb::scene::Vec3 velocity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        velocity_ = velocity;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = velocity_ };
+    }
+
+    bool SetAngularVelocity(kb::scene::SceneEntity entity, kb::scene::Vec3 angularVelocity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        angularVelocity_ = angularVelocity;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult GetAngularVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = angularVelocity_ };
+    }
+
+    bool MoveKinematic(kb::scene::SceneEntity entity, kb::scene::Vec3 targetPosition, kb::scene::Quat targetRotation, float deltaSeconds) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastMoveTarget = targetPosition;
+        lastMoveRotation = targetRotation;
+        lastMoveDeltaSeconds = deltaSeconds;
+        return true;
+    }
+
+    bool Sleep(kb::scene::SceneEntity entity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        sleeping_ = true;
+        return true;
+    }
+
+    bool Wake(kb::scene::SceneEntity entity) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        sleeping_ = false;
+        return true;
+    }
+
+    [[nodiscard]] bool IsSleeping(kb::scene::SceneEntity entity) const noexcept override {
+        return entity == knownEntity && sleeping_;
+    }
+
+    kb::scene::SceneEntity knownEntity{};
+    kb::scene::Vec3 lastForce{};
+    kb::scene::Vec3 lastImpulse{};
+    kb::scene::Vec3 lastMoveTarget{};
+    kb::scene::Quat lastMoveRotation{};
+    float lastMoveDeltaSeconds = 0.0F;
+
+private:
+    kb::scene::Vec3 velocity_{};
+    kb::scene::Vec3 angularVelocity_{};
+    bool sleeping_ = false;
 };
 
 class FakeLuaRuntime final : public kb::script::ILuaScriptRuntime {
@@ -2271,6 +2369,147 @@ end
     const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
     kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
+}
+
+// LIB-124: force/impulse/velocity/angular-velocity/kinematic-move/sleep-wake.
+// Uses a fake ProbePhysicsBackend (kb::scene::IPhysicsBackend), the SAME
+// isolated-backend-double approach RunScriptAudioApiTest already uses for
+// kb::audio::IAudioPlaybackBackend - fast, deterministic, independent of the
+// real Jolt plugin's own correctness (PhysicsSceneSystemTests.cpp covers
+// that separately). Proves BOTH the honest "no backend" failure path (no
+// physics plugin loaded, matching a real headless/no-physics project) AND
+// the full dispatch-with-backend path (right arguments reach the backend,
+// right outputs come back, an unknown entity honestly fails rather than
+// silently succeeding).
+void RunScriptPhysicsForceVelocitySleepApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Physics Backend Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Physics" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics force/velocity/sleep API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.AddForce") != nullptr, "Physics.AddForce was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.MoveKinematic") != nullptr, "Physics.MoveKinematic was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> forceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "forceX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceZ", .value = kb::script::ScriptValue{ 3.0F } },
+    };
+
+    // --- No backend registered: every call must honestly report failure,
+    // never crash and never fabricate success.
+    const kb::script::ScriptFunctionCallResult noBackendForce = host.Functions().Call("Physics.AddForce", forceArgs, context);
+    kb::tests::Require(noBackendForce.Succeeded() && !noBackendForce.Output("applied")->AsBool(), "Physics.AddForce must report applied=false when no physics backend is registered");
+    const std::vector<kb::script::ScriptFunctionArgument> velocityQueryArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noBackendVelocity = host.Functions().Call("Physics.GetVelocity", velocityQueryArgs, context);
+    kb::tests::Require(noBackendVelocity.Succeeded() && !noBackendVelocity.Output("found")->AsBool(), "Physics.GetVelocity must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `object` is "known" to it.
+    ProbePhysicsBackend backend;
+    backend.knownEntity = object.Entity();
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+    kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report true once a backend is registered");
+
+    const kb::script::ScriptFunctionCallResult forceResult = host.Functions().Call("Physics.AddForce", forceArgs, context);
+    kb::tests::Require(forceResult.Succeeded() && forceResult.Output("applied")->AsBool(), "Physics.AddForce must report applied=true once a backend is registered for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastForce.x, 1.0F) && kb::tests::NearlyEqual(backend.lastForce.y, 2.0F) && kb::tests::NearlyEqual(backend.lastForce.z, 3.0F),
+        "Physics.AddForce must pass the exact force vector through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> impulseArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseX", .value = kb::script::ScriptValue{ 4.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "impulseZ", .value = kb::script::ScriptValue{ 6.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.AddImpulse", impulseArgs, context).Output("applied")->AsBool(), "Physics.AddImpulse must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastImpulse.x, 4.0F) && kb::tests::NearlyEqual(backend.lastImpulse.z, 6.0F), "Physics.AddImpulse must pass the exact impulse vector through");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setVelocityArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityX", .value = kb::script::ScriptValue{ 7.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityY", .value = kb::script::ScriptValue{ 8.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityZ", .value = kb::script::ScriptValue{ 9.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.SetVelocity", setVelocityArgs, context).Output("applied")->AsBool(), "Physics.SetVelocity must report applied=true for a known entity");
+    const kb::script::ScriptFunctionCallResult getVelocity = host.Functions().Call("Physics.GetVelocity", velocityQueryArgs, context);
+    kb::tests::Require(getVelocity.Output("found")->AsBool() && kb::tests::NearlyEqual(getVelocity.Output("y")->AsFloat(), 8.0F), "Physics.GetVelocity must read back exactly what Physics.SetVelocity just wrote");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setAngularArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityX", .value = kb::script::ScriptValue{ 0.1F } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityY", .value = kb::script::ScriptValue{ 0.2F } },
+        kb::script::ScriptFunctionArgument{ .name = "angularVelocityZ", .value = kb::script::ScriptValue{ 0.3F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.SetAngularVelocity", setAngularArgs, context).Output("applied")->AsBool(), "Physics.SetAngularVelocity must report applied=true for a known entity");
+    const kb::script::ScriptFunctionCallResult getAngular = host.Functions().Call("Physics.GetAngularVelocity", velocityQueryArgs, context);
+    kb::tests::Require(getAngular.Output("found")->AsBool() && kb::tests::NearlyEqual(getAngular.Output("z")->AsFloat(), 0.3F), "Physics.GetAngularVelocity must read back exactly what Physics.SetAngularVelocity just wrote");
+
+    const std::vector<kb::script::ScriptFunctionArgument> moveKinematicArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "targetX", .value = kb::script::ScriptValue{ 10.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "targetY", .value = kb::script::ScriptValue{ 11.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "targetZ", .value = kb::script::ScriptValue{ 12.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult moveResult = host.Functions().Call("Physics.MoveKinematic", moveKinematicArgs, context);
+    kb::tests::Require(moveResult.Succeeded() && moveResult.Output("applied")->AsBool(), "Physics.MoveKinematic must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastMoveTarget.x, 10.0F) && kb::tests::NearlyEqual(backend.lastMoveDeltaSeconds, 0.02F),
+        "Physics.MoveKinematic must pass the target position through and default deltaSeconds to this call's own frame delta when omitted");
+
+    kb::tests::Require(!host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report false before Physics.Sleep is called");
+    kb::tests::Require(host.Functions().Call("Physics.Sleep", velocityQueryArgs, context).Output("applied")->AsBool(), "Physics.Sleep must report applied=true for a known entity");
+    kb::tests::Require(host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report true immediately after Physics.Sleep");
+    kb::tests::Require(host.Functions().Call("Physics.Wake", velocityQueryArgs, context).Output("applied")->AsBool(), "Physics.Wake must report applied=true for a known entity");
+    kb::tests::Require(!host.Functions().Call("Physics.IsSleeping", velocityQueryArgs, context).Output("sleeping")->AsBool(), "Physics.IsSleeping must report false immediately after Physics.Wake");
+
+    // --- An entity the backend does not know about must honestly fail too
+    // (not merely "no backend" - the backend itself must be able to reject).
+    const std::vector<kb::script::ScriptFunctionArgument> unknownForceArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "forceX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "forceZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.AddForce", unknownForceArgs, context).Output("applied")->AsBool(), "Physics.AddForce must report applied=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: dedicated wrappers (LuaPhysicsAddForce etc.) parse
+    // `entity` via luaL_checkinteger and explicitly tag it Entity-typed
+    // (see CheckEntityArg in PucLuaFunctionApi.cpp) rather than relying on
+    // the generic table-argument path's magnitude-based type inference -
+    // correct regardless of this entity's actual id value.
+    const kb::assets::AssetId luaAsset{ 9410U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Physics Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(object.Entity().Id()) + "\n"
+                                                "    local applied = Physics.AddForce(entityId, 1.0, 2.0, 3.0)\n"
+                                                "    Physics.SetVelocity(entityId, 21.0, 22.0, 23.0)\n"
+                                                "    local velocity = Physics.GetVelocity(entityId)\n"
+                                                "    Physics.Sleep(entityId)\n"
+                                                "    local sleeping = Physics.IsSleeping(entityId)\n"
+                                                "    SetShared(\"luaPhysicsForceApplied\", applied)\n"
+                                                "    SetShared(\"luaPhysicsVelocityY\", velocity.y)\n"
+                                                "    SetShared(\"luaPhysicsSleeping\", sleeping)\n"
+                                                "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics force/velocity/sleep API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics force/velocity/sleep API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaPhysicsForceApplied")->AsBool(), "Lua Physics.AddForce must report applied=true for a known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaPhysicsVelocityY")->AsFloat(), 22.0F), "Lua Physics.GetVelocity must read back exactly what Lua Physics.SetVelocity just wrote");
+    kb::tests::Require(host.SharedState().Get("luaPhysicsSleeping")->AsBool(), "Lua Physics.IsSleeping must report true after Lua Physics.Sleep");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+    kb::tests::Require(!kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report false after UnregisterBackend");
 }
 
 // LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
@@ -8396,6 +8635,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();
