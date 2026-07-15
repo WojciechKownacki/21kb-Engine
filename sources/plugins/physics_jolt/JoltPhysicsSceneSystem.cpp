@@ -24,6 +24,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -36,6 +37,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -363,6 +365,89 @@ private:
     JPH::BodyID bodyId_;
 };
 
+// LIB-127: OnContactAdded/Persisted/Removed genuinely fire from MULTIPLE
+// Jolt job-system threads at once (ContactListener.h's own doc comment:
+// "callbacks... are called from multiple threads at the same time when all
+// bodies are locked"), so the listener may only read the minimum safe data
+// (BodyID/IsSensor/manifold point+normal - never lock/mutate bodies) and
+// must buffer it behind a mutex. Resolving BodyID -> SceneEntity and
+// building the actual queued event both happen later, on the main thread,
+// after Step() returns (entityByBodyId_ is not thread-safe and must never
+// be touched from these callbacks).
+enum class RawContactPhase : std::uint8_t {
+    Added,
+    Persisted,
+    Removed,
+};
+
+struct RawContactEvent {
+    JPH::SubShapeIDPair pair;
+    JPH::BodyID body1;
+    JPH::BodyID body2;
+    bool isSensor1 = false;
+    bool isSensor2 = false;
+    RawContactPhase phase = RawContactPhase::Added;
+    Vec3 point{};
+    Vec3 normal{};
+};
+
+class JoltCollisionContactListener final : public JPH::ContactListener {
+public:
+    void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
+        static_cast<void>(settings);
+        Record(body1, body2, manifold, RawContactPhase::Added);
+    }
+
+    void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override {
+        static_cast<void>(settings);
+        Record(body1, body2, manifold, RawContactPhase::Persisted);
+    }
+
+    // Cannot access body/manifold data here at all (Jolt's own doc: "You
+    // cannot access the bodies at the time of this callback... the body may
+    // have been removed and destroyed") - point/normal stay zero for Exit
+    // events; only the two BodyIDs (still valid to read from the pair
+    // itself) are available.
+    void OnContactRemoved(const JPH::SubShapeIDPair& subShapePair) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_.push_back(RawContactEvent{
+            .pair = subShapePair,
+            .body1 = subShapePair.GetBody1ID(),
+            .body2 = subShapePair.GetBody2ID(),
+            .phase = RawContactPhase::Removed,
+        });
+    }
+
+    [[nodiscard]] std::vector<RawContactEvent> DrainAndClear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<RawContactEvent> drained;
+        drained.swap(pending_);
+        return drained;
+    }
+
+private:
+    void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, RawContactPhase phase) {
+        Vec3 point{};
+        if (!manifold.mRelativeContactPointsOn1.empty()) {
+            point = FromJoltPosition(manifold.GetWorldSpaceContactPointOn1(0));
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_.push_back(RawContactEvent{
+            .pair = JPH::SubShapeIDPair(body1.GetID(), manifold.mSubShapeID1, body2.GetID(), manifold.mSubShapeID2),
+            .body1 = body1.GetID(),
+            .body2 = body2.GetID(),
+            .isSensor1 = body1.IsSensor(),
+            .isSensor2 = body2.IsSensor(),
+            .phase = phase,
+            .point = point,
+            .normal = FromJolt(manifold.mWorldSpaceNormal),
+        });
+    }
+
+    std::mutex mutex_;
+    std::vector<RawContactEvent> pending_;
+};
+
 } // namespace
 
 class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend {
@@ -373,6 +458,11 @@ public:
         , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount()) {
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
+        // LIB-127: only a single ContactListener can be registered per
+        // PhysicsSystem (Jolt's own doc comment) - this Impl owns the one
+        // instance for its own PhysicsSystem, exactly like it owns
+        // broadPhaseLayers_/objectVsBroadPhaseFilter_ above.
+        physicsSystem_.SetContactListener(&contactListener_);
     }
 
     ~Impl() override {
@@ -383,6 +473,7 @@ public:
         SynchronizeBodies(context);
         Step(context.DeltaSeconds());
         WriteBack(context);
+        DispatchContactEvents(context);
     }
 
     void OnDestroy() {
@@ -771,6 +862,102 @@ private:
         }
     }
 
+    // LIB-127: drains the raw, thread-buffered contact events Step() above
+    // just collected (safe now - this runs on the main thread, after
+    // physicsSystem_.Update() has returned), reduces them to ONE
+    // authoritative phase per (body1,body2) contact pair for this fixed
+    // step, resolves BodyID -> SceneEntity, and queues two
+    // kb::scene::PendingCollisionEvent per pair (one per side - Jolt's own
+    // ContactListener doc: "Typically this is done on both objects involved
+    // in a collision event") for kb::script::ScriptRuntimeSceneSystem to
+    // drain and dispatch as real, entity-local ScriptEvents.
+    void DispatchContactEvents(SceneSystemContext& context) {
+        std::vector<RawContactEvent> drained = contactListener_.DrainAndClear();
+        if (drained.empty()) {
+            return;
+        }
+
+        // std::map, keyed by JPH::SubShapeIDPair - Jolt documents that
+        // type's operator< as existing specifically "to consistently order
+        // contact points for a deterministic simulation". Reusing it here
+        // gives BOTH the per-step reduction below (Jolt may run several
+        // internal collision sub-steps within one Step() call and report
+        // the same pair more than once: Removed always wins as the step's
+        // final word, Added otherwise wins over Persisted so a genuinely
+        // new contact this step is never downgraded to a mere Stay) AND a
+        // canonical, thread-schedule-independent dispatch order, from a
+        // single data structure.
+        std::map<JPH::SubShapeIDPair, RawContactEvent> reduced;
+        for (const RawContactEvent& contact : drained) {
+            const auto [it, inserted] = reduced.try_emplace(contact.pair, contact);
+            if (inserted) {
+                continue;
+            }
+            const bool shouldReplace = contact.phase == RawContactPhase::Removed ||
+                (contact.phase == RawContactPhase::Added && it->second.phase != RawContactPhase::Removed);
+            if (shouldReplace) {
+                it->second = contact;
+            }
+        }
+
+        kb::scene::Scene& scene = context.GetScene();
+        for (const auto& [pair, contact] : reduced) {
+            const auto entity1It = entityByBodyId_.find(contact.body1);
+            const auto entity2It = entityByBodyId_.find(contact.body2);
+            if (entity1It == entityByBodyId_.end() || entity2It == entityByBodyId_.end()) {
+                continue; // One side already removed/unmapped this frame - honest skip, not a crash.
+            }
+            // Jolt's OnContactRemoved (unlike OnContactAdded/Persisted) gives
+            // no Body access at all, so contact.isSensor1/2 are unset
+            // (default false) for a Removed event - using them directly
+            // here would silently misreport every trigger's Exit as a
+            // non-trigger OnCollisionExit. pairIsTrigger_ remembers the
+            // real answer from the pair's own Added/Persisted callbacks
+            // (this SAME fixed step or an earlier one) and is consulted
+            // (then erased - the pair is gone) on Removed instead.
+            bool isTrigger = false;
+            if (contact.phase == RawContactPhase::Removed) {
+                const auto triggerIt = pairIsTrigger_.find(pair);
+                if (triggerIt != pairIsTrigger_.end()) {
+                    isTrigger = triggerIt->second;
+                    pairIsTrigger_.erase(triggerIt);
+                }
+            } else {
+                isTrigger = contact.isSensor1 || contact.isSensor2;
+                pairIsTrigger_[pair] = isTrigger;
+            }
+            const kb::scene::PhysicsContactPhase phase = contact.phase == RawContactPhase::Added ? kb::scene::PhysicsContactPhase::Enter
+                : contact.phase == RawContactPhase::Removed                                       ? kb::scene::PhysicsContactPhase::Exit
+                                                                                                    : kb::scene::PhysicsContactPhase::Stay;
+            // Body1/Body2 order is already canonical (Jolt guarantees body1
+            // ID < body2 ID for Added/Persisted; SubShapeIDPair ordering
+            // gives the same determinism for Removed), so target=entity1 is
+            // always queued before target=entity2 for a given pair. Both
+            // sides receive the SAME raw point/normal (Jolt's own
+            // body1-relative convention) rather than a per-recipient
+            // flipped normal - a deliberate, documented simplification, not
+            // an oversight: nothing in the plan names per-side normal
+            // flipping, and it is trivially derivable by the receiving
+            // script (negate normal) if a specific use case needs it.
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                                       .target = entity1It->second,
+                                                                       .other = entity2It->second,
+                                                                       .point = contact.point,
+                                                                       .normal = contact.normal,
+                                                                       .isTrigger = isTrigger,
+                                                                       .phase = phase,
+                                                                   });
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                                       .target = entity2It->second,
+                                                                       .other = entity1It->second,
+                                                                       .point = contact.point,
+                                                                       .normal = contact.normal,
+                                                                       .isTrigger = isTrigger,
+                                                                       .phase = phase,
+                                                                   });
+        }
+    }
+
     void RemoveBody(JPH::BodyID bodyId) {
         if (bodyId.IsInvalid()) {
             return;
@@ -801,6 +988,11 @@ private:
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
+    JoltCollisionContactListener contactListener_;
+    // LIB-127: which currently-active contact pairs are trigger contacts -
+    // see DispatchContactEvents' own comment on why OnContactRemoved needs
+    // this remembered rather than read directly off the (unavailable) body.
+    std::map<JPH::SubShapeIDPair, bool> pairIsTrigger_;
 };
 
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem()

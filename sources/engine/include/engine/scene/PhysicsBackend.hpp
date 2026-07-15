@@ -5,6 +5,7 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::scene {
 
@@ -125,6 +126,37 @@ public:
     virtual void OverlapShapeAll(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) const noexcept = 0;
 };
 
+// LIB-127: OnCollisionEnter/Stay/Exit fire for a solid-vs-solid contact;
+// OnTriggerEnter/Stay/Exit fire when EITHER collider involved is a trigger
+// (ColliderComponent::trigger, already wired to Jolt's Body::IsSensor -
+// LIB-123) - the same "either side is a sensor" rule Jolt's own
+// ContactListener doc uses. `isTrigger` is the single axis distinguishing
+// the two; Enter/Stay/Exit is the same OnContactAdded/Persisted/Removed
+// mapping every physics engine with a contact listener uses.
+enum class PhysicsContactPhase : std::uint8_t {
+    Enter,
+    Stay,
+    Exit,
+};
+
+// Queued by whichever physics plugin is loaded (never constructed by script
+// code) via PhysicsBackend::QueueCollisionEvent, and drained once per frame
+// by kb::script::ScriptRuntimeSceneSystem, which turns each into a real,
+// entity-local ScriptEvent ("OnCollisionEnter" etc., target=`target`) -
+// mirrors the SAME producer-queues/consumer-drains-once-per-frame pattern
+// SceneState::pendingSceneLifecycleEvents (LIB-073) already established,
+// not a new mechanism. `point`/`normal` are only meaningful for
+// Enter/Stay (Jolt's OnContactRemoved cannot access body/manifold data at
+// all - see JoltPhysicsSceneSystem.cpp) and are zero for Exit.
+struct PendingCollisionEvent {
+    SceneEntity target;
+    SceneEntity other;
+    Vec3 point{};
+    Vec3 normal{};
+    bool isTrigger = false;
+    PhysicsContactPhase phase = PhysicsContactPhase::Enter;
+};
+
 class PhysicsBackend final {
 public:
     PhysicsBackend() = delete;
@@ -152,6 +184,14 @@ public:
     // registered, same convention as every other facade method above.
     static void CastShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept;
     static void OverlapShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) noexcept;
+
+    // LIB-127: QueueCollisionEvent is called by a physics plugin (e.g.
+    // kb_physics_jolt_plugin's contact listener), never by script code.
+    // DrainPendingCollisionEvents is called once per frame by
+    // kb::script::ScriptRuntimeSceneSystem; returns and clears every event
+    // queued since the last drain, in the exact order they were queued.
+    static void QueueCollisionEvent(Scene& scene, PendingCollisionEvent event);
+    [[nodiscard]] static std::vector<PendingCollisionEvent> DrainPendingCollisionEvents(Scene& scene);
 };
 
 // LIB-126: Raycast has stayed pure ColliderComponent/TransformComponent

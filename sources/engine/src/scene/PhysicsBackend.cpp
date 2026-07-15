@@ -4,6 +4,8 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
+#include <utility>
+
 namespace kb::scene {
 namespace {
 
@@ -115,6 +117,17 @@ void PhysicsBackend::OverlapShapeAll(Scene& scene, const PhysicsShapeDesc& shape
     } else {
         results.Clear();
     }
+}
+
+void PhysicsBackend::QueueCollisionEvent(Scene& scene, PendingCollisionEvent event) {
+    SceneAccess::State(scene).pendingCollisionEvents.push_back(std::move(event));
+}
+
+std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    std::vector<PendingCollisionEvent> drained;
+    drained.swap(state.pendingCollisionEvents);
+    return drained;
 }
 
 } // namespace kb::scene

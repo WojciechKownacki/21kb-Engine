@@ -1,6 +1,7 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -90,6 +91,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
+    DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -191,6 +193,41 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
         event.name = completion.succeeded ? "TaskCompleted" : "TaskFailed";
         event.target = completion.owner;
         event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-103: ENTITY-LOCAL (target is always the entity the callback is
+    // for, exactly like DispatchFiredTimers/DispatchCompletedTasks above).
+    // The event name encodes both the Enter/Stay/Exit phase and whether
+    // either collider involved is a trigger (kb::scene::PendingCollisionEvent::
+    // isTrigger) — the same six names Unity's own OnCollision*/OnTrigger*
+    // callbacks use, so existing Lua/Native/VisualGraph scripts written
+    // against that convention need no translation layer.
+    for (const kb::scene::PendingCollisionEvent& pending : kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene)) {
+        const char* name = nullptr;
+        switch (pending.phase) {
+        case kb::scene::PhysicsContactPhase::Enter:
+            name = pending.isTrigger ? "OnTriggerEnter" : "OnCollisionEnter";
+            break;
+        case kb::scene::PhysicsContactPhase::Stay:
+            name = pending.isTrigger ? "OnTriggerStay" : "OnCollisionStay";
+            break;
+        case kb::scene::PhysicsContactPhase::Exit:
+            name = pending.isTrigger ? "OnTriggerExit" : "OnCollisionExit";
+            break;
+        }
+        ScriptEvent event;
+        event.name = name;
+        event.target = pending.target;
+        event.arguments.push_back(ScriptEventArgument{ .name = "other", .value = ScriptValue{ pending.other.Id(), ScriptValueType::Entity } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointX", .value = ScriptValue{ pending.point.x } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointY", .value = ScriptValue{ pending.point.y } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "pointZ", .value = ScriptValue{ pending.point.z } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalX", .value = ScriptValue{ pending.normal.x } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalY", .value = ScriptValue{ pending.normal.y } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalZ", .value = ScriptValue{ pending.normal.z } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }
