@@ -213,7 +213,7 @@ void RenderScene::ClearDirty() noexcept {
     }
 }
 
-std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight, std::uint32_t targetViewportId) const {
+const CameraRenderProxyDesc* RenderScene::FindPrimaryCameraProxy(std::uint32_t targetViewportId) const noexcept {
     const CameraRenderProxyDesc* selected = nullptr;
     for (const auto& [entityId, proxy] : cameras_) {
         const CameraRenderProxyDesc& camera = proxy.desc;
@@ -228,6 +228,11 @@ std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t v
             selected = &camera;
         }
     }
+    return selected;
+}
+
+std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight, std::uint32_t targetViewportId) const {
+    const CameraRenderProxyDesc* selected = FindPrimaryCameraProxy(targetViewportId);
     if (selected == nullptr) {
         return std::nullopt;
     }

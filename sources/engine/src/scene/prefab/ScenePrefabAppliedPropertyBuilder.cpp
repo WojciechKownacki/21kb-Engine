@@ -158,6 +158,18 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(camera->priority);
             return true;
         }
+        if (propertyPath == "camera.cullingMask") {
+            property.value = std::to_string(camera->cullingMask);
+            return true;
+        }
+        if (propertyPath == "camera.clearMode") {
+            property.value = std::to_string(static_cast<int>(camera->clearMode));
+            return true;
+        }
+        if (propertyPath == "camera.clearColor") {
+            property.value = ToString(camera->clearColor);
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "meshRenderer")) {
         const MeshRendererComponent* meshRenderer = components.MeshRenderers().TryGet(entity);
@@ -196,6 +208,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "meshRenderer.receivesShadow") {
             property.value = ToString(meshRenderer->receivesShadow);
+            return true;
+        }
+        if (propertyPath == "meshRenderer.layer") {
+            property.value = std::to_string(meshRenderer->layer);
             return true;
         }
     }

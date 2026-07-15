@@ -151,6 +151,17 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_CAMERA_CLEAR_MODE(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::CameraClearMode::DontClear)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::CameraClearMode>(value.AsInt()); \
+            return true; \
+        } }
+
 #define KB_LIGHT_KIND(Component, field) \
     FieldBinding{ #field, \
         [](const void* component) noexcept -> ScriptValue { \
@@ -230,7 +241,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kVisibilityPropertyDes
     ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kCameraPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "verticalFovDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "orthographicHeight", ScriptValueType::Float },
@@ -239,6 +250,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "viewportId", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "cullingMask", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "clearMode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "clearColor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "clearColor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
@@ -255,10 +271,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -356,7 +373,7 @@ constexpr std::array<FieldBinding, 1> kVisibilityFields{
     KB_BOOL(kb::scene::VisibilityComponent, visible),
 };
 
-constexpr std::array<FieldBinding, 8> kCameraFields{
+constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_CAMERA_PROJECTION(kb::scene::CameraComponent, projection),
     KB_FLOAT(kb::scene::CameraComponent, verticalFovDegrees),
     KB_FLOAT(kb::scene::CameraComponent, orthographicHeight),
@@ -365,6 +382,11 @@ constexpr std::array<FieldBinding, 8> kCameraFields{
     KB_BOOL(kb::scene::CameraComponent, primary),
     KB_UINT32(kb::scene::CameraComponent, viewportId),
     KB_INT(kb::scene::CameraComponent, priority),
+    KB_UINT32(kb::scene::CameraComponent, cullingMask),
+    KB_CAMERA_CLEAR_MODE(kb::scene::CameraComponent, clearMode),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, x),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, y),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
 constexpr std::array<FieldBinding, 11> kLightFields{
@@ -381,10 +403,11 @@ constexpr std::array<FieldBinding, 11> kLightFields{
     KB_BOOL(kb::scene::LightComponent, castsShadow),
 };
 
-constexpr std::array<FieldBinding, 3> kMeshRendererFields{
+constexpr std::array<FieldBinding, 4> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
+    KB_UINT32(kb::scene::MeshRendererComponent, layer),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{

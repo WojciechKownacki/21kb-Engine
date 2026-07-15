@@ -6988,7 +6988,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // from 83 to 84.
     // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
     // 84 to 86.
-    kb::tests::Require(fieldsChecked == 86U, "Script component API generated accessor coverage test did not exercise the expected total field count (86) across all 10 components");
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    kb::tests::Require(fieldsChecked == 92U, "Script component API generated accessor coverage test did not exercise the expected total field count (92) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -7039,7 +7042,10 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // from 83 to 84.
     // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
     // 84 to 86.
-    kb::tests::Require(propertiesChecked == 86U, "LIB-082 raw-pointer audit did not exercise the expected total field count (86) across all 10 components");
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    kb::tests::Require(propertiesChecked == 92U, "LIB-082 raw-pointer audit did not exercise the expected total field count (92) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

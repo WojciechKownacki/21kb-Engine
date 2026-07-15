@@ -1796,7 +1796,10 @@ void RunComponentInspectorDescCatalogTest() {
     // from 83 to 84.
     // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
     // 84 to 86.
-    kb::tests::Require(fieldsChecked == 86U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (86) across all 10 components");
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    kb::tests::Require(fieldsChecked == 92U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (92) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

@@ -120,6 +120,20 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "camera.priority") {
         return ParseNumber(property.value, Ensure(node.components.camera).priority);
     }
+    if (property.propertyPath == "camera.cullingMask") {
+        return ParseNumber(property.value, Ensure(node.components.camera).cullingMask);
+    }
+    if (property.propertyPath == "camera.clearMode") {
+        int value = 0;
+        if (!ParseNumber(property.value, value) || value < static_cast<int>(CameraClearMode::SolidColor) || value > static_cast<int>(CameraClearMode::DontClear)) {
+            return false;
+        }
+        Ensure(node.components.camera).clearMode = static_cast<CameraClearMode>(value);
+        return true;
+    }
+    if (property.propertyPath == "camera.clearColor") {
+        return ParseVec3(property.value, Ensure(node.components.camera).clearColor);
+    }
     if (property.propertyPath == "meshRenderer") {
         return ApplyComponentPresence(property.value, node.components.meshRenderer);
     }
@@ -153,6 +167,9 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "meshRenderer.receivesShadow") {
         return ParseBool(property.value, Ensure(node.components.meshRenderer).receivesShadow);
+    }
+    if (property.propertyPath == "meshRenderer.layer") {
+        return ParseNumber(property.value, Ensure(node.components.meshRenderer).layer);
     }
     if (property.propertyPath == "light") {
         return ApplyComponentPresence(property.value, node.components.light);

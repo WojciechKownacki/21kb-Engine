@@ -42,6 +42,13 @@ enum class RenderCameraProjection : std::uint8_t {
     Orthographic,
 };
 
+// LIB-136: mirrors kb::scene::CameraClearMode.
+enum class RenderCameraClearMode : std::uint8_t {
+    SolidColor,
+    DepthOnly,
+    DontClear,
+};
+
 struct MeshRenderProxyDesc {
     std::uint64_t entityId = 0;
     std::uint64_t meshAssetId = 0;
@@ -55,6 +62,8 @@ struct MeshRenderProxyDesc {
     bool visible = true;
     bool castsShadow = true;
     bool receivesShadow = true;
+    // LIB-136: mirrors kb::scene::MeshRendererComponent::layer.
+    std::uint32_t layer = 1U;
 };
 
 struct CameraRenderProxyDesc {
@@ -74,6 +83,10 @@ struct CameraRenderProxyDesc {
     // unordered_map-iteration-order first match.
     std::uint32_t viewportId = 0;
     std::int32_t priority = 0;
+    // LIB-136: mirrors kb::scene::CameraComponent::cullingMask/clearMode/clearColor.
+    std::uint32_t cullingMask = 0xFFFFFFFFU;
+    RenderCameraClearMode clearMode = RenderCameraClearMode::SolidColor;
+    std::array<float, 3> clearColor{ 0.0F, 0.0F, 0.0F };
 };
 
 struct LightRenderProxyDesc {
@@ -202,6 +215,10 @@ public:
     // priority tie breaks on the lowest entityId, so the result is
     // deterministic regardless of unordered_map iteration order.
     [[nodiscard]] std::optional<SceneRenderCamera> BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight, std::uint32_t targetViewportId = 0U) const;
+    // LIB-136: same selection as BuildPrimaryCamera, without building view/projection
+    // matrices - used where only the selected camera's non-matrix settings (clearMode/
+    // clearColor) are needed, cheaply, before the rest of a frame's camera data is resolved.
+    [[nodiscard]] const CameraRenderProxyDesc* FindPrimaryCameraProxy(std::uint32_t targetViewportId = 0U) const noexcept;
     // The returned cache is refreshed lazily and remains stable until the next mesh proxy mutation.
     [[nodiscard]] const std::vector<SceneRenderDrawGroup>& DrawGroups() const;
     void BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const;

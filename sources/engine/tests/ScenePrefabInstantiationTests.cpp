@@ -2099,6 +2099,9 @@ void RunPrefabCameraAssetSaveLoadRoundTripTest() {
                 .primary = true,
                 .viewportId = 2U,
                 .priority = 9,
+                .cullingMask = 0x00000003U,
+                .clearMode = kb::scene::CameraClearMode::DepthOnly,
+                .clearColor = kb::scene::Vec3{ 0.4F, 0.5F, 0.6F },
             },
         },
     });
@@ -2119,6 +2122,10 @@ void RunPrefabCameraAssetSaveLoadRoundTripTest() {
     kb::tests::Require(camera->primary, "Camera prefab asset round trip lost primary");
     kb::tests::Require(camera->viewportId == 2U, "Camera prefab asset round trip lost viewportId");
     kb::tests::Require(camera->priority == 9, "Camera prefab asset round trip lost priority");
+    kb::tests::Require(camera->cullingMask == 0x00000003U, "Camera prefab asset round trip lost cullingMask");
+    kb::tests::Require(camera->clearMode == kb::scene::CameraClearMode::DepthOnly, "Camera prefab asset round trip lost clearMode");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->clearColor.x, 0.4F) && kb::tests::NearlyEqual(camera->clearColor.y, 0.5F) && kb::tests::NearlyEqual(camera->clearColor.z, 0.6F),
+        "Camera prefab asset round trip lost clearColor");
 
     std::filesystem::remove(prefabPath, removeError);
 }

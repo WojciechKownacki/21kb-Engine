@@ -709,6 +709,35 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
         WriteRendererBreadcrumb("renderer", message.str());
     }
+    // LIB-136: resolve the selected ECS camera's clear settings (if any - cameraOverride
+    // callers, e.g. the editor's fly camera, keep desc's own submission-level clear) BEFORE
+    // configuring the opaque view's clear state below. This is a cheap, matrix-free lookup
+    // (FindPrimaryCameraProxy, not the full BuildPrimaryCamera) so it does not duplicate the
+    // real camera resolution work done later in this function. GBuffer/deferred clearing is
+    // intentionally NOT affected - see CameraComponent.hpp's CameraClearMode doc comment.
+    std::uint16_t opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+    std::uint32_t opaqueClearRgba = desc.clearRgba;
+    if (!desc.cameraOverride.has_value()) {
+        const CameraRenderProxyDesc* clearCameraProxy = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
+        if (clearCameraProxy != nullptr) {
+            switch (clearCameraProxy->clearMode) {
+            case RenderCameraClearMode::SolidColor:
+                opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+                break;
+            case RenderCameraClearMode::DepthOnly:
+                opaqueClearFlags = BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+                break;
+            case RenderCameraClearMode::DontClear:
+                opaqueClearFlags = BGFX_CLEAR_NONE;
+                break;
+            }
+            const std::array<float, 3>& clearColor = clearCameraProxy->clearColor;
+            const auto channel = [](float value) noexcept -> std::uint32_t {
+                return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
+            };
+            opaqueClearRgba = (channel(clearColor[0]) << 24U) | (channel(clearColor[1]) << 16U) | (channel(clearColor[2]) << 8U) | 0xFFU;
+        }
+    }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
         RendererViewConfigurator::ConfigureGBufferClear(
@@ -720,7 +749,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
     } else {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear begin");
-        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
+        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc, opaqueClearFlags, opaqueClearRgba);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear end");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure transparent no-clear begin");

@@ -30,6 +30,18 @@ const char* InspectorComponentLabelFormatter::ProjectionName(kb::scene::CameraPr
     return "Unknown";
 }
 
+const char* InspectorComponentLabelFormatter::CameraClearModeName(kb::scene::CameraClearMode clearMode) noexcept {
+    switch (clearMode) {
+    case kb::scene::CameraClearMode::SolidColor:
+        return "Solid Color";
+    case kb::scene::CameraClearMode::DepthOnly:
+        return "Depth Only";
+    case kb::scene::CameraClearMode::DontClear:
+        return "Don't Clear";
+    }
+    return "Unknown";
+}
+
 const char* InspectorComponentLabelFormatter::RigidbodyBodyTypeName(kb::scene::RigidbodyBodyType bodyType) noexcept {
     switch (bodyType) {
     case kb::scene::RigidbodyBodyType::Static:

@@ -52,6 +52,11 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "primary", "Primary", "Whether this is the primary camera used for the main render pass." },
                 LibraryComponentInspectorFieldDesc{ "viewportId", "Viewport", "Which render viewport this camera targets. 0 means every viewport." },
                 LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Breaks ties when more than one primary camera targets the same viewport; higher wins." },
+                LibraryComponentInspectorFieldDesc{ "cullingMask", "Culling Mask", "Render layer bitmask this camera draws." },
+                LibraryComponentInspectorFieldDesc{ "clearMode", "Clear Mode", "Solid color, depth-only, or no clear before this camera draws." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.x", "Clear Color R", "Clear color, red channel (solid-color clear mode)." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.y", "Clear Color G", "Clear color, green channel (solid-color clear mode)." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.z", "Clear Color B", "Clear color, blue channel (solid-color clear mode)." },
             },
         },
         LibraryComponentInspectorDesc{
@@ -80,6 +85,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "materialSlotOverrideCount", "Material Overrides", "Number of material slots overridden on this instance." },
                 LibraryComponentInspectorFieldDesc{ "castsShadow", "Casts Shadow", "Whether this mesh casts shadows." },
                 LibraryComponentInspectorFieldDesc{ "receivesShadow", "Receives Shadow", "Whether this mesh receives shadows." },
+                LibraryComponentInspectorFieldDesc{ "layer", "Layer", "Render layer bitmask this mesh belongs to, checked against a camera's culling mask." },
             },
         },
         LibraryComponentInspectorDesc{

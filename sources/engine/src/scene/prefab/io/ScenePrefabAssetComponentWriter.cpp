@@ -26,6 +26,9 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "camera.primary=" << (components.camera->primary ? 1 : 0) << '\n';
         output << "camera.viewportId=" << components.camera->viewportId << '\n';
         output << "camera.priority=" << components.camera->priority << '\n';
+        output << "camera.cullingMask=" << components.camera->cullingMask << '\n';
+        output << "camera.clearMode=" << static_cast<int>(components.camera->clearMode) << '\n';
+        WriteVec3(output, "camera.clearColor", components.camera->clearColor);
     }
 
     output << "meshRenderer=" << (components.meshRenderer.has_value() ? 1 : 0) << '\n';
@@ -38,6 +41,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         }
         output << "meshRenderer.castsShadow=" << (components.meshRenderer->castsShadow ? 1 : 0) << '\n';
         output << "meshRenderer.receivesShadow=" << (components.meshRenderer->receivesShadow ? 1 : 0) << '\n';
+        output << "meshRenderer.layer=" << components.meshRenderer->layer << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
