@@ -24,6 +24,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -954,6 +955,189 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(platformTravel > 4.5F, "LIB-131 test setup sanity: the platform itself must have actually moved");
     kb::tests::Require(std::fabs(characterTravel - platformTravel) < 1.0F, "LIB-131 platform motion: a character riding a moving platform with zero move input must travel along with it, not be left behind");
     kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(scene, platformCharacter.Entity()), "LIB-131 a character riding a moving platform the whole time must still report grounded");
+
+    // LIB-133: fast mover, spawn/despawn collider, parented rigidbody, scene unload.
+
+    // --- Fast mover: a thin static wall, and a positive/negative control pair of identically
+    // fast spheres (200 m/s - ~3.3m per fixed step, far more than the wall's 0.1m thickness) -
+    // without useContinuousCollision, Jolt's default Discrete motion quality tunnels clean
+    // through; with it, Jolt's LinearCast sweep actually stops the body at the wall.
+    constexpr float kFastMoverWallX = 1000.0F;
+    const kb::scene::SceneObject fastMoverWall = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "FastMoverWall",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ kFastMoverWallX, 0.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(fastMoverWall.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(fastMoverWall.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 0.1F, 10.0F, 10.0F } });
+
+    const kb::scene::SceneObject tunnelingSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "TunnelingSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ kFastMoverWallX - 5.0F, 0.0F, -3.0F } },
+    });
+    scene.Components().Rigidbodies().Set(tunnelingSphere.Entity(), kb::scene::RigidbodyComponent{
+                                                                        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                                                                        .mass = 1.0F,
+                                                                        .linearVelocity = kb::scene::Vec3{ 200.0F, 0.0F, 0.0F },
+                                                                        .useGravity = false,
+                                                                        .useContinuousCollision = false,
+                                                                    });
+    scene.Components().Colliders().Set(tunnelingSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.2F });
+
+    const kb::scene::SceneObject arrestedSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ArrestedSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ kFastMoverWallX - 5.0F, 0.0F, 3.0F } },
+    });
+    scene.Components().Rigidbodies().Set(arrestedSphere.Entity(), kb::scene::RigidbodyComponent{
+                                                                        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                                                                        .mass = 1.0F,
+                                                                        .linearVelocity = kb::scene::Vec3{ 200.0F, 0.0F, 0.0F },
+                                                                        .useGravity = false,
+                                                                        .useContinuousCollision = true,
+                                                                    });
+    scene.Components().Colliders().Set(arrestedSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.2F });
+
+    for (int i = 0; i < 15; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    const float tunnelingFinalX = scene.Transforms().Get(tunnelingSphere).localPosition.x;
+    const float arrestedFinalX = scene.Transforms().Get(arrestedSphere).localPosition.x;
+    kb::tests::Require(tunnelingFinalX > kFastMoverWallX + 1.0F, "LIB-133 a fast Discrete-motion-quality body must tunnel clean through a thin wall (the known, documented Jolt default)");
+    kb::tests::Require(arrestedFinalX < kFastMoverWallX, "LIB-133 useContinuousCollision must make Jolt's LinearCast sweep actually stop the same fast body at the wall, not tunnel through it");
+
+    // --- Spawn/despawn collider: adding/removing a Collider on a LIVE entity mid-run must
+    // cleanly create/destroy the real Jolt body, with no corruption across a full
+    // spawn -> despawn -> respawn cycle (not merely "spawn once", already covered by every
+    // other entity created mid-test throughout this function).
+    const kb::scene::SceneObject spawnDespawnObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SpawnDespawnBody",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1050.0F, 20.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(spawnDespawnObject.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+    scene.Components().Colliders().Set(spawnDespawnObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+
+    for (int i = 0; i < 20; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, spawnDespawnObject.Entity()).found, "LIB-133 a spawned collider must have a real live Jolt body");
+    const float heightBeforeDespawn = scene.Transforms().Get(spawnDespawnObject).localPosition.y;
+    kb::tests::Require(heightBeforeDespawn < 20.0F, "LIB-133 test setup sanity: the spawned body must have actually fallen under gravity before despawn");
+
+    scene.Components().Colliders().Remove(spawnDespawnObject.Entity()); // despawn
+    for (int i = 0; i < 20; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, spawnDespawnObject.Entity()).found, "LIB-133 despawning a Collider must remove the real Jolt body (honest miss from PhysicsBackend::GetVelocity)");
+    const float heightAfterDespawn = scene.Transforms().Get(spawnDespawnObject).localPosition.y;
+    kb::tests::Require(kb::tests::NearlyEqual(heightBeforeDespawn, heightAfterDespawn), "LIB-133 a despawned body must freeze in place (no longer simulated), not keep falling under some stale state");
+
+    scene.Components().Colliders().Set(spawnDespawnObject.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F }); // respawn
+    for (int i = 0; i < 20; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, spawnDespawnObject.Entity()).found, "LIB-133 respawning a Collider must create a real live Jolt body again");
+    const float heightAfterRespawn = scene.Transforms().Get(spawnDespawnObject).localPosition.y;
+    kb::tests::Require(heightAfterRespawn < heightAfterDespawn - 0.3F, "LIB-133 a respawned body must resume falling under gravity, proving no state corruption survived the despawn/respawn cycle");
+
+    // --- Parented rigidbody: a static parent offset AND rotated 180 degrees about Y (which
+    // cleanly negates local X/Z when composing to world - std::mem the exact, easily
+    // hand-verified case that catches WriteBack writing world-space data into localPosition
+    // unconverted: a buggy WriteBack would make SynchronizeTransformHierarchy's NEXT
+    // recomposition explode the world position by ~2x the parent offset, not merely drift).
+    const kb::scene::Vec3 parentedRigWorldPosition{ 700.0F, 0.0F, 0.0F };
+    const kb::scene::Quat parentRotation180Y{ 0.0F, 1.0F, 0.0F, 0.0F };
+    const kb::scene::SceneObject parentedRigParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ParentedRigidbodyParent",
+        .transform = kb::scene::TransformComponent{ .localPosition = parentedRigWorldPosition, .localRotation = parentRotation180Y },
+    });
+
+    const kb::scene::SceneObject parentedRigFloor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "ParentedRigidbodyFloor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 700.0F, -0.5F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(parentedRigFloor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(parentedRigFloor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 20.0F, 1.0F, 20.0F } });
+
+    const kb::scene::SceneObject parentedRigChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ParentedRigidbodyChild" });
+    kb::tests::Require(scene.Hierarchy().SetParent(parentedRigChild.Entity(), parentedRigParent.Entity()), "LIB-133 parented rigidbody test setup: SetParent must succeed");
+    kb::scene::TransformComponent parentedRigChildTransform = scene.Transforms().Get(parentedRigChild);
+    parentedRigChildTransform.localPosition = kb::scene::Vec3{ 2.0F, 5.0F, 0.0F };
+    scene.Transforms().Set(parentedRigChild.Entity(), parentedRigChildTransform);
+    scene.Components().Rigidbodies().Set(parentedRigChild.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+    scene.Components().Colliders().Set(parentedRigChild.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+
+    // Expected initial world position (before any physics step): parentWorldPos +
+    // Rotate(180degY, localPos) = (700,0,0) + (-2,5,-0) = (698,5,0). If WriteBack corrupts
+    // localPosition on the FIRST fixed step, this recomposes to (700,0,0)+(-(-2),... ) =
+    // (702,...) or similar - either way a gross, easily-detected divergence from ~698.
+    for (int i = 0; i < 90; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    const kb::scene::TransformComponent parentedRigChildFinal = scene.Transforms().Get(parentedRigChild);
+    kb::tests::Require(parentedRigChildFinal.worldPosition.x > 697.0F && parentedRigChildFinal.worldPosition.x < 699.0F,
+        "LIB-133 a parented rigidbody's real WORLD position must stay correctly composed from parent+local every fixed step (WriteBack must not corrupt localPosition with a raw world-space result)");
+    kb::tests::Require(parentedRigChildFinal.worldPosition.y > 0.0F && parentedRigChildFinal.worldPosition.y < 1.0F,
+        "LIB-133 a parented rigidbody must still fall under real gravity and settle on the real floor in WORLD space");
+    kb::tests::Require(parentedRigChildFinal.localPosition.x > 1.0F && parentedRigChildFinal.localPosition.x < 3.0F,
+        "LIB-133 a parented rigidbody's LOCAL position must stay small/parent-relative (around its original local X=2), not equal to its large world-space X - the exact bug WriteBack's parent-aware fix corrects");
+
+    // --- Scene unload (within the single shared-Jolt-scene constraint documented in
+    // others/_temp.md - creating a SECOND Jolt-backed Scene in this process is a known,
+    // separately tracked bug unrelated to this task, not attempted here). Destroying entities
+    // OUTRIGHT (not merely removing components) while they still hold live
+    // Rigidbody+Collider+Joint+CharacterController bodies exercises the SAME tail-removal
+    // teardown paths (RemoveBody's joint-cleanup-first ordering, RemoveJointRecord, character
+    // removal) the whole Scene's own destructor uses on unload - the strongest proof available
+    // without a second scene.
+    const kb::scene::SceneObject teardownAnchor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "TeardownAnchor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1100.0F, 20.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(teardownAnchor.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(teardownAnchor.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+
+    const kb::scene::SceneObject teardownJointed = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "TeardownJointed",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1101.0F, 20.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(teardownJointed.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(teardownJointed.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(teardownJointed.Entity(), kb::scene::JointComponent{
+                                                                    .type = kb::scene::JointType::Fixed,
+                                                                    .connectedEntity = teardownAnchor.Entity(),
+                                                                    .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+                                                                    .connectedAnchor = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+                                                                });
+
+    const kb::scene::SceneObject teardownCharacter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "TeardownCharacter",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1102.0F, 20.0F, 0.0F } },
+    });
+    scene.Components().CharacterControllers().Set(teardownCharacter.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F });
+
+    for (int i = 0; i < 20; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, teardownAnchor.Entity()).found, "LIB-133 scene-unload test setup sanity: the anchor must have a real live Jolt body before destruction");
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, teardownJointed.Entity()).found, "LIB-133 scene-unload test setup sanity: the jointed body must have a real live Jolt body before destruction");
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterVelocity(scene, teardownCharacter.Entity()).found, "LIB-133 scene-unload test setup sanity: the character must have a real live Jolt character before destruction");
+
+    scene.Entities().Destroy(teardownAnchor.Entity());
+    scene.Entities().Destroy(teardownJointed.Entity());
+    scene.Entities().Destroy(teardownCharacter.Entity());
+
+    // The decisive proof: the physics system must survive destroying live bodies/a live joint/
+    // a live character OUTRIGHT and keep correctly simulating everything else afterward - a
+    // real teardown-path memory bug would corrupt state here, not merely fail an assertion.
+    for (int i = 0; i < 30; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(!scene.Entities().IsAlive(teardownAnchor.Entity()) && !scene.Entities().IsAlive(teardownJointed.Entity()) && !scene.Entities().IsAlive(teardownCharacter.Entity()),
+        "LIB-133 destroyed entities must actually be gone from the ECS");
+    kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, teardownAnchor.Entity()).found, "LIB-133 a destroyed entity's real Jolt body must be gone, not merely orphaned");
+    // Still-alive, unrelated bodies elsewhere in this same scene must remain correctly
+    // simulated after the teardown above - proves the teardown was properly scoped, not a
+    // blanket physics-system reset.
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, spawnDespawnObject.Entity()).found, "LIB-133 destroying unrelated entities must not disturb other still-live bodies in the same scene");
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,

@@ -6984,7 +6984,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     }
     // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
     // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
-    kb::tests::Require(fieldsChecked == 83U, "Script component API generated accessor coverage test did not exercise the expected total field count (83) across all 10 components");
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    kb::tests::Require(fieldsChecked == 84U, "Script component API generated accessor coverage test did not exercise the expected total field count (84) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -7031,7 +7033,9 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     }
     // LIB-131: CharacterController grew 5->9 script-writable fields, so the total climbs
     // from 79 to 83.
-    kb::tests::Require(propertiesChecked == 83U, "LIB-082 raw-pointer audit did not exercise the expected total field count (83) across all 10 components");
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    kb::tests::Require(propertiesChecked == 84U, "LIB-082 raw-pointer audit did not exercise the expected total field count (84) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

@@ -1792,7 +1792,9 @@ void RunComponentInspectorDescCatalogTest() {
     }
     // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
     // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
-    kb::tests::Require(fieldsChecked == 83U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (83) across all 10 components");
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    kb::tests::Require(fieldsChecked == 84U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (84) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
