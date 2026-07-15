@@ -69,13 +69,21 @@ void SceneAssetPhysicsComponentCodec::WriteCollider(std::vector<std::uint8_t>& o
 bool SceneAssetPhysicsComponentCodec::ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output) {
     return SceneAssetPrimitiveCodec::ReadVec3(input, output.center) &&
         input.ReadFloat(output.radius) &&
-        input.ReadFloat(output.height);
+        input.ReadFloat(output.height) &&
+        input.ReadFloat(output.slopeLimitDegrees) &&
+        input.ReadFloat(output.stepOffset) &&
+        input.ReadFloat(output.gravityScale) &&
+        input.ReadBool(output.useGravity);
 }
 
 void SceneAssetPhysicsComponentCodec::WriteCharacterController(std::vector<std::uint8_t>& output, const CharacterControllerComponent& characterController) {
     SceneAssetPrimitiveCodec::WriteVec3(output, characterController.center);
     SceneAssetBinaryIO::WriteFloat(output, characterController.radius);
     SceneAssetBinaryIO::WriteFloat(output, characterController.height);
+    SceneAssetBinaryIO::WriteFloat(output, characterController.slopeLimitDegrees);
+    SceneAssetBinaryIO::WriteFloat(output, characterController.stepOffset);
+    SceneAssetBinaryIO::WriteFloat(output, characterController.gravityScale);
+    SceneAssetBinaryIO::WriteUInt8(output, characterController.useGravity ? 1U : 0U);
 }
 
 } // namespace kb::scene

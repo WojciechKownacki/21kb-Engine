@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 58> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 64> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -71,6 +71,12 @@ constexpr std::array<LuaBindingSpec, 58> kLuaBindings{ {
     { "Physics", "OverlapCapsule", "Physics.OverlapCapsule", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "ClosestPoint", "Physics.ClosestPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "LayerBit", "Physics.LayerBit", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "CharacterMove", "Physics.CharacterMove", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "CharacterJump", "Physics.CharacterJump", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "CharacterVelocity", "Physics.CharacterVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "CharacterIsGrounded", "Physics.CharacterIsGrounded", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "CharacterGroundNormal", "Physics.CharacterGroundNormal", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "CharacterGroundVelocity", "Physics.CharacterGroundVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Input", "IsPressed", "Input.IsPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasPressed", "Input.WasPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasReleased", "Input.WasReleased", ScriptApiCatalogLuaReturnKind::Default, "" },

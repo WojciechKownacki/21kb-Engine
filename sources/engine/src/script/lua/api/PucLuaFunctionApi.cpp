@@ -628,6 +628,100 @@ int LuaPhysicsLayerBit(lua_State* state) {
     return 1;
 }
 
+// LIB-131: Physics.CharacterMove(entity, moveX, moveZ) -> bool. Only two positional numeric
+// args (no table form needed - unlike Cast/Overlap below, this always takes an entity so
+// mirrors AddForce/SetVelocity's CheckEntityArg pattern).
+int LuaPhysicsCharacterMove(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("moveX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("moveZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterMove", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterJump(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("speed", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterJump", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsCharacterIsGrounded(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterIsGrounded", arguments);
+    lua_pushboolean(state, result.Output("grounded").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterGroundNormal(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterGroundNormal", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsCharacterGroundVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterGroundVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
 // LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
 // OverlapCapsule take no entity argument, so (unlike the CheckEntityArg
 // functions above) the generic ArgumentsFromTable path is safe here - there
@@ -1169,7 +1263,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 19);
+    lua_createtable(state, 0, 25);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
     SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
@@ -1189,6 +1283,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "OverlapCapsule", &LuaPhysicsOverlapCapsule, context);
     SetClosure(state, "ClosestPoint", &LuaPhysicsClosestPoint, context);
     SetClosure(state, "LayerBit", &LuaPhysicsLayerBit, context);
+    SetClosure(state, "CharacterMove", &LuaPhysicsCharacterMove, context);
+    SetClosure(state, "CharacterJump", &LuaPhysicsCharacterJump, context);
+    SetClosure(state, "CharacterVelocity", &LuaPhysicsCharacterVelocity, context);
+    SetClosure(state, "CharacterIsGrounded", &LuaPhysicsCharacterIsGrounded, context);
+    SetClosure(state, "CharacterGroundNormal", &LuaPhysicsCharacterGroundNormal, context);
+    SetClosure(state, "CharacterGroundVelocity", &LuaPhysicsCharacterGroundVelocity, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);
