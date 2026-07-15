@@ -4,6 +4,7 @@
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
+#include "engine/script/ScriptMeshRendererApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
@@ -115,6 +116,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Scene",
             .ownerRuntime = "kb::scene::SceneLoadedContentService",
             .Register = &kb::script::ScriptSceneApi::Register,
+        },
+        // LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are raw
+        // uint64 asset ids, deliberately excluded from the generic ScriptSceneComponentApi
+        // reflection table (LIB-082's raw-pointer audit keeps that path to {Bool,Int,Float}
+        // only), so assignment needs a dedicated, asset-registry-validated function - mirrors
+        // Audio.Play's exact resolve-by-id-or-path-then-type-check pattern.
+        LibraryModuleDesc{
+            .name = "MeshRenderer",
+            .ownerRuntime = "kb::scene::SceneMeshRendererComponents",
+            .Register = &kb::script::ScriptMeshRendererApi::Register,
         },
     };
     return kCatalog;

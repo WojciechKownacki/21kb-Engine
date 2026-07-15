@@ -152,6 +152,53 @@ int LuaAudioPlay(lua_State* state) {
     return 2;
 }
 
+// LIB-137: shared shape for MeshRenderer.SetMesh/SetMaterial - a single required asset
+// reference (virtual path or numeric/hex id string, resolved server-side exactly like
+// Audio.Play's "clip" argument) plus an optional {entity=...} table, mirroring LuaAudioPlay's
+// exact string-or-table-first-arg / optional-table-second-arg shape.
+int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char* assetArgumentName) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        std::size_t length = 0;
+        const char* asset = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = assetArgumentName,
+            .value = ScriptValue{ std::string{ asset != nullptr ? asset : "", asset != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (asset != nullptr) {
+            lua_pop(state, 1);
+        }
+        if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+            std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+            arguments.insert(arguments.end(), options.begin(), options.end());
+        }
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction(functionName, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererSetMesh(lua_State* state) {
+    return LuaMeshRendererAssign(state, "MeshRenderer.SetMesh", "mesh");
+}
+
+int LuaMeshRendererSetMaterial(lua_State* state) {
+    return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
+}
+
 [[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value) {
     return ScriptFunctionArgument{ std::move(name), std::move(value) };
 }
@@ -1262,6 +1309,11 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
     lua_setfield(state, environmentIndex, "Audio");
+
+    lua_createtable(state, 0, 2);
+    SetClosure(state, "SetMesh", &LuaMeshRendererSetMesh, context);
+    SetClosure(state, "SetMaterial", &LuaMeshRendererSetMaterial, context);
+    lua_setfield(state, environmentIndex, "MeshRenderer");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);

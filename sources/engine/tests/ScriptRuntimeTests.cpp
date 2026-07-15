@@ -2264,6 +2264,129 @@ end
     kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
 }
 
+// LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are deliberately
+// excluded from the generic ScriptSceneComponentApi reflection table (LIB-082's raw-pointer
+// audit keeps that path to {Bool,Int,Float}, and a raw uint64 asset id is exactly the kind
+// of value it forbids there), so this is the only script-facing way to assign them - proves
+// real AssetRegistry resolution (both virtual-path and id-string forms, mirroring Audio.Play
+// exactly), real component creation AND in-place update (second call must not clobber the
+// first call's field), and honest, clean rejection of an unresolvable or wrong-type asset
+// reference (no crash, no partial mutation).
+void RunScriptMeshRendererApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script mesh renderer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMesh") != nullptr, "Script mesh renderer API did not register MeshRenderer.SetMesh");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterial") != nullptr, "Script mesh renderer API did not register MeshRenderer.SetMaterial");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMesh") != nullptr,
+        "Script mesh renderer API did not register VisualGraph runtime binding for SetMesh");
+    kb::tests::Require(host.VisualGraphNativeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMaterial") != nullptr,
+        "Script mesh renderer API did not register VisualGraph native binding for SetMaterial");
+
+    const kb::assets::AssetId meshId{ 9101U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "Cube",
+                           .virtualPath = "/Game/Meshes/Cube.21kbmesh",
+                           .physicalPath = "Cube.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer API test mesh asset registration failed");
+    const kb::assets::AssetId materialId{ 9102U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = materialId,
+                           .type = "RenderMaterial",
+                           .name = "Default",
+                           .virtualPath = "/Game/Materials/Default.kbmat",
+                           .physicalPath = "Default.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer API test material asset registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Api Subject" });
+    kb::tests::Require(!scene.Components().MeshRenderers().Has(subject.Entity()), "Script mesh renderer API test subject must start without a MeshRenderer component");
+
+    const kb::script::ScriptFunctionCallResult setMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/Cube.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setMesh.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh (virtual path) failed");
+    const kb::scene::MeshRendererComponent* afterSetMesh = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetMesh != nullptr && afterSetMesh->meshAssetId == meshId.value, "Script mesh renderer API MeshRenderer.SetMesh did not create a component with the resolved mesh asset id");
+    kb::tests::Require(afterSetMesh->materialAssetId == 0U, "Script mesh renderer API MeshRenderer.SetMesh must not touch materialAssetId when creating a fresh component");
+
+    const kb::script::ScriptFunctionCallResult setMaterial = host.Functions().Call(
+        "MeshRenderer.SetMaterial",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(materialId) } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setMaterial.Succeeded(), "Script mesh renderer API MeshRenderer.SetMaterial (id string) failed");
+    const kb::scene::MeshRendererComponent* afterSetMaterial = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetMaterial != nullptr && afterSetMaterial->materialAssetId == materialId.value,
+        "Script mesh renderer API MeshRenderer.SetMaterial did not resolve a hex asset-id-string argument");
+    kb::tests::Require(afterSetMaterial->meshAssetId == meshId.value, "Script mesh renderer API MeshRenderer.SetMaterial must preserve the existing meshAssetId (update in place, not overwrite the whole component)");
+
+    const kb::script::ScriptFunctionCallResult unresolvedMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/DoesNotExist.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!unresolvedMesh.Succeeded() && !unresolvedMesh.errors.empty(), "Script mesh renderer API MeshRenderer.SetMesh must honestly fail for an unresolvable mesh path");
+
+    const kb::script::ScriptFunctionCallResult wrongTypeMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/Default.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeMesh.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh must reject a real asset of the wrong type (RenderMaterial, not RenderMesh)");
+    const kb::scene::MeshRendererComponent* afterRejectedCalls = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterRejectedCalls != nullptr && afterRejectedCalls->meshAssetId == meshId.value && afterRejectedCalls->materialAssetId == materialId.value,
+        "Script mesh renderer API rejected calls must not have mutated the component at all");
+
+    const kb::scene::SceneObject deadObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Api Dead Subject" });
+    const kb::scene::SceneEntity deadEntity = deadObject.Entity();
+    scene.Entities().Destroy(deadObject);
+    const kb::script::ScriptFunctionCallResult deadEntityCall = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/Cube.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ deadEntity.Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!deadEntityCall.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh must honestly fail for a destroyed entity, not throw");
+
+    const kb::assets::AssetId luaAsset{ 9103U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua MeshRenderer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned, err = MeshRenderer.SetMesh("/Game/Meshes/Cube.21kbmesh", { entity = self.entity })
+    SetShared("luaMeshAssigned", assigned)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script mesh renderer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script mesh renderer API Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaAssignedValue = host.SharedState().Get("luaMeshAssigned");
+    kb::tests::Require(luaAssignedValue.has_value() && luaAssignedValue->AsBool(), "Script mesh renderer API Lua wrapper did not report a successful assignment");
+    const kb::scene::MeshRendererComponent* luaRenderer = scene.Components().MeshRenderers().TryGet(luaObject.Entity());
+    kb::tests::Require(luaRenderer != nullptr && luaRenderer->meshAssetId == meshId.value, "Script mesh renderer API Lua wrapper did not actually assign the mesh asset");
+}
+
 void RunScriptWorldTimePhysicsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "WorldApiProject";
@@ -9427,6 +9550,7 @@ void RunScriptRuntimeTests() {
     RunVisualGraphFullLifecycleOrderTest();
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
+    RunScriptMeshRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();
