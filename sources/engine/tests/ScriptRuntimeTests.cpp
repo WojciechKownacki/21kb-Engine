@@ -4,6 +4,7 @@
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -4465,6 +4466,63 @@ end
     kb::tests::Require(!host.SharedState().Get("pointer.right")->AsBool(), "Lua Pointer.Button(1) must not see the right button as held");
 }
 
+// LIB-118: the named priority constants must reach script with the exact
+// values InputContextPriority defines, both natively and through Lua - a
+// script pushing Input.AddMappingContext(ctx, Input.PriorityUI()) must
+// actually outrank Input.PriorityGameplay(), which InputTests.cpp::
+// TestNamedContextPriorityBands already proves at the InputSubsystem level;
+// this test only proves the constants survive the trip through script.
+void RunScriptInputPriorityConstantsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Priority constants script host did not initialize");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const kb::script::ScriptFunctionCallResult gameplay = host.Functions().Call("Input.PriorityGameplay", {}, callContext);
+    const kb::script::ScriptFunctionCallResult ui = host.Functions().Call("Input.PriorityUI", {}, callContext);
+    const kb::script::ScriptFunctionCallResult console = host.Functions().Call("Input.PriorityConsole", {}, callContext);
+    const kb::script::ScriptFunctionCallResult debugOverlay = host.Functions().Call("Input.PriorityDebugOverlay", {}, callContext);
+    kb::tests::Require(gameplay.Succeeded() && gameplay.Output("priority")->AsInt() == kb::input::InputContextPriority::Gameplay,
+        "Input.PriorityGameplay direct call returned the wrong value");
+    kb::tests::Require(ui.Succeeded() && ui.Output("priority")->AsInt() == kb::input::InputContextPriority::UI,
+        "Input.PriorityUI direct call returned the wrong value");
+    kb::tests::Require(console.Succeeded() && console.Output("priority")->AsInt() == kb::input::InputContextPriority::Console,
+        "Input.PriorityConsole direct call returned the wrong value");
+    kb::tests::Require(debugOverlay.Succeeded() && debugOverlay.Output("priority")->AsInt() == kb::input::InputContextPriority::DebugOverlay,
+        "Input.PriorityDebugOverlay direct call returned the wrong value");
+    kb::tests::Require(kb::input::InputContextPriority::Gameplay < kb::input::InputContextPriority::UI &&
+                kb::input::InputContextPriority::UI < kb::input::InputContextPriority::Console &&
+                kb::input::InputContextPriority::Console < kb::input::InputContextPriority::DebugOverlay,
+            "Named priority bands must be strictly ordered Gameplay < UI < Console < DebugOverlay");
+
+    const kb::assets::AssetId luaAsset{ 8823U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Priority Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("priority.gameplay", Input.PriorityGameplay())
+    SetShared("priority.ui", Input.PriorityUI())
+    SetShared("priority.console", Input.PriorityConsole())
+    SetShared("priority.debugOverlay", Input.PriorityDebugOverlay())
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Priority constants Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Priority constants Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("priority.gameplay")->AsInt() == kb::input::InputContextPriority::Gameplay,
+        "Lua Input.PriorityGameplay returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.ui")->AsInt() == kb::input::InputContextPriority::UI,
+        "Lua Input.PriorityUI returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.console")->AsInt() == kb::input::InputContextPriority::Console,
+        "Lua Input.PriorityConsole returned the wrong value");
+    kb::tests::Require(host.SharedState().Get("priority.debugOverlay")->AsInt() == kb::input::InputContextPriority::DebugOverlay,
+        "Lua Input.PriorityDebugOverlay returned the wrong value");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -7942,6 +8000,7 @@ void RunScriptRuntimeTests() {
     RunScriptInputApiTest();
     RunScriptInputApiPerPlayerTest();
     RunScriptPointerApiTest();
+    RunScriptInputPriorityConstantsTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

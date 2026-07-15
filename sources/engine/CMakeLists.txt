@@ -1007,6 +1007,7 @@ add_library(kb_engine STATIC
     src/private/ecs/world/WorldComponentReader.hpp
     src/private/ecs/world/WorldComponentRegistrar.hpp
     include/engine/input/InputActionValueType.hpp
+    include/engine/input/InputContextPriority.hpp
     include/engine/input/InputKey.hpp
     include/engine/input/InputLocalUser.hpp
     include/engine/input/InputTouchPoint.hpp

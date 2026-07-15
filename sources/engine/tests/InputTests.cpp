@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
+#include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputModifiers.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputTriggers.hpp"
@@ -447,6 +448,69 @@ void TestTouchPoints() {
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
 }
 
+// LIB-118: proves the named priority bands (Gameplay < UI < Console <
+// DebugOverlay) hold under the REAL InputMappingContextStack consumption
+// mechanism, not just as declared constants - four contexts, each binding the
+// SAME key to a DIFFERENT action, pushed in a deliberately scrambled order so
+// push order can't accidentally produce the right answer.
+void TestNamedContextPriorityBands() {
+    auto gameplayAction = MakeAction("Gameplay", InputActionValueType::Bool, true);
+    auto uiAction = MakeAction("UI", InputActionValueType::Bool, true);
+    auto consoleAction = MakeAction("Console", InputActionValueType::Bool, true);
+    auto debugAction = MakeAction("DebugOverlay", InputActionValueType::Bool, true);
+
+    auto gameplayContext = std::make_shared<InputMappingContextAsset>();
+    gameplayContext->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::Escape});
+    auto uiContext = std::make_shared<InputMappingContextAsset>();
+    uiContext->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::Escape});
+    auto consoleContext = std::make_shared<InputMappingContextAsset>();
+    consoleContext->mappings.push_back(InputKeyMapping{.actionId = 3U, .key = InputKey::Escape});
+    auto debugContext = std::make_shared<InputMappingContextAsset>();
+    debugContext->mappings.push_back(InputKeyMapping{.actionId = 4U, .key = InputKey::Escape});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{
+        {1U, gameplayAction}, {2U, uiAction}, {3U, consoleAction}, {4U, debugAction}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        {10U, gameplayContext}, {20U, uiContext}, {30U, consoleContext}, {40U, debugContext}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+
+    // Scrambled push order: console, gameplay, debug overlay, UI.
+    Require(subsystem.AddMappingContext(30U, InputContextPriority::Console), "Console context should resolve");
+    Require(subsystem.AddMappingContext(10U, InputContextPriority::Gameplay), "Gameplay context should resolve");
+    Require(subsystem.AddMappingContext(40U, InputContextPriority::DebugOverlay), "DebugOverlay context should resolve");
+    Require(subsystem.AddMappingContext(20U, InputContextPriority::UI), "UI context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Escape, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("DebugOverlay"), "DebugOverlay must win over Console/UI/Gameplay");
+    Require(!subsystem.IsActionPressed("Console") && !subsystem.IsActionPressed("UI") && !subsystem.IsActionPressed("Gameplay"),
+            "Lower-priority bands must be fully consumed while DebugOverlay is active");
+
+    subsystem.RemoveMappingContext(40U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Console"), "Console must win over UI/Gameplay once DebugOverlay is removed");
+    Require(!subsystem.IsActionPressed("UI") && !subsystem.IsActionPressed("Gameplay"), "UI/Gameplay still consumed by Console");
+
+    subsystem.RemoveMappingContext(30U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("UI"), "UI must win over Gameplay once Console is removed");
+    Require(!subsystem.IsActionPressed("Gameplay"), "Gameplay still consumed by UI");
+
+    subsystem.RemoveMappingContext(20U);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Gameplay"), "Gameplay should finally fire once every higher band is removed");
+}
+
 // LIB-117: absolute pointer position is independent storage from the existing
 // MouseX/MouseY delta keys, and survives Reset() (unlike delta) since the
 // platform collector re-sets it unconditionally every Collect() call rather
@@ -521,6 +585,7 @@ void RunInputTests() {
     TestTouchPoints();
     TestMultiGamepadMapping();
     TestPointerPosition();
+    TestNamedContextPriorityBands();
 }
 
 } // namespace kb::tests
