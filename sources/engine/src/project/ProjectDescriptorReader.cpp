@@ -176,6 +176,9 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
     if (fileVersion >= 4U && !ReadSceneLightingPath(input, descriptor)) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor scene lighting path is invalid." };
     }
+    if (fileVersion >= 5U && !input.ReadString(descriptor.physicsLayersAsset)) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor physics layers asset is invalid." };
+    }
 
     if (!input.Exhausted()) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains trailing data." };
