@@ -230,13 +230,15 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kVisibilityPropertyDes
     ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kCameraPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "verticalFovDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "orthographicHeight", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "nearClip", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "farClip", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "viewportId", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
@@ -354,13 +356,15 @@ constexpr std::array<FieldBinding, 1> kVisibilityFields{
     KB_BOOL(kb::scene::VisibilityComponent, visible),
 };
 
-constexpr std::array<FieldBinding, 6> kCameraFields{
+constexpr std::array<FieldBinding, 8> kCameraFields{
     KB_CAMERA_PROJECTION(kb::scene::CameraComponent, projection),
     KB_FLOAT(kb::scene::CameraComponent, verticalFovDegrees),
     KB_FLOAT(kb::scene::CameraComponent, orthographicHeight),
     KB_FLOAT(kb::scene::CameraComponent, nearClip),
     KB_FLOAT(kb::scene::CameraComponent, farClip),
     KB_BOOL(kb::scene::CameraComponent, primary),
+    KB_UINT32(kb::scene::CameraComponent, viewportId),
+    KB_INT(kb::scene::CameraComponent, priority),
 };
 
 constexpr std::array<FieldBinding, 11> kLightFields{
