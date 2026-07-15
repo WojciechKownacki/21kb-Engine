@@ -11,7 +11,9 @@ bool SceneAssetCameraComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input,
         !input.ReadFloat(output.orthographicHeight) ||
         !input.ReadFloat(output.nearClip) ||
         !input.ReadFloat(output.farClip) ||
-        !input.ReadBool(primary)) {
+        !input.ReadBool(primary) ||
+        !input.ReadUInt32(output.viewportId) ||
+        !input.ReadInt32(output.priority)) {
         return false;
     }
     output.projection = static_cast<CameraProjection>(projection);
@@ -26,6 +28,8 @@ void SceneAssetCameraComponentCodec::Write(std::vector<std::uint8_t>& output, co
     SceneAssetBinaryIO::WriteFloat(output, camera.nearClip);
     SceneAssetBinaryIO::WriteFloat(output, camera.farClip);
     SceneAssetBinaryIO::WriteUInt8(output, camera.primary ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, camera.viewportId);
+    SceneAssetBinaryIO::WriteInt32(output, camera.priority);
 }
 
 } // namespace kb::scene

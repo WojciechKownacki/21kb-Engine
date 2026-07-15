@@ -166,6 +166,8 @@ void RunSceneDocumentRoundTripTest() {
     source.Components().Cameras().Set(secondRoot, kb::scene::CameraComponent{
         .orthographicHeight = 16.0F,
         .primary = true,
+        .viewportId = 7U,
+        .priority = -3,
     });
     source.Components().Rigidbodies().Set(root, kb::scene::RigidbodyComponent{
         .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
@@ -252,7 +254,7 @@ void RunSceneDocumentRoundTripTest() {
         },
         &iteratedLights);
     Require(iteratedLights == 1U, "Scene document light did not roundtrip into runtime component iteration");
-    Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F), "Scene document camera did not roundtrip");
+    Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F) && camera->viewportId == 7U && camera->priority == -3, "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
     Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
     Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F), "Scene document audio source did not roundtrip");

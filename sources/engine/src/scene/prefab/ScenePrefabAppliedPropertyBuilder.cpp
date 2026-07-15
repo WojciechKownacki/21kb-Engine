@@ -150,6 +150,14 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = ToString(camera->primary);
             return true;
         }
+        if (propertyPath == "camera.viewportId") {
+            property.value = std::to_string(camera->viewportId);
+            return true;
+        }
+        if (propertyPath == "camera.priority") {
+            property.value = std::to_string(camera->priority);
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "meshRenderer")) {
         const MeshRendererComponent* meshRenderer = components.MeshRenderers().TryGet(entity);
