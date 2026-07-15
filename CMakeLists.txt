@@ -1,17 +1,17 @@
 cmake_minimum_required(VERSION 3.27)
 
 # Must be set before project() to actually take effect. Apple's libc++
-# gates std::from_chars/to_chars for floating-point types (used by
-# kb::library::TryParseDouble, EngineLibraryParsing.cpp) behind an
-# availability macro requiring macOS 13.3+; without this, Clang reports
-# "call to deleted function" on macos-15 CI runners despite the syntax
-# itself being valid C++17. FORCEd because GitHub's macOS runner images
-# export a MACOSX_DEPLOYMENT_TARGET environment variable (matching the
-# runner's own OS, often older than 13.3) that CMake picks up as the
-# CMAKE_OSX_DEPLOYMENT_TARGET default before this line ever runs - an
-# unconditional set() here would still lose to that pre-populated cache
-# entry without FORCE.
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
+# does not merely mark std::from_chars/to_chars<double> "unavailable" below
+# macOS 13.3 (kb::library::TryParseDouble, EngineLibraryParsing.cpp) - the
+# overload's declaration is conditionally compiled out of the header
+# entirely below that deployment target, which is why
+# _LIBCPP_DISABLE_AVAILABILITY (an attribute-based escape hatch) had no
+# effect below. FORCEd because GitHub's macOS runner images export a
+# MACOSX_DEPLOYMENT_TARGET environment variable that CMake reads into
+# CMAKE_OSX_DEPLOYMENT_TARGET before this line ever runs, so a plain
+# unconditional set() would still lose to that pre-populated cache entry.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
+message(STATUS "kb: CMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
 
 project(Engine21kb LANGUAGES C CXX)
 
@@ -20,16 +20,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(APPLE)
-    # Belt-and-suspenders alongside CMAKE_OSX_DEPLOYMENT_TARGET above: two
-    # attempts at bumping the deployment target both left the SAME "call to
-    # deleted function 'from_chars'" error unchanged on macos-15 CI, so the
-    # exact minimum version this SDK actually requires is not what was
-    # assumed. _LIBCPP_DISABLE_AVAILABILITY is libc++'s own documented
-    # escape hatch: it removes ALL availability gating outright instead of
-    # needing the right target number guessed. Safe here specifically
-    # because to_chars/from_chars<double> (unlike e.g. std::filesystem) is
-    # implemented entirely within libc++ itself, with no OS-runtime dylib
-    # symbol dependency to be missing at a lower actual deployment target.
+    # Belt-and-suspenders: an explicit -mmacosx-version-min flag on every
+    # compile command cannot be silently dropped the way
+    # CMAKE_OSX_DEPLOYMENT_TARGET's propagation apparently was (two prior
+    # attempts at that variable alone left the exact same "call to deleted
+    # function" error unchanged). _LIBCPP_DISABLE_AVAILABILITY stays too -
+    # harmless, and still correct for any OTHER attribute-gated libc++
+    # symbol this project might reach, even though it wasn't what gated
+    # from_chars<double> specifically.
+    add_compile_options(-mmacosx-version-min=14.0)
     add_compile_definitions(_LIBCPP_DISABLE_AVAILABILITY)
 endif()
 
