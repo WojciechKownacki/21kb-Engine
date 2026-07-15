@@ -1,6 +1,7 @@
 #include "SceneSystemTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/assets/AssetId.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -11,11 +12,15 @@
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
 #define KB_PHYSICS_JOLT_PLUGIN_PATH ""
@@ -186,6 +191,101 @@ void RunPhysicsSceneSystemFallingBodyTest() {
         overlapAllFoundFloor = overlapAllFoundFloor || overlap.entity == floor.Entity();
     }
     kb::tests::Require(overlapAllFoundBox && overlapAllFoundFloor, "PhysicsBackend::OverlapShapeAll must include both real bodies, regardless of internal order");
+
+    // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
+    // against the REAL Jolt contact listener - reusing this SAME scene (the
+    // documented "2 sequential Jolt scenes in one process" bug means every
+    // real-Jolt proof in this file must share one scene). A trigger volume
+    // and a fresh dynamic "faller" are placed at x=3 (away from the
+    // existing floor/box, which sit near the origin) so the interactions
+    // are unambiguous: the faller drops through the trigger (Enter then
+    // Exit) and then lands on the SAME real floor body (Enter, then Stay
+    // while it keeps resting).
+    const kb::scene::SceneObject trigger = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Trigger Volume",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 3.0F, 3.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(trigger.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(trigger.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F },
+        .trigger = true,
+    });
+
+    const kb::scene::SceneObject faller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Faller",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 3.0F, 8.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(faller.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+    scene.Components().Colliders().Set(faller.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F });
+
+    constexpr kb::assets::AssetId kFallerAsset{ 9601U };
+    scene.Components().Behaviours().Set(faller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kFallerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntimeHost scriptHost{ scene };
+    kb::tests::Require(scriptHost.Succeeded(), "LIB-127 real-Jolt test script host did not initialize");
+
+    struct FallerEventRecord {
+        std::string name;
+        kb::scene::SceneEntity other{};
+    };
+    std::vector<FallerEventRecord> fallerEvents;
+    const auto recordFallerEvent = [&fallerEvents](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent& event) {
+        static_cast<void>(context);
+        kb::scene::SceneEntity other{};
+        for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+            if (argument.name == "other") {
+                other = kb::scene::SceneEntity{ argument.value.AsUInt64() };
+            }
+        }
+        fallerEvents.push_back(FallerEventRecord{ .name = event.name, .other = other });
+    };
+    for (const char* name : { "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit" }) {
+        kb::tests::Require(scriptHost.NativeBackend().RegisterEvent(kFallerAsset, name, recordFallerEvent), "LIB-127 real-Jolt test event registration failed");
+    }
+    kb::tests::Require(scriptHost.InstallSceneSystem(), "LIB-127 real-Jolt test scene system install failed");
+
+    for (int i = 0; i < 200; ++i) {
+        [[maybe_unused]] const bool fallerProgressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+
+    bool sawTriggerEnter = false;
+    bool sawTriggerExit = false;
+    bool sawCollisionEnter = false;
+    bool sawCollisionStay = false;
+    for (const FallerEventRecord& record : fallerEvents) {
+        if (record.name == "OnTriggerEnter" && record.other == trigger.Entity()) {
+            sawTriggerEnter = true;
+        }
+        if (record.name == "OnTriggerExit" && record.other == trigger.Entity()) {
+            sawTriggerExit = true;
+        }
+        if (record.name == "OnCollisionEnter" && record.other == floor.Entity()) {
+            sawCollisionEnter = true;
+        }
+        if (record.name == "OnCollisionStay" && record.other == floor.Entity()) {
+            sawCollisionStay = true;
+        }
+    }
+    kb::tests::Require(sawTriggerEnter, "Faller must receive a real OnTriggerEnter for the trigger volume it fell through");
+    kb::tests::Require(sawTriggerExit, "Faller must receive a real OnTriggerExit after falling all the way through the trigger volume");
+    kb::tests::Require(sawCollisionEnter, "Faller must receive a real OnCollisionEnter when it lands on the real floor body");
+    kb::tests::Require(sawCollisionStay, "Faller must receive a real OnCollisionStay while it continues resting on the real floor body");
+
+    const auto firstIndexOf = [&fallerEvents](std::string_view name) -> std::size_t {
+        for (std::size_t i = 0; i < fallerEvents.size(); ++i) {
+            if (fallerEvents[i].name == name) {
+                return i;
+            }
+        }
+        return fallerEvents.size();
+    };
+    kb::tests::Require(firstIndexOf("OnTriggerEnter") < firstIndexOf("OnTriggerExit"), "OnTriggerEnter must be dispatched before OnTriggerExit for the same trigger, in real physics time order");
+    kb::tests::Require(firstIndexOf("OnTriggerExit") < firstIndexOf("OnCollisionEnter"), "The faller must exit the trigger before landing on the floor below it, in real physics time order");
 }
 
 } // namespace

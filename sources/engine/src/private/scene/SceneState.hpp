@@ -6,6 +6,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -340,6 +341,12 @@ public:
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
+    // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
+    // payload, queued by whichever physics plugin is loaded via
+    // PhysicsBackend::QueueCollisionEvent - mirrors
+    // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
+    // own doc comment on PendingCollisionEvent for the full contract).
+    std::vector<PendingCollisionEvent> pendingCollisionEvents;
 };
 
 } // namespace kb::scene
