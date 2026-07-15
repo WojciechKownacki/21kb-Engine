@@ -11,6 +11,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -579,6 +580,159 @@ void RunPhysicsSceneSystemFallingBodyTest() {
             (event.target == phaseB.Entity() && event.other == phaseA.Entity());
         kb::tests::Require(!involvesNonInteractingPair, "LIB-129 two overlapping bodies on non-interacting layers must never raise a real OnCollisionEnter/Stay/Exit against each other");
     }
+
+    // LIB-130: constraints/joints - the four "faktycznie obslugiwane typy"
+    // (Fixed/Hinge/Distance/Point), each proven against the REAL Jolt
+    // constraint solver via kb::scene::JointComponent (LIB-123's existing
+    // data-only component, now actually simulated). New bodies sit at
+    // x=30..46, clear of every other body already in this scene.
+
+    // Point-to-world: connectedEntity left invalid (JointComponent's own
+    // documented "connect to the static world" case), anchor=body's own
+    // origin, connectedAnchor=the body's own starting world position - a
+    // zero-length pivot arm, so a real Point constraint should hold it
+    // exactly in place against gravity instead of letting it fall.
+    const kb::scene::Vec3 pointStart{ 30.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject pointBody = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "PointJointed",
+        .transform = kb::scene::TransformComponent{ .localPosition = pointStart },
+    });
+    scene.Components().Rigidbodies().Set(pointBody.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = true });
+    scene.Components().Colliders().Set(pointBody.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(pointBody.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Point,
+        .connectedEntity = {},
+        .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .connectedAnchor = pointStart,
+    });
+
+    // Fixed between two dynamic bodies: A and B start 1 unit apart in Y with
+    // no support - BOTH should fall together under gravity (proving the
+    // constraint does not itself hold anything up, unlike the world-jointed
+    // case above), while their separation stays rigidly ~1.0 throughout
+    // (proving the weld couples their motion instead of letting them fall
+    // independently).
+    const kb::scene::SceneObject weldedA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "WeldedA",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 34.0F, 10.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(weldedA.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = true });
+    scene.Components().Colliders().Set(weldedA.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+
+    const kb::scene::SceneObject weldedB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "WeldedB",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 34.0F, 9.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(weldedB.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = true });
+    scene.Components().Colliders().Set(weldedB.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(weldedB.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Fixed,
+        .connectedEntity = weldedA.Entity(),
+        .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .connectedAnchor = kb::scene::Vec3{ 0.0F, -1.0F, 0.0F },
+    });
+
+    // Distance-to-world with an explicit limit: free-falls until 3 units
+    // from its own starting point, then must stay bounded there (a rope/
+    // chain, not an infinite fall) - the clearest possible proof that
+    // minLimit/maxLimit are actually consumed, not merely stored data.
+    const kb::scene::Vec3 distanceAnchor{ 38.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject distanceBody = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "DistanceJointed",
+        .transform = kb::scene::TransformComponent{ .localPosition = distanceAnchor },
+    });
+    scene.Components().Rigidbodies().Set(distanceBody.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = true });
+    scene.Components().Colliders().Set(distanceBody.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(distanceBody.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Distance,
+        .connectedEntity = {},
+        .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .connectedAnchor = distanceAnchor,
+        .minLimit = 0.0F,
+        .maxLimit = 3.0F,
+        .enableLimit = true,
+    });
+
+    // Hinge limit vs. no limit: both spin around a world-jointed pivot at
+    // their own origin (zero arm, so position stays put - isolates the test
+    // to rotation) starting with the SAME angular velocity around the hinge
+    // axis; the narrowly-limited one's real Jolt constraint must arrest
+    // that spin once it hits its limit, while the unlimited one keeps
+    // spinning freely - a positive/negative control pair (mirrors LIB-129's
+    // phase/solid comparison) rather than asserting one absolute value.
+    const kb::scene::Vec3 hingeAxis{ 0.0F, 1.0F, 0.0F };
+    const kb::scene::RigidbodyComponent hingeSpin{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .angularVelocity = kb::scene::Vec3{ 0.0F, 10.0F, 0.0F }, .useGravity = false };
+
+    const kb::scene::Vec3 hingeLimitedStart{ 42.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject hingeLimited = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "HingeLimited",
+        .transform = kb::scene::TransformComponent{ .localPosition = hingeLimitedStart },
+    });
+    scene.Components().Rigidbodies().Set(hingeLimited.Entity(), hingeSpin);
+    scene.Components().Colliders().Set(hingeLimited.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(hingeLimited.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Hinge,
+        .connectedEntity = {},
+        .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .connectedAnchor = hingeLimitedStart,
+        .axis = hingeAxis,
+        .minLimit = -5.0F,
+        .maxLimit = 5.0F,
+        .enableLimit = true,
+    });
+
+    const kb::scene::Vec3 hingeFreeStart{ 46.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject hingeFree = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "HingeFree",
+        .transform = kb::scene::TransformComponent{ .localPosition = hingeFreeStart },
+    });
+    scene.Components().Rigidbodies().Set(hingeFree.Entity(), hingeSpin);
+    scene.Components().Colliders().Set(hingeFree.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+    scene.Components().Joints().Set(hingeFree.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Hinge,
+        .connectedEntity = {},
+        .anchor = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        .connectedAnchor = hingeFreeStart,
+        .axis = hingeAxis,
+        .enableLimit = false,
+    });
+
+    for (int i = 0; i < 90; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+
+    const kb::scene::Vec3 pointFinal = scene.Transforms().Get(pointBody).localPosition;
+    kb::tests::Require(std::fabs(pointFinal.y - pointStart.y) < 0.1F, "LIB-130 a real Jolt Point constraint to the world must hold its body in place against gravity");
+
+    const kb::scene::Vec3 weldedAFinal = scene.Transforms().Get(weldedA).localPosition;
+    const kb::scene::Vec3 weldedBFinal = scene.Transforms().Get(weldedB).localPosition;
+    kb::tests::Require(weldedAFinal.y < 8.0F, "LIB-130 a Fixed-jointed pair connected to nothing else must still fall under gravity, not be held up by the joint itself");
+    const float weldedSeparation = std::fabs(weldedAFinal.y - weldedBFinal.y);
+    kb::tests::Require(weldedSeparation > 0.85F && weldedSeparation < 1.15F, "LIB-130 a real Jolt Fixed constraint must rigidly preserve the relative offset between two dynamic bodies as they fall together");
+
+    const kb::scene::Vec3 distanceFinal = scene.Transforms().Get(distanceBody).localPosition;
+    const float distanceFromAnchor = std::sqrt(
+        (distanceFinal.x - distanceAnchor.x) * (distanceFinal.x - distanceAnchor.x) +
+        (distanceFinal.y - distanceAnchor.y) * (distanceFinal.y - distanceAnchor.y) +
+        (distanceFinal.z - distanceAnchor.z) * (distanceFinal.z - distanceAnchor.z));
+    kb::tests::Require(distanceFromAnchor < 3.3F, "LIB-130 a real Jolt Distance constraint's maxDistance must actually bound how far the body falls");
+    kb::tests::Require(distanceFromAnchor > 2.5F, "LIB-130 a Distance-jointed body must actually fall toward its limit under gravity, not be held motionless like a Point joint");
+
+    const kb::scene::RigidbodyComponent* hingeLimitedBody = scene.Components().Rigidbodies().TryGet(hingeLimited.Entity());
+    const kb::scene::RigidbodyComponent* hingeFreeBody = scene.Components().Rigidbodies().TryGet(hingeFree.Entity());
+    kb::tests::Require(hingeLimitedBody != nullptr && hingeFreeBody != nullptr, "LIB-130 hinge test bodies must still have real Jolt bodies after simulation");
+    const float hingeLimitedSpin = std::fabs(hingeLimitedBody->angularVelocity.y);
+    const float hingeFreeSpin = std::fabs(hingeFreeBody->angularVelocity.y);
+    kb::tests::Require(hingeFreeSpin > 5.0F, "LIB-130 an unlimited real Jolt Hinge constraint must let the body keep spinning near its initial angular velocity");
+    kb::tests::Require(hingeLimitedSpin < hingeFreeSpin * 0.5F, "LIB-130 a real Jolt Hinge constraint's limit must actually arrest the spin once it is reached, unlike the unlimited positive control");
+
+    // Removal: tearing down the JointComponent must let gravity resume on
+    // the previously-held Point-jointed body.
+    scene.Components().Joints().Remove(pointBody.Entity());
+    for (int i = 0; i < 30; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    kb::tests::Require(scene.Transforms().Get(pointBody).localPosition.y < pointFinal.y - 0.2F, "LIB-130 removing a JointComponent must actually tear down the real Jolt constraint, letting gravity resume");
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,

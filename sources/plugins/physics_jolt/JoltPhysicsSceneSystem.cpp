@@ -2,7 +2,9 @@
 
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -16,11 +18,13 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Math/Math.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
@@ -34,6 +38,12 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Constraints/Constraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
@@ -54,6 +64,8 @@ namespace kb::physics_jolt {
 
 using kb::scene::ColliderComponent;
 using kb::scene::ColliderShape;
+using kb::scene::JointComponent;
+using kb::scene::JointType;
 using kb::scene::Quat;
 using kb::scene::RigidbodyBodyType;
 using kb::scene::RigidbodyComponent;
@@ -254,6 +266,118 @@ struct BodyRecord {
         lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
 
+// LIB-130: which real Jolt body(-ies) a JointComponent's constraint was last
+// built against, alongside the component's own data - if EITHER changes
+// (the joint's own fields edited, or the owner/connected entity's body was
+// recreated - e.g. its RigidbodyComponent/ColliderComponent changed, see
+// BodySignature above), the constraint must be destroyed and rebuilt rather
+// than left pointing at stale Jolt bodies.
+struct JointSignature {
+    JointType type = JointType::Fixed;
+    SceneEntity connectedEntity{};
+    Vec3 anchor{};
+    Vec3 connectedAnchor{};
+    Vec3 axis{};
+    float minLimit = 0.0F;
+    float maxLimit = 0.0F;
+    bool enableLimit = false;
+    JPH::BodyID ownerBodyId;
+    JPH::BodyID connectedBodyId; // invalid BodyID when connectedEntity is invalid (joint connects to the static world).
+};
+
+[[nodiscard]] JointSignature MakeJointSignature(const JointComponent& joint, JPH::BodyID ownerBodyId, JPH::BodyID connectedBodyId) noexcept {
+    return JointSignature{
+        .type = joint.type,
+        .connectedEntity = joint.connectedEntity,
+        .anchor = joint.anchor,
+        .connectedAnchor = joint.connectedAnchor,
+        .axis = joint.axis,
+        .minLimit = joint.minLimit,
+        .maxLimit = joint.maxLimit,
+        .enableLimit = joint.enableLimit,
+        .ownerBodyId = ownerBodyId,
+        .connectedBodyId = connectedBodyId,
+    };
+}
+
+[[nodiscard]] bool operator==(const JointSignature& lhs, const JointSignature& rhs) noexcept {
+    return lhs.type == rhs.type && lhs.connectedEntity == rhs.connectedEntity && SameVec3(lhs.anchor, rhs.anchor) &&
+        SameVec3(lhs.connectedAnchor, rhs.connectedAnchor) && SameVec3(lhs.axis, rhs.axis) &&
+        lhs.minLimit == rhs.minLimit && lhs.maxLimit == rhs.maxLimit && lhs.enableLimit == rhs.enableLimit &&
+        lhs.ownerBodyId == rhs.ownerBodyId && lhs.connectedBodyId == rhs.connectedBodyId;
+}
+
+struct JointRecord {
+    JPH::Ref<JPH::Constraint> constraint;
+    JointSignature signature;
+};
+
+// LIB-130: builds the real Jolt constraint for one of the "faktycznie
+// obslugiwane typy" (Fixed/Hinge/Distance/Point - JointComponent::type's
+// full enum, all four have a direct Jolt TwoBodyConstraint equivalent, so
+// none are excluded). mSpace=LocalToBodyCOM makes anchor/connectedAnchor
+// local offsets on each body, matching JointComponent's own doc comment;
+// every collider shape this engine creates (CreateShape above) is centered
+// on its body's origin, so "local to body COM" and "local to body origin"
+// coincide here - no extra center-of-mass correction is needed. Fixed and
+// Point have no limit concept at all (a rigid weld and a free-swinging ball
+// joint respectively); only Hinge (swing angle) and Distance
+// (min/max separation) honor JointComponent::enableLimit/minLimit/maxLimit,
+// mirroring that component's own doc comment on which fields apply to which
+// type.
+[[nodiscard]] JPH::Ref<JPH::Constraint> CreateJointConstraint(const JointComponent& joint, JPH::Body& body1, JPH::Body& body2) {
+    switch (joint.type) {
+    case JointType::Fixed: {
+        JPH::FixedConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        return settings.Create(body1, body2);
+    }
+    case JointType::Hinge: {
+        JPH::HingeConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        const JPH::Vec3 hingeAxis = ToJolt(joint.axis).NormalizedOr(JPH::Vec3::sAxisY());
+        settings.mHingeAxis1 = hingeAxis;
+        settings.mHingeAxis2 = hingeAxis;
+        const JPH::Vec3 normalAxis = hingeAxis.GetNormalizedPerpendicular();
+        settings.mNormalAxis1 = normalAxis;
+        settings.mNormalAxis2 = normalAxis;
+        if (joint.enableLimit) {
+            // Jolt's own documented range: mLimitsMin in [-pi, 0], mLimitsMax in [0, pi].
+            settings.mLimitsMin = kb::math::Clamp(JPH::DegreesToRadians(joint.minLimit), -JPH::JPH_PI, 0.0F);
+            settings.mLimitsMax = kb::math::Clamp(JPH::DegreesToRadians(joint.maxLimit), 0.0F, JPH::JPH_PI);
+        }
+        return settings.Create(body1, body2);
+    }
+    case JointType::Distance: {
+        JPH::DistanceConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        if (joint.enableLimit) {
+            settings.mMinDistance = joint.minLimit;
+            settings.mMaxDistance = joint.maxLimit;
+        }
+        // enableLimit==false leaves Jolt's own default (-1/-1), which it
+        // documents as "replaced by the distance between mPoint1 and
+        // mPoint2" - i.e. rigidly holds whatever separation the joint was
+        // created at, the honest "no limit configured" behavior.
+        return settings.Create(body1, body2);
+    }
+    case JointType::Point: {
+        JPH::PointConstraintSettings settings;
+        settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+        settings.mPoint1 = ToJoltPosition(joint.anchor);
+        settings.mPoint2 = ToJoltPosition(joint.connectedAnchor);
+        return settings.Create(body1, body2);
+    }
+    }
+    return {};
+}
+
 [[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
     switch (bodyType) {
     case RigidbodyBodyType::Static:
@@ -297,6 +421,13 @@ struct PhysicsBodySnapshot {
 };
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
+
+struct JointSnapshot {
+    SceneEntity entity{};
+    JointComponent joint{};
+};
+
+using JointQuery = kb::ecs::Query<JointComponent>;
 
 // LIB-125: builds a throwaway query shape (no Body/BodyID involved - Jolt
 // supports constructing a Shape purely to pass to CastShape/CollideShape,
@@ -505,17 +636,24 @@ public:
     }
 
     ~Impl() override {
+        RemoveAllJoints();
         RemoveAllBodies();
     }
 
     void OnFixedUpdate(SceneSystemContext& context) {
         SynchronizeBodies(context);
+        SynchronizeJoints(context);
         Step(context.DeltaSeconds());
         WriteBack(context);
         DispatchContactEvents(context);
     }
 
     void OnDestroy() {
+        // LIB-130: a constraint references its two bodies internally -
+        // remove joints BEFORE the bodies they connect, matching the real
+        // dependency order (mirrors why Jolt itself requires
+        // RemoveConstraint before the bodies it references are destroyed).
+        RemoveAllJoints();
         RemoveAllBodies();
     }
 
@@ -829,6 +967,126 @@ private:
         }
     }
 
+    // LIB-130: runs AFTER SynchronizeBodies (above) in the same OnFixedUpdate
+    // - a joint's owner and (if set) connected entity must already have live
+    // bodies this step before a constraint referencing them can be built.
+    void SynchronizeJoints(SceneSystemContext& context) {
+        jointScratch_.clear();
+        jointScratch_.reserve(std::max<std::size_t>(joints_.size(), 4U));
+        constexpr kb::ecs::QueryExecutionSettings settings{
+            .maxBatchSize = 1024U,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+        {
+            JointQuery jointQuery = context.EcsWorld().CreateQuery<JointComponent>();
+            jointQuery.ForEachBatchKernel(settings, [this](const JointQuery::Batch& batch) {
+                const JointComponent* joints = batch.Components<0>();
+                for (std::size_t index = 0; index < batch.Count(); ++index) {
+                    jointScratch_.push_back(JointSnapshot{
+                        .entity = SceneEntity{ batch.EntityAt(index).Id() },
+                        .joint = joints[index],
+                    });
+                }
+            });
+        }
+
+        std::unordered_set<std::uint64_t> seen;
+        seen.reserve(std::max(joints_.size(), jointScratch_.size()));
+        for (const JointSnapshot& snapshot : jointScratch_) {
+            seen.insert(snapshot.entity.Id());
+            SynchronizeJoint(snapshot.entity, snapshot.joint);
+        }
+
+        for (auto it = joints_.begin(); it != joints_.end();) {
+            if (seen.find(it->first) == seen.end()) {
+                RemoveJointRecord(it->second);
+                it = joints_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // A joint that held a body motionless for long enough can put it to
+    // sleep (JPH::BodyCreationSettings::mAllowSleeping defaults to true,
+    // never overridden here) - removing or rebuilding its constraint
+    // changes what (if anything) holds that body up, so both sides need
+    // waking to actually respond to gravity/forces again instead of
+    // sitting frozen in whatever pose they had when they fell asleep.
+    void RemoveJointRecord(const JointRecord& record) {
+        physicsSystem_.RemoveConstraint(record.constraint);
+        JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
+        if (!record.signature.ownerBodyId.IsInvalid()) {
+            bodyInterface.ActivateBody(record.signature.ownerBodyId);
+        }
+        if (!record.signature.connectedBodyId.IsInvalid()) {
+            bodyInterface.ActivateBody(record.signature.connectedBodyId);
+        }
+    }
+
+    // Honest skip (no constraint built/updated this step, retried the next)
+    // when the owner or connected entity has no live body yet - mirrors
+    // LIB-014's Physics.SetVelocity-in-Tick retry pattern for the exact same
+    // underlying reason: a freshly spawned entity's Jolt body does not exist
+    // until its first SynchronizeBody call.
+    void SynchronizeJoint(SceneEntity entity, const JointComponent& joint) {
+        const JPH::BodyID* ownerBodyId = FindBodyId(entity);
+        if (ownerBodyId == nullptr) {
+            return;
+        }
+
+        const bool connectedToWorld = !joint.connectedEntity.IsValid();
+        JPH::BodyID connectedBodyId;
+        if (!connectedToWorld) {
+            const JPH::BodyID* found = FindBodyId(joint.connectedEntity);
+            if (found == nullptr) {
+                return;
+            }
+            connectedBodyId = *found;
+        }
+
+        const JointSignature signature = MakeJointSignature(joint, *ownerBodyId, connectedBodyId);
+        const auto existing = joints_.find(entity.Id());
+        if (existing != joints_.end() && existing->second.signature == signature) {
+            return;
+        }
+        if (existing != joints_.end()) {
+            RemoveJointRecord(existing->second);
+            joints_.erase(existing);
+        }
+
+        JPH::Ref<JPH::Constraint> constraint;
+        if (connectedToWorld) {
+            const JPH::BodyID lockIds[1] = { *ownerBodyId };
+            JPH::BodyLockMultiWrite lock(physicsSystem_.GetBodyLockInterface(), lockIds, 1);
+            JPH::Body* body1 = lock.GetBody(0);
+            if (body1 != nullptr) {
+                constraint = CreateJointConstraint(joint, *body1, JPH::Body::sFixedToWorld);
+            }
+        } else {
+            const JPH::BodyID lockIds[2] = { *ownerBodyId, connectedBodyId };
+            JPH::BodyLockMultiWrite lock(physicsSystem_.GetBodyLockInterface(), lockIds, 2);
+            JPH::Body* body1 = lock.GetBody(0);
+            JPH::Body* body2 = lock.GetBody(1);
+            if (body1 != nullptr && body2 != nullptr) {
+                constraint = CreateJointConstraint(joint, *body1, *body2);
+            }
+        }
+        if (constraint == nullptr) {
+            return; // A body vanished between FindBodyId and the lock - honest skip, retried next step.
+        }
+        physicsSystem_.AddConstraint(constraint);
+        joints_.emplace(entity.Id(), JointRecord{ .constraint = constraint, .signature = signature });
+    }
+
+    void RemoveAllJoints() {
+        for (const auto& [entityId, record] : joints_) {
+            static_cast<void>(entityId);
+            physicsSystem_.RemoveConstraint(record.constraint);
+        }
+        joints_.clear();
+    }
+
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
         JPH::RefConst<JPH::Shape> shape = CreateShape(collider, transform.worldScale);
         const Vec3 bodyPosition = Add(transform.worldPosition, collider.center);
@@ -1003,6 +1261,24 @@ private:
         if (bodyId.IsInvalid()) {
             return;
         }
+        // LIB-130: a joint's constraint references this body internally (as
+        // either the owner's or the connected entity's body) - remove any
+        // such constraint FIRST, so Jolt never holds a constraint pointing
+        // at a body that is about to be destroyed (this runs for BOTH the
+        // "entity lost its Rigidbody/Collider" tail-removal path AND the
+        // "signature changed, rebuild the body" path in SynchronizeBody, so
+        // it must live here rather than in any one caller). SynchronizeJoints
+        // (which always runs right after SynchronizeBodies in
+        // OnFixedUpdate) rebuilds the constraint fresh once/if the
+        // referencing body exists again.
+        for (auto it = joints_.begin(); it != joints_.end();) {
+            if (it->second.signature.ownerBodyId == bodyId || it->second.signature.connectedBodyId == bodyId) {
+                RemoveJointRecord(it->second);
+                it = joints_.erase(it);
+            } else {
+                ++it;
+            }
+        }
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         bodyInterface.RemoveBody(bodyId);
         bodyInterface.DestroyBody(bodyId);
@@ -1029,6 +1305,8 @@ private:
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
+    std::unordered_map<std::uint64_t, JointRecord> joints_;
+    std::vector<JointSnapshot> jointScratch_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: which currently-active contact pairs are trigger contacts -
     // see DispatchContactEvents' own comment on why OnContactRemoved needs
