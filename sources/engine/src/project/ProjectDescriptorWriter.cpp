@@ -58,7 +58,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         !StringFits(descriptor.description) ||
         !StringFits(descriptor.contentRoot) ||
         !StringFits(descriptor.defaultScene) ||
-        !StringFits(descriptor.inputMappingContext)) {
+        !StringFits(descriptor.inputMappingContext) ||
+        !StringFits(descriptor.physicsLayersAsset)) {
         return false;
     }
 
@@ -118,6 +119,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     WriteBool(output, descriptor.inputEnabled);
     // File version 4+: project-wide scene lighting path.
     WriteUInt32(output, SceneLightingPathValue(descriptor.sceneLightingPath));
+    // File version 5+: project-wide physics layers asset (LIB-129).
+    WriteString(output, descriptor.physicsLayersAsset);
     return output;
 }
 

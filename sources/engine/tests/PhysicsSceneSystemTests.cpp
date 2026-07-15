@@ -12,6 +12,8 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsLayersAsset.hpp"
+#include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
@@ -25,6 +27,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -510,6 +513,113 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(sampleHitOther.has_value() && static_cast<std::uint64_t>(sampleHitOther->AsInt()) == target.Entity().Id(),
         "LIB-015 sample scene's spawned projectile must report the real target entity it hit");
     kb::tests::Require(!scene.Entities().IsAlive(spawnedProjectile), "LIB-015 sample scene's spawned projectile must destroy itself via World.Destroy after a real collision");
+
+    // LIB-129: named collision layers + interaction matrix, against the SAME
+    // real Jolt backend (see the "2 sequential Jolt scenes" note above - one
+    // more reason every real-Jolt proof in this file shares this one
+    // scene). Two pairs of overlapping, gravity-free dynamic spheres far
+    // from every other body in this test (x=20/22): "PhaseA"/"PhaseB" sit on
+    // two named layers whose interaction is explicitly disabled;
+    // "SolidA"/"SolidB" sit on the same default layer as a positive control.
+    // If ConfigureLayers had no real effect on Jolt's collision response,
+    // both pairs would separate identically; if it works, only the
+    // interacting (default-layer) pair separates.
+    kb::scene::PhysicsLayersAsset layers;
+    constexpr std::uint32_t kPhaseLayerA = 5U;
+    constexpr std::uint32_t kPhaseLayerB = 6U;
+    layers.layerNames[kPhaseLayerA] = "PhaseA";
+    layers.layerNames[kPhaseLayerB] = "PhaseB";
+    layers.SetLayersInteract(kPhaseLayerA, kPhaseLayerB, false);
+    kb::tests::Require(kb::scene::PhysicsBackend::ConfigureLayers(scene, layers), "LIB-129 PhysicsBackend::ConfigureLayers must report true against the real Jolt backend");
+    kb::tests::Require(kb::scene::PhysicsBackend::LayerBit(scene, "PhaseA") == (1U << kPhaseLayerA), "LIB-129 PhysicsBackend::LayerBit must resolve a configured layer name to its real bit value");
+    kb::tests::Require(kb::scene::PhysicsBackend::LayerBit(scene, "PhaseB") == (1U << kPhaseLayerB), "LIB-129 PhysicsBackend::LayerBit must resolve the second configured layer name too");
+    kb::tests::Require(kb::scene::PhysicsBackend::LayerBit(scene, "NoSuchLayer") == 0U, "LIB-129 PhysicsBackend::LayerBit must return 0 for an unknown layer name");
+    kb::tests::Require(kb::scene::PhysicsBackend::LayerBit(scene, "Default") == 1U, "LIB-129 PhysicsBackend::LayerBit must resolve the default layer 0 name every scene starts with");
+
+    const kb::scene::SceneObject phaseA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "PhaseA",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 20.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(phaseA.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(phaseA.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 1U << kPhaseLayerA });
+
+    const kb::scene::SceneObject phaseB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "PhaseB",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 20.0F, 5.3F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(phaseB.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(phaseB.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 1U << kPhaseLayerB });
+
+    const kb::scene::SceneObject solidA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SolidA",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 22.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(solidA.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(solidA.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F });
+
+    const kb::scene::SceneObject solidB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "SolidB",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 22.0F, 5.3F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(solidB.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F, .useGravity = false });
+    scene.Components().Colliders().Set(solidB.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F });
+
+    for (int i = 0; i < 60; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+
+    const float phaseSeparation = std::fabs(scene.Transforms().Get(phaseA).localPosition.y - scene.Transforms().Get(phaseB).localPosition.y);
+    const float solidSeparation = std::fabs(scene.Transforms().Get(solidA).localPosition.y - scene.Transforms().Get(solidB).localPosition.y);
+    kb::tests::Require(phaseSeparation < 0.32F, "LIB-129 two overlapping bodies on layers configured NOT to interact must NOT receive any real Jolt separation response");
+    kb::tests::Require(solidSeparation > 0.9F, "LIB-129 two overlapping bodies on the same (default, interacting) layer must receive a real Jolt separation response - positive control proving the harness itself can detect a collision response");
+
+    const std::vector<kb::scene::PendingCollisionEvent> phaseEvents = kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene);
+    for (const kb::scene::PendingCollisionEvent& event : phaseEvents) {
+        const bool involvesNonInteractingPair = (event.target == phaseA.Entity() && event.other == phaseB.Entity()) ||
+            (event.target == phaseB.Entity() && event.other == phaseA.Entity());
+        kb::tests::Require(!involvesNonInteractingPair, "LIB-129 two overlapping bodies on non-interacting layers must never raise a real OnCollisionEnter/Stay/Exit against each other");
+    }
+}
+
+// LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,
+// this needs no physics plugin at all, so it always runs.
+void RunPhysicsLayersAssetIOTest() {
+    kb::scene::PhysicsLayersAsset asset;
+    asset.layerNames[3] = "Enemy";
+    asset.layerNames[4] = "Player";
+    asset.SetLayersInteract(3, 4, false);
+
+    const std::vector<std::uint8_t> encoded = kb::scene::EncodePhysicsLayersAsset(asset);
+    const kb::scene::PhysicsLayersAssetLoadResult decoded = kb::scene::DecodePhysicsLayersAsset(encoded);
+    kb::tests::Require(decoded.succeeded, "LIB-129 physics layers asset must decode what it just encoded");
+    kb::tests::Require(decoded.asset.layerNames[3] == "Enemy", "LIB-129 physics layers asset layer names must round-trip");
+    kb::tests::Require(decoded.asset.layerNames[4] == "Player", "LIB-129 physics layers asset layer names must round-trip (second layer)");
+    kb::tests::Require(decoded.asset.layerNames[0] == "Default", "LIB-129 physics layers asset default layer 0 name must round-trip");
+    kb::tests::Require(!decoded.asset.LayersInteract(3, 4), "LIB-129 physics layers asset disabled interaction must round-trip");
+    kb::tests::Require(!decoded.asset.LayersInteract(4, 3), "LIB-129 physics layers asset disabled interaction must round-trip symmetrically");
+    kb::tests::Require(decoded.asset.LayersInteract(0, 1), "LIB-129 physics layers asset untouched pairs must still default to interacting");
+    kb::tests::Require(decoded.asset.LayerIndex("Enemy") == 3, "LIB-129 physics layers asset LayerIndex must resolve a round-tripped name");
+    kb::tests::Require(decoded.asset.LayerIndex("Missing") == -1, "LIB-129 physics layers asset LayerIndex must return -1 for an unknown name");
+
+    const kb::scene::PhysicsLayersAssetLoadResult corrupt = kb::scene::DecodePhysicsLayersAsset(std::span<const std::uint8_t>{});
+    kb::tests::Require(!corrupt.succeeded, "LIB-129 physics layers asset decode must honestly fail on empty/corrupt input");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_physics_scene_tests_lib129";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Physics", resetError);
+    kb::tests::Require(!resetError, "LIB-129 physics layers asset test project root could not be prepared");
+    const std::filesystem::path assetPath = root / "Assets" / "Physics" / "Layers.21kbphysicslayers";
+    kb::tests::Require(kb::scene::WritePhysicsLayersAsset(assetPath, asset), "LIB-129 physics layers asset must write to disk");
+    const kb::scene::PhysicsLayersAssetLoadResult reread = kb::scene::ReadPhysicsLayersAsset(assetPath);
+    kb::tests::Require(reread.succeeded && reread.asset.layerNames[3] == "Enemy", "LIB-129 physics layers asset must read back what it just wrote to disk");
+
+    kb::scene::Scene loaderScene;
+    kb::tests::Require(loaderScene.Assets().MountProject(root), "LIB-129 physics layers asset loader test project mount failed");
+    kb::tests::Require(loaderScene.Assets().Discover() == 1U, "LIB-129 physics layers asset loader test did not discover exactly the layers asset");
+    const kb::assets::AssetHandle<kb::scene::PhysicsLayersAsset> loaded = loaderScene.Assets().Manager().Load<kb::scene::PhysicsLayersAsset>(std::filesystem::path{ "/Game/Physics/Layers.21kbphysicslayers" });
+    kb::tests::Require(loaded.IsLoaded(), "LIB-129 PhysicsLayersAssetLoader must be registered and resolve the asset by virtual path");
+    kb::tests::Require(loaded->layerNames[3] == "Enemy" && !loaded->LayersInteract(3, 4), "LIB-129 PhysicsLayersAssetLoader must load the real file contents through the AssetManager");
 }
 
 } // namespace
@@ -517,6 +627,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
 namespace kb::tests {
 
 void RunPhysicsSceneSystemTests() {
+    RunPhysicsLayersAssetIOTest();
     RunPhysicsSceneSystemFallingBodyTest();
 }
 
