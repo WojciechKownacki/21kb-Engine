@@ -185,12 +185,69 @@ public:
         return entity == knownEntity && sleeping_;
     }
 
+    // LIB-125: cast/overlap/closest-point are const query methods (no live
+    // simulation state to mutate), so the recorded call arguments below are
+    // `mutable` - this proves ScriptPhysicsApi forwards shape/origin/
+    // direction/distance/layerMask through faithfully, and that the
+    // layerMask value it parsed (see castHitMask/overlapHitMask gating
+    // below) actually reaches the backend, without needing a real Jolt
+    // scene (that real-engine proof lives in PhysicsSceneSystemTests.cpp).
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        lastCastShape = shape;
+        lastCastOrigin = origin;
+        lastCastDirection = direction;
+        lastCastMaxDistance = maxDistance;
+        lastCastLayerMask = layerMask;
+        if ((layerMask & castHitMask) == 0U) {
+            return {};
+        }
+        return kb::scene::PhysicsCastResult{
+            .hit = true,
+            .entity = knownEntity,
+            .distance = 4.0F,
+            .point = kb::scene::Vec3{ origin.x + direction.x * 4.0F, origin.y + direction.y * 4.0F, origin.z + direction.z * 4.0F },
+            .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+        };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask) const noexcept override {
+        lastOverlapShape = shape;
+        lastOverlapCenter = center;
+        lastOverlapLayerMask = layerMask;
+        if ((layerMask & overlapHitMask) == 0U) {
+            return {};
+        }
+        return kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = knownEntity };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(kb::scene::SceneEntity entity, kb::scene::Vec3 point) const noexcept override {
+        lastClosestPointEntity = entity;
+        lastClosestPointQuery = point;
+        if (entity != knownEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsClosestPointResult{ .found = true, .point = kb::scene::Vec3{ point.x, 0.0F, point.z }, .distance = point.y };
+    }
+
     kb::scene::SceneEntity knownEntity{};
     kb::scene::Vec3 lastForce{};
     kb::scene::Vec3 lastImpulse{};
     kb::scene::Vec3 lastMoveTarget{};
     kb::scene::Quat lastMoveRotation{};
     float lastMoveDeltaSeconds = 0.0F;
+
+    std::uint32_t castHitMask = 0x1U;
+    std::uint32_t overlapHitMask = 0x1U;
+    mutable kb::scene::PhysicsShapeDesc lastCastShape{};
+    mutable kb::scene::Vec3 lastCastOrigin{};
+    mutable kb::scene::Vec3 lastCastDirection{};
+    mutable float lastCastMaxDistance = 0.0F;
+    mutable std::uint32_t lastCastLayerMask = 0U;
+    mutable kb::scene::PhysicsShapeDesc lastOverlapShape{};
+    mutable kb::scene::Vec3 lastOverlapCenter{};
+    mutable std::uint32_t lastOverlapLayerMask = 0U;
+    mutable kb::scene::SceneEntity lastClosestPointEntity{};
+    mutable kb::scene::Vec3 lastClosestPointQuery{};
 
 private:
     kb::scene::Vec3 velocity_{};
@@ -2510,6 +2567,216 @@ void RunScriptPhysicsForceVelocitySleepApiTest() {
 
     kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
     kb::tests::Require(!kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report false after UnregisterBackend");
+}
+
+// LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
+// OverlapCapsule/ClosestPoint. Same isolated fake-backend approach as
+// RunScriptPhysicsForceVelocitySleepApiTest above - proves the honest
+// "no backend"/"unknown entity" failure paths, that ScriptPhysicsApi
+// forwards shape/origin/direction/distance/layerMask through to the
+// backend unmodified, and that a layer mask which does not intersect the
+// backend's hit mask genuinely suppresses a hit (real Jolt-backed layer
+// filtering is proven separately in PhysicsSceneSystemTests.cpp).
+void RunScriptPhysicsCastOverlapClosestPointApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cast Overlap Closest Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Physics" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics cast/overlap/closest-point API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.SphereCast") != nullptr, "Physics.SphereCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.BoxCast") != nullptr, "Physics.BoxCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CapsuleCast") != nullptr, "Physics.CapsuleCast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapSphere") != nullptr, "Physics.OverlapSphere was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapBox") != nullptr, "Physics.OverlapBox was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.OverlapCapsule") != nullptr, "Physics.OverlapCapsule was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.ClosestPoint") != nullptr, "Physics.ClosestPoint was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> sphereCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ -1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "distance", .value = kb::script::ScriptValue{ 10.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 0.75F } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> overlapSphereArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 1.5F } },
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> closestPointArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "pointX", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointY", .value = kb::script::ScriptValue{ 4.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointZ", .value = kb::script::ScriptValue{ 5.0F } },
+    };
+
+    // --- No backend registered: every query must honestly report a miss,
+    // never crash and never fabricate a hit.
+    const kb::script::ScriptFunctionCallResult noBackendCast = host.Functions().Call("Physics.SphereCast", sphereCastArgs, context);
+    kb::tests::Require(noBackendCast.Succeeded() && !noBackendCast.Output("hit")->AsBool(), "Physics.SphereCast must report hit=false when no physics backend is registered");
+    const kb::script::ScriptFunctionCallResult noBackendOverlap = host.Functions().Call("Physics.OverlapSphere", overlapSphereArgs, context);
+    kb::tests::Require(noBackendOverlap.Succeeded() && !noBackendOverlap.Output("overlapping")->AsBool(), "Physics.OverlapSphere must report overlapping=false when no physics backend is registered");
+    const kb::script::ScriptFunctionCallResult noBackendClosest = host.Functions().Call("Physics.ClosestPoint", closestPointArgs, context);
+    kb::tests::Require(noBackendClosest.Succeeded() && !noBackendClosest.Output("found")->AsBool(), "Physics.ClosestPoint must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `object` is "known" to it, and
+    // cast/overlap hits are gated on a specific layer bit.
+    ProbePhysicsBackend backend;
+    backend.knownEntity = object.Entity();
+    backend.castHitMask = 0x1U;
+    backend.overlapHitMask = 0x4U;
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    // SphereCast: default layerMask (kPhysicsAllLayers) intersects
+    // castHitMask -> hit. Arguments (origin/direction/distance/radius) must
+    // reach the backend exactly as passed.
+    const kb::script::ScriptFunctionCallResult sphereCast = host.Functions().Call("Physics.SphereCast", sphereCastArgs, context);
+    kb::tests::Require(sphereCast.Succeeded() && sphereCast.Output("hit")->AsBool() && sphereCast.Output("entity")->AsUInt64() == object.Entity().Id(),
+        "Physics.SphereCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Sphere && kb::tests::NearlyEqual(backend.lastCastShape.radius, 0.75F),
+        "Physics.SphereCast must pass the exact shape radius through to the backend");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCastOrigin.y, 5.0F) && kb::tests::NearlyEqual(backend.lastCastMaxDistance, 10.0F),
+        "Physics.SphereCast must pass origin and distance through to the backend");
+
+    // A layerMask that does not intersect castHitMask (0x1) must miss even
+    // though the shape/origin/direction are otherwise identical.
+    std::vector<kb::script::ScriptFunctionArgument> missedSphereCastArgs = sphereCastArgs;
+    missedSphereCastArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x2 } });
+    kb::tests::Require(!host.Functions().Call("Physics.SphereCast", missedSphereCastArgs, context).Output("hit")->AsBool(),
+        "Physics.SphereCast with a non-intersecting layerMask must report hit=false");
+
+    const std::vector<kb::script::ScriptFunctionArgument> boxCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsY", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsZ", .value = kb::script::ScriptValue{ 3.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.BoxCast", boxCastArgs, context).Output("hit")->AsBool(), "Physics.BoxCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Box
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.x, 1.0F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.y, 2.0F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.z, 3.0F),
+        "Physics.BoxCast must pass the exact half-extents through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> capsuleCastArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 0.4F } },
+        kb::script::ScriptFunctionArgument{ .name = "height", .value = kb::script::ScriptValue{ 1.8F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.CapsuleCast", capsuleCastArgs, context).Output("hit")->AsBool(), "Physics.CapsuleCast must hit the known entity once a backend is registered");
+    kb::tests::Require(backend.lastCastShape.kind == kb::scene::PhysicsShapeKind::Capsule
+            && kb::tests::NearlyEqual(backend.lastCastShape.radius, 0.4F)
+            && kb::tests::NearlyEqual(backend.lastCastShape.height, 1.8F),
+        "Physics.CapsuleCast must pass the exact radius/height through to the backend");
+
+    // Overlap: kPhysicsAllLayers (the default when layerMask is omitted)
+    // has every layer bit set, so it always intersects a non-zero
+    // overlapHitMask - the "does not intersect" proof needs an EXPLICIT
+    // non-matching mask instead, mirroring the SphereCast miss case above.
+    std::vector<kb::script::ScriptFunctionArgument> missedOverlapSphereArgs = overlapSphereArgs;
+    missedOverlapSphereArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x1 } });
+    kb::tests::Require(!host.Functions().Call("Physics.OverlapSphere", missedOverlapSphereArgs, context).Output("overlapping")->AsBool(),
+        "Physics.OverlapSphere with a non-intersecting layerMask must report overlapping=false");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastOverlapCenter.x, 1.0F) && kb::tests::NearlyEqual(backend.lastOverlapShape.radius, 1.5F),
+        "Physics.OverlapSphere must pass center/radius through to the backend even on a miss");
+    std::vector<kb::script::ScriptFunctionArgument> matchedOverlapSphereArgs = overlapSphereArgs;
+    matchedOverlapSphereArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } });
+    const kb::script::ScriptFunctionCallResult overlapSphere = host.Functions().Call("Physics.OverlapSphere", matchedOverlapSphereArgs, context);
+    kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
+        "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> overlapBoxArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsX", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsY", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "halfExtentsZ", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.OverlapBox", overlapBoxArgs, context).Output("overlapping")->AsBool(), "Physics.OverlapBox must overlap the known entity with a matching layerMask");
+    kb::tests::Require(backend.lastOverlapShape.kind == kb::scene::PhysicsShapeKind::Box, "Physics.OverlapBox must select a Box shape kind");
+
+    const std::vector<kb::script::ScriptFunctionArgument> overlapCapsuleArgs{
+        kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.OverlapCapsule", overlapCapsuleArgs, context).Output("overlapping")->AsBool(), "Physics.OverlapCapsule must overlap the known entity with a matching layerMask");
+    kb::tests::Require(backend.lastOverlapShape.kind == kb::scene::PhysicsShapeKind::Capsule, "Physics.OverlapCapsule must select a Capsule shape kind");
+
+    // ClosestPoint: known entity -> found=true with the fake backend's
+    // deterministic {x, 0, z}/distance=y mapping; unknown entity -> honest
+    // found=false (the backend itself rejects it, not just "no backend").
+    const kb::script::ScriptFunctionCallResult closestPoint = host.Functions().Call("Physics.ClosestPoint", closestPointArgs, context);
+    kb::tests::Require(closestPoint.Succeeded() && closestPoint.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(closestPoint.Output("x")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("y")->AsFloat(), 0.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("z")->AsFloat(), 5.0F)
+            && kb::tests::NearlyEqual(closestPoint.Output("distance")->AsFloat(), 4.0F),
+        "Physics.ClosestPoint must return the backend's exact point/distance for a known entity");
+    const std::vector<kb::script::ScriptFunctionArgument> unknownClosestPointArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "pointX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointY", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "pointZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.ClosestPoint", unknownClosestPointArgs, context).Output("found")->AsBool(),
+        "Physics.ClosestPoint must report found=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: SphereCast/OverlapSphere use the positional
+    // fallback (no entity argument, so unlike ClosestPoint the generic
+    // table path would have been safe too - positional matches this file's
+    // existing Physics.* Lua coverage style); ClosestPoint uses the
+    // dedicated CheckEntityArg-tagged wrapper like every other entity-taking
+    // Physics.* Lua function.
+    const kb::assets::AssetId luaAsset{ 9411U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Physics Query Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(object.Entity().Id()) + "\n"
+                                                "    local cast = Physics.SphereCast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0.75)\n"
+                                                "    local overlap = Physics.OverlapSphere(1.0, 2.0, 3.0, 1.5, 4)\n"
+                                                "    local closest = Physics.ClosestPoint(entityId, 3.0, 4.0, 5.0)\n"
+                                                "    SetShared(\"luaCastHit\", cast.hit)\n"
+                                                "    SetShared(\"luaCastEntity\", cast.entity)\n"
+                                                "    SetShared(\"luaOverlapEntity\", overlap.entity)\n"
+                                                "    SetShared(\"luaClosestFound\", closest.found)\n"
+                                                "    SetShared(\"luaClosestDistance\", closest.distance)\n"
+                                                "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics cast/overlap/closest-point API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics cast/overlap/closest-point API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaCastHit")->AsBool(), "Lua Physics.SphereCast must report hit=true for the known entity");
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaCastEntity")->AsInt()) == object.Entity().Id(), "Lua Physics.SphereCast must return the known entity id");
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("luaOverlapEntity")->AsInt()) == object.Entity().Id(), "Lua Physics.OverlapSphere must return the known entity id");
+    kb::tests::Require(host.SharedState().Get("luaClosestFound")->AsBool(), "Lua Physics.ClosestPoint must report found=true for the known entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaClosestDistance")->AsFloat(), 4.0F), "Lua Physics.ClosestPoint must return the backend's exact distance");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
 }
 
 // LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
@@ -6207,7 +6474,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
         }
     }
-    kb::tests::Require(fieldsChecked == 78U, "Script component API generated accessor coverage test did not exercise the expected total field count (78) across all 10 components");
+    kb::tests::Require(fieldsChecked == 79U, "Script component API generated accessor coverage test did not exercise the expected total field count (79) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -6252,7 +6519,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
         }
     }
-    kb::tests::Require(propertiesChecked == 78U, "LIB-082 raw-pointer audit did not exercise the expected total field count (78) across all 10 components");
+    kb::tests::Require(propertiesChecked == 79U, "LIB-082 raw-pointer audit did not exercise the expected total field count (79) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -8636,6 +8903,7 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
+    RunScriptPhysicsCastOverlapClosestPointApiTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();

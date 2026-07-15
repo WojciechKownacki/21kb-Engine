@@ -78,4 +78,19 @@ bool PhysicsBackend::IsSleeping(Scene& scene, SceneEntity entity) noexcept {
     return backend != nullptr && backend->IsSleeping(entity);
 }
 
+PhysicsCastResult PhysicsBackend::CastShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->CastShape(shape, origin, direction, maxDistance, layerMask) : PhysicsCastResult{};
+}
+
+PhysicsOverlapResult PhysicsBackend::OverlapShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->OverlapShape(shape, center, layerMask) : PhysicsOverlapResult{};
+}
+
+PhysicsClosestPointResult PhysicsBackend::ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->ClosestPoint(entity, point) : PhysicsClosestPointResult{};
+}
+
 } // namespace kb::scene
