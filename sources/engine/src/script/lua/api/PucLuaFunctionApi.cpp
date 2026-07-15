@@ -722,6 +722,29 @@ int LuaPhysicsCharacterGroundVelocity(lua_State* state) {
     return 1;
 }
 
+// LIB-132: Physics.SetDebugDrawEnabled(bool) / Physics.IsDebugDrawEnabled() -> bool. No
+// entity argument, so a plain lua_toboolean/lua_pushboolean pair suffices.
+int LuaPhysicsSetDebugDrawEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        return 0;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("enabled", ScriptValue{ lua_toboolean(state, 1) != 0 }) };
+    static_cast<void>(context->CallFunction("Physics.SetDebugDrawEnabled", arguments));
+    return 0;
+}
+
+int LuaPhysicsIsDebugDrawEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.IsDebugDrawEnabled", {});
+    lua_pushboolean(state, result.Output("enabled").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 // LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
 // OverlapCapsule take no entity argument, so (unlike the CheckEntityArg
 // functions above) the generic ArgumentsFromTable path is safe here - there
@@ -1263,7 +1286,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 25);
+    lua_createtable(state, 0, 27);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
     SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
@@ -1289,6 +1312,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "CharacterIsGrounded", &LuaPhysicsCharacterIsGrounded, context);
     SetClosure(state, "CharacterGroundNormal", &LuaPhysicsCharacterGroundNormal, context);
     SetClosure(state, "CharacterGroundVelocity", &LuaPhysicsCharacterGroundVelocity, context);
+    SetClosure(state, "SetDebugDrawEnabled", &LuaPhysicsSetDebugDrawEnabled, context);
+    SetClosure(state, "IsDebugDrawEnabled", &LuaPhysicsIsDebugDrawEnabled, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);
