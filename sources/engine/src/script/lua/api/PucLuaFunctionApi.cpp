@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
 
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
@@ -611,6 +612,245 @@ int LuaPhysicsIsSleeping(lua_State* state) {
     return 1;
 }
 
+// LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
+// OverlapCapsule take no entity argument, so (unlike the CheckEntityArg
+// functions above) the generic ArgumentsFromTable path is safe here - there
+// is no entity id for it to silently mis-marshal. Table-or-positional
+// mirrors Raycast above; positional fallbacks match the native functions'
+// own optional-pin defaults (Physics.SphereCast etc. in ScriptPhysicsApi.cpp).
+[[nodiscard]] int PushShapeQueryLayerMaskDefault() noexcept {
+    return static_cast<int>(kb::scene::kPhysicsAllLayers);
+}
+
+int LuaPhysicsSphereCast(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 9, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.SphereCast", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics sphere cast failed");
+    }
+    lua_createtable(state, 0, 9);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsBoxCast(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
+            Arg("halfExtentsX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
+            Arg("halfExtentsY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 9, 0.5)) }),
+            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 10, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 11, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.BoxCast", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics box cast failed");
+    }
+    lua_createtable(state, 0, 9);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsCapsuleCast(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("originX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("originY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("originZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("directionX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+            Arg("directionY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
+            Arg("directionZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
+            Arg("distance", ScriptValue{ static_cast<float>(luaL_optnumber(state, 7, 1000.0)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 8, 0.5)) }),
+            Arg("height", ScriptValue{ static_cast<float>(luaL_optnumber(state, 9, 2.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 10, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CapsuleCast", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics capsule cast failed");
+    }
+    lua_createtable(state, 0, 9);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsOverlapSphere(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapSphere", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics overlap sphere failed");
+    }
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsOverlapBox(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("halfExtentsX", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
+            Arg("halfExtentsY", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 0.5)) }),
+            Arg("halfExtentsZ", ScriptValue{ static_cast<float>(luaL_optnumber(state, 6, 0.5)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 7, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapBox", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics overlap box failed");
+    }
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsOverlapCapsule(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+            Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
+            Arg("height", ScriptValue{ static_cast<float>(luaL_optnumber(state, 5, 2.0)) }),
+            Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 6, PushShapeQueryLayerMaskDefault())) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapCapsule", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics overlap capsule failed");
+    }
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsClosestPoint(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("pointX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("pointY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("pointZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.ClosestPoint", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "physics closest point failed");
+    }
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
 [[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
     const char* action = luaL_checkstring(state, 1);
     std::vector<ScriptFunctionArgument> arguments{ Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
@@ -913,7 +1153,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 11);
+    lua_createtable(state, 0, 18);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
     SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
@@ -925,6 +1165,13 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Sleep", &LuaPhysicsSleep, context);
     SetClosure(state, "Wake", &LuaPhysicsWake, context);
     SetClosure(state, "IsSleeping", &LuaPhysicsIsSleeping, context);
+    SetClosure(state, "SphereCast", &LuaPhysicsSphereCast, context);
+    SetClosure(state, "BoxCast", &LuaPhysicsBoxCast, context);
+    SetClosure(state, "CapsuleCast", &LuaPhysicsCapsuleCast, context);
+    SetClosure(state, "OverlapSphere", &LuaPhysicsOverlapSphere, context);
+    SetClosure(state, "OverlapBox", &LuaPhysicsOverlapBox, context);
+    SetClosure(state, "OverlapCapsule", &LuaPhysicsOverlapCapsule, context);
+    SetClosure(state, "ClosestPoint", &LuaPhysicsClosestPoint, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);

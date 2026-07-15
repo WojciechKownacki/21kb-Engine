@@ -66,7 +66,8 @@ namespace {
         && lhs.height == rhs.height
         && lhs.trigger == rhs.trigger
         && lhs.friction == rhs.friction
-        && lhs.restitution == rhs.restitution;
+        && lhs.restitution == rhs.restitution
+        && lhs.layer == rhs.layer;
 }
 
 [[nodiscard]] bool Equal(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {

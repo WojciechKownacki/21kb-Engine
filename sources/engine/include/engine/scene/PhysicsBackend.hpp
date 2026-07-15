@@ -3,6 +3,8 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cstdint>
+
 namespace kb::scene {
 
 class Scene;
@@ -11,6 +13,59 @@ struct PhysicsVectorResult {
     bool found = false;
     Vec3 value{};
 };
+
+// LIB-125: the query SHAPE for CastShape/OverlapShape - a closed, tagged set
+// (Sphere/Box/Capsule, matching kb::scene::ColliderShape exactly) rather
+// than a virtual Shape type, since ScriptValue crossing the script boundary
+// is purely scalar (LIB-058) and every Physics.*Cast/Overlap script function
+// needs a flat, fixed field list anyway. Box/Capsule queries are
+// axis-aligned (identity orientation) - a deliberately proportionate v1;
+// nothing in this task names oriented casts, and adding one is a pure
+// additive extension later if a real consumer needs it.
+enum class PhysicsShapeKind {
+    Sphere,
+    Box,
+    Capsule,
+};
+
+struct PhysicsShapeDesc {
+    PhysicsShapeKind kind = PhysicsShapeKind::Sphere;
+    float radius = 0.5F; // Sphere, Capsule
+    float height = 2.0F; // Capsule - total height including both end caps, same convention as ColliderComponent::height
+    Vec3 boxHalfExtents{ 0.5F, 0.5F, 0.5F }; // Box
+};
+
+struct PhysicsCastResult {
+    bool hit = false;
+    SceneEntity entity{};
+    float distance = 0.0F;
+    Vec3 point{};
+    Vec3 normal{};
+};
+
+struct PhysicsOverlapResult {
+    bool overlapping = false;
+    SceneEntity entity{};
+};
+
+struct PhysicsClosestPointResult {
+    bool found = false;
+    Vec3 point{};
+    float distance = 0.0F;
+};
+
+// A layer mask matching every layer (31 bits set, not 32 - the top bit is
+// deliberately left clear so this value stays representable as a positive
+// signed int, since layer/layerMask cross the script boundary as
+// ScriptValueType::Int via the generic KB_UINT32 property mechanism, which
+// rejects negative values on write - see ScriptSceneComponentApi.cpp. 31
+// simultaneously-collidable layers is already far beyond what any real
+// project configures, so this costs nothing in practice) is the default for
+// both a collider's own layer and a query's mask, so existing content and
+// existing queries are unaffected until someone deliberately narrows one
+// side or the other - LIB-129 owns turning this raw bitmask into named,
+// asset-configurable layers.
+inline constexpr std::uint32_t kPhysicsAllLayers = 0x7FFFFFFFU;
 
 // LIB-124: kb::engine owns no compile/link-time dependency on any physics
 // SDK (confirmed at LIB-123) - force/impulse/velocity/kinematic-move/
@@ -39,6 +94,18 @@ public:
     virtual bool Sleep(SceneEntity entity) noexcept = 0;
     virtual bool Wake(SceneEntity entity) noexcept = 0;
     [[nodiscard]] virtual bool IsSleeping(SceneEntity entity) const noexcept = 0;
+
+    // LIB-125: swept-shape cast (closest hit only, along direction*maxDistance),
+    // fixed-position overlap (closest overlapping body), and closest surface
+    // point on a specific entity's collider. Real, physics-engine-backed
+    // queries (unlike Physics.Raycast, which stays pure ColliderComponent/
+    // TransformComponent geometry - a deliberate, unchanged, zero-regression
+    // decision; swept-shape collision detection against arbitrary
+    // sphere/box/capsule pairs is a fundamentally harder problem this
+    // engine's real physics backend already solves correctly).
+    [[nodiscard]] virtual PhysicsCastResult CastShape(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept = 0;
+    [[nodiscard]] virtual PhysicsOverlapResult OverlapShape(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept = 0;
+    [[nodiscard]] virtual PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point) const noexcept = 0;
 };
 
 class PhysicsBackend final {
@@ -59,6 +126,10 @@ public:
     static bool Sleep(Scene& scene, SceneEntity entity) noexcept;
     static bool Wake(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool IsSleeping(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static PhysicsCastResult CastShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
+    [[nodiscard]] static PhysicsOverlapResult OverlapShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
+    [[nodiscard]] static PhysicsClosestPointResult ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point) noexcept;
 };
 
 } // namespace kb::scene

@@ -125,6 +125,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "trigger", "Trigger", "Whether this collider only reports overlaps instead of physically colliding." },
                 LibraryComponentInspectorFieldDesc{ "friction", "Friction", "Surface friction coefficient." },
                 LibraryComponentInspectorFieldDesc{ "restitution", "Restitution", "Bounciness - 0 absorbs all energy, 1 is a perfectly elastic bounce." },
+                LibraryComponentInspectorFieldDesc{ "layer", "Layer", "Raw collision layer bitmask this collider belongs to, matched against a query's layer mask." },
             },
         },
         LibraryComponentInspectorDesc{
