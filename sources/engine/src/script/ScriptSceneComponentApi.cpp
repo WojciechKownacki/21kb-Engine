@@ -265,7 +265,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDesc
     ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kRigidbodyPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "mass", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "linearVelocity.x", ScriptValueType::Float },
@@ -277,6 +277,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "lockRotation", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "useContinuousCollision", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDescs{
@@ -388,7 +389,7 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
     KB_INT(kb::scene::BehaviourComponent, executionOrder),
 };
 
-constexpr std::array<FieldBinding, 11> kRigidbodyFields{
+constexpr std::array<FieldBinding, 12> kRigidbodyFields{
     KB_RIGIDBODY_BODY_TYPE(kb::scene::RigidbodyComponent, bodyType),
     KB_FLOAT(kb::scene::RigidbodyComponent, mass),
     KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, x),
@@ -400,6 +401,7 @@ constexpr std::array<FieldBinding, 11> kRigidbodyFields{
     KB_FLOAT(kb::scene::RigidbodyComponent, gravityScale),
     KB_BOOL(kb::scene::RigidbodyComponent, useGravity),
     KB_BOOL(kb::scene::RigidbodyComponent, lockRotation),
+    KB_BOOL(kb::scene::RigidbodyComponent, useContinuousCollision),
 };
 
 constexpr std::array<FieldBinding, 13> kColliderFields{
