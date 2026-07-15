@@ -11,6 +11,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneSystemTransformAccess.hpp"
 
@@ -185,6 +186,7 @@ struct BodySignature {
     float gravityScale = 1.0F;
     bool useGravity = true;
     bool lockRotation = false;
+    bool useContinuousCollision = false;
     bool trigger = false;
     float friction = 0.5F;
     float restitution = 0.0F;
@@ -240,6 +242,53 @@ struct BodyRecord {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
 }
 
+[[nodiscard]] float SafeDivide(float value, float divisor) noexcept {
+    return std::fabs(divisor) < MinimumShapeExtent ? value : value / divisor;
+}
+
+// LIB-133: WriteBack/WriteBackCharacters write a Jolt body's real WORLD-space result - for a
+// root entity, local IS world (matches TransformMath::ComposeRoot's own contract), but for a
+// child entity under a non-identity parent, writing the world result straight into
+// localPosition/localRotation would double-apply the parent transform the next time
+// SynchronizeTransformHierarchy recomposes worldPosition from it. This is the exact inverse
+// of TransformMath::Compose's forward formula, replicated here (not called directly) because
+// TransformMath.hpp is a private kb_engine header this plugin (a separate library) cannot
+// include - mirrors the same math kb::script::ScriptTransformApi.cpp's own WorldPoseToLocal
+// already uses for Transform.SetWorldPose/SetParent.
+[[nodiscard]] Vec3 WorldToLocalPosition(const TransformComponent& parentTransform, Vec3 worldPosition) noexcept {
+    const Quat parentRotationInverse = kb::math::Inverse(parentTransform.worldRotation);
+    const Vec3 unrotatedDelta = kb::math::Rotate(parentRotationInverse, Subtract(worldPosition, parentTransform.worldPosition));
+    return Vec3{
+        SafeDivide(unrotatedDelta.x, parentTransform.worldScale.x),
+        SafeDivide(unrotatedDelta.y, parentTransform.worldScale.y),
+        SafeDivide(unrotatedDelta.z, parentTransform.worldScale.z),
+    };
+}
+
+[[nodiscard]] Quat WorldToLocalRotation(const TransformComponent& parentTransform, Quat worldRotation) noexcept {
+    return kb::math::Inverse(parentTransform.worldRotation) * worldRotation;
+}
+
+// Shared by WriteBack/WriteBackCharacters below - honest fallback to "local == world" when the
+// entity has no parent OR its parent's TransformComponent cannot be found (matches
+// TransformMath::ComposeRoot's own contract; a vanished parent mid-frame is the same shape of
+// edge case CreateBody/SynchronizeBody already treat as "not simulated this step", not a crash).
+void WriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) {
+    const SceneEntity parent = context.GetScene().Hierarchy().Parent(entity);
+    const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
+    if (parentTransform != nullptr) {
+        transform.localPosition = WorldToLocalPosition(*parentTransform, worldPosition);
+        transform.localRotation = WorldToLocalRotation(*parentTransform, worldRotation);
+    } else {
+        transform.localPosition = worldPosition;
+        transform.localRotation = worldRotation;
+    }
+    transform.worldPosition = worldPosition;
+    transform.worldRotation = worldRotation;
+    transform.worldDirty = true;
+    context.Transforms().MarkModified(entity);
+}
+
 [[nodiscard]] BodySignature MakeSignature(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) noexcept {
     return BodySignature{
         .bodyType = rigidbody.bodyType,
@@ -253,6 +302,7 @@ struct BodyRecord {
         .gravityScale = rigidbody.gravityScale,
         .useGravity = rigidbody.useGravity,
         .lockRotation = rigidbody.lockRotation,
+        .useContinuousCollision = rigidbody.useContinuousCollision,
         .trigger = collider.trigger,
         .friction = collider.friction,
         .restitution = collider.restitution,
@@ -264,7 +314,8 @@ struct BodyRecord {
     return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && SameVec3(lhs.scale, rhs.scale) &&
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
-        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger &&
+        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation &&
+        lhs.useContinuousCollision == rhs.useContinuousCollision && lhs.trigger == rhs.trigger &&
         lhs.layer == rhs.layer &&
         lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
@@ -1406,12 +1457,8 @@ private:
                 continue;
             }
             const Vec3 position = FromJoltPosition(record.character->GetPosition());
-            transform->localPosition = position;
-            transform->worldPosition = position;
-            transform->localRotation = FromJolt(record.character->GetRotation());
-            transform->worldRotation = transform->localRotation;
-            transform->worldDirty = true;
-            context.Transforms().MarkModified(entity);
+            const Quat rotation = FromJolt(record.character->GetRotation());
+            WriteBackLocalPose(context, entity, *transform, position, rotation);
         }
     }
 
@@ -1433,6 +1480,10 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
+        // LIB-133: fast mover / tunneling - Jolt's own default (Discrete) can tunnel a
+        // fast-moving body clean through a thin collider within a single fixed step; LinearCast
+        // sweeps the shape from start to destination instead.
+        bodySettings.mMotionQuality = rigidbody.useContinuousCollision ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
         if (rigidbody.lockRotation) {
             bodySettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
         }
@@ -1480,12 +1531,8 @@ private:
             }
 
             const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), body.signature.center);
-            transform->localPosition = position;
-            transform->worldPosition = position;
-            transform->localRotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
-            transform->worldRotation = transform->localRotation;
-            transform->worldDirty = true;
-            context.Transforms().MarkModified(entity);
+            const Quat rotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
+            WriteBackLocalPose(context, entity, *transform, position, rotation);
 
             rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
             rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));

@@ -106,6 +106,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "gravityScale", "Gravity Scale", "Multiplier applied to world gravity for this body." },
                 LibraryComponentInspectorFieldDesc{ "useGravity", "Use Gravity", "Whether world gravity affects this body." },
                 LibraryComponentInspectorFieldDesc{ "lockRotation", "Lock Rotation", "Whether physics simulation is prevented from rotating this body." },
+                LibraryComponentInspectorFieldDesc{ "useContinuousCollision", "Continuous Collision", "Sweeps this body's shape along its path each step so it cannot tunnel through thin colliders at high speed." },
             },
         },
         LibraryComponentInspectorDesc{
