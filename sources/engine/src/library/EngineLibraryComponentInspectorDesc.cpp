@@ -138,6 +138,10 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "center.z", "Center Z", "Local-space offset of the capsule's center, Z axis." },
                 LibraryComponentInspectorFieldDesc{ "radius", "Radius", "Capsule radius." },
                 LibraryComponentInspectorFieldDesc{ "height", "Height", "Capsule total height, including both end caps." },
+                LibraryComponentInspectorFieldDesc{ "slopeLimitDegrees", "Slope Limit", "Maximum slope angle, in degrees, the character can stand on or walk up." },
+                LibraryComponentInspectorFieldDesc{ "stepOffset", "Step Offset", "Maximum height of a step or ledge the character can walk over." },
+                LibraryComponentInspectorFieldDesc{ "gravityScale", "Gravity Scale", "Multiplier applied to world gravity for this character." },
+                LibraryComponentInspectorFieldDesc{ "useGravity", "Use Gravity", "Whether world gravity affects this character." },
             },
         },
         LibraryComponentInspectorDesc{

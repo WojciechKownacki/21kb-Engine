@@ -144,6 +144,42 @@ public:
         static_cast<void>(layers);
         return false;
     }
+
+    // LIB-131: a CharacterControllerComponent entity has no Rigidbody - the
+    // real backend steps a separate, un-simulated-by-the-rest-of-physics
+    // character object for it (JPH::CharacterVirtual, see
+    // JoltPhysicsSceneSystem.cpp), so none of the Rigidbody-facing methods
+    // above ever apply to it. CharacterMove/CharacterJump are genuine
+    // per-frame INPUT (unlike Rigidbody/Joint, which read exclusively from
+    // their own component every fixed step) because a character's desired
+    // horizontal move direction and jump intent have no persisted-state
+    // source the way a Rigidbody's own simulated velocity does - a script
+    // calls these every frame it wants movement/a jump to keep applying,
+    // exactly like it would call Physics.SetVelocity every frame to keep a
+    // Kinematic body moving.
+    //
+    // CharacterMove sets the character's desired HORIZONTAL velocity
+    // (world-space X/Z); the backend combines it every fixed step with
+    // ground velocity (platform motion), slope/step handling, and gravity
+    // internally - a script never computes any of that itself. CharacterJump
+    // is a one-shot vertical speed kick, consumed (and cleared) on the next
+    // fixed step and only actually applied while the character is grounded
+    // and not moving away from the ground - a jump requested while airborne
+    // is honestly dropped, matching how a real jump button behaves.
+    virtual bool CharacterMove(SceneEntity entity, Vec3 horizontalVelocity) noexcept = 0;
+    virtual bool CharacterJump(SceneEntity entity, float verticalSpeed) noexcept = 0;
+
+    // Real, resulting state after the backend's own last fixed step - honest
+    // found=false/grounded=false for an entity with no live character (never
+    // synchronized yet, or has no CharacterControllerComponent at all).
+    [[nodiscard]] virtual PhysicsVectorResult CharacterVelocity(SceneEntity entity) const noexcept = 0;
+    [[nodiscard]] virtual bool CharacterIsGrounded(SceneEntity entity) const noexcept = 0;
+    [[nodiscard]] virtual PhysicsVectorResult CharacterGroundNormal(SceneEntity entity) const noexcept = 0;
+    // Velocity of whatever the character is currently standing on (zero for
+    // static/no ground) - this IS "platform motion" as queryable data; the
+    // movement itself is already folded into CharacterMove's resulting
+    // motion automatically, this exists so a script can also observe it.
+    [[nodiscard]] virtual PhysicsVectorResult CharacterGroundVelocity(SceneEntity entity) const noexcept = 0;
 };
 
 // LIB-127: OnCollisionEnter/Stay/Exit fire for a solid-vs-solid contact;
@@ -238,6 +274,16 @@ public:
     // inputMappingContext; kb::library does not call this automatically.
     // False if the path is empty, fails to load, or no backend is registered.
     static bool LoadAndConfigureLayers(Scene& scene, const std::string& virtualPath) noexcept;
+
+    // LIB-131: see IPhysicsBackend's own doc comments above for the full
+    // contract - these simply forward to whichever backend is registered,
+    // honest false/empty when none is.
+    static bool CharacterMove(Scene& scene, SceneEntity entity, Vec3 horizontalVelocity) noexcept;
+    static bool CharacterJump(Scene& scene, SceneEntity entity, float verticalSpeed) noexcept;
+    [[nodiscard]] static PhysicsVectorResult CharacterVelocity(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool CharacterIsGrounded(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static PhysicsVectorResult CharacterGroundNormal(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static PhysicsVectorResult CharacterGroundVelocity(Scene& scene, SceneEntity entity) noexcept;
 };
 
 // LIB-126: Raycast has stayed pure ColliderComponent/TransformComponent

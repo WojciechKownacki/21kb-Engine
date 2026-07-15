@@ -155,4 +155,34 @@ bool PhysicsBackend::LoadAndConfigureLayers(Scene& scene, const std::string& vir
     return ConfigureLayers(scene, *handle);
 }
 
+bool PhysicsBackend::CharacterMove(Scene& scene, SceneEntity entity, Vec3 horizontalVelocity) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->CharacterMove(entity, horizontalVelocity);
+}
+
+bool PhysicsBackend::CharacterJump(Scene& scene, SceneEntity entity, float verticalSpeed) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->CharacterJump(entity, verticalSpeed);
+}
+
+PhysicsVectorResult PhysicsBackend::CharacterVelocity(Scene& scene, SceneEntity entity) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->CharacterVelocity(entity) : PhysicsVectorResult{};
+}
+
+bool PhysicsBackend::CharacterIsGrounded(Scene& scene, SceneEntity entity) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->CharacterIsGrounded(entity);
+}
+
+PhysicsVectorResult PhysicsBackend::CharacterGroundNormal(Scene& scene, SceneEntity entity) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->CharacterGroundNormal(entity) : PhysicsVectorResult{};
+}
+
+PhysicsVectorResult PhysicsBackend::CharacterGroundVelocity(Scene& scene, SceneEntity entity) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr ? backend->CharacterGroundVelocity(entity) : PhysicsVectorResult{};
+}
+
 } // namespace kb::scene

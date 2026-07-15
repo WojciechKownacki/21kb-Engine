@@ -1655,7 +1655,7 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 88U, .enabled = true });
     source.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{ .mass = 12.5F });
     source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
-    source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F });
+    source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .slopeLimitDegrees = 40.0F, .stepOffset = 0.3F, .gravityScale = 1.5F, .useGravity = false });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .minLimit = -45.0F });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
@@ -1701,6 +1701,14 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::tests::Require(restoredCharacterController != nullptr && kb::tests::NearlyEqual(restoredCharacterController->radius, 0.4F) &&
                             kb::tests::NearlyEqual(restoredCharacterController->height, 1.8F),
         "Engine21kbLibrary component registry: CharacterController is marked serializable=true and must survive a save/load round trip");
+    // LIB-131: slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive the same
+    // round trip too, not just the pre-existing shape fields above.
+    kb::tests::Require(restoredCharacterController != nullptr &&
+                            kb::tests::NearlyEqual(restoredCharacterController->slopeLimitDegrees, 40.0F) &&
+                            kb::tests::NearlyEqual(restoredCharacterController->stepOffset, 0.3F) &&
+                            kb::tests::NearlyEqual(restoredCharacterController->gravityScale, 1.5F) &&
+                            !restoredCharacterController->useGravity,
+        "Engine21kbLibrary component registry: CharacterController's slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive a save/load round trip");
     // Joint is deliberately serializable=false (connectedEntity is a live
     // runtime handle with no stable cross-node serialization scheme yet) -
     // this must genuinely NOT survive, the same honesty check Visibility's
@@ -1782,7 +1790,9 @@ void RunComponentInspectorDescCatalogTest() {
             kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
         }
     }
-    kb::tests::Require(fieldsChecked == 79U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
+    // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
+    kb::tests::Require(fieldsChecked == 83U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (83) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
