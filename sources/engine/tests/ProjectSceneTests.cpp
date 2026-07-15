@@ -97,6 +97,8 @@ void RunProjectDescriptorRoundTripTest() {
     descriptor.targetPlatforms = { "Windows", "Linux" };
     descriptor.modules.push_back(kb::project::ProjectModuleDescriptor{ .name = "SampleRuntime", .type = "Runtime", .loadingPhase = "Default" });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "GameplayTools", .binaryPath = "Plugins/GameplayTools.dll", .enabled = true });
+    // LIB-129: named collision layers asset reference, file version >= 5.
+    descriptor.physicsLayersAsset = "/Game/Physics/GameplayLayers.21kbphysicslayers";
 
     Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor was not created");
     Require(std::filesystem::is_regular_file(projectFile), "Project descriptor file was not written");
@@ -121,6 +123,8 @@ void RunProjectDescriptorRoundTripTest() {
     Require(!loaded.descriptor.modules.empty() && loaded.descriptor.modules.front().name == "SampleRuntime", "Project descriptor modules did not roundtrip");
     Require(!loaded.descriptor.plugins.empty() && loaded.descriptor.plugins.front().name == "GameplayTools", "Project descriptor plugins did not roundtrip");
     Require(loaded.descriptor.plugins.front().binaryPath == "Plugins/GameplayTools.dll", "Project descriptor plugin binary path did not roundtrip");
+    Require(loaded.descriptor.physicsLayersAsset == "/Game/Physics/GameplayLayers.21kbphysicslayers", "LIB-129 project descriptor physics layers asset path did not roundtrip");
+    Require(loaded.descriptor.fileVersion >= 5U, "LIB-129 project descriptor written at file version >= 5");
 }
 
 void RunProjectDescriptorRejectsChecksumMismatchTest() {

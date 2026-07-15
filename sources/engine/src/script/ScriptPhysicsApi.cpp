@@ -70,6 +70,11 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? kb::scene::SceneEntity{} : kb::scene::SceneEntity{ value->AsUInt64() };
 }
 
+[[nodiscard]] std::string StringArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? std::string{} : value->AsString();
+}
+
 // LIB-125: shared by Raycast (pure geometry) and the sphere/box/capsule
 // cast/overlap functions below (real-backend-routed) - "z warstwa maski"
 // in the plan's LIB-125 bullet qualifies the whole listed group (Raycast
@@ -358,6 +363,23 @@ ScriptFunctionCallResult IsSleeping(const ScriptFunctionCallContext& context, st
     return BoolResult("sleeping", kb::scene::PhysicsBackend::IsSleeping(*context.scene, EntityArg(arguments, "entity")));
 }
 
+// LIB-129: resolves a named collision layer (kb::scene::PhysicsLayersAsset,
+// last applied via PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers)
+// to its bit value, ready to OR into any Physics.*Cast/Overlap layerMask
+// input above - script code never needs to know a layer's raw index, only
+// its name. 0 (matches nothing extra) for an unknown name.
+ScriptFunctionCallResult LayerBit(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const std::uint32_t bit = kb::scene::PhysicsBackend::LayerBit(*context.scene, StringArg(arguments, "name"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "bit", ScriptValue{ static_cast<int>(bit) } } },
+        .errors = {},
+    };
+}
+
 [[nodiscard]] bool RegisterVectorSetter(ScriptRuntimeHost& host, std::string name, std::string vectorPin, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -547,6 +569,13 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     };
     closestPointDesc.callback = &ClosestPoint;
     ok = host.RegisterFunction(std::move(closestPointDesc)) && ok;
+
+    ScriptFunctionDesc layerBitDesc;
+    layerBitDesc.signature.name = "Physics.LayerBit";
+    layerBitDesc.signature.inputs = { ScriptFunctionPin{ "name", ScriptValueType::String, true } };
+    layerBitDesc.signature.outputs = { ScriptFunctionPin{ "bit", ScriptValueType::Int, true } };
+    layerBitDesc.callback = &LayerBit;
+    ok = host.RegisterFunction(std::move(layerBitDesc)) && ok;
 
     return ok;
 }
