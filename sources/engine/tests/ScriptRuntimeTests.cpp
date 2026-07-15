@@ -2387,6 +2387,178 @@ end
     kb::tests::Require(luaRenderer != nullptr && luaRenderer->meshAssetId == meshId.value, "Script mesh renderer API Lua wrapper did not actually assign the mesh asset");
 }
 
+// LIB-138: MeshRenderer.SetMaterialSlot/GetMaterialSlot/ClearMaterialSlot - the per-slot
+// materialSlotAssetIds[] array (already fully wired through binary codec/prefab/renderer,
+// LIB-136/137's own investigation) had no script-facing way to assign an individual slot,
+// for the exact same LIB-082 reason meshAssetId/materialAssetId needed dedicated functions
+// in LIB-137: it is not a scalar Bool/Int/Float field the generic reflection table can carry.
+void RunScriptMeshRendererMaterialSlotApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script mesh renderer material slot API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register SetMaterialSlot");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.GetMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register GetMaterialSlot");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.ClearMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register ClearMaterialSlot");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMaterialSlot") != nullptr,
+        "Script mesh renderer material slot API did not register VisualGraph runtime binding for SetMaterialSlot");
+
+    const kb::assets::AssetId slot0MaterialId{ 9201U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = slot0MaterialId,
+                           .type = "RenderMaterial",
+                           .name = "SlotZero",
+                           .virtualPath = "/Game/Materials/SlotZero.kbmat",
+                           .physicalPath = "SlotZero.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test slot0 material registration failed");
+    const kb::assets::AssetId slot2MaterialId{ 9202U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = slot2MaterialId,
+                           .type = "RenderMaterialInstance",
+                           .name = "SlotTwo",
+                           .virtualPath = "/Game/Materials/SlotTwo.kbmatinst",
+                           .physicalPath = "SlotTwo.kbmatinst",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test slot2 material instance registration failed");
+    const kb::assets::AssetId meshId{ 9203U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "MultiSectionMesh",
+                           .virtualPath = "/Game/Meshes/MultiSection.21kbmesh",
+                           .physicalPath = "MultiSection.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test mesh registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Material Slot Subject" });
+
+    // Setting a slot on an entity with NO MeshRendererComponent yet must create one.
+    const kb::script::ScriptFunctionCallResult setSlot0 = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/SlotZero.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSlot0.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot(0, ...) failed");
+    const kb::scene::MeshRendererComponent* afterSlot0 = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSlot0 != nullptr && afterSlot0->materialSlotAssetIds[0] == slot0MaterialId.value && afterSlot0->materialSlotOverrideCount == 1U,
+        "Script mesh renderer material slot API SetMaterialSlot(0, ...) did not create the component with the resolved override and a correct count");
+
+    // Setting a HIGHER slot (2) must grow materialSlotOverrideCount to include it, leaving
+    // slot 1 as an untouched (zero = no override) gap - proves the "sparse array" contract
+    // MeshPipelineResourceResolver::MaterialAssetForSectionInstance relies on (only a nonzero
+    // slot id below the count counts as a real override).
+    const kb::script::ScriptFunctionCallResult setSlot2 = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 2 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(slot2MaterialId) } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSlot2.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot(2, ...) (id string, RenderMaterialInstance) failed");
+    const kb::scene::MeshRendererComponent* afterSlot2 = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSlot2 != nullptr && afterSlot2->materialSlotOverrideCount == 3U, "Script mesh renderer material slot API SetMaterialSlot(2, ...) did not grow materialSlotOverrideCount to 3");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[0] == slot0MaterialId.value, "Script mesh renderer material slot API SetMaterialSlot(2, ...) must not disturb the existing slot 0 override");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[1] == 0U, "Script mesh renderer material slot API SetMaterialSlot(2, ...) must leave the untouched slot 1 as zero (no override)");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[2] == slot2MaterialId.value, "Script mesh renderer material slot API SetMaterialSlot(2, ...) did not resolve a hex id string argument for a RenderMaterialInstance asset");
+
+    // GetMaterialSlot must honestly report which slots really have an override.
+    const kb::script::ScriptFunctionCallResult getSlot0 = host.Functions().Call(
+        "MeshRenderer.GetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(getSlot0.Succeeded(), "Script mesh renderer material slot API GetMaterialSlot(0, ...) failed");
+    kb::tests::Require(getSlot0.Output("hasOverride").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script mesh renderer material slot API GetMaterialSlot(0, ...) must report hasOverride=true");
+    kb::tests::Require(getSlot0.Output("material").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(slot0MaterialId),
+        "Script mesh renderer material slot API GetMaterialSlot(0, ...) did not return the resolved material asset id");
+
+    const kb::script::ScriptFunctionCallResult getSlot1 = host.Functions().Call(
+        "MeshRenderer.GetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 1 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(getSlot1.Succeeded() && !getSlot1.Output("hasOverride").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Script mesh renderer material slot API GetMaterialSlot(1, ...) must honestly report no override for an untouched slot");
+
+    // ClearMaterialSlot must zero the id without disturbing other slots or the count.
+    const kb::script::ScriptFunctionCallResult clearSlot0 = host.Functions().Call(
+        "MeshRenderer.ClearMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearSlot0.Succeeded(), "Script mesh renderer material slot API ClearMaterialSlot(0, ...) failed");
+    const kb::scene::MeshRendererComponent* afterClear = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterClear != nullptr && afterClear->materialSlotAssetIds[0] == 0U, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) did not zero the slot");
+    kb::tests::Require(afterClear->materialSlotAssetIds[2] == slot2MaterialId.value, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) must not disturb slot 2");
+    kb::tests::Require(afterClear->materialSlotOverrideCount == 3U, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) must not shrink materialSlotOverrideCount (slot 2 is still a real override)");
+
+    // Out-of-range slot index must be honestly rejected, not silently clamped/wrapped.
+    const kb::script::ScriptFunctionCallResult outOfRangeSlot = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ static_cast<int>(kb::scene::kMaxMeshRendererMaterialSlotOverrides) } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/SlotZero.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!outOfRangeSlot.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot must honestly reject a slot index at kMaxMeshRendererMaterialSlotOverrides");
+
+    // Wrong-type asset (a real RenderMesh, not a material) must be rejected too.
+    const kb::script::ScriptFunctionCallResult wrongTypeSlot = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 1 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/MultiSection.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeSlot.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot must reject a real asset of the wrong type (RenderMesh, not a material)");
+
+    // Lua wrapper, exercising both the two-values-in table return of GetMaterialSlot and
+    // the leading-slot-index calling shape of SetMaterialSlot.
+    const kb::assets::AssetId luaAsset{ 9204U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua MeshRenderer Material Slot Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned = MeshRenderer.SetMaterialSlot(3, "/Game/Materials/SlotZero.kbmat", { entity = self.entity })
+    local slot = MeshRenderer.GetMaterialSlot(3, { entity = self.entity })
+    SetShared("luaSlotAssigned", assigned)
+    SetShared("luaSlotHasOverride", slot.hasOverride)
+    SetShared("luaSlotMaterial", slot.material)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script mesh renderer material slot API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script mesh renderer material slot API Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaAssignedValue = host.SharedState().Get("luaSlotAssigned");
+    kb::tests::Require(luaAssignedValue.has_value() && luaAssignedValue->AsBool(), "Script mesh renderer material slot API Lua wrapper did not report a successful assignment");
+    const std::optional<kb::script::ScriptValue> luaHasOverrideValue = host.SharedState().Get("luaSlotHasOverride");
+    kb::tests::Require(luaHasOverrideValue.has_value() && luaHasOverrideValue->AsBool(), "Script mesh renderer material slot API Lua wrapper GetMaterialSlot did not report hasOverride=true");
+    const std::optional<kb::script::ScriptValue> luaMaterialValue = host.SharedState().Get("luaSlotMaterial");
+    kb::tests::Require(luaMaterialValue.has_value() && luaMaterialValue->AsString() == kb::assets::ToString(slot0MaterialId),
+        "Script mesh renderer material slot API Lua wrapper GetMaterialSlot did not return the resolved material asset id");
+    const kb::scene::MeshRendererComponent* luaRenderer = scene.Components().MeshRenderers().TryGet(luaObject.Entity());
+    kb::tests::Require(luaRenderer != nullptr && luaRenderer->materialSlotAssetIds[3] == slot0MaterialId.value, "Script mesh renderer material slot API Lua wrapper did not actually assign the material slot");
+}
+
 void RunScriptWorldTimePhysicsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "WorldApiProject";
@@ -9551,6 +9723,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
     RunScriptMeshRendererApiTest();
+    RunScriptMeshRendererMaterialSlotApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();
