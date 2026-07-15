@@ -133,6 +133,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneJointComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
+    include/engine/scene/PhysicsBackend.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/BehaviourExecutionOrder.hpp
@@ -395,6 +396,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldRestoreMap.cpp
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
+    src/scene/PhysicsBackend.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneBehaviourIterationService.cpp
     src/scene/SceneHierarchy.cpp
