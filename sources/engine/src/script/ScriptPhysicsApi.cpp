@@ -277,6 +277,103 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
     };
 }
 
+// LIB-125: sphere/box/capsule CAST (swept, real physics-engine-backed
+// query), unlike Raycast above which deliberately stays pure geometry - a
+// hand-rolled swept-shape-vs-arbitrary-shape solver is a genuinely hard
+// problem (see kb::scene::IPhysicsBackend::CastShape's own doc comment) the
+// real backend already solves correctly, so LIB-125 routes through it
+// instead of duplicating that math. Honest false/not-found when no physics
+// backend is registered, same contract as every LIB-124 function.
+[[nodiscard]] std::uint32_t LayerMaskArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
+    const ScriptValue* value = FindArg(arguments, "layerMask");
+    return value == nullptr ? kb::scene::kPhysicsAllLayers : static_cast<std::uint32_t>(std::max(0, value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers))));
+}
+
+ScriptFunctionCallResult CastShapeResult(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, const kb::scene::PhysicsShapeDesc& shape) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const Vec3 origin = VecArg(arguments, "origin");
+    const Vec3 direction = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
+    const float maxDistance = std::max(0.0F, FloatArg(arguments, "distance", 1000.0F));
+    const kb::scene::PhysicsCastResult hit = kb::scene::PhysicsBackend::CastShape(*context.scene, shape, origin, direction, maxDistance, LayerMaskArg(arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "hit", ScriptValue{ hit.hit } },
+            ScriptFunctionArgument{ "entity", ScriptValue{ hit.entity.Id(), ScriptValueType::Entity } },
+            ScriptFunctionArgument{ "distance", ScriptValue{ hit.hit ? hit.distance : 0.0F } },
+            ScriptFunctionArgument{ "x", ScriptValue{ hit.hit ? hit.point.x : 0.0F } },
+            ScriptFunctionArgument{ "y", ScriptValue{ hit.hit ? hit.point.y : 0.0F } },
+            ScriptFunctionArgument{ "z", ScriptValue{ hit.hit ? hit.point.z : 0.0F } },
+            ScriptFunctionArgument{ "normalX", ScriptValue{ hit.hit ? hit.normal.x : 0.0F } },
+            ScriptFunctionArgument{ "normalY", ScriptValue{ hit.hit ? hit.normal.y : 0.0F } },
+            ScriptFunctionArgument{ "normalZ", ScriptValue{ hit.hit ? hit.normal.z : 0.0F } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult OverlapShapeResult(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments, const kb::scene::PhysicsShapeDesc& shape) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const Vec3 center = VecArg(arguments, "center");
+    const kb::scene::PhysicsOverlapResult overlap = kb::scene::PhysicsBackend::OverlapShape(*context.scene, shape, center, LayerMaskArg(arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "overlapping", ScriptValue{ overlap.overlapping } },
+            ScriptFunctionArgument{ "entity", ScriptValue{ overlap.entity.Id(), ScriptValueType::Entity } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult SphereCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return CastShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)) });
+}
+
+ScriptFunctionCallResult BoxCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return CastShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Box, .boxHalfExtents = VecArg(arguments, "halfExtents", Vec3{ 0.5F, 0.5F, 0.5F }) });
+}
+
+ScriptFunctionCallResult CapsuleCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return CastShapeResult(context, arguments,
+        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)), .height = std::max(0.0001F, FloatArg(arguments, "height", 2.0F)) });
+}
+
+ScriptFunctionCallResult OverlapSphere(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return OverlapShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)) });
+}
+
+ScriptFunctionCallResult OverlapBox(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return OverlapShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Box, .boxHalfExtents = VecArg(arguments, "halfExtents", Vec3{ 0.5F, 0.5F, 0.5F }) });
+}
+
+ScriptFunctionCallResult OverlapCapsule(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return OverlapShapeResult(context, arguments,
+        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)), .height = std::max(0.0001F, FloatArg(arguments, "height", 2.0F)) });
+}
+
+ScriptFunctionCallResult ClosestPoint(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const kb::scene::PhysicsClosestPointResult result = kb::scene::PhysicsBackend::ClosestPoint(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "point"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ result.found } },
+            ScriptFunctionArgument{ "x", ScriptValue{ result.found ? result.point.x : 0.0F } },
+            ScriptFunctionArgument{ "y", ScriptValue{ result.found ? result.point.y : 0.0F } },
+            ScriptFunctionArgument{ "z", ScriptValue{ result.found ? result.point.z : 0.0F } },
+            ScriptFunctionArgument{ "distance", ScriptValue{ result.found ? result.distance : 0.0F } },
+        },
+        .errors = {},
+    };
+}
+
 // LIB-124: force/impulse/velocity/kinematic-move/sleep-wake are one-shot or
 // instantaneous-read operations against whatever live physics simulation is
 // actually running - unlike Raycast above (pure geometry against
@@ -399,6 +496,75 @@ ScriptFunctionCallResult IsSleeping(const ScriptFunctionCallContext& context, st
     return host.RegisterFunction(std::move(desc));
 }
 
+// LIB-125: shape-parameter pin sets shared by the Cast/Overlap registration
+// helpers below - kept as free functions (not inlined per call site) so
+// SphereCast and OverlapSphere agree on "radius" exactly, etc.
+[[nodiscard]] std::vector<ScriptFunctionPin> SphereShapePins() {
+    return { ScriptFunctionPin{ "radius", ScriptValueType::Float, false } };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> BoxShapePins() {
+    return {
+        ScriptFunctionPin{ "halfExtentsX", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "halfExtentsY", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "halfExtentsZ", ScriptValueType::Float, false },
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> CapsuleShapePins() {
+    return {
+        ScriptFunctionPin{ "radius", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "height", ScriptValueType::Float, false },
+    };
+}
+
+[[nodiscard]] bool RegisterCastFunction(ScriptRuntimeHost& host, std::string name, const std::vector<ScriptFunctionPin>& shapePins, ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {
+        ScriptFunctionPin{ "originX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "originY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "originZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "directionX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "directionY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "directionZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "distance", ScriptValueType::Float, false },
+    };
+    desc.signature.inputs.insert(desc.signature.inputs.end(), shapePins.begin(), shapePins.end());
+    desc.signature.inputs.push_back(ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false });
+    desc.signature.outputs = {
+        ScriptFunctionPin{ "hit", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "distance", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalZ", ScriptValueType::Float, true },
+    };
+    desc.callback = callback;
+    return host.RegisterFunction(std::move(desc));
+}
+
+[[nodiscard]] bool RegisterOverlapFunction(ScriptRuntimeHost& host, std::string name, const std::vector<ScriptFunctionPin>& shapePins, ScriptFunctionCallback callback) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {
+        ScriptFunctionPin{ "centerX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "centerY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "centerZ", ScriptValueType::Float, true },
+    };
+    desc.signature.inputs.insert(desc.signature.inputs.end(), shapePins.begin(), shapePins.end());
+    desc.signature.inputs.push_back(ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false });
+    desc.signature.outputs = {
+        ScriptFunctionPin{ "overlapping", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+    };
+    desc.callback = callback;
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
@@ -456,6 +622,31 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     moveKinematicDesc.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
     moveKinematicDesc.callback = &MoveKinematic;
     ok = host.RegisterFunction(std::move(moveKinematicDesc)) && ok;
+
+    ok = RegisterCastFunction(host, "Physics.SphereCast", SphereShapePins(), &SphereCast) && ok;
+    ok = RegisterCastFunction(host, "Physics.BoxCast", BoxShapePins(), &BoxCast) && ok;
+    ok = RegisterCastFunction(host, "Physics.CapsuleCast", CapsuleShapePins(), &CapsuleCast) && ok;
+    ok = RegisterOverlapFunction(host, "Physics.OverlapSphere", SphereShapePins(), &OverlapSphere) && ok;
+    ok = RegisterOverlapFunction(host, "Physics.OverlapBox", BoxShapePins(), &OverlapBox) && ok;
+    ok = RegisterOverlapFunction(host, "Physics.OverlapCapsule", CapsuleShapePins(), &OverlapCapsule) && ok;
+
+    ScriptFunctionDesc closestPointDesc;
+    closestPointDesc.signature.name = "Physics.ClosestPoint";
+    closestPointDesc.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "pointX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointZ", ScriptValueType::Float, true },
+    };
+    closestPointDesc.signature.outputs = {
+        ScriptFunctionPin{ "found", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "distance", ScriptValueType::Float, true },
+    };
+    closestPointDesc.callback = &ClosestPoint;
+    ok = host.RegisterFunction(std::move(closestPointDesc)) && ok;
 
     return ok;
 }

@@ -279,7 +279,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "lockRotation", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kColliderPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
@@ -292,6 +292,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kColliderPropertyDesc
     ScriptSceneComponentPropertyDesc{ "trigger", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kCharacterControllerPropertyDescs{
@@ -397,7 +398,7 @@ constexpr std::array<FieldBinding, 11> kRigidbodyFields{
     KB_BOOL(kb::scene::RigidbodyComponent, lockRotation),
 };
 
-constexpr std::array<FieldBinding, 12> kColliderFields{
+constexpr std::array<FieldBinding, 13> kColliderFields{
     KB_COLLIDER_SHAPE(kb::scene::ColliderComponent, shape),
     KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, x),
     KB_NESTED_FLOAT(kb::scene::ColliderComponent, center, y),
@@ -410,6 +411,7 @@ constexpr std::array<FieldBinding, 12> kColliderFields{
     KB_BOOL(kb::scene::ColliderComponent, trigger),
     KB_FLOAT(kb::scene::ColliderComponent, friction),
     KB_FLOAT(kb::scene::ColliderComponent, restitution),
+    KB_UINT32(kb::scene::ColliderComponent, layer),
 };
 
 constexpr std::array<FieldBinding, 5> kCharacterControllerFields{

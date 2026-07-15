@@ -45,7 +45,8 @@ bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReade
         !input.ReadFloat(output.height) ||
         !input.ReadBool(trigger) ||
         !input.ReadFloat(output.friction) ||
-        !input.ReadFloat(output.restitution)) {
+        !input.ReadFloat(output.restitution) ||
+        !input.ReadUInt32(output.layer)) {
         return false;
     }
     output.shape = static_cast<ColliderShape>(shape);
@@ -62,6 +63,7 @@ void SceneAssetPhysicsComponentCodec::WriteCollider(std::vector<std::uint8_t>& o
     SceneAssetBinaryIO::WriteUInt8(output, collider.trigger ? 1U : 0U);
     SceneAssetBinaryIO::WriteFloat(output, collider.friction);
     SceneAssetBinaryIO::WriteFloat(output, collider.restitution);
+    SceneAssetBinaryIO::WriteUInt32(output, collider.layer);
 }
 
 bool SceneAssetPhysicsComponentCodec::ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output) {
