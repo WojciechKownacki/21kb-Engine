@@ -6,8 +6,9 @@
 namespace kb::scene {
 
 SceneJointComponentStore::SceneJointComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world)
-    , componentId_(componentId) {}
+    : world_(&world) {
+    static_cast<void>(componentId);
+}
 
 bool SceneJointComponentStore::Has(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::Has<JointComponent>(world_, entity);

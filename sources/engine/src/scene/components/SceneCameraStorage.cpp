@@ -6,8 +6,9 @@
 namespace kb::scene {
 
 SceneCameraComponentStore::SceneCameraComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
-    : world_(&world)
-    , componentId_(componentId) {}
+    : world_(&world) {
+    static_cast<void>(componentId);
+}
 
 bool SceneCameraComponentStore::Has(SceneEntity entity) const noexcept {
     return SceneComponentStorageAccess::Has<CameraComponent>(world_, entity);
