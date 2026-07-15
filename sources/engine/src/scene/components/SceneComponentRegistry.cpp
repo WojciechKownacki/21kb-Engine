@@ -50,6 +50,7 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(ColliderComponent, trigger, kb::ecs::ComponentFieldType::Bool),
             KB_ECS_FIELD(ColliderComponent, friction, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(ColliderComponent, restitution, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(ColliderComponent, layer, kb::ecs::ComponentFieldType::UInt32),
         }));
 }
 

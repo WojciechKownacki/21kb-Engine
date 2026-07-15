@@ -1774,7 +1774,7 @@ void RunComponentInspectorDescCatalogTest() {
             kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
         }
     }
-    kb::tests::Require(fieldsChecked == 78U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (78) across all 10 components");
+    kb::tests::Require(fieldsChecked == 79U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (79) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

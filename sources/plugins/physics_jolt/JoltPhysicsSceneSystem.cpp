@@ -17,14 +17,19 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <algorithm>
@@ -172,6 +177,7 @@ struct BodySignature {
     bool trigger = false;
     float friction = 0.5F;
     float restitution = 0.0F;
+    std::uint32_t layer = 0x7FFFFFFFU;
 };
 
 struct BodyRecord {
@@ -239,6 +245,7 @@ struct BodyRecord {
         .trigger = collider.trigger,
         .friction = collider.friction,
         .restitution = collider.restitution,
+        .layer = collider.layer,
     };
 }
 
@@ -247,6 +254,7 @@ struct BodyRecord {
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
         lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger &&
+        lhs.layer == rhs.layer &&
         lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
 
@@ -297,6 +305,63 @@ struct PhysicsBodySnapshot {
 };
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
+
+// LIB-125: builds a throwaway query shape (no Body/BodyID involved - Jolt
+// supports constructing a Shape purely to pass to CastShape/CollideShape,
+// the same construction calls CreateShape above already uses for real
+// bodies) from the engine-facing, script-boundary-friendly PhysicsShapeDesc.
+[[nodiscard]] JPH::RefConst<JPH::Shape> CreateQueryShape(const kb::scene::PhysicsShapeDesc& shape) {
+    switch (shape.kind) {
+    case kb::scene::PhysicsShapeKind::Sphere:
+        return new JPH::SphereShape(ClampPositive(shape.radius));
+    case kb::scene::PhysicsShapeKind::Capsule: {
+        const float radius = ClampPositive(shape.radius);
+        const float halfCylinder = std::max(0.0F, (shape.height * 0.5F) - radius);
+        return new JPH::CapsuleShape(halfCylinder, radius);
+    }
+    case kb::scene::PhysicsShapeKind::Box:
+        return new JPH::BoxShape(JPH::Vec3(
+            ClampPositive(shape.boxHalfExtents.x),
+            ClampPositive(shape.boxHalfExtents.y),
+            ClampPositive(shape.boxHalfExtents.z)));
+    }
+    return new JPH::SphereShape(0.5F);
+}
+
+// Query-time layer mask filter (LIB-125): every body's mUserData is set to
+// its ColliderComponent::layer bitmask at creation time (CreateBody below) -
+// Jolt's own ObjectLayer/ObjectLayerFilter is a single coarse value (this
+// engine only has 2: Moving/NonMoving, see Layers:: above) and cannot carry
+// an arbitrary per-body bitmask, so BodyFilter::ShouldCollideLocked (which
+// runs after the body is locked, giving access to GetUserData()) is the
+// correct extension point instead.
+class LayerMaskBodyFilter final : public JPH::BodyFilter {
+public:
+    explicit LayerMaskBodyFilter(std::uint32_t mask) noexcept
+        : mask_(mask) {}
+
+    [[nodiscard]] bool ShouldCollideLocked(const JPH::Body& body) const override {
+        return (static_cast<std::uint32_t>(body.GetUserData()) & mask_) != 0U;
+    }
+
+private:
+    std::uint32_t mask_ = 0U;
+};
+
+// ClosestPoint (LIB-125) targets ONE already-known entity's body specifically
+// (not a broad-phase search), so its query only ever accepts that single body.
+class SingleBodyOnlyFilter final : public JPH::BodyFilter {
+public:
+    explicit SingleBodyOnlyFilter(JPH::BodyID bodyId) noexcept
+        : bodyId_(bodyId) {}
+
+    [[nodiscard]] bool ShouldCollide(const JPH::BodyID& bodyId) const override {
+        return bodyId == bodyId_;
+    }
+
+private:
+    JPH::BodyID bodyId_;
+};
 
 } // namespace
 
@@ -413,6 +478,90 @@ public:
         return bodyId != nullptr && !physicsSystem_.GetBodyInterface().IsActive(*bodyId);
     }
 
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        const JPH::Vec3 joltDirection = ToJolt(direction);
+        const float directionLength = joltDirection.Length();
+        if (maxDistance <= 0.0F || directionLength <= 0.000001F) {
+            return {};
+        }
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        const JPH::RShapeCast shapeCast = JPH::RShapeCast::sFromWorldTransform(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(origin)), (joltDirection / directionLength) * maxDistance);
+        JPH::ShapeCastSettings settings;
+        JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CastShape(shapeCast, settings, ToJoltPosition(origin), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        const auto entityIt = entityByBodyId_.find(collector.mHit.mBodyID2);
+        if (entityIt == entityByBodyId_.end()) {
+            return {};
+        }
+        // mContactPointOn2 is returned RELATIVE to inBaseOffset (origin, as
+        // passed to CastShape above), not an absolute world position - add
+        // it back to get the real hit point.
+        return kb::scene::PhysicsCastResult{
+            .hit = true,
+            .entity = entityIt->second,
+            .distance = collector.mHit.mFraction * maxDistance,
+            .point = Add(origin, FromJolt(collector.mHit.mContactPointOn2)),
+            .normal = FromJolt(-collector.mHit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())),
+        };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept override {
+        const JPH::RefConst<JPH::Shape> queryShape = CreateQueryShape(shape);
+        JPH::CollideShapeSettings settings;
+        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const LayerMaskBodyFilter bodyFilter(layerMask);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            queryShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(center)), settings, ToJoltPosition(center), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        const auto entityIt = entityByBodyId_.find(collector.mHit.mBodyID2);
+        if (entityIt == entityByBodyId_.end()) {
+            return {};
+        }
+        return kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entityIt->second };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point) const noexcept override {
+        const JPH::BodyID* bodyId = FindBodyId(entity);
+        if (bodyId == nullptr) {
+            return {};
+        }
+        // A tiny point-like sphere at the query point, restricted to collide
+        // ONLY with the target body (SingleBodyOnlyFilter) - with
+        // mMaxSeparationDistance set large, CollideShapeResult::
+        // mContactPointOn2 gives the closest point on the target's real
+        // surface regardless of how far away it is, and mPenetrationDepth
+        // (negative when separated) gives the distance - the documented
+        // Jolt pattern for closest-point queries (no dedicated API exists).
+        constexpr float PointRadius = 0.01F;
+        constexpr float MaxSearchDistance = 1.0e6F;
+        const JPH::SphereShape pointShape(PointRadius);
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = MaxSearchDistance;
+        JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+        const SingleBodyOnlyFilter bodyFilter(*bodyId);
+        physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+            &pointShape, JPH::Vec3::sReplicate(1.0F), JPH::RMat44::sTranslation(ToJoltPosition(point)), settings, ToJoltPosition(point), collector, {}, {}, bodyFilter);
+        if (!collector.HadHit()) {
+            return {};
+        }
+        // mContactPointOn2 is relative to inBaseOffset (point, as passed to
+        // CollideShape above) - add it back for the absolute world position.
+        const Vec3 closest = Add(point, FromJolt(collector.mHit.mContactPointOn2));
+        const Vec3 delta = Subtract(closest, point);
+        return kb::scene::PhysicsClosestPointResult{
+            .found = true,
+            .point = closest,
+            .distance = std::sqrt((delta.x * delta.x) + (delta.y * delta.y) + (delta.z * delta.z)),
+        };
+    }
+
     void SynchronizeBody(
         SceneEntity entity,
         const TransformComponent& transform,
@@ -431,7 +580,9 @@ public:
             RemoveBody(existing->second.bodyId);
             bodies_.erase(existing);
         }
-        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = CreateBody(rigidbody, collider, transform), .signature = signature });
+        const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform);
+        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = bodyId, .signature = signature });
+        entityByBodyId_.emplace(bodyId, entity);
     }
 
 private:
@@ -496,6 +647,7 @@ private:
         bodySettings.mIsSensor = collider.trigger;
         bodySettings.mFriction = collider.friction;
         bodySettings.mRestitution = collider.restitution;
+        bodySettings.mUserData = collider.layer;
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
@@ -566,6 +718,7 @@ private:
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         bodyInterface.RemoveBody(bodyId);
         bodyInterface.DestroyBody(bodyId);
+        entityByBodyId_.erase(bodyId);
     }
 
     void RemoveAllBodies() {
@@ -585,6 +738,7 @@ private:
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
 };

@@ -49,6 +49,11 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
         .shape = kb::scene::ColliderShape::Box,
         .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F },
+        // LIB-125: a distinct, single-bit layer (disjoint from the box's
+        // below) so the real-Jolt cast/overlap layer-mask proofs at the end
+        // of this test can target one body without the other by layer
+        // alone, not merely by "closer hit wins".
+        .layer = 0x1U,
     });
 
     kb::scene::SceneObject box = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -64,6 +69,7 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     scene.Components().Colliders().Set(box.Entity(), kb::scene::ColliderComponent{
         .shape = kb::scene::ColliderShape::Box,
         .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+        .layer = 0x2U,
     });
 
     for (int i = 0; i < 120; ++i) {
@@ -111,6 +117,43 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     const kb::scene::SceneEntity unknownEntity = scene.Entities().CreateEntity();
     kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, unknownEntity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
         "PhysicsBackend::AddForce must report false for an entity with no live Jolt body");
+
+    // LIB-125: prove CastShape/OverlapShape/ClosestPoint reach the REAL
+    // Jolt backend, including genuine layer-mask filtering - the floor and
+    // box above were given distinct, disjoint single-bit layers at creation
+    // (0x1 and 0x2) specifically so a mask matching only one of them proves
+    // LayerMaskBodyFilter (JoltPhysicsSceneSystem.cpp) actually discriminates
+    // real Jolt bodies by layer, not merely "whichever is hit first".
+    const kb::scene::Vec3 boxRestingPosition = scene.Transforms().Get(box).localPosition;
+    const kb::scene::Vec3 castOrigin{ boxRestingPosition.x, boxRestingPosition.y + 5.0F, boxRestingPosition.z };
+    const kb::scene::Vec3 castDown{ 0.0F, -1.0F, 0.0F };
+    const kb::scene::PhysicsShapeDesc sphereQueryShape{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = 0.1F };
+
+    const kb::scene::PhysicsCastResult castHitsBox = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, castOrigin, castDown, 10.0F, 0x2U);
+    kb::tests::Require(castHitsBox.hit && castHitsBox.entity == box.Entity(), "PhysicsBackend::CastShape with a mask matching only the box's layer must hit the real box body, not the floor");
+    kb::tests::Require(castHitsBox.point.y > boxRestingPosition.y - 0.2F, "PhysicsBackend::CastShape hit point must land on the box's real surface, not fall through to the floor");
+
+    const kb::scene::PhysicsCastResult castHitsFloor = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, castOrigin, castDown, 10.0F, 0x1U);
+    kb::tests::Require(castHitsFloor.hit && castHitsFloor.entity == floor.Entity(), "PhysicsBackend::CastShape with a mask matching only the floor's layer must hit the real floor body, skipping the box entirely");
+    kb::tests::Require(castHitsFloor.point.y > -0.3F && castHitsFloor.point.y < 0.3F, "PhysicsBackend::CastShape must land on the floor's real top surface (y approx 0)");
+
+    const kb::scene::PhysicsCastResult castEmptySpace = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, kb::scene::Vec3{ 1000.0F, 1000.0F, 1000.0F }, castDown, 1.0F, kb::scene::kPhysicsAllLayers);
+    kb::tests::Require(!castEmptySpace.hit, "PhysicsBackend::CastShape must honestly report no hit against the real Jolt world when nothing is in range");
+
+    const kb::scene::PhysicsShapeDesc overlapQueryShape{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = 0.6F };
+    const kb::scene::PhysicsOverlapResult overlapBoxOnly = kb::scene::PhysicsBackend::OverlapShape(scene, overlapQueryShape, boxRestingPosition, 0x2U);
+    kb::tests::Require(overlapBoxOnly.overlapping && overlapBoxOnly.entity == box.Entity(), "PhysicsBackend::OverlapShape with a mask matching only the box's layer must overlap the real box body");
+
+    const kb::scene::PhysicsOverlapResult overlapFloorOnly = kb::scene::PhysicsBackend::OverlapShape(scene, overlapQueryShape, boxRestingPosition, 0x1U);
+    kb::tests::Require(overlapFloorOnly.overlapping && overlapFloorOnly.entity == floor.Entity(), "PhysicsBackend::OverlapShape with a mask matching only the floor's layer must overlap the real floor body instead of the box");
+
+    const kb::scene::PhysicsClosestPointResult closestOnFloor = kb::scene::PhysicsBackend::ClosestPoint(scene, floor.Entity(), kb::scene::Vec3{ 0.0F, 5.0F, 0.0F });
+    kb::tests::Require(closestOnFloor.found, "PhysicsBackend::ClosestPoint must find the real, live floor body");
+    kb::tests::Require(closestOnFloor.point.y > -0.3F && closestOnFloor.point.y < 0.3F, "PhysicsBackend::ClosestPoint must return a point on the floor's real top surface (y approx 0)");
+    kb::tests::Require(closestOnFloor.distance > 4.5F && closestOnFloor.distance < 5.5F, "PhysicsBackend::ClosestPoint must return the real distance from the query point to the floor's surface");
+
+    const kb::scene::PhysicsClosestPointResult closestOnUnknown = kb::scene::PhysicsBackend::ClosestPoint(scene, unknownEntity, kb::scene::Vec3{ 0.0F, 5.0F, 0.0F });
+    kb::tests::Require(!closestOnUnknown.found, "PhysicsBackend::ClosestPoint must report found=false for an entity with no live Jolt body");
 }
 
 } // namespace
