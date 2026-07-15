@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 40> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 50> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -53,6 +53,16 @@ constexpr std::array<LuaBindingSpec, 40> kLuaBindings{ {
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "Translate", "Transform.Translate", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "Raycast", "Physics.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "AddForce", "Physics.AddForce", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "AddImpulse", "Physics.AddImpulse", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "SetVelocity", "Physics.SetVelocity", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "GetVelocity", "Physics.GetVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "SetAngularVelocity", "Physics.SetAngularVelocity", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "GetAngularVelocity", "Physics.GetAngularVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "MoveKinematic", "Physics.MoveKinematic", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "Sleep", "Physics.Sleep", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "Wake", "Physics.Wake", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "IsSleeping", "Physics.IsSleeping", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "IsPressed", "Input.IsPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasPressed", "Input.WasPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasReleased", "Input.WasReleased", ScriptApiCatalogLuaReturnKind::Default, "" },
