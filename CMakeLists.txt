@@ -19,6 +19,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(APPLE)
+    # Belt-and-suspenders alongside CMAKE_OSX_DEPLOYMENT_TARGET above: two
+    # attempts at bumping the deployment target both left the SAME "call to
+    # deleted function 'from_chars'" error unchanged on macos-15 CI, so the
+    # exact minimum version this SDK actually requires is not what was
+    # assumed. _LIBCPP_DISABLE_AVAILABILITY is libc++'s own documented
+    # escape hatch: it removes ALL availability gating outright instead of
+    # needing the right target number guessed. Safe here specifically
+    # because to_chars/from_chars<double> (unlike e.g. std::filesystem) is
+    # implemented entirely within libc++ itself, with no OS-runtime dylib
+    # symbol dependency to be missing at a lower actual deployment target.
+    add_compile_definitions(_LIBCPP_DISABLE_AVAILABILITY)
+endif()
+
 include(CTest)
 include(FetchContent)
 
