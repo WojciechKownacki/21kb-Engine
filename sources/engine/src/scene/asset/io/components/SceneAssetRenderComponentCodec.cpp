@@ -16,7 +16,7 @@ bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteRe
             return false;
         }
     }
-    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow);
+    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow) && input.ReadUInt32(output.layer);
 }
 
 void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer) {
@@ -28,6 +28,7 @@ void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>
     }
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.castsShadow ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.receivesShadow ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, meshRenderer.layer);
 }
 
 bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, LightComponent& output) {

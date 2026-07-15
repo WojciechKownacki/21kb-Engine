@@ -65,7 +65,8 @@ bool ScenePrefabAssetMeshRendererParser::Parse(const ScenePrefabAssetFieldMap& f
         || !ParseAssetId(fields, "meshRenderer.materialAssetId", meshRenderer.materialAssetId)
         || !ParseOptionalMaterialSlotOverrides(fields, meshRenderer)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.castsShadow", castsShadow)
-        || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.receivesShadow", receivesShadow)) {
+        || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.receivesShadow", receivesShadow)
+        || !ParseField(fields, "meshRenderer.layer", meshRenderer.layer)) {
         return false;
     }
 

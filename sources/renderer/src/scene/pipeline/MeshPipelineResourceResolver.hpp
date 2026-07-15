@@ -27,7 +27,8 @@ public:
         const SceneRenderResourceMap& resourceMap,
         SceneRenderSubmitStats& stats,
         SceneRenderDiagnostics* diagnostics,
-        std::span<const std::uint64_t> selectedEntityIds) noexcept;
+        std::span<const std::uint64_t> selectedEntityIds,
+        std::uint32_t cullingMask) noexcept;
     [[nodiscard]] static const RenderMaterialResource* ResolveMaterialOrFallback(
         const SceneRenderMeshInstance& instance,
         std::uint64_t materialAssetId,

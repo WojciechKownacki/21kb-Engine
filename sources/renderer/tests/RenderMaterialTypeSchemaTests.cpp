@@ -551,9 +551,9 @@ void RunKbmat0606OpaqueAlphaRuntimeTest() {
     Require(NearlyEqual(binding.params[3], material.alphaCutoff), "KBMAT-0606: Opaque binding must still preserve authored alpha cutoff for stable material state");
 
     const SceneRenderMeshInstance instance{ .castsShadow = true };
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the depth pass");
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the base opaque pass");
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the shadow pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0606: Opaque material must remain accepted by the depth pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0606: Opaque material must remain accepted by the base opaque pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0606: Opaque material must remain accepted by the shadow pass");
 }
 
 void RunKbmat0607AlphaMaskCutoffRuntimeTest() {
@@ -578,9 +578,9 @@ void RunKbmat0607AlphaMaskCutoffRuntimeTest() {
     Require(NearlyEqual(shadowBinding.params[3], material.alphaCutoff), "KBMAT-0607: Shadow binding must pass alpha cutoff to the shader");
 
     const SceneRenderMeshInstance instance{ .castsShadow = true };
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the depth pass");
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the base opaque pass");
-    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the shadow pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0607: Mask material must remain accepted by the depth pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0607: Mask material must remain accepted by the base opaque pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}, 0xFFFFFFFFU), "KBMAT-0607: Mask material must remain accepted by the shadow pass");
 }
 
 void RunKbmat0608AlphaBlendSchemaReasonTest() {

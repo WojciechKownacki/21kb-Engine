@@ -32,13 +32,14 @@ void EmitPassDiagnostics(
     MeshPassType pass,
     const SceneMeshBatch& batch,
     std::uint64_t materialAssetId,
-    std::span<const std::uint64_t> selectedEntityIds) {
+    std::span<const std::uint64_t> selectedEntityIds,
+    std::uint32_t cullingMask) {
     if (diagnostics == nullptr) {
         return;
     }
 
     for (const SceneRenderMeshInstance& instance : batch.instances) {
-        if (!MeshPipelinePassPolicy::CanEverContain(pass, instance, selectedEntityIds)) {
+        if (!MeshPipelinePassPolicy::CanEverContain(pass, instance, selectedEntityIds, cullingMask)) {
             continue;
         }
         diagnostics->events.push_back(SceneRenderDiagnosticEvent{
@@ -107,13 +108,14 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
     const SceneRenderResourceMap& resourceMap,
     SceneRenderSubmitStats& stats,
     SceneRenderDiagnostics* diagnostics,
-    std::span<const std::uint64_t> selectedEntityIds) noexcept {
+    std::span<const std::uint64_t> selectedEntityIds,
+    std::uint32_t cullingMask) noexcept {
     const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
     if (!meshHandle.IsValid()) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshBindingCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds, cullingMask);
         return {};
     }
 
@@ -122,21 +124,21 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshResourceCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds, cullingMask);
         return {};
     }
     if (!IsSceneMeshVertexFormatSupported(meshResource->vertexFormat)) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.unsupportedMeshVertexFormatCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds, cullingMask);
         return {};
     }
     if (!bgfx::isValid(meshResource->vertexBuffer) || !bgfx::isValid(meshResource->indexBuffer)) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshResourceCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds, cullingMask);
         return {};
     }
 

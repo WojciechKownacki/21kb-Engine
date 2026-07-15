@@ -12,12 +12,27 @@ namespace {
     return std::ranges::find(selectedEntityIds, entityId) != selectedEntityIds.end();
 }
 
+// LIB-136: applied unconditionally (not gated per-pass like selection) - the drawing
+// camera's cullingMask defaults to all-bits-set (SceneRenderCamera's own default member
+// initializer), so this is a no-op for every instance with the default layer=1 and for
+// every camera authored before LIB-136, including the shadow-casting light's own
+// SceneRenderCamera (DirectionalShadowSetup::camera{} - default-constructed, never given a
+// restricted mask). A camera's cullingMask therefore only ever restricts what THAT camera
+// itself draws (opaque/transparent/GBuffer/selection), never what casts shadows for it.
+[[nodiscard]] bool PassesCullingMask(const SceneRenderMeshInstance& instance, std::uint32_t cullingMask) noexcept {
+    return (instance.layer & cullingMask) != 0U;
+}
+
 } // namespace
 
 bool MeshPipelinePassPolicy::CanEverContain(
     MeshPassType pass,
     const SceneRenderMeshInstance& instance,
-    std::span<const std::uint64_t> selectedEntityIds) noexcept {
+    std::span<const std::uint64_t> selectedEntityIds,
+    std::uint32_t cullingMask) noexcept {
+    if (!PassesCullingMask(instance, cullingMask)) {
+        return false;
+    }
     switch (pass) {
     case MeshPassType::ShadowDepth:
         return instance.castsShadow;
@@ -38,10 +53,11 @@ bool MeshPipelinePassPolicy::CanEverContain(
 std::uint32_t MeshPipelinePassPolicy::CountCandidateInstances(
     MeshPassType pass,
     const SceneMeshBatch& batch,
-    std::span<const std::uint64_t> selectedEntityIds) noexcept {
+    std::span<const std::uint64_t> selectedEntityIds,
+    std::uint32_t cullingMask) noexcept {
     std::uint32_t count = 0U;
     for (const SceneRenderMeshInstance& instance : batch.instances) {
-        count += CanEverContain(pass, instance, selectedEntityIds) ? 1U : 0U;
+        count += CanEverContain(pass, instance, selectedEntityIds, cullingMask) ? 1U : 0U;
     }
     return count;
 }
@@ -50,7 +66,11 @@ bool MeshPipelinePassPolicy::Accepts(
     MeshPassType pass,
     const SceneRenderMeshInstance& instance,
     const RenderMaterialResource* material,
-    std::span<const std::uint64_t> selectedEntityIds) noexcept {
+    std::span<const std::uint64_t> selectedEntityIds,
+    std::uint32_t cullingMask) noexcept {
+    if (!PassesCullingMask(instance, cullingMask)) {
+        return false;
+    }
     switch (pass) {
     case MeshPassType::Depth:
         return !UsesDisabledAlphaBlend(material);

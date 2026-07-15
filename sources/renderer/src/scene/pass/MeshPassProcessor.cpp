@@ -76,12 +76,13 @@ void EmitInstanceDiagnostic(
 void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
     const bool validateResources = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate;
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(desc.camera);
+    const std::uint32_t cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU;
     result.commands.reserve(desc.meshBatches.size());
 
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneMeshBatch& batch : desc.meshBatches) {
-        const std::uint32_t instanceCount = MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds);
+        const std::uint32_t instanceCount = MeshPipelinePassPolicy::CountCandidateInstances(desc.pass, batch, desc.selectedEntityIds, cullingMask);
         if (instanceCount == 0U) {
             continue;
         }
@@ -97,7 +98,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 *desc.resourceMap,
                 result.stats,
                 desc.diagnostics,
-                desc.selectedEntityIds);
+                desc.selectedEntityIds,
+                cullingMask);
             meshHandle = resolvedMesh.handle;
             meshResource = resolvedMesh.resource;
             if (meshResource == nullptr) {
@@ -123,7 +125,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
             result.commandLookupScratch.reserve(instanceCount);
             std::uint32_t culledForSection = 0U;
             for (SceneRenderMeshInstance instance : batch.instances) {
-                if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds)) {
+                if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
                 const std::uint8_t selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
@@ -145,7 +147,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     // pass instead (MAT-80); this is correct routing, not an unsupported-material error.
                     continue;
                 }
-                if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds)) {
+                if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
                 instance.worldBounds = MeshPipelineVisibility::TransformBounds(section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds), instance.model);

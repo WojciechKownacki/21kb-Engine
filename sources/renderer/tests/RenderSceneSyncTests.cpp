@@ -149,6 +149,45 @@ void RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest() {
     Require(tieBreakResult->projection == expectedTieBreakWinner.projection, "RenderScene BuildPrimaryCamera priority tie-break did not deterministically pick the lowest entityId");
 }
 
+// LIB-136: proves EcsRenderSceneSynchronizer actually copies the new CameraComponent
+// cullingMask/clearMode/clearColor and MeshRendererComponent layer fields into the renderer
+// proxies - not just that the fields exist on both sides and compile.
+void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Camera" });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
+        .primary = true,
+        .cullingMask = 0x00000006U,
+        .clearMode = kb::scene::CameraClearMode::DepthOnly,
+        .clearColor = kb::scene::Vec3{ 0.25F, 0.5F, 0.75F },
+    });
+
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = 5U,
+        .materialAssetId = 9U,
+        .layer = 0x00000004U,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+
+    const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(camera.Id());
+    Require(cameraProxy != nullptr, "RenderScene did not create a camera proxy");
+    Require(cameraProxy->desc.cullingMask == 0x00000006U, "EcsRenderSceneSynchronizer did not propagate CameraComponent::cullingMask");
+    Require(cameraProxy->desc.clearMode == RenderCameraClearMode::DepthOnly, "EcsRenderSceneSynchronizer did not propagate CameraComponent::clearMode");
+    Require(NearlyEqual(cameraProxy->desc.clearColor[0], 0.25F) && NearlyEqual(cameraProxy->desc.clearColor[1], 0.5F) && NearlyEqual(cameraProxy->desc.clearColor[2], 0.75F),
+        "EcsRenderSceneSynchronizer did not propagate CameraComponent::clearColor");
+
+    const MeshRenderProxy* meshProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(meshProxy != nullptr, "RenderScene did not create a mesh proxy");
+    Require(meshProxy->desc.layer == 0x00000004U, "EcsRenderSceneSynchronizer did not propagate MeshRendererComponent::layer");
+
+    const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
+    Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
+    Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
 void RunRenderSceneSyncsLightPipelineFieldsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -1956,6 +1995,7 @@ void RunSyncFallsBackToResolveForDirtyTransformTest() {
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
+    RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();

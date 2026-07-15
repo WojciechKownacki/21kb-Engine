@@ -62,6 +62,7 @@ void RunPrefabCaptureTest() {
     source.Components().MeshRenderers().Set(root.Entity(), kb::scene::MeshRendererComponent{
         .meshAssetId = 17,
         .materialAssetId = 23,
+        .layer = 0x00000008U,
     });
     source.Components().Cameras().Set(child.Entity(), kb::scene::CameraComponent{
         .projection = kb::scene::CameraProjection::Orthographic,
@@ -69,6 +70,9 @@ void RunPrefabCaptureTest() {
         .primary = true,
         .viewportId = 3U,
         .priority = 5,
+        .cullingMask = 0x00000005U,
+        .clearMode = kb::scene::CameraClearMode::SolidColor,
+        .clearColor = kb::scene::Vec3{ 0.9F, 0.1F, 0.2F },
     });
     source.Components().Lights().Set(grandchild.Entity(), kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Spot,
@@ -91,8 +95,11 @@ void RunPrefabCaptureTest() {
     const kb::scene::MeshRendererComponent* capturedMeshRenderer = target.Components().MeshRenderers().TryGet(instance.ObjectAt(0).Entity());
     const kb::scene::CameraComponent* capturedCamera = target.Components().Cameras().TryGet(instance.ObjectAt(1).Entity());
     const kb::scene::LightComponent* capturedLight = target.Components().Lights().TryGet(instance.ObjectAt(2).Entity());
-    kb::tests::Require(capturedMeshRenderer != nullptr && capturedMeshRenderer->meshAssetId == 17, "Captured mesh renderer was not preserved");
-    kb::tests::Require(capturedCamera != nullptr && capturedCamera->orthographicHeight == 12.0F && capturedCamera->viewportId == 3U && capturedCamera->priority == 5, "Captured camera was not preserved");
+    kb::tests::Require(capturedMeshRenderer != nullptr && capturedMeshRenderer->meshAssetId == 17 && capturedMeshRenderer->layer == 0x00000008U, "Captured mesh renderer was not preserved");
+    kb::tests::Require(capturedCamera != nullptr && capturedCamera->orthographicHeight == 12.0F && capturedCamera->viewportId == 3U && capturedCamera->priority == 5
+            && capturedCamera->cullingMask == 0x00000005U && capturedCamera->clearMode == kb::scene::CameraClearMode::SolidColor
+            && capturedCamera->clearColor.x == 0.9F && capturedCamera->clearColor.y == 0.1F && capturedCamera->clearColor.z == 0.2F,
+        "Captured camera was not preserved");
     kb::tests::Require(capturedLight != nullptr && capturedLight->intensity == 9.0F, "Captured light was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);
