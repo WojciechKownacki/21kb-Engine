@@ -68,6 +68,18 @@ struct Basis {
     };
 }
 
+[[nodiscard]] SceneRenderCameraClearMode ResolvedClearModeOf(RenderCameraClearMode clearMode) noexcept {
+    switch (clearMode) {
+    case RenderCameraClearMode::SolidColor:
+        return SceneRenderCameraClearMode::SolidColor;
+    case RenderCameraClearMode::DepthOnly:
+        return SceneRenderCameraClearMode::DepthOnly;
+    case RenderCameraClearMode::DontClear:
+        return SceneRenderCameraClearMode::DontClear;
+    }
+    return SceneRenderCameraClearMode::SolidColor;
+}
+
 } // namespace
 
 SceneRenderCamera RenderSceneCameraBuilder::Build(const CameraRenderProxyDesc& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight) {
@@ -80,7 +92,11 @@ SceneRenderCamera RenderSceneCameraBuilder::Build(const CameraRenderProxyDesc& c
     };
     const bx::Vec3 up{ basis.yx, basis.yy, basis.yz };
 
-    SceneRenderCamera renderCamera{};
+    SceneRenderCamera renderCamera{
+        .cullingMask = camera.cullingMask,
+        .clearMode = ResolvedClearModeOf(camera.clearMode),
+        .clearColor = camera.clearColor,
+    };
     bx::mtxLookAt(renderCamera.view.data(), eye, at, up);
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     switch (camera.projection) {
@@ -119,6 +135,7 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .customData0 = mesh.customData0,
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
+        .layer = mesh.layer,
     };
 }
 

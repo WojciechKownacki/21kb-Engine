@@ -19,7 +19,7 @@ void RendererViewConfigurator::ApplyViewOrder(std::span<const std::uint16_t> vie
     }
 }
 
-void RendererViewConfigurator::ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc) {
+void RendererViewConfigurator::ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, std::uint32_t clearRgba) {
     const std::array<float, 16> identity = RendererMatrixMath::Identity();
     const std::uint16_t width = ClampToViewExtent(desc.target.viewport.extent.width);
     const std::uint16_t height = ClampToViewExtent(desc.target.viewport.extent.height);
@@ -27,7 +27,7 @@ void RendererViewConfigurator::ConfigureSceneClear(bgfx::ViewId viewId, const Re
     bgfx::setViewName(viewId, "KB Scene Target");
     bgfx::setViewFrameBuffer(viewId, desc.target.frameBuffer);
     bgfx::setViewTransform(viewId, identity.data(), identity.data());
-    bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, desc.clearRgba, desc.clearDepth, desc.clearStencil);
+    bgfx::setViewClear(viewId, clearFlags, clearRgba, desc.clearDepth, desc.clearStencil);
     bgfx::setViewRect(viewId, 0, 0, width, height);
     bgfx::touch(viewId);
 }

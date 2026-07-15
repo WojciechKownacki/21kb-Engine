@@ -513,6 +513,74 @@ void RunMeshPipelineFiltersSelectionInstancesTest() {
     Require(result.commands[0].instances[0].entityId == 2U, "MeshPipeline selection pass kept the wrong entity");
 }
 
+// LIB-136: proves a camera's cullingMask actually excludes non-matching-layer instances
+// from a real draw command build - not just that the fields exist and compile.
+// MeshPipelinePassPolicy applies the check uniformly across every pass (opaque and shadow
+// alike, per PassesCullingMask's own doc comment) - it is each SUBMITTER's responsibility to
+// pass the right camera object in. The real shadow submission path
+// (RendererShadowSubmitter/DirectionalShadowPassPlanner) always builds its OWN
+// SceneRenderCamera for the light, which default-constructs with an unrestricted mask
+// (SceneRenderCamera::cullingMask's own default member initializer) regardless of what the
+// scene's viewing camera's mask is set to - so shadow casters are decoupled from the viewing
+// camera's cullingMask in practice, without MeshPipelinePassPolicy needing a pass-specific
+// exemption.
+void RunMeshPipelineFiltersByCameraCullingMaskTest() {
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .castsShadow = true, .layer = 0x1U },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .castsShadow = true, .layer = 0x2U },
+            },
+        },
+    };
+
+    const SceneRenderCamera restrictedCamera{ .cullingMask = 0x2U };
+    const MeshPipelineBuildResult opaqueResult = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .camera = &restrictedCamera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(opaqueResult.commands.size() == 1U, "MeshPipeline opaque pass did not emit a command for the culling-mask-matching layer");
+    Require(opaqueResult.commands[0].instances.size() == 1U, "MeshPipeline opaque pass did not filter the non-matching layer instance");
+    Require(opaqueResult.commands[0].instances[0].entityId == 2U, "MeshPipeline opaque pass kept the wrong (non-matching-layer) instance");
+
+    // Same restricted mask, ShadowDepth pass this time - proves the filter applies
+    // consistently (no per-pass exemption baked into MeshPipelinePassPolicy). A restricted
+    // shadow-pass camera SHOULD filter exactly like an opaque one; production code stays
+    // correct by never constructing the shadow submission's own camera with a restricted
+    // mask (see the default-constructed camera assertion below).
+    const MeshPipelineBuildResult restrictedShadowResult = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth,
+        .drawGroups = &drawGroups,
+        .camera = &restrictedCamera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(restrictedShadowResult.commands.size() == 1U && restrictedShadowResult.commands[0].instances.size() == 1U && restrictedShadowResult.commands[0].instances[0].entityId == 2U,
+        "MeshPipeline shadow pass did not apply an explicitly restricted cullingMask consistently with the opaque pass");
+
+    const SceneRenderCamera unrestrictedCamera{};
+    Require(unrestrictedCamera.cullingMask == 0xFFFFFFFFU, "SceneRenderCamera's own default cullingMask must be all-bits-set, so a default-constructed shadow-light camera never restricts casters");
+    const MeshPipelineBuildResult unrestrictedShadowResult = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth,
+        .drawGroups = &drawGroups,
+        .camera = &unrestrictedCamera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(unrestrictedShadowResult.commands.size() == 1U && unrestrictedShadowResult.commands[0].instances.size() == 2U,
+        "MeshPipeline shadow pass with a default-constructed (all-bits) camera - matching real production shadow submission - must include every layer's casters");
+
+    const MeshPipelineBuildResult allLayersResult = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .camera = &unrestrictedCamera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(allLayersResult.commands.size() == 1U && allLayersResult.commands[0].instances.size() == 2U,
+        "MeshPipeline opaque pass with a default (all-bits) cullingMask must draw every layer, matching pre-LIB-136 behavior");
+}
+
 void RunMeshPipelineReportsShadowPassMissingResourcesOnlyForCastersTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
@@ -1482,6 +1550,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineBuildIntoReusesCommandInstanceCapacityTest();
     RunMeshPipelineFiltersShadowCastingInstancesTest();
     RunMeshPipelineFiltersSelectionInstancesTest();
+    RunMeshPipelineFiltersByCameraCullingMaskTest();
     RunMeshPipelineReportsShadowPassMissingResourcesOnlyForCastersTest();
     RunSceneRendererValidatesExplicitMeshPassTest();
     RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest();
