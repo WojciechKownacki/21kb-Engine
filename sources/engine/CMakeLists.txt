@@ -1019,6 +1019,7 @@ add_library(kb_engine STATIC
     include/engine/input/InputMappingContextAsset.hpp
     include/engine/input/InputAssetIO.hpp
     include/engine/input/InputAssetLoaders.hpp
+    include/engine/input/InputRebinding.hpp
     include/engine/input/InputModifiers.hpp
     include/engine/input/InputTriggers.hpp
     include/engine/input/InputSubsystem.hpp
@@ -1030,6 +1031,7 @@ add_library(kb_engine STATIC
     src/input/InputKey.cpp
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
+    src/input/InputRebinding.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputSubsystem.cpp
