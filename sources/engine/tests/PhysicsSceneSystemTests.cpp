@@ -12,6 +12,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <utility>
@@ -154,6 +155,37 @@ void RunPhysicsSceneSystemFallingBodyTest() {
 
     const kb::scene::PhysicsClosestPointResult closestOnUnknown = kb::scene::PhysicsBackend::ClosestPoint(scene, unknownEntity, kb::scene::Vec3{ 0.0F, 5.0F, 0.0F });
     kb::tests::Require(!closestOnUnknown.found, "PhysicsBackend::ClosestPoint must report found=false for an entity with no live Jolt body");
+
+    // LIB-126: NonAlloc "all hits" against the REAL Jolt narrow phase -
+    // reusing the same box/floor bodies and disjoint layers (0x2/0x1) from
+    // the LIB-125 proofs above. A buffer smaller than the real hit count
+    // proves genuine truncation against the actual Jolt query, not just a
+    // fake backend's own bookkeeping.
+    constexpr std::uint32_t kBoxAndFloorLayers = 0x1U | 0x2U;
+    std::array<kb::scene::PhysicsCastResult, 4> castAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> castAllBuffer(castAllStorage);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, castOrigin, castDown, 10.0F, kBoxAndFloorLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 2U, "PhysicsBackend::CastShapeAll must collect both the real box and floor bodies when the mask matches both layers");
+    kb::tests::Require(castAllBuffer.GetAt(0) != nullptr && castAllBuffer.GetAt(0)->entity == box.Entity(), "PhysicsBackend::CastShapeAll must order the closer real body (the box) first");
+    kb::tests::Require(castAllBuffer.GetAt(1) != nullptr && castAllBuffer.GetAt(1)->entity == floor.Entity(), "PhysicsBackend::CastShapeAll must order the farther real body (the floor) second");
+
+    std::array<kb::scene::PhysicsCastResult, 1> smallCastAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> smallCastAllBuffer(smallCastAllStorage);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, castOrigin, castDown, 10.0F, kBoxAndFloorLayers, smallCastAllBuffer);
+    kb::tests::Require(smallCastAllBuffer.Count() == 1U && smallCastAllBuffer.Full(), "PhysicsBackend::CastShapeAll must silently stop at the buffer's capacity against the real Jolt narrow phase too");
+    kb::tests::Require(smallCastAllBuffer.GetAt(0) != nullptr && smallCastAllBuffer.GetAt(0)->entity == box.Entity(), "PhysicsBackend::CastShapeAll must keep the closest real body when the buffer can only hold one");
+
+    std::array<kb::scene::PhysicsOverlapResult, 4> overlapAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlapAllBuffer(overlapAllStorage);
+    kb::scene::PhysicsBackend::OverlapShapeAll(scene, overlapQueryShape, boxRestingPosition, kBoxAndFloorLayers, overlapAllBuffer);
+    kb::tests::Require(overlapAllBuffer.Count() == 2U, "PhysicsBackend::OverlapShapeAll must find both the real box and floor bodies overlapping the query sphere");
+    bool overlapAllFoundBox = false;
+    bool overlapAllFoundFloor = false;
+    for (const kb::scene::PhysicsOverlapResult& overlap : overlapAllBuffer) {
+        overlapAllFoundBox = overlapAllFoundBox || overlap.entity == box.Entity();
+        overlapAllFoundFloor = overlapAllFoundFloor || overlap.entity == floor.Entity();
+    }
+    kb::tests::Require(overlapAllFoundBox && overlapAllFoundFloor, "PhysicsBackend::OverlapShapeAll must include both real bodies, regardless of internal order");
 }
 
 } // namespace

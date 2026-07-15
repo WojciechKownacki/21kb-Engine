@@ -93,4 +93,28 @@ PhysicsClosestPointResult PhysicsBackend::ClosestPoint(Scene& scene, SceneEntity
     return backend != nullptr ? backend->ClosestPoint(entity, point) : PhysicsClosestPointResult{};
 }
 
+// LIB-126: unlike every closest-result method above (which returns a fresh
+// struct by value, so "no backend" trivially means a default-constructed
+// empty result), these write into a buffer the CALLER already owns and may
+// be reusing across many calls - the no-backend branch must explicitly
+// clear it, or a Scene that had a backend last Tick but not this one would
+// leave stale hits sitting in the caller's buffer.
+void PhysicsBackend::CastShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    if (backend != nullptr) {
+        backend->CastShapeAll(shape, origin, direction, maxDistance, layerMask, results);
+    } else {
+        results.Clear();
+    }
+}
+
+void PhysicsBackend::OverlapShapeAll(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    if (backend != nullptr) {
+        backend->OverlapShapeAll(shape, center, layerMask, results);
+    } else {
+        results.Clear();
+    }
+}
+
 } // namespace kb::scene

@@ -397,6 +397,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/PhysicsBackend.cpp
+    src/scene/PhysicsGeometryQueries.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneBehaviourIterationService.cpp
     src/scene/SceneHierarchy.cpp
@@ -769,6 +770,7 @@ add_library(kb_engine STATIC
     src/private/scene/hierarchy/SceneHierarchyRootCollector.hpp
     src/private/scene/history/SceneHistoryStack.hpp
     src/private/scene/SceneAccess.hpp
+    src/private/scene/PhysicsGeometryQueries.hpp
     src/private/scene/SceneComponentMutationService.hpp
     src/private/scene/SceneComponentQueryService.hpp
     src/private/scene/SceneEntityService.hpp
