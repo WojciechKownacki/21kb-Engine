@@ -72,6 +72,21 @@ class ScriptRuntimeHost;
 //     ("Camera z pose/projection/viewport/priority" and "screen/world
 //     conversions, ray z kamery"), so implementing it here would either
 //     duplicate that work or require a new kb::scene -> kb::render dependency.
+//
+// Named context priority bands (LIB-118) - Input.AddMappingContext's priority
+// argument is a plain int with no established convention; these functions let
+// scripts reference the engine's reserved bands by name instead of hardcoding
+// magic numbers, so a future console/debug-overlay/UI system (LIB-173/224-226/
+// 180) reliably outranks gameplay's default (0) and each other, in the order
+// DebugOverlay > Console > UI > Gameplay (see InputContextPriority.hpp):
+//   Input.PriorityGameplay()    -> priority:Int (0)
+//   Input.PriorityUI()          -> priority:Int (1000)
+//   Input.PriorityConsole()     -> priority:Int (2000)
+//   Input.PriorityDebugOverlay() -> priority:Int (3000)
+// No UI tree, console, or debug overlay exists yet to actually push contexts
+// at these bands - that is LIB-173/226/224-225's job. This only establishes
+// the shared priority contract they will all use, and is verified against the
+// real InputMappingContextStack consumption mechanism (not just declared).
 struct ScriptInputApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
 };

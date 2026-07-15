@@ -648,6 +648,33 @@ int LuaPointerButton(lua_State* state) {
     return 1;
 }
 
+int LuaInputPriorityConstant(lua_State* state, std::string_view functionName) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(functionName, {});
+    lua_pushinteger(state, static_cast<lua_Integer>(result.Output("priority").value_or(ScriptValue{ 0 }).AsInt()));
+    return 1;
+}
+
+int LuaInputPriorityGameplay(lua_State* state) {
+    return LuaInputPriorityConstant(state, "Input.PriorityGameplay");
+}
+
+int LuaInputPriorityUI(lua_State* state) {
+    return LuaInputPriorityConstant(state, "Input.PriorityUI");
+}
+
+int LuaInputPriorityConsole(lua_State* state) {
+    return LuaInputPriorityConstant(state, "Input.PriorityConsole");
+}
+
+int LuaInputPriorityDebugOverlay(lua_State* state) {
+    return LuaInputPriorityConstant(state, "Input.PriorityDebugOverlay");
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, function, 1);
@@ -698,7 +725,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     lua_setfield(state, environmentIndex, "Physics");
 
-    lua_createtable(state, 0, 14);
+    lua_createtable(state, 0, 18);
     SetClosure(state, "IsPressed", &LuaInputIsPressed, context);
     SetClosure(state, "WasPressed", &LuaInputWasPressed, context);
     SetClosure(state, "WasReleased", &LuaInputWasReleased, context);
@@ -713,6 +740,10 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Pressed", &LuaInputPressed, context);
     SetClosure(state, "Released", &LuaInputReleased, context);
     SetClosure(state, "Held", &LuaInputHeld, context);
+    SetClosure(state, "PriorityGameplay", &LuaInputPriorityGameplay, context);
+    SetClosure(state, "PriorityUI", &LuaInputPriorityUI, context);
+    SetClosure(state, "PriorityConsole", &LuaInputPriorityConsole, context);
+    SetClosure(state, "PriorityDebugOverlay", &LuaInputPriorityDebugOverlay, context);
     lua_setfield(state, environmentIndex, "Input");
 
     lua_createtable(state, 0, 3);

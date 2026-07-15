@@ -1,5 +1,6 @@
 #include "engine/script/ScriptInputApi.hpp"
 
+#include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputLocalUser.hpp"
@@ -276,6 +277,25 @@ bool RegisterPointerButton(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
+// Constant-returning functions so scripts reference the named priority bands
+// (LIB-118) by name instead of hardcoding magic numbers into
+// Input.AddMappingContext's priority argument. No existing mechanism in this
+// registry exposes plain constants (only callable functions), so these are
+// zero-input functions returning the int - the same shape every other
+// registration here already uses, not a new kind of registration.
+bool RegisterPriorityConstant(ScriptRuntimeHost& host, std::string name, std::int32_t value) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.outputs = {ScriptFunctionPin{"priority", ScriptValueType::Int, true}};
+    desc.callback = [value](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"priority", ScriptValue{static_cast<int>(value)}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
@@ -299,6 +319,11 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterPointerPosition(host) && ok;
     ok = RegisterPointerDelta(host) && ok;
     ok = RegisterPointerButton(host) && ok;
+
+    ok = RegisterPriorityConstant(host, "Input.PriorityGameplay", kb::input::InputContextPriority::Gameplay) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityUI", kb::input::InputContextPriority::UI) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityConsole", kb::input::InputContextPriority::Console) && ok;
+    ok = RegisterPriorityConstant(host, "Input.PriorityDebugOverlay", kb::input::InputContextPriority::DebugOverlay) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;
