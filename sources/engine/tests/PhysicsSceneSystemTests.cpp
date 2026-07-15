@@ -17,6 +17,7 @@
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -286,6 +287,73 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     };
     kb::tests::Require(firstIndexOf("OnTriggerEnter") < firstIndexOf("OnTriggerExit"), "OnTriggerEnter must be dispatched before OnTriggerExit for the same trigger, in real physics time order");
     kb::tests::Require(firstIndexOf("OnTriggerExit") < firstIndexOf("OnCollisionEnter"), "The faller must exit the trigger before landing on the floor below it, in real physics time order");
+
+    // LIB-014: the Projectile template's REAL physics-driven proof - reusing
+    // this SAME scene and the SAME scriptHost already attached above (a
+    // second ScriptRuntimeHost on one Scene is untested territory, and
+    // reusing the existing one is also simply correct: it is still the
+    // same live scene). Placed at y=15, x/z far from the floor's +-5
+    // footprint and the trigger/faller rig near x=3, so its straight-line
+    // flight cannot touch anything but its own target. useGravity=false
+    // keeps the flight path exactly straight, so a real-Jolt hit is a
+    // deterministic distance/time away rather than a ballistic arc this
+    // test would need to compute.
+    const kb::scene::SceneObject projectile = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Projectile",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -8.0F, 15.0F, -8.0F } },
+    });
+    scene.Components().Rigidbodies().Set(projectile.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 0.5F, .useGravity = false });
+    scene.Components().Colliders().Set(projectile.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
+
+    constexpr kb::assets::AssetId kProjectileAsset{ 9602U };
+    scene.Components().Behaviours().Set(projectile.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kProjectileAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Target",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -2.0F, 15.0F, -8.0F } },
+    });
+    scene.Components().Rigidbodies().Set(target.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(target.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F } });
+
+    // LIB-014: the launch retries in Tick (not a one-shot in Ready) because
+    // a freshly-spawned entity's Rigidbody/Collider is not guaranteed to
+    // have a live Jolt body yet by the time Ready fires - the physics and
+    // script scene systems' relative execution order is not guaranteed
+    // (see LIB-127's own notes; LIB-128's job to formalize). Retrying every
+    // Tick until Physics.SetVelocity actually reports applied=true is both
+    // the robust fix and realistic template code a real project would want
+    // anyway, not merely a test workaround.
+    const std::string projectileLuaScript =
+        "local launched = false\n"
+        "function Tick(self, dt)\n"
+        "    if not launched then\n"
+        "        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)\n"
+        "        if applied then\n"
+        "            launched = true\n"
+        "        end\n"
+        "    end\n"
+        "end\n"
+        "function OnCollisionEnter(self, event)\n"
+        "    SetShared(\"projectileHit\", true)\n"
+        "    SetShared(\"projectileHitOther\", event.args.other)\n"
+        "    World.Destroy(self.entity)\n"
+        "end\n";
+    kb::tests::Require(scriptHost.LuaRuntime().LoadScript(kProjectileAsset, projectileLuaScript).succeeded, "LIB-014 projectile template Lua script did not load");
+
+    for (int i = 0; i < 150; ++i) {
+        [[maybe_unused]] const bool projectileProgressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+
+    const std::optional<kb::script::ScriptValue> projectileHit = scriptHost.SharedState().Get("projectileHit");
+    kb::tests::Require(projectileHit.has_value() && projectileHit->AsBool(), "LIB-014 projectile template must receive a real OnCollisionEnter when it hits the target");
+    const std::optional<kb::script::ScriptValue> projectileHitOther = scriptHost.SharedState().Get("projectileHitOther");
+    kb::tests::Require(projectileHitOther.has_value() && static_cast<std::uint64_t>(projectileHitOther->AsInt()) == target.Entity().Id(),
+        "LIB-014 projectile template's OnCollisionEnter must report the real target entity it hit");
+    kb::tests::Require(!scene.Entities().IsAlive(projectile.Entity()), "LIB-014 projectile template must destroy itself via World.Destroy after a real collision");
 }
 
 } // namespace
