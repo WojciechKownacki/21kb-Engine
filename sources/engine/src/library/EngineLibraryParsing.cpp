@@ -2,7 +2,16 @@
 
 #include <array>
 #include <charconv>
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
+#include <string>
+
+#if defined(_WIN32)
+#include <clocale>
+#else
+#include <locale.h>
+#endif
 
 namespace kb::library {
 namespace {
@@ -44,6 +53,32 @@ namespace {
     return conversion.ec == std::errc{} && conversion.ptr == text.data() + text.size();
 }
 
+// std::from_chars<double> is not available in Apple's shipped libc++ as of
+// Xcode 16.4 ("call to deleted function" - confirmed empirically, with
+// only std::from_chars's INTEGRAL overloads visible as candidates
+// regardless of deployment target or availability macros, so this is a
+// genuine gap in that library, not a gated one). std::strtod/std::atof/
+// std::stringstream were deliberately ruled out originally because their
+// behaviour depends on the PROCESS-GLOBAL locale (this file's own top
+// comment). The locale-EXPLICIT C library entry points - strtod_l on
+// POSIX, _strtod_l on MSVC - give the identical correctly-rounded
+// conversion without touching or depending on that global state: a bound,
+// per-call "C" locale instead, upholding the same invariant a different
+// way.
+[[nodiscard]] double ParseDoubleInvariant(const char* text, char** endPtr) noexcept {
+#if defined(_WIN32)
+    _locale_t invariantLocale = _create_locale(LC_ALL, "C");
+    const double value = _strtod_l(text, endPtr, invariantLocale);
+    _free_locale(invariantLocale);
+    return value;
+#else
+    locale_t invariantLocale = newlocale(LC_ALL_MASK, "C", static_cast<locale_t>(0));
+    const double value = strtod_l(text, endPtr, invariantLocale);
+    freelocale(invariantLocale);
+    return value;
+#endif
+}
+
 } // namespace
 
 bool TryParseInt64(std::string_view text, std::int64_t& outValue) noexcept {
@@ -76,9 +111,28 @@ bool TryParseDouble(std::string_view text, double& outValue) noexcept {
     if (text.empty()) {
         return false;
     }
-    double value = 0.0;
-    const std::from_chars_result conversion = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (conversion.ec != std::errc{} || conversion.ptr != text.data() + text.size()) {
+    // Match std::from_chars<double>'s narrower grammar exactly (what the
+    // strtod-based ParseDoubleInvariant below is a stand-in for): the
+    // first character after an optional '-' (from_chars does not accept a
+    // leading '+', matching TryParseInt64/UInt64 above) must be a digit or
+    // '.', which rejects "inf"/"infinity"/"nan" (all start with a letter)
+    // up front - strtod would otherwise happily accept those, along with
+    // 0x-prefixed hex float literals, neither of which is part of this
+    // project's one documented decimal grammar (see this file's own top
+    // comment).
+    std::size_t index = text.front() == '-' ? 1U : 0U;
+    if (index >= text.size() || (text[index] != '.' && (text[index] < '0' || text[index] > '9'))) {
+        return false;
+    }
+    if (text[index] == '0' && index + 1U < text.size() && (text[index + 1U] == 'x' || text[index + 1U] == 'X')) {
+        return false;
+    }
+
+    const std::string buffer{ text };
+    char* endPtr = nullptr;
+    errno = 0;
+    const double value = ParseDoubleInvariant(buffer.c_str(), &endPtr);
+    if (endPtr != buffer.c_str() + buffer.size() || errno == ERANGE) {
         return false;
     }
     outValue = value;

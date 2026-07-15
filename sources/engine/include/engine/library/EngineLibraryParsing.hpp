@@ -11,15 +11,22 @@ namespace kb::library {
 // LIB-063: parsing for the four data shapes the plan calls out — numbers,
 // GUID, colors, dates — all with "unambiguous locale/invariant culture"
 // behaviour: none of these functions consult the current C locale (no
-// std::atof/std::strtod/std::stringstream, whose behaviour depends on the
-// process-global locale — e.g. ',' vs '.' as the decimal separator, which
-// would make the SAME input string parse differently on different
-// machines/configurations). Numbers go through std::from_chars (C++17),
-// which the standard defines as locale-independent by construction, not
-// merely "usually is". GUID/Color/Date are hand-validated against one
-// fixed, documented textual grammar (no format auto-detection, no
-// alternate spellings) for the same reason: one unambiguous format,
-// everywhere, rather than a locale-sensitive guess.
+// std::atof/std::strtod/std::stringstream against the PROCESS-GLOBAL
+// locale, whose behaviour depends on it — e.g. ',' vs '.' as the decimal
+// separator, which would make the SAME input string parse differently on
+// different machines/configurations). Integers go through std::from_chars
+// (C++17), which the standard defines as locale-independent by
+// construction, not merely "usually is". Doubles use a hand-scoped "C"
+// locale (strtod_l/_strtod_l, never touching the process-global locale) —
+// std::from_chars<double> would be the natural first choice, but Apple's
+// shipped libc++ does not implement it (confirmed empirically: "call to
+// deleted function", not merely gated behind a deployment-target
+// availability macro), so EngineLibraryParsing.cpp works around the gap
+// while preserving the exact same locale-independence guarantee a
+// different way. GUID/Color/Date are hand-validated against one fixed,
+// documented textual grammar (no format auto-detection, no alternate
+// spellings) for the same reason: one unambiguous format, everywhere,
+// rather than a locale-sensitive guess.
 //
 // Every function follows the established TryParse* contract already used
 // elsewhere in this codebase (e.g. TryParseVisualGraphValueType,
