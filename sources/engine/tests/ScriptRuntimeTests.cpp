@@ -16,6 +16,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -2381,6 +2382,25 @@ void RunScriptWorldTimePhysicsApiTest() {
     const kb::script::ScriptFunctionCallResult maskedOutRay = host.Functions().Call("Physics.Raycast", maskedOutRayArgs, context);
     kb::tests::Require(maskedOutRay.Succeeded() && !maskedOutRay.Output("hit")->AsBool(), "Physics.Raycast with layerMask=0 must not hit any collider, including the floor");
 
+    // LIB-129: Physics.LayerBit resolves a named layer (configured via
+    // kb::scene::PhysicsBackend::ConfigureLayers) to its bit value -
+    // resolution lives on SceneState, not the backend, so this works
+    // regardless of whether ProbePhysicsBackend itself applies the config.
+    kb::scene::PhysicsLayersAsset scriptLayers;
+    scriptLayers.layerNames[7] = "Hazard";
+    static_cast<void>(kb::scene::PhysicsBackend::ConfigureLayers(scene, scriptLayers));
+    const std::vector<kb::script::ScriptFunctionArgument> layerBitArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Hazard" } } },
+    };
+    const kb::script::ScriptFunctionCallResult layerBit = host.Functions().Call("Physics.LayerBit", layerBitArgs, context);
+    kb::tests::Require(layerBit.Succeeded() && layerBit.Output("bit").has_value() && layerBit.Output("bit")->AsInt() == (1 << 7),
+        "Physics.LayerBit direct call did not resolve the configured layer name to its real bit value");
+    const std::vector<kb::script::ScriptFunctionArgument> unknownLayerBitArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Unknown" } } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownLayerBit = host.Functions().Call("Physics.LayerBit", unknownLayerBitArgs, context);
+    kb::tests::Require(unknownLayerBit.Succeeded() && unknownLayerBit.Output("bit")->AsInt() == 0, "Physics.LayerBit direct call must return 0 for an unknown layer name");
+
     const std::vector<kb::script::ScriptFunctionArgument> prefabArgs{
         kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
         kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ -2.0F } },
@@ -2423,6 +2443,8 @@ function Tick(self, dt)
         distance = 10.0
     })
     local maskedOutHit = Physics.Raycast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0)
+    local hazardBit = Physics.LayerBit("Hazard")
+    local unknownBit = Physics.LayerBit("Unknown")
     local prefabRoot = World.InstantiatePrefab({ prefab = "/Game/Prefabs/RuntimePrefab.kbprefab", x = 9.0, y = 10.0, z = 11.0 })
     SetShared("world.entity", entity)
     SetShared("world.found", found)
@@ -2444,6 +2466,8 @@ function Tick(self, dt)
     SetShared("world.raycastEntity", hit.entity)
     SetShared("world.raycastDistance", hit.distance)
     SetShared("world.raycastMaskedOutHit", maskedOutHit.hit)
+    SetShared("world.hazardBit", hazardBit)
+    SetShared("world.unknownBit", unknownBit)
     SetShared("world.prefabRoot", prefabRoot)
     SetShared("time.delta", Time.delta())
 end
@@ -2475,6 +2499,8 @@ end
     kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("world.raycastEntity")->AsInt()) == floor.Entity().Id(), "Lua Physics.Raycast hit the wrong entity");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("world.raycastDistance")->AsFloat(), 4.5F), "Lua Physics.Raycast returned the wrong distance");
     kb::tests::Require(!host.SharedState().Get("world.raycastMaskedOutHit")->AsBool(), "Lua Physics.Raycast (positional form) with layerMask=0 must not hit any collider");
+    kb::tests::Require(host.SharedState().Get("world.hazardBit")->AsInt() == (1 << 7), "Lua Physics.LayerBit did not resolve the configured layer name to its real bit value");
+    kb::tests::Require(host.SharedState().Get("world.unknownBit")->AsInt() == 0, "Lua Physics.LayerBit must return 0 for an unknown layer name");
     const kb::scene::SceneEntity luaPrefabRoot{ static_cast<std::uint64_t>(host.SharedState().Get("world.prefabRoot")->AsInt()) };
     kb::tests::Require(luaPrefabRoot.IsValid() && scene.Entities().Name(luaPrefabRoot) == "Prefab Root", "Lua World.InstantiatePrefab returned the wrong root entity");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.x, 9.0F)

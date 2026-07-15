@@ -10,6 +10,7 @@
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
@@ -69,6 +70,7 @@ Scene::Scene(
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
     const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
+    const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -78,6 +80,7 @@ Scene::Scene(
     static_cast<void>(registeredInputContextLoader);
     static_cast<void>(registeredAudioClipLoader);
     static_cast<void>(registeredImportedAssetLoader);
+    static_cast<void>(registeredPhysicsLayersLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;

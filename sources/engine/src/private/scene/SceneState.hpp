@@ -347,6 +347,13 @@ public:
     // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
     // own doc comment on PendingCollisionEvent for the full contract).
     std::vector<PendingCollisionEvent> pendingCollisionEvents;
+    // LIB-129: the last layers configuration applied via
+    // PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers - kept here
+    // (backend-independent) so name -> bit resolution (PhysicsBackend::
+    // LayerBit) works even without a physics backend registered. Default-
+    // constructed (layer 0 = "Default", every pair interacts) matches every
+    // pre-LIB-129 scene exactly.
+    PhysicsLayersAsset physicsLayers;
 };
 
 } // namespace kb::scene

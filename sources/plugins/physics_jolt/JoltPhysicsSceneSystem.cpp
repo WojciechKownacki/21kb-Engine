@@ -4,6 +4,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -22,11 +23,13 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -66,11 +69,13 @@ constexpr std::uint32_t MaxBodies = 65536U;
 constexpr std::uint32_t NumBodyMutexes = 0U;
 constexpr std::uint32_t MaxBodyPairs = 65536U;
 constexpr std::uint32_t MaxContactConstraints = 10240U;
-namespace Layers {
-constexpr JPH::ObjectLayer NonMoving = 0;
-constexpr JPH::ObjectLayer Moving = 1;
-constexpr JPH::ObjectLayer Count = 2;
-} // namespace Layers
+// LIB-129: a named layer (ColliderComponent::layer's lowest set bit, 0-31 -
+// see kb::scene::PhysicsLayersAsset) combined with static/dynamic motion
+// type into a single Jolt ObjectLayer - see ToObjectLayer below for why
+// static/dynamic still needs its own axis even though it is now orthogonal
+// to the named layer.
+constexpr JPH::uint kNamedLayerCount = kb::scene::kPhysicsLayerCount;
+constexpr JPH::uint kObjectLayerCount = kNamedLayerCount * 2U;
 
 namespace BroadPhaseLayers {
 constexpr JPH::BroadPhaseLayer NonMoving(0);
@@ -78,55 +83,44 @@ constexpr JPH::BroadPhaseLayer Moving(1);
 constexpr JPH::uint Count = 2;
 } // namespace BroadPhaseLayers
 
-class ObjectLayerPairFilter final : public JPH::ObjectLayerPairFilter {
-public:
-    [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer object1, JPH::ObjectLayer object2) const override {
-        if (object1 == Layers::NonMoving) {
-            return object2 == Layers::Moving;
-        }
-        return object1 == Layers::Moving;
-    }
-};
+// Two bodies on the SAME named layer but different motion types still need
+// DIFFERENT object layers, because Jolt's BroadPhaseLayerInterface maps
+// object layer -> broadphase layer through a fixed, per-object-layer table
+// (no per-body override) and broadphase layer must still distinguish static
+// from dynamic for Jolt's own broad-phase pruning to work correctly -
+// doubling the object layer count is the standard way to combine this
+// orthogonal "which broadphase bucket" axis with the "which named layer"
+// axis in Jolt's object-layer model.
+[[nodiscard]] constexpr JPH::ObjectLayer ToObjectLayer(std::uint32_t namedLayer, bool isStatic) noexcept {
+    return static_cast<JPH::ObjectLayer>(namedLayer * 2U + (isStatic ? 0U : 1U));
+}
 
-class BroadPhaseLayerInterface final : public JPH::BroadPhaseLayerInterface {
-public:
-    BroadPhaseLayerInterface() {
-        objectToBroadPhase_[Layers::NonMoving] = BroadPhaseLayers::NonMoving;
-        objectToBroadPhase_[Layers::Moving] = BroadPhaseLayers::Moving;
-    }
-
-    [[nodiscard]] JPH::uint GetNumBroadPhaseLayers() const override {
-        return BroadPhaseLayers::Count;
-    }
-
-    [[nodiscard]] JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-        return layer < Layers::Count ? objectToBroadPhase_[layer] : BroadPhaseLayers::Moving;
-    }
-
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-    [[nodiscard]] const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
-        if (layer == BroadPhaseLayers::NonMoving) {
-            return "NonMoving";
-        }
-        if (layer == BroadPhaseLayers::Moving) {
-            return "Moving";
-        }
-        return "Invalid";
-    }
-#endif
-
-private:
-    JPH::BroadPhaseLayer objectToBroadPhase_[Layers::Count]{};
-};
-
+// Computes ShouldCollide LIVE from the mutable, live-reconfigurable-via-
+// IPhysicsBackend::ConfigureLayers JPH::ObjectLayerPairFilterTable and the
+// fixed object-layer -> broadphase-layer mapping, instead of using Jolt's
+// own ObjectVsBroadPhaseLayerFilterTable, which snapshots ShouldCollide
+// results once at CONSTRUCTION time: a snapshot taken before ConfigureLayers
+// is ever called would stay stale after a later ConfigureLayers call, with
+// Jolt's broad-phase silently continuing to cull pairs that should now
+// collide.
 class ObjectVsBroadPhaseLayerFilter final : public JPH::ObjectVsBroadPhaseLayerFilter {
 public:
+    ObjectVsBroadPhaseLayerFilter(const JPH::ObjectLayerPairFilter& pairFilter, const JPH::BroadPhaseLayerInterface& broadPhaseLayers) noexcept
+        : pairFilter_(pairFilter)
+        , broadPhaseLayers_(broadPhaseLayers) {}
+
     [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer objectLayer, JPH::BroadPhaseLayer broadPhaseLayer) const override {
-        if (objectLayer == Layers::NonMoving) {
-            return broadPhaseLayer == BroadPhaseLayers::Moving;
+        for (JPH::ObjectLayer other = 0; other < static_cast<JPH::ObjectLayer>(kObjectLayerCount); ++other) {
+            if (broadPhaseLayers_.GetBroadPhaseLayer(other) == broadPhaseLayer && pairFilter_.ShouldCollide(objectLayer, other)) {
+                return true;
+            }
         }
-        return objectLayer == Layers::Moving;
+        return false;
     }
+
+private:
+    const JPH::ObjectLayerPairFilter& pairFilter_;
+    const JPH::BroadPhaseLayerInterface& broadPhaseLayers_;
 };
 
 class JoltRuntime {
@@ -272,10 +266,6 @@ struct BodyRecord {
     return JPH::EMotionType::Dynamic;
 }
 
-[[nodiscard]] JPH::ObjectLayer ToObjectLayer(RigidbodyBodyType bodyType) noexcept {
-    return bodyType == RigidbodyBodyType::Static ? Layers::NonMoving : Layers::Moving;
-}
-
 [[nodiscard]] JPH::RefConst<JPH::Shape> CreateShape(const ColliderComponent& collider, Vec3 scale) {
     const float scaleX = AbsScale(scale.x);
     const float scaleY = AbsScale(scale.y);
@@ -332,11 +322,13 @@ using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, 
 
 // Query-time layer mask filter (LIB-125): every body's mUserData is set to
 // its ColliderComponent::layer bitmask at creation time (CreateBody below) -
-// Jolt's own ObjectLayer/ObjectLayerFilter is a single coarse value (this
-// engine only has 2: Moving/NonMoving, see Layers:: above) and cannot carry
-// an arbitrary per-body bitmask, so BodyFilter::ShouldCollideLocked (which
-// runs after the body is locked, giving access to GetUserData()) is the
-// correct extension point instead.
+// Jolt's own ObjectLayer/ObjectLayerFilter is a single coarse value (a named
+// layer + static/dynamic sub-lane, see ToObjectLayer above; still not an
+// arbitrary per-body bitmask) so BodyFilter::ShouldCollideLocked (which
+// runs after the body is locked, giving access to GetUserData()) remains the
+// correct extension point for a query's own layerMask - orthogonal to
+// LIB-129's interaction matrix, which governs real collision RESPONSE via
+// ObjectLayerPairFilter instead.
 class LayerMaskBodyFilter final : public JPH::BodyFilter {
 public:
     explicit LayerMaskBodyFilter(std::uint32_t mask) noexcept
@@ -454,8 +446,28 @@ class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend {
 public:
     explicit Impl(JoltPhysicsSceneSystemSettings settings)
         : settings_(settings)
+        , broadPhaseLayers_(kObjectLayerCount, BroadPhaseLayers::Count)
+        , objectLayerPairFilter_(kObjectLayerCount)
+        , objectVsBroadPhaseFilter_(objectLayerPairFilter_, broadPhaseLayers_)
         , tempAllocator_(10U * 1024U * 1024U)
         , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount()) {
+        for (JPH::ObjectLayer namedLayer = 0; namedLayer < static_cast<JPH::ObjectLayer>(kNamedLayerCount); ++namedLayer) {
+            broadPhaseLayers_.MapObjectToBroadPhaseLayer(ToObjectLayer(namedLayer, true), BroadPhaseLayers::NonMoving);
+            broadPhaseLayers_.MapObjectToBroadPhaseLayer(ToObjectLayer(namedLayer, false), BroadPhaseLayers::Moving);
+        }
+        // LIB-129: every layer interacts with every other layer by default,
+        // matching this engine's behavior before LIB-129 (static vs. dynamic
+        // affected only broad-phase pruning, never collision response) - a
+        // project that never calls ConfigureLayers sees this default
+        // forever, and every collider that never set an explicit
+        // ColliderComponent::layer resolves to named layer 0 (see
+        // kb::scene::LowestSetPhysicsLayerIndex), so existing content is
+        // unaffected either way.
+        for (JPH::ObjectLayer first = 0; first < static_cast<JPH::ObjectLayer>(kObjectLayerCount); ++first) {
+            for (JPH::ObjectLayer second = first; second < static_cast<JPH::ObjectLayer>(kObjectLayerCount); ++second) {
+                objectLayerPairFilter_.EnableCollision(first, second);
+            }
+        }
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
         // LIB-127: only a single ContactListener can be registered per
@@ -463,6 +475,33 @@ public:
         // instance for its own PhysicsSystem, exactly like it owns
         // broadPhaseLayers_/objectVsBroadPhaseFilter_ above.
         physicsSystem_.SetContactListener(&contactListener_);
+    }
+
+    // LIB-129: see IPhysicsBackend::ConfigureLayers - mutates
+    // objectLayerPairFilter_ in place (JPH::ObjectLayerPairFilterTable's
+    // EnableCollision/DisableCollision are plain, non-virtual methods
+    // queried live by Jolt's narrow-phase AND by this Impl's own
+    // ObjectVsBroadPhaseLayerFilter above), so this is safe to call at any
+    // point in Impl's lifetime, before or after Init/bodies exist - no
+    // re-Init of physicsSystem_ needed.
+    bool ConfigureLayers(const kb::scene::PhysicsLayersAsset& layers) noexcept override {
+        for (std::uint32_t a = 0U; a < kb::scene::kPhysicsLayerCount; ++a) {
+            for (std::uint32_t b = a; b < kb::scene::kPhysicsLayerCount; ++b) {
+                const bool interact = layers.LayersInteract(a, b);
+                for (const bool aStatic : { true, false }) {
+                    for (const bool bStatic : { true, false }) {
+                        const JPH::ObjectLayer objectA = ToObjectLayer(a, aStatic);
+                        const JPH::ObjectLayer objectB = ToObjectLayer(b, bStatic);
+                        if (interact) {
+                            objectLayerPairFilter_.EnableCollision(objectA, objectB);
+                        } else {
+                            objectLayerPairFilter_.DisableCollision(objectA, objectB);
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     ~Impl() override {
@@ -793,8 +832,10 @@ private:
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
         JPH::RefConst<JPH::Shape> shape = CreateShape(collider, transform.worldScale);
         const Vec3 bodyPosition = Add(transform.worldPosition, collider.center);
+        const std::uint32_t namedLayer = kb::scene::LowestSetPhysicsLayerIndex(collider.layer);
+        const bool isStaticBody = rigidbody.bodyType == RigidbodyBodyType::Static;
 
-        JPH::BodyCreationSettings bodySettings(shape, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), ToMotionType(rigidbody.bodyType), ToObjectLayer(rigidbody.bodyType));
+        JPH::BodyCreationSettings bodySettings(shape, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), ToMotionType(rigidbody.bodyType), ToObjectLayer(namedLayer, isStaticBody));
         bodySettings.mIsSensor = collider.trigger;
         bodySettings.mFriction = collider.friction;
         bodySettings.mRestitution = collider.restitution;
@@ -978,9 +1019,9 @@ private:
 
     JoltRuntime runtime_;
     JoltPhysicsSceneSystemSettings settings_;
-    BroadPhaseLayerInterface broadPhaseLayers_;
+    JPH::BroadPhaseLayerInterfaceTable broadPhaseLayers_;
+    JPH::ObjectLayerPairFilterTable objectLayerPairFilter_;
     ObjectVsBroadPhaseLayerFilter objectVsBroadPhaseFilter_;
-    ObjectLayerPairFilter objectLayerPairFilter_;
     JPH::PhysicsSystem physicsSystem_;
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;

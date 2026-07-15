@@ -25,7 +25,7 @@ enum class ProjectSceneLightingPath : std::uint32_t {
 };
 
 struct ProjectDescriptor {
-    static constexpr std::uint32_t CurrentFileVersion = 4U;
+    static constexpr std::uint32_t CurrentFileVersion = 5U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string engineAssociation = "21kb";
@@ -47,6 +47,14 @@ struct ProjectDescriptor {
     // Project-wide renderer lighting path (file version >= 4). Older projects
     // remain on Forward until the user switches them in Project Settings.
     ProjectSceneLightingPath sceneLightingPath = ProjectSceneLightingPath::Forward;
+
+    // LIB-129: named collision-layer + interaction-matrix asset, referenced
+    // by virtual path (empty = none configured), file version >= 5. Mirrors
+    // inputMappingContext exactly: kb::library does not auto-apply this on
+    // Scene construction (a Scene's assets aren't mounted yet at that point -
+    // see kb::scene::PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers),
+    // a host loads and applies it explicitly once the project is mounted.
+    std::string physicsLayersAsset;
 };
 
 } // namespace kb::project
