@@ -1027,11 +1027,13 @@ add_library(kb_engine STATIC
     include/engine/input/InputMappingEvaluator.hpp
     include/engine/input/InputPollingSystem.hpp
     include/engine/input/InputModule.hpp
+    include/engine/input/InputRecording.hpp
     src/input/InputModule.cpp
     src/input/InputKey.cpp
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
     src/input/InputRebinding.cpp
+    src/input/InputRecording.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputSubsystem.cpp
