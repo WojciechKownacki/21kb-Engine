@@ -134,6 +134,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
     include/engine/scene/PhysicsBackend.hpp
+    include/engine/scene/PhysicsLayersAsset.hpp
+    include/engine/scene/PhysicsLayersAssetIO.hpp
+    include/engine/scene/PhysicsLayersAssetLoader.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/BehaviourExecutionOrder.hpp
@@ -398,6 +401,8 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/scene/PhysicsBackend.cpp
     src/scene/PhysicsGeometryQueries.cpp
+    src/scene/PhysicsLayersAssetIO.cpp
+    src/scene/PhysicsLayersAssetLoader.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneBehaviourIterationService.cpp
     src/scene/SceneHierarchy.cpp

@@ -613,6 +613,21 @@ int LuaPhysicsIsSleeping(lua_State* state) {
     return 1;
 }
 
+// LIB-129: Physics.LayerBit("Enemy") -> integer bit value, ready to OR
+// (Lua's `|` since 5.3) into any layerMask argument above.
+int LuaPhysicsLayerBit(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const char* name = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.LayerBit", arguments);
+    lua_pushinteger(state, static_cast<lua_Integer>(result.Output("bit").value_or(ScriptValue{ 0 }).AsInt()));
+    return 1;
+}
+
 // LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
 // OverlapCapsule take no entity argument, so (unlike the CheckEntityArg
 // functions above) the generic ArgumentsFromTable path is safe here - there
@@ -1154,7 +1169,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 18);
+    lua_createtable(state, 0, 19);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
     SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
@@ -1173,6 +1188,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "OverlapBox", &LuaPhysicsOverlapBox, context);
     SetClosure(state, "OverlapCapsule", &LuaPhysicsOverlapCapsule, context);
     SetClosure(state, "ClosestPoint", &LuaPhysicsClosestPoint, context);
+    SetClosure(state, "LayerBit", &LuaPhysicsLayerBit, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);

@@ -1,9 +1,12 @@
 #include "engine/scene/PhysicsBackend.hpp"
 
+#include "engine/assets/AssetHandle.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
+#include <filesystem>
 #include <utility>
 
 namespace kb::scene {
@@ -128,6 +131,28 @@ std::vector<PendingCollisionEvent> PhysicsBackend::DrainPendingCollisionEvents(S
     std::vector<PendingCollisionEvent> drained;
     drained.swap(state.pendingCollisionEvents);
     return drained;
+}
+
+bool PhysicsBackend::ConfigureLayers(Scene& scene, const PhysicsLayersAsset& layers) noexcept {
+    SceneAccess::State(scene).physicsLayers = layers;
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->ConfigureLayers(layers);
+}
+
+std::uint32_t PhysicsBackend::LayerBit(Scene& scene, std::string_view name) noexcept {
+    const int index = SceneAccess::State(scene).physicsLayers.LayerIndex(name);
+    return index < 0 ? 0U : (1U << static_cast<std::uint32_t>(index));
+}
+
+bool PhysicsBackend::LoadAndConfigureLayers(Scene& scene, const std::string& virtualPath) noexcept {
+    if (virtualPath.empty()) {
+        return false;
+    }
+    const kb::assets::AssetHandle<PhysicsLayersAsset> handle = scene.Assets().Manager().Load<PhysicsLayersAsset>(std::filesystem::path{ virtualPath });
+    if (!handle.IsLoaded()) {
+        return false;
+    }
+    return ConfigureLayers(scene, *handle);
 }
 
 } // namespace kb::scene
