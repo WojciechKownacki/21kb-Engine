@@ -24,6 +24,8 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "camera.nearClip=" << components.camera->nearClip << '\n';
         output << "camera.farClip=" << components.camera->farClip << '\n';
         output << "camera.primary=" << (components.camera->primary ? 1 : 0) << '\n';
+        output << "camera.viewportId=" << components.camera->viewportId << '\n';
+        output << "camera.priority=" << components.camera->priority << '\n';
     }
 
     output << "meshRenderer=" << (components.meshRenderer.has_value() ? 1 : 0) << '\n';

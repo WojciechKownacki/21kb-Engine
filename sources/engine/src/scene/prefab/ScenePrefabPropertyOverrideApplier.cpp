@@ -114,6 +114,12 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "camera.primary") {
         return ParseBool(property.value, Ensure(node.components.camera).primary);
     }
+    if (property.propertyPath == "camera.viewportId") {
+        return ParseNumber(property.value, Ensure(node.components.camera).viewportId);
+    }
+    if (property.propertyPath == "camera.priority") {
+        return ParseNumber(property.value, Ensure(node.components.camera).priority);
+    }
     if (property.propertyPath == "meshRenderer") {
         return ApplyComponentPresence(property.value, node.components.meshRenderer);
     }

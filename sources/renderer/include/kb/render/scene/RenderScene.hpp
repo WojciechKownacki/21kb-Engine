@@ -68,6 +68,12 @@ struct CameraRenderProxyDesc {
     float farClip = 1000.0F;
     bool primary = false;
     bool visible = true;
+    // LIB-135: mirrors kb::scene::CameraComponent::viewportId/priority. 0
+    // means "any viewport". BuildPrimaryCamera uses these to pick a
+    // deterministic camera per target viewport instead of an arbitrary
+    // unordered_map-iteration-order first match.
+    std::uint32_t viewportId = 0;
+    std::int32_t priority = 0;
 };
 
 struct LightRenderProxyDesc {
@@ -188,14 +194,21 @@ public:
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
 
     void ClearDirty() noexcept;
-    [[nodiscard]] std::optional<SceneRenderCamera> BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight) const;
+    // LIB-135: targetViewportId selects among cameras whose viewportId either
+    // matches exactly or is 0 ("any viewport" - the default every camera
+    // authored before LIB-135 keeps, so single-viewport callers that never
+    // pass a real id keep matching every camera exactly as before). Among
+    // matching, visible, primary candidates the highest priority wins; a
+    // priority tie breaks on the lowest entityId, so the result is
+    // deterministic regardless of unordered_map iteration order.
+    [[nodiscard]] std::optional<SceneRenderCamera> BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight, std::uint32_t targetViewportId = 0U) const;
     // The returned cache is refreshed lazily and remains stable until the next mesh proxy mutation.
     [[nodiscard]] const std::vector<SceneRenderDrawGroup>& DrawGroups() const;
     void BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const;
     [[nodiscard]] std::size_t DrawGroupCapacity() const noexcept;
     [[nodiscard]] std::size_t DrawGroupInstanceCapacity() const noexcept;
     [[nodiscard]] std::size_t DrawGroupLookupScratchCapacity() const noexcept;
-    void BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t viewportHeight, SceneRenderSnapshot& outSnapshot) const;
+    void BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t viewportHeight, SceneRenderSnapshot& outSnapshot, std::uint32_t targetViewportId = 0U) const;
 
 private:
     struct DrawGroupKey {

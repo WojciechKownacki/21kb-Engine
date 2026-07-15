@@ -759,7 +759,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
-    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);

@@ -67,6 +67,8 @@ void RunPrefabCaptureTest() {
         .projection = kb::scene::CameraProjection::Orthographic,
         .orthographicHeight = 12.0F,
         .primary = true,
+        .viewportId = 3U,
+        .priority = 5,
     });
     source.Components().Lights().Set(grandchild.Entity(), kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Spot,
@@ -90,7 +92,7 @@ void RunPrefabCaptureTest() {
     const kb::scene::CameraComponent* capturedCamera = target.Components().Cameras().TryGet(instance.ObjectAt(1).Entity());
     const kb::scene::LightComponent* capturedLight = target.Components().Lights().TryGet(instance.ObjectAt(2).Entity());
     kb::tests::Require(capturedMeshRenderer != nullptr && capturedMeshRenderer->meshAssetId == 17, "Captured mesh renderer was not preserved");
-    kb::tests::Require(capturedCamera != nullptr && capturedCamera->orthographicHeight == 12.0F, "Captured camera was not preserved");
+    kb::tests::Require(capturedCamera != nullptr && capturedCamera->orthographicHeight == 12.0F && capturedCamera->viewportId == 3U && capturedCamera->priority == 5, "Captured camera was not preserved");
     kb::tests::Require(capturedLight != nullptr && capturedLight->intensity == 9.0F, "Captured light was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);

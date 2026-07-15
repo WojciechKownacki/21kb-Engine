@@ -50,6 +50,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "nearClip", "Near Clip", "Distance to the near clipping plane." },
                 LibraryComponentInspectorFieldDesc{ "farClip", "Far Clip", "Distance to the far clipping plane." },
                 LibraryComponentInspectorFieldDesc{ "primary", "Primary", "Whether this is the primary camera used for the main render pass." },
+                LibraryComponentInspectorFieldDesc{ "viewportId", "Viewport", "Which render viewport this camera targets. 0 means every viewport." },
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Breaks ties when more than one primary camera targets the same viewport; higher wins." },
             },
         },
         LibraryComponentInspectorDesc{

@@ -2076,6 +2076,53 @@ void RunPrefabApplyOverrideToAssetTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// LIB-135: exercises the actual on-disk text asset round trip (ScenePrefabAssetComponentWriter
+// -> ScenePrefabAssetCameraParser), not just the in-memory ScenePrefabBakedData copy the other
+// Camera-bearing prefab tests use - proves viewportId/priority (and every pre-existing Camera
+// field) actually survive a real Save()/Load() cycle through the text format.
+void RunPrefabCameraAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_camera_round_trip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t cameraNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Camera Round Trip",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{
+                .projection = kb::scene::CameraProjection::Orthographic,
+                .verticalFovDegrees = 45.0F,
+                .orthographicHeight = 8.0F,
+                .nearClip = 0.5F,
+                .farClip = 500.0F,
+                .primary = true,
+                .viewportId = 2U,
+                .priority = 9,
+            },
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("CameraRoundTripPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Camera prefab asset save failed");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Camera prefab asset did not load");
+    const kb::scene::ScenePrefabInstance instance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    const kb::scene::CameraComponent* camera = loadedScene.Components().Cameras().TryGet(instance.ObjectAt(cameraNode).Entity());
+    kb::tests::Require(camera != nullptr, "Camera prefab asset round trip did not instantiate a Camera component");
+    kb::tests::Require(camera->projection == kb::scene::CameraProjection::Orthographic, "Camera prefab asset round trip lost projection");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->verticalFovDegrees, 45.0F), "Camera prefab asset round trip lost verticalFovDegrees");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->orthographicHeight, 8.0F), "Camera prefab asset round trip lost orthographicHeight");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->nearClip, 0.5F), "Camera prefab asset round trip lost nearClip");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->farClip, 500.0F), "Camera prefab asset round trip lost farClip");
+    kb::tests::Require(camera->primary, "Camera prefab asset round trip lost primary");
+    kb::tests::Require(camera->viewportId == 2U, "Camera prefab asset round trip lost viewportId");
+    kb::tests::Require(camera->priority == 9, "Camera prefab asset round trip lost priority");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 void RunPrefabAssetLoadMigratesMissingNodeStableIdsTest() {
     const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_missing_node_ids.kbprefab";
     std::error_code removeError;
@@ -2589,6 +2636,7 @@ void RunScenePrefabInstantiationTests() {
     run("RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest", RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest);
     run("RunPrefabRefreshLargeInstanceSetTest", RunPrefabRefreshLargeInstanceSetTest);
     run("RunPrefabApplyOverrideToAssetTest", RunPrefabApplyOverrideToAssetTest);
+    run("RunPrefabCameraAssetSaveLoadRoundTripTest", RunPrefabCameraAssetSaveLoadRoundTripTest);
     run("RunPrefabAssetLoadMigratesMissingNodeStableIdsTest", RunPrefabAssetLoadMigratesMissingNodeStableIdsTest);
     run("RunNestedPrefabCompositionTest", RunNestedPrefabCompositionTest);
     run("RunNestedPrefabCaptureAndRefreshTest", RunNestedPrefabCaptureAndRefreshTest);

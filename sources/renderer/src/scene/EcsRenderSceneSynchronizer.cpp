@@ -124,6 +124,8 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
         .farClip = camera.farClip,
         .primary = camera.primary,
         .visible = IsVisible(*sync->scene, entity),
+        .viewportId = camera.viewportId,
+        .priority = camera.priority,
     }));
     static_cast<void>(transform);
 }
