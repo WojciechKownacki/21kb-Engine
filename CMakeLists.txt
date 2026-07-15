@@ -5,10 +5,13 @@ cmake_minimum_required(VERSION 3.27)
 # kb::library::TryParseDouble, EngineLibraryParsing.cpp) behind an
 # availability macro requiring macOS 13.3+; without this, Clang reports
 # "call to deleted function" on macos-15 CI runners despite the syntax
-# itself being valid C++17.
-if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target")
-endif()
+# itself being valid C++17. FORCEd because GitHub's macOS runner images
+# export a MACOSX_DEPLOYMENT_TARGET environment variable (matching the
+# runner's own OS, often older than 13.3) that CMake picks up as the
+# CMAKE_OSX_DEPLOYMENT_TARGET default before this line ever runs - an
+# unconditional set() here would still lose to that pre-populated cache
+# entry without FORCE.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS deployment target" FORCE)
 
 project(Engine21kb LANGUAGES C CXX)
 
