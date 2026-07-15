@@ -229,6 +229,52 @@ public:
         return kb::scene::PhysicsClosestPointResult{ .found = true, .point = kb::scene::Vec3{ point.x, 0.0F, point.z }, .distance = point.y };
     }
 
+    // LIB-126: fills `results` from the test-configured `castAllHits`/
+    // `overlapAllEntities` lists (empty by default) - lets a test prove
+    // both "more hits exist than the buffer can hold" (results.Full()==true,
+    // extras silently not written) and "closest-first ordering", without
+    // needing a real Jolt scene.
+    struct AllHitEntry {
+        kb::scene::SceneEntity entity;
+        float distance = 0.0F;
+    };
+    std::vector<AllHitEntry> castAllHits;
+    std::vector<kb::scene::SceneEntity> overlapAllEntities;
+
+    void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 origin, kb::scene::Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        lastCastShape = shape;
+        lastCastOrigin = origin;
+        lastCastDirection = direction;
+        lastCastMaxDistance = maxDistance;
+        lastCastLayerMask = layerMask;
+        results.Clear();
+        if ((layerMask & castHitMask) == 0U) {
+            return;
+        }
+        for (const AllHitEntry& entry : castAllHits) {
+            [[maybe_unused]] const bool pushed = results.PushBack(kb::scene::PhysicsCastResult{
+                .hit = true,
+                .entity = entry.entity,
+                .distance = entry.distance,
+                .point = origin,
+                .normal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+            });
+        }
+    }
+
+    void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, kb::scene::Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        lastOverlapShape = shape;
+        lastOverlapCenter = center;
+        lastOverlapLayerMask = layerMask;
+        results.Clear();
+        if ((layerMask & overlapHitMask) == 0U) {
+            return;
+        }
+        for (const kb::scene::SceneEntity& entity : overlapAllEntities) {
+            [[maybe_unused]] const bool pushed = results.PushBack(kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entity });
+        }
+    }
+
     kb::scene::SceneEntity knownEntity{};
     kb::scene::Vec3 lastForce{};
     kb::scene::Vec3 lastImpulse{};
@@ -2789,6 +2835,115 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaClosestDistance")->AsFloat(), 4.0F), "Lua Physics.ClosestPoint must return the backend's exact distance");
 
     kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+}
+
+// LIB-126: NonAlloc "all hits" queries. Deliberately native-C++-only, no
+// script/Lua/VisualGraph surface: ScriptValue is a flat scalar tagged union
+// (LIB-032/041) with no way to carry a caller-owned buffer or a variable-
+// length result list across the script boundary - exactly the same wall
+// LIB-058 already hit and documented for exposing Array<T> itself to
+// scripts, inherited here rather than re-litigated. "wymaganie bufora" is
+// satisfied structurally: RaycastAllNonAlloc/CastShapeAll/OverlapShapeAll
+// all take a kb::library::ArrayNonAlloc<T>& (LIB-059) as a MANDATORY
+// parameter, so there is no allocating alternative to reach for by mistake
+// in a Tick. Proves: closest-first ordering, silent-but-observable buffer-
+// capacity truncation (Full()), layer-mask gating, and that a REUSED buffer
+// is fully cleared on every call (no stale hits from a prior frame),
+// against both pure geometry (Raycast) and a fake IPhysicsBackend.
+void RunPhysicsBackendNonAllocQueriesTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject nearSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "NearSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 7.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(nearSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+
+    const kb::scene::SceneObject midSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "MidSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 5.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(midSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x2U });
+
+    const kb::scene::SceneObject farSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "FarSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 3.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(farSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+
+    const kb::scene::Vec3 rayOrigin{ 0.0F, 10.0F, 0.0F };
+    const kb::scene::Vec3 rayDown{ 0.0F, -1.0F, 0.0F };
+
+    // --- RaycastAllNonAlloc: pure geometry, mirrors Physics.Raycast's own
+    // IntersectRayCollider math.
+    std::array<kb::scene::PhysicsCastResult, 4> allCapacityStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> allCapacity(allCapacityStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, allCapacity);
+    kb::tests::Require(allCapacity.Count() == 3U, "RaycastAllNonAlloc must collect all 3 intersecting colliders when the buffer has room");
+    kb::tests::Require(allCapacity.GetAt(0) != nullptr && allCapacity.GetAt(0)->entity == nearSphere.Entity(), "RaycastAllNonAlloc must order the closest hit first");
+    kb::tests::Require(allCapacity.GetAt(1) != nullptr && allCapacity.GetAt(1)->entity == midSphere.Entity(), "RaycastAllNonAlloc must order the middle sphere second");
+    kb::tests::Require(allCapacity.GetAt(2) != nullptr && allCapacity.GetAt(2)->entity == farSphere.Entity(), "RaycastAllNonAlloc must order the far sphere last");
+    kb::tests::Require(kb::tests::NearlyEqual(allCapacity.GetAt(0)->distance, 2.5F), "RaycastAllNonAlloc must report the exact geometric distance to the near sphere");
+
+    std::array<kb::scene::PhysicsCastResult, 1> smallCapacityStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> smallCapacity(smallCapacityStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, smallCapacity);
+    kb::tests::Require(smallCapacity.Count() == 1U && smallCapacity.Full(), "RaycastAllNonAlloc must silently stop at the buffer's capacity rather than overflow or allocate");
+    kb::tests::Require(smallCapacity.GetAt(0) != nullptr && smallCapacity.GetAt(0)->entity == nearSphere.Entity(), "RaycastAllNonAlloc must keep the CLOSEST hit when the buffer can only hold one");
+
+    std::array<kb::scene::PhysicsCastResult, 4> maskedStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> masked(maskedStorage);
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, rayDown, 20.0F, 0x2U, masked);
+    kb::tests::Require(masked.Count() == 1U && masked.GetAt(0) != nullptr && masked.GetAt(0)->entity == midSphere.Entity(), "RaycastAllNonAlloc with layerMask=0x2 must only hit the mid sphere's layer");
+
+    kb::scene::RaycastAllNonAlloc(scene, rayOrigin, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }, 20.0F, kb::scene::kPhysicsAllLayers, allCapacity);
+    kb::tests::Require(allCapacity.Count() == 0U, "RaycastAllNonAlloc must clear a reused buffer, not retain stale hits from a previous call that collected 3");
+
+    // --- PhysicsBackend::CastShapeAll/OverlapShapeAll: fake backend proves
+    // dispatch, buffer-reuse honesty, and layer-mask gating without a real
+    // Jolt scene (real-Jolt proof lives in PhysicsSceneSystemTests.cpp).
+    const kb::scene::PhysicsShapeDesc sphereQueryShape{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = 0.5F };
+    std::array<kb::scene::PhysicsCastResult, 4> castAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> castAllBuffer(castAllStorage);
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll must report zero results when no physics backend is registered");
+
+    ProbePhysicsBackend backend;
+    backend.knownEntity = nearSphere.Entity();
+    backend.castHitMask = 0x1U;
+    backend.overlapHitMask = 0x1U;
+    backend.castAllHits = {
+        ProbePhysicsBackend::AllHitEntry{ .entity = nearSphere.Entity(), .distance = 2.5F },
+        ProbePhysicsBackend::AllHitEntry{ .entity = midSphere.Entity(), .distance = 4.5F },
+        ProbePhysicsBackend::AllHitEntry{ .entity = farSphere.Entity(), .distance = 6.5F },
+    };
+    backend.overlapAllEntities = { nearSphere.Entity(), midSphere.Entity() };
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 3U, "PhysicsBackend::CastShapeAll must report all 3 hits the backend configured");
+    kb::tests::Require(castAllBuffer.GetAt(0) != nullptr && castAllBuffer.GetAt(0)->entity == nearSphere.Entity(), "PhysicsBackend::CastShapeAll must preserve the backend's hit order");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCastMaxDistance, 20.0F), "PhysicsBackend::CastShapeAll must pass maxDistance through to the backend");
+
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, 0x2U, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll with a layerMask not intersecting the backend's castHitMask must report zero results");
+
+    std::array<kb::scene::PhysicsCastResult, 2> smallCastAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> smallCastAllBuffer(smallCastAllStorage);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, smallCastAllBuffer);
+    kb::tests::Require(smallCastAllBuffer.Count() == 2U && smallCastAllBuffer.Full(), "PhysicsBackend::CastShapeAll must silently stop at the buffer's capacity rather than overflow or allocate");
+
+    std::array<kb::scene::PhysicsOverlapResult, 4> overlapAllStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlapAllBuffer(overlapAllStorage);
+    kb::scene::PhysicsBackend::OverlapShapeAll(scene, sphereQueryShape, kb::scene::Vec3{}, kb::scene::kPhysicsAllLayers, overlapAllBuffer);
+    kb::tests::Require(overlapAllBuffer.Count() == 2U, "PhysicsBackend::OverlapShapeAll must report both entities the backend configured");
+    kb::tests::Require(overlapAllBuffer.GetAt(0) != nullptr && overlapAllBuffer.GetAt(0)->entity == nearSphere.Entity(), "PhysicsBackend::OverlapShapeAll must preserve the backend's hit order");
+    kb::tests::Require(overlapAllBuffer.GetAt(1) != nullptr && overlapAllBuffer.GetAt(1)->entity == midSphere.Entity(), "PhysicsBackend::OverlapShapeAll's second entry must be the second configured entity");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
+    kb::scene::PhysicsBackend::CastShapeAll(scene, sphereQueryShape, rayOrigin, rayDown, 20.0F, kb::scene::kPhysicsAllLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Count() == 0U, "PhysicsBackend::CastShapeAll must clear a reused buffer once the backend is unregistered, not retain the 3 hits from before");
 }
 
 // LIB-085: Transform.LocalPosition/LocalRotation/LocalScale (get/set) and
@@ -8916,6 +9071,7 @@ void RunScriptRuntimeTests() {
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCastOverlapClosestPointApiTest();
+    RunPhysicsBackendNonAllocQueriesTest();
     RunScriptTimeApiElapsedAndAliasingTest();
     RunScriptTimeApiScaleAndPauseTest();
     RunScriptTimerApiTest();
