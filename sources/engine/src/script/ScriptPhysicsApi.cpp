@@ -4,6 +4,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -169,6 +170,17 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
     context.scene->Runtime().SynchronizeTransforms();
     context.scene->Transforms().ForEach(&RaycastVisitor, &raycastContext);
     const kb::scene::PhysicsCastResult& hit = raycastContext.best;
+
+    // LIB-132: single-query trace - RecordQueryTrace is an honest no-op unless debug draw is
+    // enabled on this scene (see PhysicsDebugDraw.hpp), so this costs nothing when disabled.
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(*context.scene, kb::scene::PhysicsDebugQueryTrace{
+                                                                       .valid = true,
+                                                                       .hit = hit.hit,
+                                                                       .origin = origin,
+                                                                       .endpoint = hit.hit ? hit.point : (origin + direction * maxDistance),
+                                                                       .normal = hit.normal,
+                                                                   });
+
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -201,6 +213,15 @@ ScriptFunctionCallResult CastShapeResult(const ScriptFunctionCallContext& contex
     const Vec3 direction = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
     const float maxDistance = std::max(0.0F, FloatArg(arguments, "distance", 1000.0F));
     const kb::scene::PhysicsCastResult hit = kb::scene::PhysicsBackend::CastShape(*context.scene, shape, origin, direction, maxDistance, LayerMaskArg(arguments));
+
+    kb::scene::PhysicsDebugDraw::RecordQueryTrace(*context.scene, kb::scene::PhysicsDebugQueryTrace{
+                                                                       .valid = true,
+                                                                       .hit = hit.hit,
+                                                                       .origin = origin,
+                                                                       .endpoint = hit.hit ? hit.point : (origin + direction * maxDistance),
+                                                                       .normal = hit.normal,
+                                                                   });
+
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -418,6 +439,25 @@ ScriptFunctionCallResult CharacterGroundVelocity(const ScriptFunctionCallContext
     }
     const kb::scene::PhysicsVectorResult result = kb::scene::PhysicsBackend::CharacterGroundVelocity(*context.scene, EntityArg(arguments, "entity"));
     return VectorResult(result.found, result.value);
+}
+
+// LIB-132: lets a script (or the editor) toggle physics debug draw/query-trace recording on
+// this scene - see PhysicsDebugDraw.hpp for the full "zero release-path impact" contract.
+ScriptFunctionCallResult SetDebugDrawEnabled(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const ScriptValue* value = FindArg(arguments, "enabled");
+    kb::scene::PhysicsDebugDraw::SetEnabled(*context.scene, value != nullptr && value->AsBool());
+    return ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+}
+
+ScriptFunctionCallResult IsDebugDrawEnabled(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("enabled", kb::scene::PhysicsDebugDraw::IsEnabled(*context.scene));
 }
 
 // LIB-129: resolves a named collision layer (kb::scene::PhysicsLayersAsset,
@@ -659,6 +699,20 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterEntityBoolQuery(host, "Physics.CharacterIsGrounded", "grounded", &CharacterIsGrounded) && ok;
     ok = RegisterVectorGetter(host, "Physics.CharacterGroundNormal", &CharacterGroundNormal) && ok;
     ok = RegisterVectorGetter(host, "Physics.CharacterGroundVelocity", &CharacterGroundVelocity) && ok;
+
+    ScriptFunctionDesc setDebugDrawDesc;
+    setDebugDrawDesc.signature.name = "Physics.SetDebugDrawEnabled";
+    setDebugDrawDesc.signature.inputs = { ScriptFunctionPin{ "enabled", ScriptValueType::Bool, true } };
+    setDebugDrawDesc.signature.outputs = {};
+    setDebugDrawDesc.callback = &SetDebugDrawEnabled;
+    ok = host.RegisterFunction(std::move(setDebugDrawDesc)) && ok;
+
+    ScriptFunctionDesc isDebugDrawDesc;
+    isDebugDrawDesc.signature.name = "Physics.IsDebugDrawEnabled";
+    isDebugDrawDesc.signature.inputs = {};
+    isDebugDrawDesc.signature.outputs = { ScriptFunctionPin{ "enabled", ScriptValueType::Bool, true } };
+    isDebugDrawDesc.callback = &IsDebugDrawEnabled;
+    ok = host.RegisterFunction(std::move(isDebugDrawDesc)) && ok;
 
     return ok;
 }

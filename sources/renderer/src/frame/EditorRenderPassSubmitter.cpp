@@ -209,6 +209,7 @@ void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& vie
             .draggedAxis = desc.editorGizmo.draggedAxis,
             .mode = desc.editorGizmo.mode,
             .lightWireframes = desc.editorLightWireframes,
+            .physicsDebugLines = desc.physicsDebugLines,
             .visible = desc.editorGizmo.visible,
         }));
         return;

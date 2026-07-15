@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/overlay/EditorLightWireframe.hpp"
+#include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
@@ -25,6 +26,7 @@ struct SceneGizmoPassDesc {
     int draggedAxis = -1;
     std::uint8_t mode = 0U;
     std::span<const EditorLightWireframeDesc> lightWireframes{};
+    std::span<const PhysicsDebugLine> physicsDebugLines{};
     bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;

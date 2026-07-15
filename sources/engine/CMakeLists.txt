@@ -134,6 +134,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
     include/engine/scene/PhysicsBackend.hpp
+    include/engine/scene/PhysicsDebugDraw.hpp
     include/engine/scene/PhysicsLayersAsset.hpp
     include/engine/scene/PhysicsLayersAssetIO.hpp
     include/engine/scene/PhysicsLayersAssetLoader.hpp
@@ -400,6 +401,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/PhysicsBackend.cpp
+    src/scene/PhysicsDebugDraw.cpp
     src/scene/PhysicsGeometryQueries.cpp
     src/scene/PhysicsLayersAssetIO.cpp
     src/scene/PhysicsLayersAssetLoader.cpp

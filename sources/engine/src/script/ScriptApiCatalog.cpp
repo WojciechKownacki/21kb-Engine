@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 64> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 66> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -77,6 +77,8 @@ constexpr std::array<LuaBindingSpec, 64> kLuaBindings{ {
     { "Physics", "CharacterIsGrounded", "Physics.CharacterIsGrounded", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "CharacterGroundNormal", "Physics.CharacterGroundNormal", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "CharacterGroundVelocity", "Physics.CharacterGroundVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "SetDebugDrawEnabled", "Physics.SetDebugDrawEnabled", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "IsDebugDrawEnabled", "Physics.IsDebugDrawEnabled", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "IsPressed", "Input.IsPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasPressed", "Input.WasPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "WasReleased", "Input.WasReleased", ScriptApiCatalogLuaReturnKind::Default, "" },
