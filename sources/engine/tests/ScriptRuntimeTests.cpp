@@ -2326,6 +2326,15 @@ void RunScriptWorldTimePhysicsApiTest() {
     kb::tests::Require(ray.Output("entity").has_value() && ray.Output("entity")->AsUInt64() == floor.Entity().Id(), "Physics.Raycast direct call hit the wrong entity");
     kb::tests::Require(ray.Output("distance").has_value() && kb::tests::NearlyEqual(ray.Output("distance")->AsFloat(), 4.5F), "Physics.Raycast direct call returned the wrong distance");
 
+    // LIB-125: "z warstwa maski" in the plan's bullet qualifies Raycast too,
+    // not just the sphere/box/capsule cast/overlap/closest-point queries -
+    // an explicit layerMask=0 must suppress every hit, including a collider
+    // (the floor) whose own layer defaults to kPhysicsAllLayers.
+    std::vector<kb::script::ScriptFunctionArgument> maskedOutRayArgs = rayArgs;
+    maskedOutRayArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0 } });
+    const kb::script::ScriptFunctionCallResult maskedOutRay = host.Functions().Call("Physics.Raycast", maskedOutRayArgs, context);
+    kb::tests::Require(maskedOutRay.Succeeded() && !maskedOutRay.Output("hit")->AsBool(), "Physics.Raycast with layerMask=0 must not hit any collider, including the floor");
+
     const std::vector<kb::script::ScriptFunctionArgument> prefabArgs{
         kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
         kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ -2.0F } },
@@ -2367,6 +2376,7 @@ function Tick(self, dt)
         directionX = 0.0, directionY = -1.0, directionZ = 0.0,
         distance = 10.0
     })
+    local maskedOutHit = Physics.Raycast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0)
     local prefabRoot = World.InstantiatePrefab({ prefab = "/Game/Prefabs/RuntimePrefab.kbprefab", x = 9.0, y = 10.0, z = 11.0 })
     SetShared("world.entity", entity)
     SetShared("world.found", found)
@@ -2387,6 +2397,7 @@ function Tick(self, dt)
     SetShared("world.raycastHit", hit.hit)
     SetShared("world.raycastEntity", hit.entity)
     SetShared("world.raycastDistance", hit.distance)
+    SetShared("world.raycastMaskedOutHit", maskedOutHit.hit)
     SetShared("world.prefabRoot", prefabRoot)
     SetShared("time.delta", Time.delta())
 end
@@ -2417,6 +2428,7 @@ end
     kb::tests::Require(host.SharedState().Get("world.raycastHit")->AsBool(), "Lua Physics.Raycast did not hit the test floor");
     kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("world.raycastEntity")->AsInt()) == floor.Entity().Id(), "Lua Physics.Raycast hit the wrong entity");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("world.raycastDistance")->AsFloat(), 4.5F), "Lua Physics.Raycast returned the wrong distance");
+    kb::tests::Require(!host.SharedState().Get("world.raycastMaskedOutHit")->AsBool(), "Lua Physics.Raycast (positional form) with layerMask=0 must not hit any collider");
     const kb::scene::SceneEntity luaPrefabRoot{ static_cast<std::uint64_t>(host.SharedState().Get("world.prefabRoot")->AsInt()) };
     kb::tests::Require(luaPrefabRoot.IsValid() && scene.Entities().Name(luaPrefabRoot) == "Prefab Root", "Lua World.InstantiatePrefab returned the wrong root entity");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.x, 9.0F)
