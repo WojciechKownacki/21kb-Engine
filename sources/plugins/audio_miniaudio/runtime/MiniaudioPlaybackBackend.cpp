@@ -27,6 +27,9 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
         voicePool_.StopAll();
     }
     sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, busRegistry_, engine_.IsPlaybackAvailable());
+    // LIB-149: owner-attached voices follow their owner's transform and die with it -
+    // BEFORE the finished sweep, so an owner-released voice never lingers a frame.
+    voicePool_.SyncAttachedVoices(context.GetScene());
     voicePool_.RemoveFinishedVoices();
 }
 

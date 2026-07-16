@@ -54,6 +54,8 @@ public:
     void SetVolume(float volume) noexcept;
     void SetPitch(float pitch) noexcept;
     void SetLooping(bool loop) noexcept;
+    // LIB-149: per-tick position update for owner-attached voices.
+    void SetPosition(const kb::scene::Vec3& position) noexcept;
 
 private:
     ma_sound sound_{};

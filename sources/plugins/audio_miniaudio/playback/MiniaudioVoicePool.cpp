@@ -1,6 +1,9 @@
 #include "playback/MiniaudioVoicePool.hpp"
 
 #include "assets/MiniaudioClipResolver.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "runtime/MiniaudioSound.hpp"
 
 #include <algorithm>
@@ -55,9 +58,31 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .clipAssetId = desc.clipAssetId,
         .looping = desc.loop,
         .priority = desc.priority,
+        .ownerEntityId = desc.ownerEntityId,
         .sound = std::move(sound),
     });
     return kb::audio::AudioPlayResult{ .started = true, .voiceId = voiceId, .error = {} };
+}
+
+void MiniaudioVoicePool::SyncAttachedVoices(kb::scene::Scene& scene) {
+    for (auto iter = voices_.begin(); iter != voices_.end();) {
+        if (iter->ownerEntityId == 0U) {
+            ++iter;
+            continue;
+        }
+        const kb::scene::SceneEntity owner{ iter->ownerEntityId };
+        // The canonical owner-gone poll (ScriptEventBus/SceneTimerService convention) -
+        // destroying the record stops the ma_sound and releases the source immediately,
+        // looping/paused voices included.
+        if (!scene.Entities().IsAlive(owner) || !scene.Entities().IsActive(owner)) {
+            iter = voices_.erase(iter);
+            continue;
+        }
+        if (iter->sound != nullptr) {
+            iter->sound->SetPosition(scene.Transforms().Get(owner).worldPosition);
+        }
+        ++iter;
+    }
 }
 
 bool MiniaudioVoicePool::StopVoice(std::uint64_t voiceId) noexcept {
