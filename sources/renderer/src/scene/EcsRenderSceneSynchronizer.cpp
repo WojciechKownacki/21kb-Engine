@@ -4,6 +4,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
@@ -145,6 +146,21 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
     static_cast<void>(transform);
 }
 
+// LIB-139: a runtime MaterialInstance handle wins over the authored
+// materialAssetId. Resolved here (once per sync, kb::scene-side) rather than
+// inside kb::render's resource resolution, so kb::render never needs to know
+// runtime instances exist at all - by the time MeshRenderProxyDesc is built,
+// materialAssetId is either the real parent asset id or 0, exactly the same
+// shape RuntimeMaterialResourceEnsurer already handles for an
+// authored-but-unresolvable materialAssetId (honest no-material, no crash,
+// no silent fallback to the stale/released instance's old parent).
+[[nodiscard]] std::uint64_t ResolveMaterialAssetId(const kb::scene::Scene& scene, const kb::scene::MeshRendererComponent& renderer) noexcept {
+    if (renderer.materialInstanceHandle == 0U) {
+        return renderer.materialAssetId;
+    }
+    return scene.MaterialInstances().Parent(renderer.materialInstanceHandle);
+}
+
 void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
@@ -154,7 +170,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
-        .materialAssetId = renderer.materialAssetId,
+        .materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer),
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),

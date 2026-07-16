@@ -6,6 +6,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
@@ -80,6 +81,14 @@ SceneTimers Scene::Timers() noexcept {
 
 SceneTasks Scene::Tasks() noexcept {
     return SceneTasks{ *this };
+}
+
+SceneMaterialInstances Scene::MaterialInstances() noexcept {
+    return SceneMaterialInstances{ *this };
+}
+
+SceneMaterialInstanceQueries Scene::MaterialInstances() const noexcept {
+    return SceneMaterialInstanceQueries{ *this };
 }
 
 } // namespace kb::scene
