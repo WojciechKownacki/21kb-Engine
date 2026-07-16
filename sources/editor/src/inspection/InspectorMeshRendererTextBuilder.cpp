@@ -10,12 +10,13 @@ void InspectorMeshRendererTextBuilder::Append(std::string& text, const kb::scene
     std::snprintf(
         component,
         sizeof(component),
-        "\n\nMesh Renderer\nMesh: %llu\nMaterial: %llu\nMaterial slot overrides: %u\nCasts shadow: %s\nReceives shadow: %s",
+        "\n\nMesh Renderer\nMesh: %llu\nMaterial: %llu\nMaterial slot overrides: %u\nCasts shadow: %s\nReceives shadow: %s\nLayer: %u",
         static_cast<unsigned long long>(renderer.meshAssetId),
         static_cast<unsigned long long>(renderer.materialAssetId),
         renderer.materialSlotOverrideCount,
         renderer.castsShadow ? "true" : "false",
-        renderer.receivesShadow ? "true" : "false");
+        renderer.receivesShadow ? "true" : "false",
+        renderer.layer);
     text += component;
     for (std::uint32_t slotIndex = 0U; slotIndex < renderer.materialSlotOverrideCount && slotIndex < kb::scene::kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
         text += "\nMaterial slot ";

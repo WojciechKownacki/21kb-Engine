@@ -3,8 +3,13 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
+#include "engine/script/ScriptMeshRendererApi.hpp"
+#include "engine/script/ScriptParticleSystemApi.hpp"
+#include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
+#include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
 #include "engine/script/ScriptTaskApi.hpp"
@@ -115,6 +120,64 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Scene",
             .ownerRuntime = "kb::scene::SceneLoadedContentService",
             .Register = &kb::script::ScriptSceneApi::Register,
+        },
+        // LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are raw
+        // uint64 asset ids, deliberately excluded from the generic ScriptSceneComponentApi
+        // reflection table (LIB-082's raw-pointer audit keeps that path to {Bool,Int,Float}
+        // only), so assignment needs a dedicated, asset-registry-validated function - mirrors
+        // Audio.Play's exact resolve-by-id-or-path-then-type-check pattern.
+        LibraryModuleDesc{
+            .name = "MeshRenderer",
+            .ownerRuntime = "kb::scene::SceneMeshRendererComponents",
+            .Register = &kb::script::ScriptMeshRendererApi::Register,
+        },
+        // LIB-139/LIB-140: MaterialInstance.Create/Release/Exists/Parent/SetParameterScalar/
+        // SetParameterBool/ClearParameter - a scene-owned, explicit-lifetime handle table plus
+        // per-parameter overrides (kb::scene::SceneMaterialInstances), NOT a GPU resource
+        // itself (see ScriptMaterialInstanceApi.hpp's doc comment) - the raw handle passes
+        // through unresolved at ECS-sync time (EcsRenderSceneSynchronizer::SyncMesh) and is
+        // resolved (parent + live overrides) at render-resolution time instead
+        // (RuntimeMaterialResourceEnsurer's material-instance path).
+        LibraryModuleDesc{
+            .name = "MaterialInstance",
+            .ownerRuntime = "kb::scene::SceneMaterialInstances",
+            .Register = &kb::script::ScriptMaterialInstanceApi::Register,
+        },
+        // LIB-142: PostProcess.SetProfile/ClearProfile/ActiveProfile - a scene-global,
+        // asset-based, serializable post-process parameter set (kb::scene::
+        // ScenePostProcessAccess), NOT a live per-field API - see ScriptPostProcessApi.hpp's
+        // doc comment for why this deliberately mirrors MeshRenderer.SetMaterial instead of
+        // the generic per-field reflection Light/Camera/MeshRenderer's own fields use.
+        LibraryModuleDesc{
+            .name = "PostProcess",
+            .ownerRuntime = "kb::scene::ScenePostProcessAccess",
+            .Register = &kb::script::ScriptPostProcessApi::Register,
+        },
+        // LIB-143: Particles.Create/Release/Exists/Play/Stop/IsPlaying/SetSeed/
+        // SetParameterScalar/ClearParameter/Emit/LiveCount - a scene-owned particle system
+        // instance (kb::scene::SceneParticleSystems) simulated entirely in kb::scene
+        // (position/velocity/age/lifetime, no GPU/kb::render dependency); kb::render's own
+        // SceneParticleRenderSynchronizer reads the SAME instance table read-only each frame
+        // to submit real, GPU-instanced billboard quads through the existing mesh pipeline -
+        // see ScriptParticleSystemApi.hpp's doc comment for the "event" verb's Emit mapping.
+        LibraryModuleDesc{
+            .name = "Particles",
+            .ownerRuntime = "kb::scene::SceneParticleSystems",
+            .Register = &kb::script::ScriptParticleSystemApi::Register,
+        },
+        // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame - reads the CPU-side
+        // per-entity visibility/bounds feedback frame (kb::scene::SceneRenderFeedback) the
+        // renderer publishes into the scene at every SubmitScene, computed with the exact
+        // same frustum/bounds math the mesh pipeline culls with - one-frame latency, zero
+        // GPU occlusion queries/readbacks/fences (see ScriptRendererApi.hpp's doc comment).
+        // LIB-145 adds WorldToScreen/ScreenPointToRay/ScreenToWorld (CPU conversions
+        // through the same published camera - ray outputs feed Physics.Raycast's pins
+        // directly) and CaptureScreen/CaptureStatus (async PNG capture through the
+        // frame-gated, never-stalling readback pattern the auto-exposure meter uses).
+        LibraryModuleDesc{
+            .name = "Renderer",
+            .ownerRuntime = "kb::scene::SceneRenderFeedback",
+            .Register = &kb::script::ScriptRendererApi::Register,
         },
     };
     return kCatalog;

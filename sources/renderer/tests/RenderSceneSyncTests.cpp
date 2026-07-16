@@ -1,31 +1,46 @@
 #include "RendererTestSupport.hpp"
 
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
+#include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "scene/RenderSceneProxyConverters.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "kb/render/scene/RenderBridgeTelemetry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
+#include "scene/lighting/SceneForwardLightSelector.hpp"
+#include "scene/SceneLightColor.hpp"
+#include "scene/SceneRenderVisibilityPublisher.hpp"
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <span>
+#include <system_error>
 #include <vector>
 
 namespace kb::render::tests {
@@ -85,6 +100,142 @@ void RunCreatesStableRenderProxiesTest() {
     Require(snapshot.meshes[0].entityId == mesh.Id(), "RenderScene snapshot mesh entity id does not match ECS");
 }
 
+// LIB-135: proves CameraRenderProxyDesc::viewportId/priority actually change which camera
+// RenderScene::BuildPrimaryCamera picks, not just that the fields exist and compile. Also
+// proves the tie-break (highest priority, then lowest entityId) is deterministic - it used to
+// be "first match in unordered_map iteration order", i.e. undefined between two primary
+// cameras.
+void RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest() {
+    RenderScene renderScene;
+
+    // Camera A: viewportId=0 ("any viewport"), low priority - only candidate for viewport 0,
+    // and the lowest-priority fallback candidate for every other viewport.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 1U,
+        .verticalFovDegrees = 30.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 0U,
+        .priority = 0,
+    }));
+    // Camera B: targets viewport 5 specifically, mid priority.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 2U,
+        .verticalFovDegrees = 50.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 5U,
+        .priority = 10,
+    }));
+    // Camera C: also targets viewport 5, highest priority - must win over B on viewport 5.
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 3U,
+        .verticalFovDegrees = 70.0F,
+        .primary = true,
+        .visible = true,
+        .viewportId = 5U,
+        .priority = 20,
+    }));
+
+    const std::optional<SceneRenderCamera> forDefaultViewport = renderScene.BuildPrimaryCamera(1280U, 720U, 0U);
+    Require(forDefaultViewport.has_value(), "RenderScene did not select a camera for the default (0) viewport");
+    const SceneRenderCamera expectedForDefaultViewport = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 30.0F, .primary = true, .visible = true, .viewportId = 0U, .priority = 0 }, 1280U, 720U);
+    Require(forDefaultViewport->projection == expectedForDefaultViewport.projection, "RenderScene BuildPrimaryCamera(viewport=0) did not select the only viewport-0 camera (A)");
+
+    const std::optional<SceneRenderCamera> forViewportFive = renderScene.BuildPrimaryCamera(1280U, 720U, 5U);
+    Require(forViewportFive.has_value(), "RenderScene did not select a camera for viewport 5");
+    const SceneRenderCamera expectedForViewportFive = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 70.0F, .primary = true, .visible = true, .viewportId = 5U, .priority = 20 }, 1280U, 720U);
+    Require(forViewportFive->projection == expectedForViewportFive.projection, "RenderScene BuildPrimaryCamera(viewport=5) did not select the higher-priority camera (C) over the lower-priority one (B) targeting the same viewport");
+
+    const std::optional<SceneRenderCamera> forUnrelatedViewport = renderScene.BuildPrimaryCamera(1280U, 720U, 99U);
+    Require(forUnrelatedViewport.has_value(), "RenderScene did not fall back to the any-viewport camera for a viewport nothing specifically targets");
+    Require(forUnrelatedViewport->projection == expectedForDefaultViewport.projection, "RenderScene BuildPrimaryCamera(viewport=99) did not fall back to the viewport-0 (any-viewport) camera (A)");
+
+    // Deterministic tie-break: two cameras, same priority, both targeting viewport 0 - the
+    // lower entityId must consistently win, proving selection no longer depends on
+    // unordered_map iteration order.
+    RenderScene tieBreakScene;
+    static_cast<void>(tieBreakScene.UpsertCamera(CameraRenderProxyDesc{ .entityId = 200U, .verticalFovDegrees = 40.0F, .primary = true, .visible = true }));
+    static_cast<void>(tieBreakScene.UpsertCamera(CameraRenderProxyDesc{ .entityId = 100U, .verticalFovDegrees = 90.0F, .primary = true, .visible = true }));
+    const std::optional<SceneRenderCamera> tieBreakResult = tieBreakScene.BuildPrimaryCamera(1280U, 720U, 0U);
+    Require(tieBreakResult.has_value(), "RenderScene tie-break scenario did not select a camera");
+    const SceneRenderCamera expectedTieBreakWinner = RenderSceneCameraBuilder::Build(CameraRenderProxyDesc{ .verticalFovDegrees = 90.0F, .primary = true, .visible = true }, 1280U, 720U);
+    Require(tieBreakResult->projection == expectedTieBreakWinner.projection, "RenderScene BuildPrimaryCamera priority tie-break did not deterministically pick the lowest entityId");
+}
+
+// LIB-136: proves EcsRenderSceneSynchronizer actually copies the new CameraComponent
+// cullingMask/clearMode/clearColor and MeshRendererComponent layer fields into the renderer
+// proxies - not just that the fields exist on both sides and compile.
+void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Camera" });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
+        .primary = true,
+        .cullingMask = 0x00000006U,
+        .clearMode = kb::scene::CameraClearMode::DepthOnly,
+        .clearColor = kb::scene::Vec3{ 0.25F, 0.5F, 0.75F },
+    });
+
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = 5U,
+        .materialAssetId = 9U,
+        .layer = 0x00000004U,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+
+    const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(camera.Id());
+    Require(cameraProxy != nullptr, "RenderScene did not create a camera proxy");
+    Require(cameraProxy->desc.cullingMask == 0x00000006U, "EcsRenderSceneSynchronizer did not propagate CameraComponent::cullingMask");
+    Require(cameraProxy->desc.clearMode == RenderCameraClearMode::DepthOnly, "EcsRenderSceneSynchronizer did not propagate CameraComponent::clearMode");
+    Require(NearlyEqual(cameraProxy->desc.clearColor[0], 0.25F) && NearlyEqual(cameraProxy->desc.clearColor[1], 0.5F) && NearlyEqual(cameraProxy->desc.clearColor[2], 0.75F),
+        "EcsRenderSceneSynchronizer did not propagate CameraComponent::clearColor");
+
+    const MeshRenderProxy* meshProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(meshProxy != nullptr, "RenderScene did not create a mesh proxy");
+    Require(meshProxy->desc.layer == 0x00000004U, "EcsRenderSceneSynchronizer did not propagate MeshRendererComponent::layer");
+
+    const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
+    Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
+    Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
+// LIB-139/LIB-140: proves EcsRenderSceneSynchronizer::SyncMesh actually resolves a live
+// materialInstanceHandle - winning over the authored materialAssetId - and honestly falls
+// back to "no material" (0) once the instance is Release()d - not a crash, not silently
+// keeping the stale parent. Since LIB-140, the proxy carries the RAW instance handle
+// (unresolved), not the parent asset id - see EcsRenderSceneSynchronizer.cpp's
+// ResolveMaterialAssetId doc comment for why (RuntimeMaterialResourceEnsurer needs the raw
+// handle to recognize + resolve parameter overrides).
+void RunEcsSyncResolvesMaterialInstanceHandleTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Instanced Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = 5U,
+        .materialAssetId = 42U,
+    });
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(777U);
+    Require(instance != 0U, "RenderScene sync test setup failed to create a material instance");
+    scene.Components().MeshRenderers().TryGet(mesh)->materialInstanceHandle = instance;
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* liveProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(liveProxy != nullptr && liveProxy->desc.materialAssetId == instance,
+        "EcsRenderSceneSynchronizer did not pass through the live materialInstanceHandle unresolved (must win over the authored materialAssetId)");
+    Require(scene.MaterialInstances().Parent(instance) == 777U,
+        "RenderScene sync test setup's instance did not resolve to its parent material asset id via SceneMaterialInstances().Parent");
+
+    Require(scene.MaterialInstances().Release(instance), "RenderScene sync test setup failed to release the material instance");
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* afterReleaseProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(afterReleaseProxy != nullptr && afterReleaseProxy->desc.materialAssetId == 0U,
+        "EcsRenderSceneSynchronizer must honestly resolve a released materialInstanceHandle to 0 (no material), not silently keep the stale parent or fall back to materialAssetId");
+}
+
 void RunRenderSceneSyncsLightPipelineFieldsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -104,6 +255,7 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
         .contactShadowLength = 0.25F,
         .volumetricScattering = 0.4F,
         .castsShadow = false,
+        .layerMask = 3U,
     });
 
     RenderScene renderScene;
@@ -113,13 +265,14 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
     Require(proxy != nullptr && proxy->id.IsValid(), "RenderScene did not create a light proxy for ECS light");
     Require(proxy->desc.kind == RenderLightKind::Spot, "RenderScene did not preserve ECS light kind");
     Require(NearlyEqual(proxy->desc.position[0], 2.0F) && NearlyEqual(proxy->desc.position[1], 3.0F) && NearlyEqual(proxy->desc.position[2], 4.0F), "RenderScene did not preserve ECS light position");
-    Require(NearlyEqual(proxy->desc.color[0], 0.7F) && NearlyEqual(proxy->desc.color[1], 0.8F) && NearlyEqual(proxy->desc.color[2], 0.9F), "RenderScene did not preserve ECS light color");
+    Require(NearlyEqual(proxy->desc.color[0], 0.7F) && NearlyEqual(proxy->desc.color[1], 0.8F) && NearlyEqual(proxy->desc.color[2], 0.9F), "RenderScene did not preserve ECS light color when useColorTemperature is false");
     Require(NearlyEqual(proxy->desc.intensity, 6.0F), "RenderScene did not preserve ECS light intensity");
     Require(NearlyEqual(proxy->desc.range, 25.0F), "RenderScene did not preserve ECS light range");
     Require(NearlyEqual(proxy->desc.areaWidth, 3.0F) && NearlyEqual(proxy->desc.areaHeight, 1.5F), "RenderScene did not preserve ECS light area size");
     Require(NearlyEqual(proxy->desc.contactShadowLength, 0.25F), "RenderScene did not preserve ECS light contact shadow length");
     Require(NearlyEqual(proxy->desc.volumetricScattering, 0.4F), "RenderScene did not preserve ECS light volumetric scattering");
     Require(!proxy->desc.castsShadow, "RenderScene did not preserve ECS light shadow flag");
+    Require(proxy->desc.layer == 3U, "RenderScene did not preserve ECS light layerMask");
 
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
@@ -153,6 +306,38 @@ void RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest() {
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
     Require(snapshot.lights.empty(), "RenderScene snapshot exposed lights while Basic Lighting provider was inactive");
+}
+
+// LIB-141: proves EcsRenderSceneSynchronizer::SyncLight actually calls
+// SceneLightColor::Resolve when building the proxy (integration wiring) - not just that the
+// pure math itself is correct (already proven in isolation by
+// RunSceneLightColorResolvesTemperatureTest). A single-light scene keeps this independent
+// of RunRenderSceneSyncsLightPipelineFieldsTest's own byte-for-byte color pass-through
+// assertion (useColorTemperature=false), which proves the opposite direction: zero behavior
+// change for existing (non-temperature) content.
+void RunRenderSceneSyncResolvesLightColorTemperatureTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Temperature Light",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .color = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+        .intensity = 1.0F,
+        .range = 5.0F,
+        .useColorTemperature = true,
+        .colorTemperatureKelvin = 1000.0F,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+
+    const LightRenderProxy* proxy = renderScene.FindLightByEntity(light.Id());
+    Require(proxy != nullptr, "RenderScene did not create a light proxy for the color-temperature ECS light");
+    Require(proxy->desc.color[2] < proxy->desc.color[0] * 0.5F,
+        "EcsRenderSceneSynchronizer::SyncLight must actually resolve useColorTemperature into the proxy's color, not pass the raw authored color through");
 }
 
 void RunTracksUpdatesWithoutReplacingProxyTest() {
@@ -1190,6 +1375,83 @@ void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
     Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
 }
 
+// LIB-141: proves SceneForwardLightSelector::Select filters lights by the light-side
+// layer bitmask against the camera's cullingMask - the light-side mirror of
+// MeshPipelinePassPolicy's mesh-vs-camera cullingMask filtering (LIB-136). A masked-out
+// light must not be selected (it never reaches the camera's forward lighting), but must
+// also not count toward validLightCount (it was never a candidate for THIS camera), and a
+// default (all-bits) cullingMask must keep selecting every layer, matching pre-LIB-141
+// behavior.
+void RunSceneForwardLightSelectorAppliesLayerMaskTest() {
+    RenderScene scene;
+    const RenderProxyId layerOneLight = scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 1U,
+        .kind = RenderLightKind::Point,
+        .position = { 0.0F, 0.0F, 0.0F },
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 2.0F,
+        .range = 10.0F,
+        .visible = true,
+        .layer = 1U,
+    });
+    const RenderProxyId layerTwoLight = scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 2U,
+        .kind = RenderLightKind::Point,
+        .position = { 0.0F, 0.0F, 0.0F },
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 2.0F,
+        .range = 10.0F,
+        .visible = true,
+        .layer = 2U,
+    });
+    Require(layerOneLight.IsValid() && layerTwoLight.IsValid(), "Light layer mask test setup failed to create both lights");
+
+    SceneRenderSubmitStats restrictedStats{};
+    const SceneForwardLightSelection restricted = SceneForwardLightSelector::Select(
+        scene.LightProxies(), 8U, { 0.0F, 0.0F, 0.0F, 0.0F }, restrictedStats, SceneRenderLightingConfig{}, 0x1U);
+    Require(restricted.selectedCount == 1U, "A camera cullingMask of 0x1 must select exactly the layer-1 light, not both");
+    Require(restricted.selected[0].light != nullptr && restricted.selected[0].light->kind == RenderLightKind::Point &&
+            restricted.selected[0].entityId == 1U,
+        "A camera cullingMask of 0x1 must select the layer-1 light specifically, not the layer-2 one");
+    Require(restricted.validLightCount == 1U, "A layer-masked-out light must not count toward validLightCount for this camera");
+
+    SceneRenderSubmitStats unrestrictedStats{};
+    const SceneForwardLightSelection unrestricted = SceneForwardLightSelector::Select(
+        scene.LightProxies(), 8U, { 0.0F, 0.0F, 0.0F, 0.0F }, unrestrictedStats, SceneRenderLightingConfig{}, 0xFFFFFFFFU);
+    Require(unrestricted.selectedCount == 2U, "A default (all-bits) camera cullingMask must keep selecting every light layer, matching pre-LIB-141 behavior");
+}
+
+// LIB-141: proves SceneLightColor::Resolve leaves `color` untouched when
+// useColorTemperature is false (the default - existing content sees zero behavior change),
+// and actually tints `color` by a blackbody-radiator RGB when enabled - a very warm (1000K,
+// heavily red-shifted) temperature must reduce the blue channel well below the red channel,
+// proving the Kelvin value genuinely drives the result rather than being accepted-but-ignored.
+void RunSceneLightColorResolvesTemperatureTest() {
+    kb::scene::LightComponent plain;
+    plain.color = { 0.5F, 0.6F, 0.7F };
+    plain.useColorTemperature = false;
+    plain.colorTemperatureKelvin = 1000.0F;
+    const std::array<float, 3> plainResolved = SceneLightColor::Resolve(plain);
+    Require(NearlyEqual(plainResolved[0], 0.5F) && NearlyEqual(plainResolved[1], 0.6F) && NearlyEqual(plainResolved[2], 0.7F),
+        "SceneLightColor::Resolve must leave color untouched when useColorTemperature is false");
+
+    kb::scene::LightComponent warm;
+    warm.color = { 1.0F, 1.0F, 1.0F };
+    warm.useColorTemperature = true;
+    warm.colorTemperatureKelvin = 1000.0F;
+    const std::array<float, 3> warmResolved = SceneLightColor::Resolve(warm);
+    Require(warmResolved[2] < warmResolved[0] * 0.5F,
+        "SceneLightColor::Resolve must tint a very warm (1000K) light toward red - blue channel must be well below red");
+
+    kb::scene::LightComponent daylight;
+    daylight.color = { 1.0F, 1.0F, 1.0F };
+    daylight.useColorTemperature = true;
+    daylight.colorTemperatureKelvin = 6500.0F;
+    const std::array<float, 3> daylightResolved = SceneLightColor::Resolve(daylight);
+    Require(daylightResolved[0] > 0.9F && daylightResolved[1] > 0.9F && daylightResolved[2] > 0.9F,
+        "SceneLightColor::Resolve must render the default 6500K daylight temperature as close to neutral white");
+}
+
 void RunRendererStoresDefaultPostProcessSettingsTest() {
     Renderer renderer;
     Require(renderer.ConfigurePostProcessChain(PostProcessChain::DefaultSceneChainDesc()), "Renderer rejected default post-process chain before setting bloom options");
@@ -1887,12 +2149,176 @@ void RunSyncFallsBackToResolveForDirtyTransformTest() {
     Require(stats.transformResolvedFallbackCount >= 1U, "Render bridge did not fall back to resolve for a dirty transform");
 }
 
+// LIB-143: proves SceneParticleRenderSynchronizer actually produces real, GPU-visible
+// MeshRenderProxy entries for live particles (mesh/material/shadow flags correct) and
+// correctly removes stale proxy slots both when particles die naturally (count shrinks) and
+// when the whole instance is released (owner destroyed) - the exact two cleanup paths the
+// class's own doc comment calls out as necessary because synthetic particle proxy ids are not
+// real ECS entities.
+void RunSceneParticleRenderSynchronizerTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_sync_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
+    Require(!resetError, "LIB-143 particle render sync test project root could not be prepared");
+
+    kb::scene::ParticleEffectAsset effect{};
+    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 535353U });
+    effect.looping = true;
+    effect.emissionRatePerSecond = 1000.0F;
+    effect.startSpeedMin = 0.0F;
+    effect.startSpeedMax = 0.0F;
+    effect.startLifetimeMin = 0.05F;
+    effect.startLifetimeMax = 0.05F;
+    effect.spreadDegrees = 0.0F;
+    effect.gravityScale = 0.0F;
+    effect.maxParticles = 4U;
+    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "Sync.kbvfx";
+    Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "LIB-143 particle render sync test effect asset must write to disk");
+
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(root), "LIB-143 particle render sync test project mount failed");
+    Require(scene.Assets().Discover() == 1U, "LIB-143 particle render sync test did not discover exactly the effect asset");
+    const kb::assets::AssetMetadata* effectMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Fx/Sync.kbvfx");
+    Require(effectMetadata != nullptr, "LIB-143 particle render sync test discovered wrong effect metadata");
+    const std::uint64_t effectAssetId = effectMetadata->id.value;
+
+    // Registered AFTER Discover() - see ScriptRuntimeTests.cpp's own note on why a synthetic,
+    // file-less asset would otherwise be swept away by DiscoverMountedAssets' cleanup pass.
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 535353U },
+                .type = "RenderMaterial",
+                .name = "FakeParticleSyncMaterial",
+                .virtualPath = "/Game/FakeParticleSyncMaterial.kbmat",
+                .physicalPath = "FakeParticleSyncMaterial.kbmat",
+                .contentHash = 1U,
+            }),
+        "LIB-143 particle render sync test fake material registration failed");
+
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "ParticleSyncOwner",
+        .transform = LocalOnlyTransformAt(2.0F, 0.0F, 0.0F),
+    });
+    Require(owner.IsValid(), "LIB-143 particle render sync test owner entity creation failed");
+    scene.Runtime().SynchronizeTransforms();
+
+    const std::uint64_t instance = scene.Particles().Create(effectAssetId, owner);
+    Require(instance != 0U, "LIB-143 particle render sync test instance creation failed");
+    Require(scene.Particles().Play(instance), "LIB-143 particle render sync test Play failed");
+    scene.Particles().Advance(0.01F);
+    scene.Particles().Advance(0.01F);
+    const std::uint32_t liveAfterSpawn = scene.Particles().LiveParticleCount(instance);
+    Require(liveAfterSpawn > 0U && liveAfterSpawn <= 4U, "LIB-143 particle render sync test did not spawn any particles to sync");
+
+    RenderScene renderScene;
+    SceneParticleRenderSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene, 0U);
+
+    const kb::assets::AssetId quadMeshAssetId = BuiltInParticleQuadMeshAssetId();
+    std::uint32_t particleProxyCount = 0U;
+    for (const auto& [proxyId, proxy] : renderScene.MeshProxies()) {
+        if (proxy.desc.meshAssetId != quadMeshAssetId.value) {
+            continue;
+        }
+        ++particleProxyCount;
+        Require(proxy.desc.materialAssetId == 535353U, "SceneParticleRenderSynchronizer must submit the instance's resolved material asset id");
+        Require(!proxy.desc.castsShadow, "SceneParticleRenderSynchronizer must submit particle billboards as non-shadow-casting");
+        Require(proxy.desc.receivesShadow, "SceneParticleRenderSynchronizer must submit particle billboards as shadow-receiving");
+        Require(proxy.desc.visible, "SceneParticleRenderSynchronizer must submit particle billboards as visible");
+    }
+    Require(particleProxyCount == liveAfterSpawn, "SceneParticleRenderSynchronizer must submit exactly one mesh proxy per live particle");
+    Require(renderScene.MeshProxyCount() == liveAfterSpawn, "SceneParticleRenderSynchronizer must not leave any unrelated mesh proxies behind");
+
+    // Stop first (halts new emission only, per SceneParticleSystems::Stop's own contract) -
+    // otherwise emissionRatePerSecond=1000 would keep replacing dying particles with new
+    // ones and LiveParticleCount would never reach 0. All particles' lifetime is 0.05s, so
+    // advancing well past that kills the already-live batch (count shrinks to 0 while the
+    // instance itself stays alive), proving the "currentCount < previousCount" stale-slot
+    // cleanup path.
+    Require(scene.Particles().Stop(instance), "LIB-143 particle render sync test Stop failed");
+    scene.Particles().Advance(0.2F);
+    Require(scene.Particles().LiveParticleCount(instance) == 0U, "LIB-143 particle render sync test particles did not die as expected");
+    synchronizer.Sync(scene, renderScene, 0U);
+    Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove stale proxy slots once particles die");
+
+    // Re-spawn, sync once so proxies exist again, then release the whole instance via owner
+    // destruction - proving the OTHER cleanup path (an instance disappearing between frames
+    // entirely, not just shrinking).
+    Require(scene.Particles().Emit(instance, 2U), "LIB-143 particle render sync test re-emit failed");
+    Require(scene.Particles().LiveParticleCount(instance) == 2U, "LIB-143 particle render sync test re-emit did not spawn the requested count");
+    synchronizer.Sync(scene, renderScene, 0U);
+    Require(renderScene.MeshProxyCount() == 2U, "LIB-143 particle render sync test re-emitted particles were not synced");
+
+    scene.Entities().Destroy(owner);
+    scene.Particles().Advance(0.01F);
+    Require(!scene.Particles().Exists(instance), "LIB-143 particle render sync test instance did not auto-release with its owner");
+    synchronizer.Sync(scene, renderScene, 0U);
+    Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove all proxy slots for an instance released since last frame");
+}
+
+// LIB-144: SceneRenderVisibilityPublisher's frame construction against a hand-built
+// RenderScene - no Scene, no bgfx, no resources needed. Proves: deterministic
+// entityId-sorted entries regardless of proxy-map iteration order, synthetic particle
+// proxies skipped, the VisibilityComponent flag and the camera cullingMask both reflected
+// in `visible`, the "no camera = invalid frustum = nothing culled" rule, and the
+// "unresolvable mesh = invalid bounds = never frustum-culled" rule (real bounds resolution
+// and real frustum culling are proven end-to-end through Renderer::SubmitScene in
+// RendererRuntimeSubmitTests' RunRendererPublishesSceneVisibilityFeedbackTest).
+void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
+    RenderScene renderScene;
+    std::array<float, 16> identity{};
+    identity[0] = identity[5] = identity[10] = identity[15] = 1.0F;
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 9U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 1U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 1U, .model = identity, .visible = false, .layer = 1U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 6U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = SceneParticleRenderSynchronizer::kSyntheticProxyIdBase + 42U,
+        .meshAssetId = 1U,
+        .model = identity,
+        .visible = true,
+        .layer = 1U,
+    }));
+
+    // No camera: invalid frustum, all-bits mask - the authored visible flag alone decides.
+    kb::scene::SceneRenderVisibilityFrame frame;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, 64U, 64U, nullptr, nullptr, frame);
+    Require(!frame.frustumValid, "LIB-144 publisher must report an invalid frustum when the submit had no camera");
+    Require(!frame.cameraValid, "LIB-145 publisher must report no camera for a camera-less submit");
+    Require(frame.viewportWidth == 64U && frame.viewportHeight == 64U, "LIB-145 publisher must record the submitted viewport extent");
+    Require(frame.viewportId == 5U, "LIB-144 publisher must record the submitted viewport id");
+    Require(frame.entries.size() == 3U, "LIB-144 publisher must skip synthetic particle proxies");
+    Require(frame.entries[0].entityId == 3U && frame.entries[1].entityId == 6U && frame.entries[2].entityId == 9U,
+        "LIB-144 publisher entries must be sorted by entityId regardless of proxy-map iteration order");
+    Require(!frame.entries[0].visible, "LIB-144 publisher must report a VisibilityComponent-hidden proxy as not visible");
+    Require(frame.entries[1].visible && frame.entries[2].visible, "LIB-144 publisher must report visible proxies as visible under an all-bits default mask");
+    Require(!frame.entries[0].worldBounds.IsValid(), "LIB-144 publisher must keep invalid bounds for a proxy whose mesh resource is unresolvable");
+
+    // Restrictive camera mask (layer bit 1 only): the layer=2 proxy is mask-rejected,
+    // exactly like MeshPipelinePassPolicy would reject it from every pass of this camera.
+    SceneRenderCamera camera{};
+    camera.view = identity;
+    camera.projection = identity;
+    camera.cullingMask = 1U;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 64U, 64U, nullptr, nullptr, frame);
+    Require(frame.frustumValid, "LIB-144 publisher must extract a valid frustum from a real camera");
+    Require(frame.cameraValid && frame.view == identity && frame.projection == identity,
+        "LIB-145 publisher must copy the submit camera's view/projection matrices into the frame");
+    Require(frame.entries.size() == 3U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
+    Require(!frame.entries[1].visible, "LIB-144 publisher must mask-reject a proxy whose layer is outside the camera's cullingMask");
+    Require(frame.entries[2].visible, "LIB-144 publisher must keep a mask-passing, visible proxy visible (invalid bounds are never frustum-culled)");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
+    RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
+    RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
+    RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
+    RunRenderSceneSyncResolvesLightColorTemperatureTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
@@ -1921,6 +2347,8 @@ void RunRenderSceneSyncTests() {
     RunRendererStoresDefaultSceneDrawBudgetTest();
     RunRendererStoresDefaultSceneLightingConfigTest();
     RunSceneLightingPackerAddsEditorPreviewKeyLightTest();
+    RunSceneForwardLightSelectorAppliesLayerMaskTest();
+    RunSceneLightColorResolvesTemperatureTest();
     RunRendererStoresDefaultPostProcessSettingsTest();
     RunRendererSynchronizesTonemapPostProcessSettingsTest();
     RunSceneExposureMeterEstimatesLightingLuminanceTest();
@@ -1944,6 +2372,8 @@ void RunRenderSceneSyncTests() {
     RunSyncMeshWorldAffinesParallelTest();
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();
     RunScenesHaveStableUniqueIdsTest();
+    RunSceneParticleRenderSynchronizerTest();
+    RunSceneRenderVisibilityPublisherBuildsFrameTest();
 }
 
 } // namespace kb::render::tests

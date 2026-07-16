@@ -7,9 +7,15 @@
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneMode.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
@@ -188,6 +194,25 @@ public:
     };
     std::vector<TaskRecord> tasks;
     std::uint64_t nextTaskId = 1U;
+    // LIB-139: one live runtime MaterialInstance created through
+    // kb::scene::SceneMaterialInstances::Create - a scene-side indirection
+    // recording only which parent material asset it stands in for (LIB-140's
+    // scope adds per-parameter overrides on top of this record; LIB-139
+    // deliberately does not carry any parameter data yet). `id` is monotonic
+    // and never reused within a scene's lifetime, mirroring TimerRecord::id's
+    // own convention exactly (see SceneTimerService.cpp's rationale) - a
+    // stale id can never collide with a live one, so no generation counter
+    // is needed for "explicit lifetime" (Release'd once, gone forever).
+    struct MaterialInstanceRecord {
+        std::uint64_t id = 0U;
+        std::uint64_t parentMaterialAssetId = 0U;
+        // LIB-140: unvalidated named overrides - see MaterialParameterOverride's own doc
+        // comment (SceneMaterialInstances.hpp) for why kb::scene cannot validate these
+        // itself.
+        std::vector<MaterialParameterOverride> parameterOverrides;
+    };
+    std::vector<MaterialInstanceRecord> materialInstances;
+    std::uint64_t nextMaterialInstanceId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
@@ -341,6 +366,26 @@ public:
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
+    // LIB-142: scene-global active PostProcessProfile asset id (0 = none) - the ONLY
+    // asset-based, serializable post-process parameter set a scene can be assigned, mirroring
+    // basicLightingEnabled's own scene-global-toggle shape rather than a per-entity component
+    // (a spatial, per-camera/per-volume post-process system is explicitly out of scope for
+    // this ticket - see ScenePostProcessAccess.hpp's own doc comment).
+    std::uint64_t postProcessProfileAssetId = 0U;
+    // LIB-147: scene-global active AudioMixer asset id (0 = none) + active snapshot NAME
+    // (empty = authored bus volumes) - the ONLY mixer selection a scene carries, mirroring
+    // postProcessProfileAssetId's exact scene-global-toggle shape. Content resolution and
+    // application happen entirely in the audio backend each tick - see
+    // SceneAudioMixerAccess.hpp's own doc comment.
+    std::uint64_t audioMixerAssetId = 0U;
+    std::string audioMixerSnapshotName;
+    // LIB-150: runtime per-bus volume overrides (strongest layer) + the active snapshot
+    // transition (advanced with scene delta time by the audio backend each tick).
+    std::vector<AudioMixerBusVolumeOverride> audioMixerBusVolumeOverrides;
+    AudioMixerSnapshotTransition audioMixerSnapshotTransition;
+    // LIB-151: scene-global audio occlusion configuration (disabled by default - zero
+    // raycast cost until a game opts in).
+    AudioOcclusionSettings audioOcclusionSettings;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors
@@ -354,6 +399,72 @@ public:
     // constructed (layer 0 = "Default", every pair interacts) matches every
     // pre-LIB-129 scene exactly.
     PhysicsLayersAsset physicsLayers;
+    // LIB-132: off by default, and never touched by kb_standalone_player's own code path
+    // (only the editor's Scene Viewport ever calls PhysicsDebugDraw::SetEnabled/CollectLines)
+    // - see PhysicsDebugDraw.hpp's own doc comment for the full "zero release-path impact"
+    // argument.
+    bool physicsDebugDrawEnabled = false;
+    PhysicsDebugQueryTrace physicsDebugQueryTrace{};
+    // LIB-143: one live particle system instance started through
+    // kb::scene::SceneParticleSystems::Create. `id` is assigned from
+    // nextParticleSystemInstanceId, never reused within a scene's lifetime (same convention
+    // as nextTimerId/nextMaterialInstanceId above). `owner` follows the exact same
+    // auto-release-on-death/deactivation convention SceneTimerService::OwnerGone already
+    // establishes (see SceneParticleSystemService.cpp's own copy of that check).
+    // `resolvedMaterialAssetId` is resolved once at Create() time (see
+    // ParticleEffectAsset.hpp's own doc comment for why); everything else needed for
+    // simulation is re-read fresh from the effect asset every Advance() call (keeps hot
+    // reload of the .kbvfx file live, mirrors RuntimeMeshResourceEnsurer's own
+    // every-frame-Load() convention), with any per-instance `overrides` applied on top.
+    struct ParticleSystemParameterOverrides {
+        std::optional<float> emissionRatePerSecond;
+        std::optional<float> startSpeedMin;
+        std::optional<float> startSpeedMax;
+        std::optional<float> startLifetimeMin;
+        std::optional<float> startLifetimeMax;
+        std::optional<float> spreadDegrees;
+        std::optional<float> gravityScale;
+    };
+    struct ParticleSystemInstanceRecord {
+        std::uint64_t id = 0U;
+        std::uint64_t effectAssetId = 0U;
+        std::uint64_t resolvedMaterialAssetId = 0U;
+        SceneEntity owner{};
+        bool playing = false;
+        kb::math::RandomStream rng{};
+        // Fractional particle carried between Advance() calls so a non-integer
+        // emissionRatePerSecond*deltaSeconds still emits at the correct long-run average
+        // rate instead of silently truncating every frame.
+        float emissionAccumulator = 0.0F;
+        // Seconds since Play() was last called - drives the non-looping `durationSeconds`
+        // auto-stop; reset to 0 every Play() call.
+        float elapsedSeconds = 0.0F;
+        ParticleSystemParameterOverrides overrides;
+        std::vector<ParticleState> particles;
+    };
+    std::vector<ParticleSystemInstanceRecord> particleSystems;
+    std::uint64_t nextParticleSystemInstanceId = 1U;
+    // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
+    // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
+    // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish
+    // (through the same const_cast-during-submit convention EnsureSceneResources already
+    // uses for asset loading), read by scripts the next frame. renderVisibilityPublishCount
+    // is monotonic; 0 means "no frame was ever published" and every query honestly returns
+    // its empty result - see SceneRenderFeedback.hpp's own doc comment for the full
+    // latency/last-submit-wins contract.
+    SceneRenderVisibilityFrame renderVisibilityFrame{};
+    std::uint64_t renderVisibilityPublishCount = 0U;
+    // LIB-145: the single-slot async screen-capture request/result channel. A script's
+    // RequestScreenCapture fills the pending slot (one in-flight per scene, mirroring
+    // SceneExposureGpuReadback's own single-pending rule); the renderer consumes it during
+    // SubmitScene, performs the frame-gated GPU readback + PNG encode across later frames,
+    // and reports through CompleteScreenCapture. Ids are monotonic, never reused.
+    std::uint64_t nextScreenCaptureId = 1U;
+    std::uint64_t pendingScreenCaptureId = 0U;
+    std::string pendingScreenCapturePath;
+    bool pendingScreenCaptureConsumed = false;
+    std::uint64_t lastScreenCaptureId = 0U;
+    bool lastScreenCaptureSucceeded = false;
 };
 
 } // namespace kb::scene

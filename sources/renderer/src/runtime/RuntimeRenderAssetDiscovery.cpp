@@ -8,6 +8,7 @@
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
@@ -34,7 +35,14 @@ void RuntimeRenderAssetDiscovery::Ensure(kb::scene::Scene& scene, std::uint64_t 
         RegisterLoaderIfMissing<RenderMaterialGraphAssetLoader>(manager, kRenderMaterialGraphAssetType);
         RegisterLoaderIfMissing<RenderMaterialInstanceAssetLoader>(manager, "RenderMaterialInstance");
         RegisterLoaderIfMissing<RenderMaterialTypeAssetLoader>(manager, kRenderMaterialTypeAssetType);
+        RegisterLoaderIfMissing<PostProcessProfileAssetLoader>(manager, kPostProcessProfileAssetType);
         RegisterLoaderIfMissing<RenderTextureAssetLoader>(manager, "RenderTexture");
+        // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's
+        // own constructor (Scene.cpp, mirrors PhysicsLayersAssetLoader's precedent) - kb::scene
+        // never depends on kb::render, so it does not belong in this renderer-only discovery
+        // list. The built-in particle quad mesh needs no registration at all here - see
+        // BuiltInParticleQuadMesh.hpp's own doc comment for why it bypasses AssetRegistry
+        // entirely (RuntimeMeshResourceEnsurer resolves it directly).
     }
 
     Refresh(scene, currentFrame);

@@ -179,7 +179,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 10U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 15U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -191,8 +191,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly ten domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly fifteen domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -833,6 +833,51 @@ void RunEntityHandleScriptComponentAccessTest() {
     kb::tests::Require(!deadHandle.GetRequired<kb::scene::CameraComponent>(scene).Succeeded(), "Engine21kbLibrary EntityHandle::GetRequired<T> on a destroyed entity must return a failed Result, not throw");
     kb::tests::Require(!deadHandle.Add<kb::scene::CameraComponent>(scene, kb::scene::CameraComponent{}), "Engine21kbLibrary EntityHandle::Add<T> on a destroyed entity must report false, not throw");
     kb::tests::Require(!deadHandle.Remove<kb::scene::CameraComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<T> on a destroyed entity must report false, not throw");
+}
+
+// LIB-137: the same EntityHandle::Has/TryGet/GetRequired/Add/Remove contract
+// RunEntityHandleScriptComponentAccessTest proves for Camera, exercised for
+// MeshRendererComponent - ScriptComponentAccess<MeshRendererComponent> (LIB-077's
+// full-struct native access specialization) already compiled and worked, but had no
+// dedicated coverage until now.
+void RunEntityHandleMeshRendererComponentAccessTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRendererComponentAccessSubject" });
+    const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+
+    kb::tests::Require(!handle.Has<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Has<MeshRendererComponent> must be false before the component is ever added");
+    kb::tests::Require(handle.TryGet<kb::scene::MeshRendererComponent>(scene) == nullptr, "Engine21kbLibrary EntityHandle::TryGet<MeshRendererComponent> must return nullptr before the component is ever added");
+    const kb::library::Result<kb::scene::MeshRendererComponent> missingRenderer = handle.GetRequired<kb::scene::MeshRendererComponent>(scene);
+    kb::tests::Require(!missingRenderer.Succeeded() && missingRenderer.Error().code == kb::library::LibraryErrorCode::InvalidArgument,
+        "Engine21kbLibrary EntityHandle::GetRequired<MeshRendererComponent> must fail with InvalidArgument when the component is absent");
+    kb::tests::Require(!handle.Remove<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<MeshRendererComponent> must report false when there was nothing to remove");
+
+    kb::scene::MeshRendererComponent renderer{};
+    renderer.meshAssetId = 111U;
+    renderer.materialAssetId = 222U;
+    kb::tests::Require(handle.Add<kb::scene::MeshRendererComponent>(scene, renderer), "Engine21kbLibrary EntityHandle::Add<MeshRendererComponent> must succeed for a live handle");
+    kb::tests::Require(handle.Has<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Has<MeshRendererComponent> must be true immediately after Add<MeshRendererComponent>");
+    const kb::scene::MeshRendererComponent* rendererPointer = handle.TryGet<kb::scene::MeshRendererComponent>(scene);
+    kb::tests::Require(rendererPointer != nullptr && rendererPointer->meshAssetId == 111U && rendererPointer->materialAssetId == 222U,
+        "Engine21kbLibrary EntityHandle::TryGet<MeshRendererComponent> must return the real, just-added component data");
+    const kb::library::Result<kb::scene::MeshRendererComponent> gotRenderer = handle.GetRequired<kb::scene::MeshRendererComponent>(scene);
+    kb::tests::Require(gotRenderer.Succeeded() && gotRenderer.Value().meshAssetId == 111U,
+        "Engine21kbLibrary EntityHandle::GetRequired<MeshRendererComponent> must succeed and return a correct copy once the component exists");
+
+    kb::scene::MeshRendererComponent* mutableRendererPointer = handle.TryGet<kb::scene::MeshRendererComponent>(scene);
+    kb::tests::Require(mutableRendererPointer != nullptr, "Engine21kbLibrary EntityHandle::TryGet<MeshRendererComponent> (mutable overload) must return a real pointer once the component exists");
+    mutableRendererPointer->materialAssetId = 333U;
+    kb::tests::Require(scene.Components().MeshRenderers().TryGet(object.Entity())->materialAssetId == 333U,
+        "Engine21kbLibrary EntityHandle::TryGet<MeshRendererComponent> (mutable overload) must return a pointer into the REAL live component, not a copy");
+
+    kb::tests::Require(handle.Remove<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<MeshRendererComponent> must report true when the component was actually present");
+    kb::tests::Require(!handle.Has<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Has<MeshRendererComponent> must be false immediately after Remove<MeshRendererComponent>");
+
+    scene.Entities().Destroy(object);
+    const kb::library::EntityHandle deadHandle = handle;
+    kb::tests::Require(!deadHandle.Has<kb::scene::MeshRendererComponent>(scene), "Engine21kbLibrary EntityHandle::Has<MeshRendererComponent> on a destroyed entity must report false, not throw");
+    kb::tests::Require(deadHandle.TryGet<kb::scene::MeshRendererComponent>(scene) == nullptr, "Engine21kbLibrary EntityHandle::TryGet<MeshRendererComponent> on a destroyed entity must return nullptr, not throw");
+    kb::tests::Require(!deadHandle.Add<kb::scene::MeshRendererComponent>(scene, kb::scene::MeshRendererComponent{}), "Engine21kbLibrary EntityHandle::Add<MeshRendererComponent> on a destroyed entity must report false, not throw");
 }
 
 // LIB-123: the same EntityHandle::Has/TryGet/GetRequired/Add/Remove contract
@@ -1655,7 +1700,7 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 88U, .enabled = true });
     source.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{ .mass = 12.5F });
     source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
-    source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F });
+    source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .slopeLimitDegrees = 40.0F, .stepOffset = 0.3F, .gravityScale = 1.5F, .useGravity = false });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .minLimit = -45.0F });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
@@ -1701,6 +1746,14 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::tests::Require(restoredCharacterController != nullptr && kb::tests::NearlyEqual(restoredCharacterController->radius, 0.4F) &&
                             kb::tests::NearlyEqual(restoredCharacterController->height, 1.8F),
         "Engine21kbLibrary component registry: CharacterController is marked serializable=true and must survive a save/load round trip");
+    // LIB-131: slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive the same
+    // round trip too, not just the pre-existing shape fields above.
+    kb::tests::Require(restoredCharacterController != nullptr &&
+                            kb::tests::NearlyEqual(restoredCharacterController->slopeLimitDegrees, 40.0F) &&
+                            kb::tests::NearlyEqual(restoredCharacterController->stepOffset, 0.3F) &&
+                            kb::tests::NearlyEqual(restoredCharacterController->gravityScale, 1.5F) &&
+                            !restoredCharacterController->useGravity,
+        "Engine21kbLibrary component registry: CharacterController's slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive a save/load round trip");
     // Joint is deliberately serializable=false (connectedEntity is a live
     // runtime handle with no stable cross-node serialization scheme yet) -
     // this must genuinely NOT survive, the same honesty check Visibility's
@@ -1782,7 +1835,19 @@ void RunComponentInspectorDescCatalogTest() {
             kb::tests::Require(!fieldDesc->tooltip.empty(), ("Engine21kbLibrary component inspector field entry must have a non-empty tooltip for " + fieldLabel).c_str());
         }
     }
-    kb::tests::Require(fieldsChecked == 79U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
+    // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
+    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
+    // total climbs from 92 to 97.
+    kb::tests::Require(fieldsChecked == 97U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (97) across all 10 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -2708,6 +2773,7 @@ void RunEngineLibraryTests() {
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunEntityHandleTest();
     RunEntityHandleScriptComponentAccessTest();
+    RunEntityHandleMeshRendererComponentAccessTest();
     RunEntityHandlePhysicsComponentAccessTest();
     RunArrayViewTest();
     RunCollectionsScalarTest();

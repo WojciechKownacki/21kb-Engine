@@ -1,6 +1,7 @@
 #include "engine/scene/Scene.hpp"
 
 #include "engine/audio/AudioClipAssetLoader.hpp"
+#include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/input/InputActionAsset.hpp"
@@ -10,9 +11,13 @@
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/ParticleEffectAssetLoader.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -69,8 +74,10 @@ Scene::Scene(
     const bool registeredInputActionLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputActionAssetLoader>());
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
     const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
+    const bool registeredAudioMixerLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioMixerAssetLoader>());
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
+    const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -79,8 +86,10 @@ Scene::Scene(
     static_cast<void>(registeredInputActionLoader);
     static_cast<void>(registeredInputContextLoader);
     static_cast<void>(registeredAudioClipLoader);
+    static_cast<void>(registeredAudioMixerLoader);
     static_cast<void>(registeredImportedAssetLoader);
     static_cast<void>(registeredPhysicsLayersLoader);
+    static_cast<void>(registeredParticleEffectLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
@@ -198,6 +207,107 @@ void SceneLightingAccess::SetBasicLightingEnabled(Scene& scene, bool enabled) no
 
 bool SceneLightingAccess::BasicLightingEnabled(const Scene& scene) noexcept {
     return SceneAccess::State(scene).basicLightingEnabled;
+}
+
+void ScenePostProcessAccess::SetActiveProfile(Scene& scene, std::uint64_t profileAssetId) noexcept {
+    SceneAccess::State(scene).postProcessProfileAssetId = profileAssetId;
+}
+
+std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).postProcessProfileAssetId;
+}
+
+void SceneAudioMixerAccess::SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept {
+    SceneAccess::State(scene).audioMixerAssetId = mixerAssetId;
+}
+
+std::uint64_t SceneAudioMixerAccess::ActiveMixer(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerAssetId;
+}
+
+void SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
+    SceneAccess::State(scene).audioMixerSnapshotName.assign(snapshotName);
+}
+
+const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerSnapshotName;
+}
+
+void SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+    SceneState& state = SceneAccess::State(scene);
+    for (AudioMixerBusVolumeOverride& override_ : state.audioMixerBusVolumeOverrides) {
+        if (override_.bus == busName) {
+            override_.volume = volume;
+            return;
+        }
+    }
+    state.audioMixerBusVolumeOverrides.push_back(AudioMixerBusVolumeOverride{ .bus = std::string{ busName }, .volume = volume });
+}
+
+bool SceneAudioMixerAccess::ClearBusVolumeOverride(Scene& scene, std::string_view busName) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    for (auto iterator = state.audioMixerBusVolumeOverrides.begin(); iterator != state.audioMixerBusVolumeOverrides.end(); ++iterator) {
+        if (iterator->bus == busName) {
+            state.audioMixerBusVolumeOverrides.erase(iterator);
+            return true;
+        }
+    }
+    return false;
+}
+
+std::span<const AudioMixerBusVolumeOverride> SceneAudioMixerAccess::BusVolumeOverrides(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerBusVolumeOverrides;
+}
+
+void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    state.audioMixerBusVolumeOverrides.clear();
+    state.audioMixerSnapshotTransition = {};
+}
+
+void SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
+    SceneAccess::State(scene).audioOcclusionSettings = settings;
+}
+
+const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioOcclusionSettings;
+}
+
+void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+    SceneState& state = SceneAccess::State(scene);
+    // A running transition completes instantly before retargeting - the new blend always
+    // starts from a well-defined snapshot state, never from an unrepresentable mid-blend.
+    if (state.audioMixerSnapshotTransition.IsActive()) {
+        state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;
+        state.audioMixerSnapshotTransition = {};
+    }
+    if (durationSeconds <= 0.0F) {
+        state.audioMixerSnapshotName.assign(toSnapshot);
+        return;
+    }
+    state.audioMixerSnapshotTransition = AudioMixerSnapshotTransition{
+        .toSnapshot = std::string{ toSnapshot },
+        .elapsedSeconds = 0.0F,
+        .durationSeconds = durationSeconds,
+    };
+}
+
+const AudioMixerSnapshotTransition& SceneAudioMixerAccess::SnapshotTransition(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerSnapshotTransition;
+}
+
+bool SceneAudioMixerAccess::AdvanceSnapshotTransition(Scene& scene, float deltaSeconds) {
+    SceneState& state = SceneAccess::State(scene);
+    if (!state.audioMixerSnapshotTransition.IsActive()) {
+        return false;
+    }
+    state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds < 0.0F ? 0.0F : deltaSeconds;
+    if (state.audioMixerSnapshotTransition.elapsedSeconds < state.audioMixerSnapshotTransition.durationSeconds) {
+        return false;
+    }
+    state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;
+    state.audioMixerSnapshotTransition = {};
+    return true;
 }
 
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {

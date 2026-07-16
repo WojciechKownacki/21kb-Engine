@@ -11,8 +11,12 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -24,6 +28,7 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -1288,6 +1293,309 @@ void RunRuntimeMaterialInstanceDynamicParameterOverrideTest() {
     std::filesystem::remove_all(root, error);
 }
 
+// LIB-140: proves RuntimeMaterialResolver::ResolveAssetWithParameterOverrides - the isolated
+// resolution path RuntimeMaterialResourceEnsurer uses for a runtime kb::scene::MaterialInstance
+// handle - actually changes the resolved material's roughness when a Scalar override is
+// supplied (not just accepted-but-ignored), keeps a no-override resolve at the parent's own
+// baked default, honestly falls back to the default material for an unresolvable parent, and
+// rejects a RenderMaterialInstance parent as out of the LIB-140 v1 scope cut (error material).
+void RunRuntimeMaterialResolverResolvesInstanceParameterOverridesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_runtime_material_instance_scalar_override";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-140 instance override test could not create temp root");
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ParameterScalar, "roughnessOverride", "0.1"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-140 instance override test could not save parent material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-140 instance override test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "MAT-140 instance override test could not register instance loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-140 instance override test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "MAT-140 instance override test did not discover parent material");
+    const kb::assets::AssetMetadata* parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(parentMeta != nullptr, "MAT-140 instance override test did not find parent material metadata");
+
+    RuntimeMaterialResolver resolver;
+
+    const ResolvedRuntimeMaterialAsset withoutOverride = resolver.ResolveAssetWithParameterOverrides(manager, parentMeta->id, {});
+    Require(withoutOverride.resolved && withoutOverride.status == RuntimeMaterialResolveStatus::Resolved,
+        "MAT-140: parent material with no overrides must resolve cleanly");
+    Require(NearlyEqual(withoutOverride.material.desc.roughnessFactor, 0.1F),
+        "MAT-140: parent material with no overrides must keep its baked roughness default");
+
+    const std::vector<RenderMaterialGraphParameterValue> overrides{
+        RenderMaterialGraphParameterValue{
+            .stableId = "roughnessOverride",
+            .type = RenderMaterialParameterType::Scalar,
+            .numbers = { 0.9F, 0.0F, 0.0F, 0.0F },
+        },
+    };
+    const ResolvedRuntimeMaterialAsset withOverride = resolver.ResolveAssetWithParameterOverrides(manager, parentMeta->id, overrides);
+    Require(withOverride.resolved && withOverride.status == RuntimeMaterialResolveStatus::Resolved,
+        "MAT-140: parent material with a scalar override must resolve cleanly");
+    Require(NearlyEqual(withOverride.material.desc.roughnessFactor, 0.9F),
+        "MAT-140: a runtime MaterialInstance parameter override must change the resolved roughness value");
+
+    const ResolvedRuntimeMaterialAsset missingParent = resolver.ResolveAssetWithParameterOverrides(manager, kb::assets::AssetId{ 999999U }, overrides);
+    Require(missingParent.resolved && missingParent.status == RuntimeMaterialResolveStatus::DefaultMaterial,
+        "MAT-140: an unresolvable parent material asset must fall back to the default material");
+
+    RenderMaterialInstanceAssetData instanceAsset{};
+    instanceAsset.parentMaterialAssetId = parentMeta->id;
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Parent_Inst.kbmatinst", instanceAsset), "MAT-140 instance override test could not save a material instance parent fixture");
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-140 instance override test did not discover the instance fixture");
+    const kb::assets::AssetMetadata* instanceMeta = manager.Registry().FindByPath("/Game/Parent_Inst.kbmatinst");
+    Require(instanceMeta != nullptr, "MAT-140 instance override test did not find the instance fixture metadata");
+    const ResolvedRuntimeMaterialAsset instanceParent = resolver.ResolveAssetWithParameterOverrides(manager, instanceMeta->id, overrides);
+    Require(instanceParent.resolved && instanceParent.status == RuntimeMaterialResolveStatus::ErrorMaterial,
+        "MAT-140: a RenderMaterialInstance parent must be rejected as out of scope (error material), not silently accepted");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-140: end-to-end through Renderer::SubmitScene - proves a live kb::scene::MaterialInstance
+// handle on a MeshRendererComponent actually drives material resolution (materialLoadedCount
+// increments once for the first submit), that a SetParameterScalar call between frames is
+// detected and reloads the bound material (materialReloadCount increments), and that
+// resubmitting with no further change is a cache hit (no further reload).
+void RunRendererAppliesMaterialInstanceParameterOverrideTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_instance_override";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-140 renderer override test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ParameterScalar, "roughnessOverride", "0.1"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-140 renderer override test could not save parent material");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-140 renderer override test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-140 renderer override test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-140 renderer override test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-140 renderer override test did not discover mesh and material assets");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(meshMetadata != nullptr && materialMetadata != nullptr, "MAT-140 renderer override test discovered wrong metadata");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(materialMetadata->id.value);
+    Require(instance != 0U, "MAT-140 renderer override test could not create a material instance");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Instance Override Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialInstanceHandle = instance,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "MAT-140 renderer override test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit first frame");
+    const Renderer::RuntimeSceneResourceStats afterFirstSubmit = renderer.RuntimeResourceStats();
+    Require(afterFirstSubmit.materialLoadedCount == 1U, "MAT-140: the first submit must resolve and load the instance's material exactly once");
+    Require(afterFirstSubmit.materialReloadCount == 0U, "MAT-140: the first submit is not a reload");
+    Require(afterFirstSubmit.materialErrorCount == 0U, "MAT-140: the first submit must not report a material error");
+    renderer.EndFrame();
+
+    Require(scene.MaterialInstances().SetParameterScalar(instance, "roughnessOverride", 0.9F),
+        "MAT-140 renderer override test could not set a parameter override");
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit second frame");
+    const Renderer::RuntimeSceneResourceStats afterOverride = renderer.RuntimeResourceStats();
+    Require(afterOverride.materialReloadCount == 1U,
+        "MAT-140: changing a material instance parameter must invalidate the cache and reload the bound material");
+    renderer.EndFrame();
+
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin third frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit third frame");
+    const Renderer::RuntimeSceneResourceStats afterStableResubmit = renderer.RuntimeResourceStats();
+    // Renderer::SubmitScene(s) resets these stats to zero at the start of every call (see
+    // Renderer::SubmitScenes), so "no reload this frame" is materialReloadCount == 0, not a
+    // carried-over count from the previous frame's genuine reload.
+    Require(afterStableResubmit.materialReloadCount == 0U,
+        "MAT-140: resubmitting with no further parameter change must be a cache hit, not another reload");
+    Require(afterStableResubmit.materialErrorCount == 0U, "MAT-140: a stable resubmit must not report a material error");
+    renderer.EndFrame();
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-142: proves PostProcessProfileAssetLoader::SaveProfile/LoadProfile round-trips
+// ScenePostProcessSettings through the real on-disk text format - representative fields
+// across the flat top-level struct, the nested outputTransform, and the doubly-nested
+// autoExposure, plus a non-default value for every enum.
+void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_post_process_profile_round_trip.kbppfx";
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+
+    ScenePostProcessSettings settings{};
+    settings.bloomEnabled = false;
+    settings.bloomStrength = 0.42F;
+    settings.bloomThreshold = 1.8F;
+    settings.bloomSoftKnee = 0.3F;
+    settings.bloomRadiusPixels = 2.5F;
+    settings.temporalAntiAliasingEnabled = false;
+    settings.temporalJitterEnabled = false;
+    settings.temporalHistoryBlend = 0.5F;
+    settings.fxaaEnabled = true;
+    settings.tonemapEnabled = false;
+    settings.autoExposureMetering = ScenePostProcessSettings::AutoExposureMeteringMode::Manual;
+    settings.outputTransform.exposureStops = 1.25F;
+    settings.outputTransform.gamma = 2.4F;
+    settings.outputTransform.tonemap = FullscreenTextureTonemapOperator::AgxApprox;
+    settings.outputTransform.colorGradingLutStrength = 0.75F;
+    settings.outputTransform.autoExposure.enabled = false;
+    settings.outputTransform.autoExposure.meteredAverageLuminance = 0.3F;
+    settings.outputTransform.autoExposure.middleGray = 0.22F;
+    settings.outputTransform.autoExposure.minExposureStops = -4.0F;
+    settings.outputTransform.autoExposure.maxExposureStops = 6.0F;
+    settings.outputTransform.autoExposure.biasStops = 0.5F;
+    settings.outputTransform.autoExposure.temporalAdaptationEnabled = false;
+    settings.outputTransform.autoExposure.brightAdaptationRate = 3.0F;
+    settings.outputTransform.autoExposure.darkAdaptationRate = 1.0F;
+
+    Require(PostProcessProfileAssetLoader::SaveProfile(path, settings), "PostProcess profile asset save failed");
+    const std::optional<ScenePostProcessSettings> loaded = PostProcessProfileAssetLoader::LoadProfile(path);
+    Require(loaded.has_value(), "PostProcess profile asset did not load");
+    Require(!loaded->bloomEnabled && NearlyEqual(loaded->bloomStrength, 0.42F) && NearlyEqual(loaded->bloomThreshold, 1.8F) &&
+            NearlyEqual(loaded->bloomSoftKnee, 0.3F) && NearlyEqual(loaded->bloomRadiusPixels, 2.5F),
+        "PostProcess profile asset round trip lost bloom fields");
+    Require(!loaded->temporalAntiAliasingEnabled && !loaded->temporalJitterEnabled && NearlyEqual(loaded->temporalHistoryBlend, 0.5F) && loaded->fxaaEnabled,
+        "PostProcess profile asset round trip lost anti-aliasing fields");
+    Require(!loaded->tonemapEnabled && loaded->autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::Manual,
+        "PostProcess profile asset round trip lost tonemapEnabled/autoExposureMetering");
+    Require(NearlyEqual(loaded->outputTransform.exposureStops, 1.25F) && NearlyEqual(loaded->outputTransform.gamma, 2.4F) &&
+            loaded->outputTransform.tonemap == FullscreenTextureTonemapOperator::AgxApprox && NearlyEqual(loaded->outputTransform.colorGradingLutStrength, 0.75F),
+        "PostProcess profile asset round trip lost outputTransform fields");
+    Require(!loaded->outputTransform.autoExposure.enabled && NearlyEqual(loaded->outputTransform.autoExposure.meteredAverageLuminance, 0.3F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.middleGray, 0.22F) && NearlyEqual(loaded->outputTransform.autoExposure.minExposureStops, -4.0F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.maxExposureStops, 6.0F) && NearlyEqual(loaded->outputTransform.autoExposure.biasStops, 0.5F) &&
+            !loaded->outputTransform.autoExposure.temporalAdaptationEnabled && NearlyEqual(loaded->outputTransform.autoExposure.brightAdaptationRate, 3.0F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.darkAdaptationRate, 1.0F),
+        "PostProcess profile asset round trip lost outputTransform.autoExposure fields");
+
+    const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
+        std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
+    Require(!missing.has_value(), "PostProcess profile asset load must honestly fail for a nonexistent file, not return defaults");
+
+    std::filesystem::remove(path, removeError);
+}
+
+// LIB-142: end-to-end through Renderer::SubmitScene - proves a scene's asset-based active
+// PostProcessProfile actually drives the resolved post-process settings when the caller
+// supplies no explicit per-submit override, and that an explicit per-submit override still
+// wins over the scene's profile (the override is purely additive, not a new precedence rule
+// - see Renderer.cpp's ResolveScenePostProcessProfile doc comment).
+void RunRendererAppliesScenePostProcessProfileTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_post_process_profile";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Post process profile renderer test could not create temp root");
+
+    ScenePostProcessSettings profileSettings{};
+    profileSettings.bloomEnabled = true;
+    profileSettings.bloomStrength = 0.77F;
+    profileSettings.fxaaEnabled = true;
+    profileSettings.tonemapEnabled = false;
+    Require(PostProcessProfileAssetLoader::SaveProfile(root / "Profile.kbppfx", profileSettings), "Post process profile renderer test could not save profile asset");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()), "Post process profile renderer test could not register loader");
+    Require(manager.Mounts().Mount("Game", root), "Post process profile renderer test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "Post process profile renderer test did not discover the profile asset");
+    const kb::assets::AssetMetadata* profileMetadata = manager.Registry().FindByPath("/Game/Profile.kbppfx");
+    Require(profileMetadata != nullptr, "Post process profile renderer test did not find profile metadata");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, profileMetadata->id.value);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Post process profile renderer test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "Post process profile renderer test renderer did not submit first frame");
+    const std::optional<ScenePostProcessSettings> withProfile = renderer.LastResolvedPostProcessSettings();
+    Require(withProfile.has_value() && NearlyEqual(withProfile->bloomStrength, 0.77F) && withProfile->fxaaEnabled && !withProfile->tonemapEnabled,
+        "Renderer did not apply the scene's active PostProcessProfile when no explicit submit override was supplied");
+    renderer.EndFrame();
+
+    RenderSceneSubmitDesc overriddenDesc = desc;
+    overriddenDesc.postProcessSettings = ScenePostProcessSettings{
+        .bloomEnabled = true,
+        .bloomStrength = 0.11F,
+        .fxaaEnabled = false,
+        .tonemapEnabled = true,
+    };
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, overriddenDesc), "Post process profile renderer test renderer did not submit second frame");
+    const std::optional<ScenePostProcessSettings> withExplicitOverride = renderer.LastResolvedPostProcessSettings();
+    Require(withExplicitOverride.has_value() && NearlyEqual(withExplicitOverride->bloomStrength, 0.11F) && !withExplicitOverride->fxaaEnabled && withExplicitOverride->tonemapEnabled,
+        "An explicit per-submit postProcessSettings override must still win over the scene's active PostProcessProfile");
+    renderer.EndFrame();
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 0U);
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin third frame");
+    Require(renderer.SubmitScene(scene, desc), "Post process profile renderer test renderer did not submit third frame");
+    Require(!renderer.LastResolvedPostProcessSettings().has_value(),
+        "With neither an explicit submit override nor an active scene profile, the renderer must honestly resolve to no override, not stale state from a previous frame");
+    renderer.EndFrame();
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRuntimeMaterialInstanceStaticBaseOverrideChainTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_material_instance_static_base_chain";
     std::error_code error;
@@ -1686,6 +1994,339 @@ void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
     std::filesystem::remove_all(root, error);
 }
 #endif
+
+// LIB-144: the end-to-end proof that a real Renderer::SubmitScene publishes the CPU-side
+// per-entity visibility/bounds feedback frame into the scene (SceneRenderFeedback) - real
+// mesh asset on disk, real headless Noop submit, real bounds resolved from the mesh
+// resource, real frustum cull against the camera the submit rendered with, zero GPU
+// readback anywhere. IdentityCamera()'s identity view*projection extracts the NDC unit cube
+// as the frustum, so |x|,|y|,|z| <= 1 is inside.
+void RunRendererPublishesSceneVisibilityFeedbackTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_visibility_feedback";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Visibility feedback test could not create temp root");
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Visibility feedback test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "Visibility feedback test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "Visibility feedback test did not discover the mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Visibility feedback test discovered wrong mesh metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+
+    const kb::scene::SceneEntity onScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "On Screen Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(onScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    const kb::scene::SceneEntity offScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Off Screen Mesh",
+        .transform = TransformAt(100.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(offScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    const kb::scene::SceneEntity hiddenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Hidden Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(hiddenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    scene.Components().Visibility().Set(hiddenEntity, kb::scene::VisibilityComponent{ .visible = false });
+    const kb::scene::SceneEntity meshlessEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "No Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+
+    Require(!kb::scene::SceneRenderFeedback::HasFrame(scene), "A never-submitted scene must not report a published visibility frame");
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Visibility feedback test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit first frame");
+    renderer.EndFrame();
+
+    Require(kb::scene::SceneRenderFeedback::HasFrame(scene), "SubmitScene must publish a visibility feedback frame into the scene");
+    Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 1U, "The first submit must publish exactly one visibility frame");
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, onScreenEntity), "An in-frustum, visible mesh entity must be reported visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, offScreenEntity), "A mesh entity far outside the camera frustum must be reported not visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "A VisibilityComponent-disabled mesh entity must be reported not visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, meshlessEntity), "An entity with no MeshRenderer must have no visibility entry");
+
+    // Bounds come from the real mesh resource (triangle.obj, ~0.14 world radius),
+    // transformed by each entity's own model matrix - tracked even for culled/hidden
+    // entities (bounds answer "where is it", not "was it drawn").
+    const kb::scene::SceneRenderBounds onScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, onScreenEntity);
+    Require(onScreenBounds.IsValid() && onScreenBounds.radius > 0.05F && onScreenBounds.radius < 1.0F,
+        "The on-screen entity's world bounds must carry the real mesh-resource bounding sphere");
+    Require(std::abs(onScreenBounds.center.x) < 0.2F, "The on-screen entity's world bounds must be centered near its origin transform");
+    const kb::scene::SceneRenderBounds offScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, offScreenEntity);
+    Require(offScreenBounds.IsValid() && std::abs(offScreenBounds.center.x - 100.0F) < 0.2F,
+        "The off-screen entity's world bounds must be transformed by its own model matrix");
+    Require(kb::scene::SceneRenderFeedback::WorldBounds(scene, hiddenEntity).IsValid(),
+        "A hidden entity keeps valid bounds - bounds report placement, not draw status");
+    Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, meshlessEntity).IsValid(),
+        "An entity with no MeshRenderer must report invalid bounds");
+
+    // The published frustum is queryable directly (identity clip = NDC unit cube).
+    Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must accept the origin inside the identity-camera frustum");
+    Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 100.0F, 0.0F, 0.0F }, 0.0F), "TestFrustum must reject a point far outside the identity-camera frustum");
+    Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 1.5F, 0.0F, 0.0F }, 1.0F), "TestFrustum must accept a sphere straddling the identity-camera frustum boundary");
+
+    // Every subsequent submit republishes - the feedback tracks the latest frame, never
+    // frozen first-frame state.
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit second frame");
+    renderer.EndFrame();
+    Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 2U, "A second submit must publish a second visibility frame");
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, onScreenEntity), "The second published frame must still track the on-screen entity");
+
+    // LIB-145: the published frame carries the submit camera, so the screen/world
+    // conversions work end-to-end. IdentityCamera + 64x64 viewport: the world origin
+    // projects to the viewport center, and the center pixel's ray runs along +Z.
+    const kb::scene::SceneRenderScreenPoint projected = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{});
+    Require(projected.valid && projected.onScreen && std::abs(projected.screenX - 32.0F) < 0.01F && std::abs(projected.screenY - 32.0F) < 0.01F,
+        "WorldToScreen must project the world origin to the identity camera's viewport center after a real submit");
+    const kb::scene::SceneRenderCameraRay centerRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 32.0F, 32.0F);
+    Require(centerRay.valid && std::abs(centerRay.ray.direction.z - 1.0F) < 0.01F,
+        "ScreenPointToRay must build a forward ray through the identity camera's viewport center after a real submit");
+
+    // LIB-145: async screen capture through a real submit. The headless Noop backend has
+    // no TEXTURE_READ_BACK/TEXTURE_BLIT caps, so the honest terminal answer is Failed -
+    // delivered through the request->consume->complete channel, never a forever-Pending
+    // hang and never a fake success.
+    const std::filesystem::path capturePath = root / "capture.png";
+    const std::uint64_t captureId = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, capturePath.string());
+    Require(captureId != 0U, "Visibility feedback test could not request a screen capture");
+    Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, captureId) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A requested capture must report Pending before the next submit");
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin capture frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit capture frame");
+    renderer.EndFrame();
+    Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, captureId) == kb::scene::SceneScreenCaptureStatus::Failed,
+        "A capture that can never succeed under the Noop backend must be honestly completed as Failed on its submit");
+    Require(!std::filesystem::exists(capturePath), "A failed capture must not leave a file behind");
+    Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, capturePath.string()) != 0U,
+        "A terminal capture result must free the single pending slot for the next request");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-146: shared harness bits for the render-resource lifecycle tests below - a scene
+// with one mesh entity backed by a real on-disk triangle.obj under its own asset root.
+struct LifecycleSceneFixture {
+    kb::scene::Scene scene;
+    std::uint64_t meshAssetId = 0;
+    kb::scene::SceneEntity entity{};
+};
+
+void PrepareLifecycleScene(LifecycleSceneFixture& fixture, const std::filesystem::path& root) {
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "LIB-146 lifecycle test could not create asset root");
+    WriteTriangleObj(root / "triangle.obj");
+    kb::assets::AssetManager& manager = fixture.scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "LIB-146 lifecycle test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "LIB-146 lifecycle test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "LIB-146 lifecycle test did not discover the mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "LIB-146 lifecycle test discovered wrong mesh metadata");
+    fixture.meshAssetId = meshMetadata->id.value;
+    fixture.entity = fixture.scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Lifecycle Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    fixture.scene.Components().MeshRenderers().Set(fixture.entity, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshAssetId });
+}
+
+[[nodiscard]] RenderSceneSubmitDesc LifecycleSubmitDesc(std::uint32_t viewportId) {
+    return RenderSceneSubmitDesc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ viewportId },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+}
+
+void SubmitLifecycleFrame(Renderer& renderer, const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const char* failure) {
+    Require(renderer.BeginFrame(), failure);
+    Require(renderer.SubmitScene(scene, desc), failure);
+    renderer.EndFrame();
+}
+
+// LIB-146 (scene unload): Renderer::ReleaseScene must destroy exactly the released
+// scene's runtime GPU resources ({sceneId, assetId}-keyed isolation - a second live scene
+// keeps its own), the released scene must remain fully re-submittable (release is a clean
+// unload, not poisoning), and ReleaseAllScenes must drop everything.
+void RunRendererReleaseSceneDropsRuntimeResourcesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_release_scene";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture first;
+    LifecycleSceneFixture second;
+    PrepareLifecycleScene(first, root / "a");
+    PrepareLifecycleScene(second, root / "b");
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 release test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not submit the first scene");
+    SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not submit the second scene");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 2U, "Two submitted scenes must cache one mesh resource each");
+
+    renderer.ReleaseScene(first.scene);
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "ReleaseScene must destroy exactly the released scene's cached resources");
+    SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not resubmit the surviving scene");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "Releasing one scene must not break another scene's rendering");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "The surviving scene's cache entry must be reused, not rebuilt");
+
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not resubmit the released scene");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "A released scene must be cleanly re-submittable");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 2U, "Resubmitting a released scene must re-ensure its resources");
+
+    renderer.ReleaseAllScenes();
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U && renderer.RuntimeResourceStats().cachedMaterialCount == 0U && renderer.RuntimeResourceStats().cachedTextureCount == 0U,
+        "ReleaseAllScenes must drop every cached runtime resource");
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not resubmit after ReleaseAllScenes");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "ReleaseAllScenes must leave the renderer fully usable");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-146 (entity destroy + retention eviction): destroying the last entity referencing a
+// mesh removes its render proxy immediately, but the GPU resource stays cached BY DESIGN
+// for kRuntimeAssetRetentionFrames (120) - and PruneUnused then actually evicts it. A new
+// entity using the same asset after eviction re-ensures the resource from scratch.
+void RunRendererPrunesUnreferencedResourcesAfterRetentionTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_retention_prune";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 retention test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit the initial frame");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "LIB-146 retention test initial submit did not cache the mesh resource");
+
+    fixture.scene.Entities().Destroy(fixture.entity);
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit after entity destroy");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount == 0U, "A destroyed entity's proxy must stop rendering on the next full sync");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "An unreferenced resource must stay cached inside the retention window (destroying the entity is not an immediate GPU destroy)");
+
+    // Age the resource past the retention window; PruneUnused runs at the end of every
+    // SubmitScenes, keyed to the completed-frame counter.
+    for (std::uint32_t frame = 0U; frame < Renderer::kRuntimeAssetRetentionFrames + 8U; ++frame) {
+        SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit an aging frame");
+    }
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U,
+        "PruneUnused must actually evict a resource once nothing referenced it for kRuntimeAssetRetentionFrames");
+
+    const kb::scene::SceneEntity revived = fixture.scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Revived Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    fixture.scene.Components().MeshRenderers().Set(revived, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshAssetId });
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit the revived entity");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "A pruned asset must be cleanly re-ensured when a new entity references it again");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-146 (asset reload): a mesh asset whose on-disk content (and therefore contentHash)
+// changed must be rebuilt into a NEW GPU handle on the next submit, with the old handle
+// honestly unresolvable - the mesh sibling of the long-standing material/texture reload
+// tests (RunRendererReloadsChangedRuntimeMaterialAssetTest).
+void RunRendererReloadsChangedRuntimeMeshAssetTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_mesh_reload";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 mesh reload test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 mesh reload test did not submit the initial frame");
+    const RenderMeshHandle firstHandle = renderer.SceneResourceMap()->ResolveMesh(fixture.meshAssetId);
+    Require(firstHandle.IsValid() && renderer.SceneResources()->FindMesh(firstHandle) != nullptr,
+        "LIB-146 mesh reload test initial submit did not bind a live mesh handle");
+
+    // Rewrite the mesh with different geometry -> new contentHash on rediscovery.
+    {
+        std::ofstream output{ root / "triangle.obj", std::ios::trunc };
+        output
+            << "v -0.3 -0.3 0.0\n"
+            << "v 0.3 -0.3 0.0\n"
+            << "v 0.0 0.3 0.1\n"
+            << "vt 0 0\n"
+            << "vt 1 0\n"
+            << "vt 0.5 1\n"
+            << "vn 0 0 1\n"
+            << "f 1/1/1 2/2/1 3/3/1\n";
+    }
+    Require(fixture.scene.Assets().Manager().DiscoverMountedAssets() >= 1U, "LIB-146 mesh reload test rediscovery failed");
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 mesh reload test did not submit the reload frame");
+
+    const RenderMeshHandle secondHandle = renderer.SceneResourceMap()->ResolveMesh(fixture.meshAssetId);
+    Require(secondHandle.IsValid() && secondHandle.value != firstHandle.value,
+        "A changed mesh contentHash must rebuild the GPU mesh into a new handle on the next submit");
+    Require(renderer.SceneResources()->FindMesh(firstHandle) == nullptr,
+        "The replaced mesh's old handle must be honestly unresolvable after the reload");
+    Require(renderer.SceneResources()->FindMesh(secondHandle) != nullptr && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "The reloaded mesh must be live and cached exactly once");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "The reloaded mesh must keep rendering");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
 
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
@@ -3924,10 +4565,18 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
+    RunRendererPublishesSceneVisibilityFeedbackTest();
+    RunRendererReleaseSceneDropsRuntimeResourcesTest();
+    RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
+    RunRendererReloadsChangedRuntimeMeshAssetTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();
     RunRuntimeMaterialInstanceDynamicParameterOverrideTest();
+    RunRuntimeMaterialResolverResolvesInstanceParameterOverridesTest();
+    RunRendererAppliesMaterialInstanceParameterOverrideTest();
+    RunPostProcessProfileAssetSaveLoadRoundTripTest();
+    RunRendererAppliesScenePostProcessProfileTest();
     RunRuntimeMaterialInstanceStaticBaseOverrideChainTest();
     RunRendererBindsGraphMaterialGpuProgramTest();
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)

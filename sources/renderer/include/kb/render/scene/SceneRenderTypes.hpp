@@ -74,9 +74,25 @@ enum class SceneRenderReflectionProbeShape : std::uint8_t {
     Sphere,
 };
 
+// LIB-136: mirrors kb::scene::CameraClearMode. Deferred/GBuffer rendering always fully
+// clears regardless of this setting - see CameraComponent.hpp's doc comment.
+enum class SceneRenderCameraClearMode : std::uint8_t {
+    SolidColor,
+    DepthOnly,
+    DontClear,
+};
+
 struct SceneRenderCamera {
     std::array<float, 16> view{};
     std::array<float, 16> projection{};
+    // LIB-136: resolved from the selected CameraComponent's cullingMask/clearMode/clearColor
+    // (kb::scene::CameraComponent). Defaults are "no filtering, full clear" so every
+    // call site that default-constructs a SceneRenderCamera without an ECS camera behind it
+    // (shadow-casting light cameras, the editor's fly camera override, etc.) keeps behaving
+    // exactly as before LIB-136.
+    std::uint32_t cullingMask = 0xFFFFFFFFU;
+    SceneRenderCameraClearMode clearMode = SceneRenderCameraClearMode::SolidColor;
+    std::array<float, 3> clearColor{ 0.0F, 0.0F, 0.0F };
 };
 
 struct SceneRenderMeshInstance {
@@ -93,6 +109,10 @@ struct SceneRenderMeshInstance {
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
     bool receivesShadow = true;
+    // LIB-136: which render layer this mesh belongs to, checked against the drawing
+    // camera's SceneRenderCamera::cullingMask. Bit 0 set by default, matching
+    // MeshRendererComponent::layer's default ("Default" layer).
+    std::uint32_t layer = 1U;
 };
 
 struct SceneRenderDrawGroup {

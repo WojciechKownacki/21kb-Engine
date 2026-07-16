@@ -18,8 +18,12 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     runtime/MiniaudioPlaybackBackend.cpp
     runtime/MiniaudioSound.hpp
     runtime/MiniaudioSound.cpp
+    scene/MiniaudioBusRegistry.hpp
+    scene/MiniaudioBusRegistry.cpp
     scene/MiniaudioListenerSynchronizer.hpp
     scene/MiniaudioListenerSynchronizer.cpp
+    scene/MiniaudioOcclusionSampler.hpp
+    scene/MiniaudioOcclusionSampler.cpp
     scene/MiniaudioSourceRegistry.hpp
     scene/MiniaudioSourceRegistry.cpp
 )

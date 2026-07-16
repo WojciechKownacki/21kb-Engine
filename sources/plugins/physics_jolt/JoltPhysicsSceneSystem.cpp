@@ -3,6 +3,7 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/math/EngineMath.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -10,6 +11,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneSystemTransformAccess.hpp"
 
@@ -26,6 +28,7 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Body/MotionType.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
@@ -62,6 +65,7 @@ JPH_SUPPRESS_WARNINGS
 
 namespace kb::physics_jolt {
 
+using kb::scene::CharacterControllerComponent;
 using kb::scene::ColliderComponent;
 using kb::scene::ColliderShape;
 using kb::scene::JointComponent;
@@ -182,6 +186,7 @@ struct BodySignature {
     float gravityScale = 1.0F;
     bool useGravity = true;
     bool lockRotation = false;
+    bool useContinuousCollision = false;
     bool trigger = false;
     float friction = 0.5F;
     float restitution = 0.0F;
@@ -237,6 +242,53 @@ struct BodyRecord {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
 }
 
+[[nodiscard]] float SafeDivide(float value, float divisor) noexcept {
+    return std::fabs(divisor) < MinimumShapeExtent ? value : value / divisor;
+}
+
+// LIB-133: WriteBack/WriteBackCharacters write a Jolt body's real WORLD-space result - for a
+// root entity, local IS world (matches TransformMath::ComposeRoot's own contract), but for a
+// child entity under a non-identity parent, writing the world result straight into
+// localPosition/localRotation would double-apply the parent transform the next time
+// SynchronizeTransformHierarchy recomposes worldPosition from it. This is the exact inverse
+// of TransformMath::Compose's forward formula, replicated here (not called directly) because
+// TransformMath.hpp is a private kb_engine header this plugin (a separate library) cannot
+// include - mirrors the same math kb::script::ScriptTransformApi.cpp's own WorldPoseToLocal
+// already uses for Transform.SetWorldPose/SetParent.
+[[nodiscard]] Vec3 WorldToLocalPosition(const TransformComponent& parentTransform, Vec3 worldPosition) noexcept {
+    const Quat parentRotationInverse = kb::math::Inverse(parentTransform.worldRotation);
+    const Vec3 unrotatedDelta = kb::math::Rotate(parentRotationInverse, Subtract(worldPosition, parentTransform.worldPosition));
+    return Vec3{
+        SafeDivide(unrotatedDelta.x, parentTransform.worldScale.x),
+        SafeDivide(unrotatedDelta.y, parentTransform.worldScale.y),
+        SafeDivide(unrotatedDelta.z, parentTransform.worldScale.z),
+    };
+}
+
+[[nodiscard]] Quat WorldToLocalRotation(const TransformComponent& parentTransform, Quat worldRotation) noexcept {
+    return kb::math::Inverse(parentTransform.worldRotation) * worldRotation;
+}
+
+// Shared by WriteBack/WriteBackCharacters below - honest fallback to "local == world" when the
+// entity has no parent OR its parent's TransformComponent cannot be found (matches
+// TransformMath::ComposeRoot's own contract; a vanished parent mid-frame is the same shape of
+// edge case CreateBody/SynchronizeBody already treat as "not simulated this step", not a crash).
+void WriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) {
+    const SceneEntity parent = context.GetScene().Hierarchy().Parent(entity);
+    const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
+    if (parentTransform != nullptr) {
+        transform.localPosition = WorldToLocalPosition(*parentTransform, worldPosition);
+        transform.localRotation = WorldToLocalRotation(*parentTransform, worldRotation);
+    } else {
+        transform.localPosition = worldPosition;
+        transform.localRotation = worldRotation;
+    }
+    transform.worldPosition = worldPosition;
+    transform.worldRotation = worldRotation;
+    transform.worldDirty = true;
+    context.Transforms().MarkModified(entity);
+}
+
 [[nodiscard]] BodySignature MakeSignature(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) noexcept {
     return BodySignature{
         .bodyType = rigidbody.bodyType,
@@ -250,6 +302,7 @@ struct BodyRecord {
         .gravityScale = rigidbody.gravityScale,
         .useGravity = rigidbody.useGravity,
         .lockRotation = rigidbody.lockRotation,
+        .useContinuousCollision = rigidbody.useContinuousCollision,
         .trigger = collider.trigger,
         .friction = collider.friction,
         .restitution = collider.restitution,
@@ -261,7 +314,8 @@ struct BodyRecord {
     return lhs.bodyType == rhs.bodyType && lhs.shape == rhs.shape && SameVec3(lhs.scale, rhs.scale) &&
         SameVec3(lhs.center, rhs.center) && SameVec3(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius &&
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
-        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation && lhs.trigger == rhs.trigger &&
+        lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation &&
+        lhs.useContinuousCollision == rhs.useContinuousCollision && lhs.trigger == rhs.trigger &&
         lhs.layer == rhs.layer &&
         lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
@@ -378,6 +432,50 @@ struct JointRecord {
     return {};
 }
 
+// LIB-131: which real shape a CharacterControllerComponent's JPH::CharacterVirtual was last
+// built against (mirror BodySignature) - only a SHAPE change (center/radius/height/scale)
+// forces destroy+recreate; slopeLimitDegrees is applied live every step via
+// JPH::CharacterVirtual::SetMaxSlopeAngle (see UpdateCharacters below) and needs no rebuild.
+struct CharacterSignature {
+    Vec3 scale{ 1.0F, 1.0F, 1.0F };
+    Vec3 center{};
+    float radius = 0.5F;
+    float height = 2.0F;
+};
+
+[[nodiscard]] CharacterSignature MakeCharacterSignature(const CharacterControllerComponent& character, const TransformComponent& transform) noexcept {
+    return CharacterSignature{
+        .scale = transform.worldScale,
+        .center = character.center,
+        .radius = character.radius,
+        .height = character.height,
+    };
+}
+
+[[nodiscard]] bool operator==(const CharacterSignature& lhs, const CharacterSignature& rhs) noexcept {
+    return SameVec3(lhs.scale, rhs.scale) && SameVec3(lhs.center, rhs.center) && lhs.radius == rhs.radius && lhs.height == rhs.height;
+}
+
+struct CharacterRecord {
+    JPH::Ref<JPH::CharacterVirtual> character;
+    CharacterSignature signature{};
+    // LIB-131: per-frame INPUT set by Physics.CharacterMove/CharacterJump (see
+    // IPhysicsBackend's own doc comment for why this cannot live on the component like
+    // Rigidbody/Joint data does) - consumed every fixed step by UpdateCharacters below.
+    // pendingJumpSpeed is cleared back to 0 every step regardless of whether the jump was
+    // actually honored (character not grounded), matching a real jump button's one-shot
+    // semantics.
+    Vec3 moveInput{};
+    float pendingJumpSpeed = 0.0F;
+    // Mirrors of CharacterControllerComponent's own fields that Jolt has no "live setter"
+    // for (unlike slopeLimitDegrees, applied straight to the JPH::CharacterVirtual via
+    // SetMaxSlopeAngle - see SynchronizeCharacter) - refreshed every step regardless of
+    // whether the character's SHAPE changed, so editing them never requires a rebuild.
+    float stepOffset = 0.4F;
+    float gravityScale = 1.0F;
+    bool useGravity = true;
+};
+
 [[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
     switch (bodyType) {
     case RigidbodyBodyType::Static:
@@ -390,6 +488,16 @@ struct JointRecord {
     return JPH::EMotionType::Dynamic;
 }
 
+// LIB-131: factored out of the Capsule case below so CharacterControllerComponent's shape
+// (SynchronizeCharacter's CreateCharacterSettings) can build the identical capsule geometry
+// instead of re-deriving the half-cylinder math a second time.
+[[nodiscard]] JPH::RefConst<JPH::Shape> CreateCapsuleShape(float scaledRadius, float scaledHeight) {
+    const float radius = ClampPositive(scaledRadius);
+    const float clampedHeight = ClampPositive(scaledHeight);
+    const float halfCylinder = std::max(0.0F, (clampedHeight * 0.5F) - radius);
+    return new JPH::CapsuleShape(halfCylinder, radius);
+}
+
 [[nodiscard]] JPH::RefConst<JPH::Shape> CreateShape(const ColliderComponent& collider, Vec3 scale) {
     const float scaleX = AbsScale(scale.x);
     const float scaleY = AbsScale(scale.y);
@@ -398,12 +506,8 @@ struct JointRecord {
     switch (collider.shape) {
     case ColliderShape::Sphere:
         return new JPH::SphereShape(ClampPositive(collider.radius * std::max({ scaleX, scaleY, scaleZ })));
-    case ColliderShape::Capsule: {
-        const float radius = ClampPositive(collider.radius * std::max(scaleX, scaleZ));
-        const float scaledHeight = ClampPositive(collider.height * scaleY);
-        const float halfCylinder = std::max(0.0F, (scaledHeight * 0.5F) - radius);
-        return new JPH::CapsuleShape(halfCylinder, radius);
-    }
+    case ColliderShape::Capsule:
+        return CreateCapsuleShape(collider.radius * std::max(scaleX, scaleZ), collider.height * scaleY);
     case ColliderShape::Box:
         return new JPH::BoxShape(JPH::Vec3(
             ClampPositive(collider.boxSize.x * scaleX * 0.5F),
@@ -421,6 +525,19 @@ struct PhysicsBodySnapshot {
 };
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
+
+// LIB-131: a CharacterControllerComponent entity deliberately never appears in
+// PhysicsBodyQuery above (it has no Rigidbody/Collider - the whole point of a character
+// controller is a shape that moves itself via collision sweeps instead of being simulated
+// as an ordinary Body), so it needs its own, entirely separate query/snapshot/synchronize
+// path rather than sharing bodies_.
+struct CharacterSnapshot {
+    SceneEntity entity{};
+    TransformComponent transform{};
+    CharacterControllerComponent character{};
+};
+
+using CharacterQuery = kb::ecs::Query<TransformComponent, CharacterControllerComponent>;
 
 struct JointSnapshot {
     SceneEntity entity{};
@@ -636,15 +753,26 @@ public:
     }
 
     ~Impl() override {
+        RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
     }
 
+    // LIB-131: UpdateCharacters runs BEFORE Step() below, matching Jolt's own reference
+    // sample (Samples/Tests/Character/CharacterVirtualTest.cpp names this ordering
+    // "PrePhysicsUpdate") - a character's ExtendedUpdate reads ground bodies' CURRENT
+    // (not-yet-this-frame-advanced) velocity to compute how far to ride along with them,
+    // and Step() then advances those same ground bodies by that same velocity*dt - running
+    // the character after Step() instead would double-count (or lag a frame behind) however
+    // far a platform the character is standing on moves this step.
     void OnFixedUpdate(SceneSystemContext& context) {
         SynchronizeBodies(context);
         SynchronizeJoints(context);
+        SynchronizeCharacters(context);
+        UpdateCharacters(context);
         Step(context.DeltaSeconds());
         WriteBack(context);
+        WriteBackCharacters(context);
         DispatchContactEvents(context);
     }
 
@@ -653,6 +781,7 @@ public:
         // remove joints BEFORE the bodies they connect, matching the real
         // dependency order (mirrors why Jolt itself requires
         // RemoveConstraint before the bodies it references are destroyed).
+        RemoveAllCharacters();
         RemoveAllJoints();
         RemoveAllBodies();
     }
@@ -744,6 +873,61 @@ public:
     [[nodiscard]] bool IsSleeping(SceneEntity entity) const noexcept override {
         const JPH::BodyID* bodyId = FindBodyId(entity);
         return bodyId != nullptr && !physicsSystem_.GetBodyInterface().IsActive(*bodyId);
+    }
+
+    // LIB-131: see IPhysicsBackend's own doc comment - these operate on characters_ (a
+    // JPH::CharacterVirtual per CharacterControllerComponent entity), entirely separate from
+    // bodies_ above.
+    bool CharacterMove(SceneEntity entity, Vec3 horizontalVelocity) noexcept override {
+        CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr) {
+            return false;
+        }
+        record->moveInput = horizontalVelocity;
+        return true;
+    }
+
+    bool CharacterJump(SceneEntity entity, float verticalSpeed) noexcept override {
+        CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr) {
+            return false;
+        }
+        record->pendingJumpSpeed = verticalSpeed;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(SceneEntity entity) const noexcept override {
+        const CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(record->character->GetLinearVelocity()) };
+    }
+
+    [[nodiscard]] bool CharacterIsGrounded(SceneEntity entity) const noexcept override {
+        const CharacterRecord* record = FindCharacterRecord(entity);
+        return record != nullptr && record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+    }
+
+    // LIB-131: CharacterBase.h's own doc comment on EGroundState::NotSupported says "The
+    // GetGroundXXX functions will return information about the touched object" - so the
+    // honest "no ground data" gate is InAir specifically (touching nothing at all), not
+    // merely "not fully supported" (which would also exclude the still-meaningful
+    // OnSteepGround/NotSupported states).
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundNormal(SceneEntity entity) const noexcept override {
+        const CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr || record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::InAir) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(record->character->GetGroundNormal()) };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundVelocity(SceneEntity entity) const noexcept override {
+        const CharacterRecord* record = FindCharacterRecord(entity);
+        if (record == nullptr || record->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::InAir) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(record->character->GetGroundVelocity()) };
     }
 
     [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
@@ -1087,6 +1271,201 @@ private:
         joints_.clear();
     }
 
+    [[nodiscard]] CharacterRecord* FindCharacterRecord(SceneEntity entity) noexcept {
+        const auto existing = characters_.find(entity.Id());
+        return existing == characters_.end() ? nullptr : &existing->second;
+    }
+
+    [[nodiscard]] const CharacterRecord* FindCharacterRecord(SceneEntity entity) const noexcept {
+        const auto existing = characters_.find(entity.Id());
+        return existing == characters_.end() ? nullptr : &existing->second;
+    }
+
+    // LIB-131: a CharacterControllerComponent entity is never a Rigidbody/Collider (see
+    // CharacterSnapshot's own comment) - runs alongside SynchronizeBodies/SynchronizeJoints
+    // in OnFixedUpdate, entirely independent of bodies_/joints_.
+    void SynchronizeCharacters(SceneSystemContext& context) {
+        characterScratch_.clear();
+        characterScratch_.reserve(std::max<std::size_t>(characters_.size(), 4U));
+        constexpr kb::ecs::QueryExecutionSettings settings{
+            .maxBatchSize = 1024U,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+        {
+            CharacterQuery characterQuery = context.EcsWorld().CreateQuery<TransformComponent, CharacterControllerComponent>();
+            characterQuery.ForEachBatchKernel(settings, [this](const CharacterQuery::Batch& batch) {
+                const TransformComponent* transforms = batch.Components<0>();
+                const CharacterControllerComponent* characterComponents = batch.Components<1>();
+                for (std::size_t index = 0; index < batch.Count(); ++index) {
+                    characterScratch_.push_back(CharacterSnapshot{
+                        .entity = SceneEntity{ batch.EntityAt(index).Id() },
+                        .transform = transforms[index],
+                        .character = characterComponents[index],
+                    });
+                }
+            });
+        }
+
+        std::unordered_set<std::uint64_t> seen;
+        seen.reserve(std::max(characters_.size(), characterScratch_.size()));
+        for (const CharacterSnapshot& snapshot : characterScratch_) {
+            seen.insert(snapshot.entity.Id());
+            SynchronizeCharacter(snapshot.entity, snapshot.transform, snapshot.character);
+        }
+
+        for (auto it = characters_.begin(); it != characters_.end();) {
+            if (seen.find(it->first) == seen.end()) {
+                it = characters_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Only a shape change (CharacterSignature) destroys+recreates the real JPH::CharacterVirtual;
+    // slopeLimitDegrees/stepOffset/gravityScale/useGravity are refreshed on the record every
+    // step regardless (slopeLimitDegrees applied live via SetMaxSlopeAngle - the other three
+    // have no Jolt-side "live setter", they are read directly off CharacterRecord by
+    // UpdateCharacters below instead).
+    void SynchronizeCharacter(SceneEntity entity, const TransformComponent& transform, const CharacterControllerComponent& component) {
+        const CharacterSignature signature = MakeCharacterSignature(component, transform);
+        const auto existing = characters_.find(entity.Id());
+        if (existing != characters_.end() && existing->second.signature == signature) {
+            existing->second.character->SetMaxSlopeAngle(JPH::DegreesToRadians(component.slopeLimitDegrees));
+            existing->second.stepOffset = component.stepOffset;
+            existing->second.gravityScale = component.gravityScale;
+            existing->second.useGravity = component.useGravity;
+            return;
+        }
+
+        // A rebuild (shape changed, or first creation) starts fresh at the entity's CURRENT
+        // transform - WriteBackCharacters keeps that transform continuously in sync with the
+        // OLD character's own last position every prior step, so this is not a position
+        // reset in practice, only real velocity carries over explicitly below.
+        Vec3 moveInput{};
+        float pendingJumpSpeed = 0.0F;
+        if (existing != characters_.end()) {
+            moveInput = existing->second.moveInput;
+            pendingJumpSpeed = existing->second.pendingJumpSpeed;
+            characters_.erase(existing);
+        }
+
+        const float scaleX = AbsScale(transform.worldScale.x);
+        const float scaleY = AbsScale(transform.worldScale.y);
+        const float scaleZ = AbsScale(transform.worldScale.z);
+
+        JPH::CharacterVirtualSettings characterSettings;
+        characterSettings.mShape = CreateCapsuleShape(component.radius * std::max(scaleX, scaleZ), component.height * scaleY);
+        characterSettings.mShapeOffset = ToJolt(component.center);
+        characterSettings.mMaxSlopeAngle = JPH::DegreesToRadians(component.slopeLimitDegrees);
+
+        const JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(
+            &characterSettings, ToJoltPosition(transform.worldPosition), ToJolt(transform.worldRotation), &physicsSystem_);
+        characters_.emplace(entity.Id(), CharacterRecord{
+                                              .character = character,
+                                              .signature = signature,
+                                              .moveInput = moveInput,
+                                              .pendingJumpSpeed = pendingJumpSpeed,
+                                              .stepOffset = component.stepOffset,
+                                              .gravityScale = component.gravityScale,
+                                              .useGravity = component.useGravity,
+                                          });
+    }
+
+    // LIB-131: the movement algorithm below is a faithful port of Jolt's OWN reference
+    // implementation (third_party/jolt/Samples/Tests/Character/CharacterVirtualTest.cpp,
+    // HandleInput) - not reinvented. Runs BEFORE Step() - see OnFixedUpdate's own comment.
+    void UpdateCharacters(SceneSystemContext& context) {
+        const float deltaSeconds = context.DeltaSeconds();
+        if (deltaSeconds <= 0.0F) {
+            return;
+        }
+        const JPH::ObjectLayer characterLayer = ToObjectLayer(0U, false);
+        for (auto& [entityId, record] : characters_) {
+            static_cast<void>(entityId);
+            JPH::CharacterVirtual* character = record.character;
+
+            // A cheaper re-estimate of ground velocity than a full contact refresh - the
+            // ground body's own velocity may have changed since the last contact was
+            // detected (e.g. SynchronizeBodies just re-derived a Kinematic platform's
+            // velocity from its transform this very step).
+            character->UpdateGroundVelocity();
+
+            const JPH::Vec3 up = character->GetUp();
+            const JPH::Vec3 currentVerticalVelocity = character->GetLinearVelocity().Dot(up) * up;
+            const JPH::Vec3 groundVelocity = character->GetGroundVelocity();
+            const bool movingTowardsGround = (currentVerticalVelocity.Dot(up) - groundVelocity.Dot(up)) < 0.1F;
+
+            JPH::Vec3 newVelocity;
+            if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround && movingTowardsGround) {
+                // LIB-131 "platform motion": assume the velocity of whatever is stood on -
+                // zero for static/no ground, the real moving velocity for a Kinematic/Dynamic
+                // platform, so the character rides along with it automatically.
+                newVelocity = groundVelocity;
+                // LIB-131 jump: only actually honored while grounded and not already moving
+                // away from the ground - a request made while airborne was already dropped by
+                // this same `if` not being taken, so pendingJumpSpeed is simply never added.
+                if (record.pendingJumpSpeed > 0.0F) {
+                    newVelocity += up * record.pendingJumpSpeed;
+                }
+            } else {
+                newVelocity = currentVerticalVelocity;
+            }
+            record.pendingJumpSpeed = 0.0F;
+
+            // LIB-131 gravity: this component's own gravityScale/useGravity, not the scene
+            // gravity vector unmodified - mirrors RigidbodyComponent's identically-named
+            // fields, since a character has no Rigidbody of its own to read them from.
+            const JPH::Vec3 gravity = physicsSystem_.GetGravity() * (record.useGravity ? record.gravityScale : 0.0F);
+            newVelocity += gravity * deltaSeconds;
+
+            // LIB-131 movement input (Physics.CharacterMove): horizontal only - any vertical
+            // component is projected out so a script cannot bypass CharacterJump/gravity by
+            // passing a nonzero Y through CharacterMove instead (ScriptPhysicsApi.cpp's
+            // Physics.CharacterMove pins do not even accept a Y value).
+            const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
+            newVelocity += desiredVelocity - desiredVelocity.Dot(up) * up;
+
+            character->SetLinearVelocity(newVelocity);
+
+            // LIB-131 step offset: ExtendedUpdate's own WalkStairs pass, magnitude taken from
+            // this character's configured stepOffset (not Jolt's built-in 0.4 default, though
+            // that IS this field's own default value - see CharacterControllerComponent.hpp).
+            JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
+            updateSettings.mWalkStairsStepUp = up * record.stepOffset;
+
+            character->ExtendedUpdate(
+                deltaSeconds,
+                gravity,
+                updateSettings,
+                physicsSystem_.GetDefaultBroadPhaseLayerFilter(characterLayer),
+                physicsSystem_.GetDefaultLayerFilter(characterLayer),
+                {},
+                {},
+                tempAllocator_);
+        }
+    }
+
+    void WriteBackCharacters(SceneSystemContext& context) {
+        for (const auto& [entityId, record] : characters_) {
+            SceneEntity entity{ entityId };
+            if (!context.Transforms().IsAlive(entity)) {
+                continue;
+            }
+            TransformComponent* transform = context.Transforms().TryGet(entity);
+            if (transform == nullptr) {
+                continue;
+            }
+            const Vec3 position = FromJoltPosition(record.character->GetPosition());
+            const Quat rotation = FromJolt(record.character->GetRotation());
+            WriteBackLocalPose(context, entity, *transform, position, rotation);
+        }
+    }
+
+    void RemoveAllCharacters() {
+        characters_.clear();
+    }
+
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
         JPH::RefConst<JPH::Shape> shape = CreateShape(collider, transform.worldScale);
         const Vec3 bodyPosition = Add(transform.worldPosition, collider.center);
@@ -1101,6 +1480,10 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
+        // LIB-133: fast mover / tunneling - Jolt's own default (Discrete) can tunnel a
+        // fast-moving body clean through a thin collider within a single fixed step; LinearCast
+        // sweeps the shape from start to destination instead.
+        bodySettings.mMotionQuality = rigidbody.useContinuousCollision ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
         if (rigidbody.lockRotation) {
             bodySettings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
         }
@@ -1148,12 +1531,8 @@ private:
             }
 
             const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), body.signature.center);
-            transform->localPosition = position;
-            transform->worldPosition = position;
-            transform->localRotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
-            transform->worldRotation = transform->localRotation;
-            transform->worldDirty = true;
-            context.Transforms().MarkModified(entity);
+            const Quat rotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
+            WriteBackLocalPose(context, entity, *transform, position, rotation);
 
             rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
             rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));
@@ -1307,6 +1686,8 @@ private:
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
     std::unordered_map<std::uint64_t, JointRecord> joints_;
     std::vector<JointSnapshot> jointScratch_;
+    std::unordered_map<std::uint64_t, CharacterRecord> characters_;
+    std::vector<CharacterSnapshot> characterScratch_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: which currently-active contact pairs are trigger contacts -
     // see DispatchContactEvents' own comment on why OnContactRemoved needs

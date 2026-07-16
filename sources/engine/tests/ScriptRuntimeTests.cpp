@@ -24,8 +24,18 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
@@ -97,9 +107,23 @@ public:
         ++stopAllCount;
     }
 
+    // LIB-148: minimal honest per-voice contract for this probe - any voice id below
+    // nextVoiceId was handed out by PlayOneShot and counts as live.
+    [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool PauseVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
+
+private:
+    [[nodiscard]] bool IsLive(std::uint64_t voiceId) const noexcept { return voiceId != 0U && voiceId < nextVoiceId; }
 };
 
 // LIB-124: mirrors ProbeAudioPlaybackBackend above - a real, deterministic
@@ -275,6 +299,60 @@ public:
             [[maybe_unused]] const bool pushed = results.PushBack(kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = entity });
         }
     }
+
+    // LIB-131: mirrors AddForce/SetVelocity above - a second "known entity" so tests can
+    // prove CharacterMove/CharacterJump/CharacterVelocity/CharacterIsGrounded/
+    // CharacterGroundNormal/CharacterGroundVelocity dispatch correctly through
+    // ScriptPhysicsApi -> kb::scene::PhysicsBackend -> this fake, independent of whether
+    // `knownEntity` (a Rigidbody-shaped fake elsewhere in this file) also exists.
+    bool CharacterMove(kb::scene::SceneEntity entity, kb::scene::Vec3 horizontalVelocity) noexcept override {
+        if (entity != knownCharacterEntity) {
+            return false;
+        }
+        lastCharacterMove = horizontalVelocity;
+        return true;
+    }
+
+    bool CharacterJump(kb::scene::SceneEntity entity, float verticalSpeed) noexcept override {
+        if (entity != knownCharacterEntity) {
+            return false;
+        }
+        lastCharacterJumpSpeed = verticalSpeed;
+        return true;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterVelocity };
+    }
+
+    [[nodiscard]] bool CharacterIsGrounded(kb::scene::SceneEntity entity) const noexcept override {
+        return entity == knownCharacterEntity && characterGrounded;
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundNormal(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity || !characterGrounded) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterGroundNormal };
+    }
+
+    [[nodiscard]] kb::scene::PhysicsVectorResult CharacterGroundVelocity(kb::scene::SceneEntity entity) const noexcept override {
+        if (entity != knownCharacterEntity || !characterGrounded) {
+            return {};
+        }
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = characterGroundVelocity };
+    }
+
+    kb::scene::SceneEntity knownCharacterEntity{};
+    kb::scene::Vec3 lastCharacterMove{};
+    float lastCharacterJumpSpeed = 0.0F;
+    kb::scene::Vec3 characterVelocity{};
+    bool characterGrounded = false;
+    kb::scene::Vec3 characterGroundNormal{};
+    kb::scene::Vec3 characterGroundVelocity{};
 
     kb::scene::SceneEntity knownEntity{};
     kb::scene::Vec3 lastForce{};
@@ -2176,6 +2254,27 @@ void RunScriptAudioApiTest() {
     kb::tests::Require(directPlay.mute && directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
     kb::tests::Require(kb::tests::NearlyEqual(directPlay.pan, -0.5F) && kb::tests::NearlyEqual(directPlay.spatialBlend, 0.25F), "Script audio API direct call did not preserve pan or spatial blend");
     kb::tests::Require(directPlay.attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(directPlay.minDistance, 2.0F) && kb::tests::NearlyEqual(directPlay.maxDistance, 75.0F) && kb::tests::NearlyEqual(directPlay.rolloff, 0.5F) && kb::tests::NearlyEqual(directPlay.dopplerFactor, 0.1F), "Script audio API direct call did not preserve attenuation settings");
+    kb::tests::Require(directPlay.ownerEntityId == 0U, "An unattached Audio.Play must not carry an owner entity");
+
+    // LIB-149: attach=true binds the one-shot to the caller (or explicit entity); a dead
+    // target is an honest error.
+    const std::vector<kb::script::ScriptFunctionArgument> attachedArguments{
+        kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+        kb::script::ScriptFunctionArgument{ .name = "attach", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult attached = host.Functions().Call(
+        "Audio.Play",
+        std::span<const kb::script::ScriptFunctionArgument>{ attachedArguments },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+    kb::tests::Require(attached.Succeeded() && audioBackend.played.back().ownerEntityId == caller.Entity().Id(),
+        "An attached Audio.Play must carry the calling entity as the voice owner");
+    const std::vector<kb::script::ScriptFunctionArgument> deadOwnerArguments{
+        kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+        kb::script::ScriptFunctionArgument{ .name = "attach", .value = kb::script::ScriptValue{ true } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ std::uint64_t{ 987654321U }, kb::script::ScriptValueType::Entity } },
+    };
+    kb::tests::Require(!host.Functions().Call("Audio.Play", std::span<const kb::script::ScriptFunctionArgument>{ deadOwnerArguments }, kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() }).Succeeded(),
+        "An attached Audio.Play must honestly error for a dead owner entity");
 
     const kb::assets::AssetId luaAsset{ 8802U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Caller" });
@@ -2199,8 +2298,10 @@ end
     const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
     kb::tests::Require(tick.Succeeded(), "Script audio API Lua wrapper execution failed");
     const std::optional<kb::script::ScriptValue> luaVoiceValue = host.SharedState().Get("luaAudioVoice");
-    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 2, "Script audio API Lua wrapper did not return a voice");
-    kb::tests::Require(audioBackend.played.size() == 2U, "Script audio API Lua wrapper did not reach audio backend");
+    // Voice 3: the direct call took 1, LIB-149's attached-play probe above took 2 (the
+    // dead-owner attempt errors before ever reaching the backend, so it takes none).
+    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 3, "Script audio API Lua wrapper did not return a voice");
+    kb::tests::Require(audioBackend.played.size() == 3U, "Script audio API Lua wrapper did not reach audio backend");
     const kb::audio::AudioPlayDesc& luaPlay = audioBackend.played.back();
     kb::tests::Require(luaPlay.clipAssetId == clipId.value, "Script audio API Lua wrapper sent the wrong clip id");
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.volume, 0.75F), "Script audio API Lua wrapper did not preserve volume");
@@ -2208,6 +2309,2023 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.pan, 0.5F) && kb::tests::NearlyEqual(luaPlay.spatialBlend, 0.6F), "Script audio API Lua wrapper did not preserve pan or spatial blend");
     kb::tests::Require(luaPlay.attenuationModel == kb::audio::AudioAttenuationModel::Exponential && kb::tests::NearlyEqual(luaPlay.minDistance, 4.0F) && kb::tests::NearlyEqual(luaPlay.maxDistance, 120.0F) && kb::tests::NearlyEqual(luaPlay.rolloff, 1.4F) && kb::tests::NearlyEqual(luaPlay.dopplerFactor, 0.2F), "Script audio API Lua wrapper did not preserve attenuation settings");
     kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
+}
+
+// LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are deliberately
+// excluded from the generic ScriptSceneComponentApi reflection table (LIB-082's raw-pointer
+// audit keeps that path to {Bool,Int,Float}, and a raw uint64 asset id is exactly the kind
+// of value it forbids there), so this is the only script-facing way to assign them - proves
+// real AssetRegistry resolution (both virtual-path and id-string forms, mirroring Audio.Play
+// exactly), real component creation AND in-place update (second call must not clobber the
+// first call's field), and honest, clean rejection of an unresolvable or wrong-type asset
+// reference (no crash, no partial mutation).
+void RunScriptMeshRendererApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script mesh renderer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMesh") != nullptr, "Script mesh renderer API did not register MeshRenderer.SetMesh");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterial") != nullptr, "Script mesh renderer API did not register MeshRenderer.SetMaterial");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMesh") != nullptr,
+        "Script mesh renderer API did not register VisualGraph runtime binding for SetMesh");
+    kb::tests::Require(host.VisualGraphNativeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMaterial") != nullptr,
+        "Script mesh renderer API did not register VisualGraph native binding for SetMaterial");
+
+    const kb::assets::AssetId meshId{ 9101U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "Cube",
+                           .virtualPath = "/Game/Meshes/Cube.21kbmesh",
+                           .physicalPath = "Cube.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer API test mesh asset registration failed");
+    const kb::assets::AssetId materialId{ 9102U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = materialId,
+                           .type = "RenderMaterial",
+                           .name = "Default",
+                           .virtualPath = "/Game/Materials/Default.kbmat",
+                           .physicalPath = "Default.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer API test material asset registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Api Subject" });
+    kb::tests::Require(!scene.Components().MeshRenderers().Has(subject.Entity()), "Script mesh renderer API test subject must start without a MeshRenderer component");
+
+    const kb::script::ScriptFunctionCallResult setMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/Cube.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setMesh.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh (virtual path) failed");
+    const kb::scene::MeshRendererComponent* afterSetMesh = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetMesh != nullptr && afterSetMesh->meshAssetId == meshId.value, "Script mesh renderer API MeshRenderer.SetMesh did not create a component with the resolved mesh asset id");
+    kb::tests::Require(afterSetMesh->materialAssetId == 0U, "Script mesh renderer API MeshRenderer.SetMesh must not touch materialAssetId when creating a fresh component");
+
+    const kb::script::ScriptFunctionCallResult setMaterial = host.Functions().Call(
+        "MeshRenderer.SetMaterial",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(materialId) } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setMaterial.Succeeded(), "Script mesh renderer API MeshRenderer.SetMaterial (id string) failed");
+    const kb::scene::MeshRendererComponent* afterSetMaterial = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetMaterial != nullptr && afterSetMaterial->materialAssetId == materialId.value,
+        "Script mesh renderer API MeshRenderer.SetMaterial did not resolve a hex asset-id-string argument");
+    kb::tests::Require(afterSetMaterial->meshAssetId == meshId.value, "Script mesh renderer API MeshRenderer.SetMaterial must preserve the existing meshAssetId (update in place, not overwrite the whole component)");
+
+    const kb::script::ScriptFunctionCallResult unresolvedMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/DoesNotExist.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!unresolvedMesh.Succeeded() && !unresolvedMesh.errors.empty(), "Script mesh renderer API MeshRenderer.SetMesh must honestly fail for an unresolvable mesh path");
+
+    const kb::script::ScriptFunctionCallResult wrongTypeMesh = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/Default.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeMesh.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh must reject a real asset of the wrong type (RenderMaterial, not RenderMesh)");
+    const kb::scene::MeshRendererComponent* afterRejectedCalls = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterRejectedCalls != nullptr && afterRejectedCalls->meshAssetId == meshId.value && afterRejectedCalls->materialAssetId == materialId.value,
+        "Script mesh renderer API rejected calls must not have mutated the component at all");
+
+    const kb::scene::SceneObject deadObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Api Dead Subject" });
+    const kb::scene::SceneEntity deadEntity = deadObject.Entity();
+    scene.Entities().Destroy(deadObject);
+    const kb::script::ScriptFunctionCallResult deadEntityCall = host.Functions().Call(
+        "MeshRenderer.SetMesh",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "mesh", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/Cube.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ deadEntity.Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!deadEntityCall.Succeeded(), "Script mesh renderer API MeshRenderer.SetMesh must honestly fail for a destroyed entity, not throw");
+
+    const kb::assets::AssetId luaAsset{ 9103U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua MeshRenderer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned, err = MeshRenderer.SetMesh("/Game/Meshes/Cube.21kbmesh", { entity = self.entity })
+    SetShared("luaMeshAssigned", assigned)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script mesh renderer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script mesh renderer API Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaAssignedValue = host.SharedState().Get("luaMeshAssigned");
+    kb::tests::Require(luaAssignedValue.has_value() && luaAssignedValue->AsBool(), "Script mesh renderer API Lua wrapper did not report a successful assignment");
+    const kb::scene::MeshRendererComponent* luaRenderer = scene.Components().MeshRenderers().TryGet(luaObject.Entity());
+    kb::tests::Require(luaRenderer != nullptr && luaRenderer->meshAssetId == meshId.value, "Script mesh renderer API Lua wrapper did not actually assign the mesh asset");
+}
+
+// LIB-138: MeshRenderer.SetMaterialSlot/GetMaterialSlot/ClearMaterialSlot - the per-slot
+// materialSlotAssetIds[] array (already fully wired through binary codec/prefab/renderer,
+// LIB-136/137's own investigation) had no script-facing way to assign an individual slot,
+// for the exact same LIB-082 reason meshAssetId/materialAssetId needed dedicated functions
+// in LIB-137: it is not a scalar Bool/Int/Float field the generic reflection table can carry.
+void RunScriptMeshRendererMaterialSlotApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script mesh renderer material slot API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register SetMaterialSlot");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.GetMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register GetMaterialSlot");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.ClearMaterialSlot") != nullptr, "Script mesh renderer material slot API did not register ClearMaterialSlot");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MeshRenderer.SetMaterialSlot") != nullptr,
+        "Script mesh renderer material slot API did not register VisualGraph runtime binding for SetMaterialSlot");
+
+    const kb::assets::AssetId slot0MaterialId{ 9201U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = slot0MaterialId,
+                           .type = "RenderMaterial",
+                           .name = "SlotZero",
+                           .virtualPath = "/Game/Materials/SlotZero.kbmat",
+                           .physicalPath = "SlotZero.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test slot0 material registration failed");
+    const kb::assets::AssetId slot2MaterialId{ 9202U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = slot2MaterialId,
+                           .type = "RenderMaterialInstance",
+                           .name = "SlotTwo",
+                           .virtualPath = "/Game/Materials/SlotTwo.kbmatinst",
+                           .physicalPath = "SlotTwo.kbmatinst",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test slot2 material instance registration failed");
+    const kb::assets::AssetId meshId{ 9203U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "MultiSectionMesh",
+                           .virtualPath = "/Game/Meshes/MultiSection.21kbmesh",
+                           .physicalPath = "MultiSection.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script mesh renderer material slot API test mesh registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MeshRenderer Material Slot Subject" });
+
+    // Setting a slot on an entity with NO MeshRendererComponent yet must create one.
+    const kb::script::ScriptFunctionCallResult setSlot0 = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/SlotZero.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSlot0.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot(0, ...) failed");
+    const kb::scene::MeshRendererComponent* afterSlot0 = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSlot0 != nullptr && afterSlot0->materialSlotAssetIds[0] == slot0MaterialId.value && afterSlot0->materialSlotOverrideCount == 1U,
+        "Script mesh renderer material slot API SetMaterialSlot(0, ...) did not create the component with the resolved override and a correct count");
+
+    // Setting a HIGHER slot (2) must grow materialSlotOverrideCount to include it, leaving
+    // slot 1 as an untouched (zero = no override) gap - proves the "sparse array" contract
+    // MeshPipelineResourceResolver::MaterialAssetForSectionInstance relies on (only a nonzero
+    // slot id below the count counts as a real override).
+    const kb::script::ScriptFunctionCallResult setSlot2 = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 2 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(slot2MaterialId) } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSlot2.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot(2, ...) (id string, RenderMaterialInstance) failed");
+    const kb::scene::MeshRendererComponent* afterSlot2 = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSlot2 != nullptr && afterSlot2->materialSlotOverrideCount == 3U, "Script mesh renderer material slot API SetMaterialSlot(2, ...) did not grow materialSlotOverrideCount to 3");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[0] == slot0MaterialId.value, "Script mesh renderer material slot API SetMaterialSlot(2, ...) must not disturb the existing slot 0 override");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[1] == 0U, "Script mesh renderer material slot API SetMaterialSlot(2, ...) must leave the untouched slot 1 as zero (no override)");
+    kb::tests::Require(afterSlot2->materialSlotAssetIds[2] == slot2MaterialId.value, "Script mesh renderer material slot API SetMaterialSlot(2, ...) did not resolve a hex id string argument for a RenderMaterialInstance asset");
+
+    // GetMaterialSlot must honestly report which slots really have an override.
+    const kb::script::ScriptFunctionCallResult getSlot0 = host.Functions().Call(
+        "MeshRenderer.GetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(getSlot0.Succeeded(), "Script mesh renderer material slot API GetMaterialSlot(0, ...) failed");
+    kb::tests::Require(getSlot0.Output("hasOverride").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script mesh renderer material slot API GetMaterialSlot(0, ...) must report hasOverride=true");
+    kb::tests::Require(getSlot0.Output("material").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(slot0MaterialId),
+        "Script mesh renderer material slot API GetMaterialSlot(0, ...) did not return the resolved material asset id");
+
+    const kb::script::ScriptFunctionCallResult getSlot1 = host.Functions().Call(
+        "MeshRenderer.GetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 1 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(getSlot1.Succeeded() && !getSlot1.Output("hasOverride").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Script mesh renderer material slot API GetMaterialSlot(1, ...) must honestly report no override for an untouched slot");
+
+    // ClearMaterialSlot must zero the id without disturbing other slots or the count.
+    const kb::script::ScriptFunctionCallResult clearSlot0 = host.Functions().Call(
+        "MeshRenderer.ClearMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 0 } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearSlot0.Succeeded(), "Script mesh renderer material slot API ClearMaterialSlot(0, ...) failed");
+    const kb::scene::MeshRendererComponent* afterClear = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterClear != nullptr && afterClear->materialSlotAssetIds[0] == 0U, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) did not zero the slot");
+    kb::tests::Require(afterClear->materialSlotAssetIds[2] == slot2MaterialId.value, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) must not disturb slot 2");
+    kb::tests::Require(afterClear->materialSlotOverrideCount == 3U, "Script mesh renderer material slot API ClearMaterialSlot(0, ...) must not shrink materialSlotOverrideCount (slot 2 is still a real override)");
+
+    // Out-of-range slot index must be honestly rejected, not silently clamped/wrapped.
+    const kb::script::ScriptFunctionCallResult outOfRangeSlot = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ static_cast<int>(kb::scene::kMaxMeshRendererMaterialSlotOverrides) } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Materials/SlotZero.kbmat" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!outOfRangeSlot.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot must honestly reject a slot index at kMaxMeshRendererMaterialSlotOverrides");
+
+    // Wrong-type asset (a real RenderMesh, not a material) must be rejected too.
+    const kb::script::ScriptFunctionCallResult wrongTypeSlot = host.Functions().Call(
+        "MeshRenderer.SetMaterialSlot",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "slot", .value = kb::script::ScriptValue{ 1 } },
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/MultiSection.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeSlot.Succeeded(), "Script mesh renderer material slot API SetMaterialSlot must reject a real asset of the wrong type (RenderMesh, not a material)");
+
+    // Lua wrapper, exercising both the two-values-in table return of GetMaterialSlot and
+    // the leading-slot-index calling shape of SetMaterialSlot.
+    const kb::assets::AssetId luaAsset{ 9204U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua MeshRenderer Material Slot Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned = MeshRenderer.SetMaterialSlot(3, "/Game/Materials/SlotZero.kbmat", { entity = self.entity })
+    local slot = MeshRenderer.GetMaterialSlot(3, { entity = self.entity })
+    SetShared("luaSlotAssigned", assigned)
+    SetShared("luaSlotHasOverride", slot.hasOverride)
+    SetShared("luaSlotMaterial", slot.material)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script mesh renderer material slot API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script mesh renderer material slot API Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaAssignedValue = host.SharedState().Get("luaSlotAssigned");
+    kb::tests::Require(luaAssignedValue.has_value() && luaAssignedValue->AsBool(), "Script mesh renderer material slot API Lua wrapper did not report a successful assignment");
+    const std::optional<kb::script::ScriptValue> luaHasOverrideValue = host.SharedState().Get("luaSlotHasOverride");
+    kb::tests::Require(luaHasOverrideValue.has_value() && luaHasOverrideValue->AsBool(), "Script mesh renderer material slot API Lua wrapper GetMaterialSlot did not report hasOverride=true");
+    const std::optional<kb::script::ScriptValue> luaMaterialValue = host.SharedState().Get("luaSlotMaterial");
+    kb::tests::Require(luaMaterialValue.has_value() && luaMaterialValue->AsString() == kb::assets::ToString(slot0MaterialId),
+        "Script mesh renderer material slot API Lua wrapper GetMaterialSlot did not return the resolved material asset id");
+    const kb::scene::MeshRendererComponent* luaRenderer = scene.Components().MeshRenderers().TryGet(luaObject.Entity());
+    kb::tests::Require(luaRenderer != nullptr && luaRenderer->materialSlotAssetIds[3] == slot0MaterialId.value, "Script mesh renderer material slot API Lua wrapper did not actually assign the material slot");
+}
+
+// LIB-143: kb::scene::ParticleEffectAssetIO's own real on-disk Save()/Load() round trip -
+// every scalar field, the material reference string, and (the part
+// RunSceneParticleSystemsLifecycleTest's own single-keyframe/single-stop effect does not
+// exercise) a multi-keyframe Curve and multi-stop Gradient with distinct Easing modes per
+// segment, plus honest failure for a missing file.
+void RunParticleEffectAssetIORoundTripTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_particle_effect_asset_io_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root, resetError);
+    kb::tests::Require(!resetError, "LIB-143 particle effect asset IO test root could not be prepared");
+
+    kb::scene::ParticleEffectAsset asset{};
+    asset.materialReference = "/Game/Materials/Spark.kbmat";
+    asset.looping = false;
+    asset.durationSeconds = 2.5F;
+    asset.maxParticles = 512U;
+    asset.emissionRatePerSecond = 42.0F;
+    asset.startSpeedMin = 1.5F;
+    asset.startSpeedMax = 3.5F;
+    asset.startLifetimeMin = 0.75F;
+    asset.startLifetimeMax = 1.25F;
+    asset.direction = kb::math::Vec3{ 0.0F, 0.5F, 0.5F };
+    asset.spreadDegrees = 22.5F;
+    asset.gravityScale = 0.3F;
+    asset.sizeOverLifetime.keyframes = {
+        kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.1F, .easing = kb::math::Easing::OutQuad },
+        kb::math::CurveKeyframe{ .time = 0.5F, .value = 1.0F, .easing = kb::math::Easing::InOutSine },
+        kb::math::CurveKeyframe{ .time = 1.0F, .value = 0.0F, .easing = kb::math::Easing::Linear },
+    };
+    asset.colorOverLifetime.stops = {
+        kb::math::GradientStop{ .time = 0.0F, .color = kb::math::Color{ 1.0F, 0.9F, 0.4F, 1.0F } },
+        kb::math::GradientStop{ .time = 1.0F, .color = kb::math::Color{ 0.6F, 0.1F, 0.0F, 0.0F } },
+    };
+
+    const std::filesystem::path assetPath = root / "Spark.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(assetPath, asset), "LIB-143 particle effect asset must write to disk");
+
+    const std::optional<kb::scene::ParticleEffectAsset> reread = kb::scene::ParticleEffectAssetIO::Load(assetPath);
+    kb::tests::Require(reread.has_value(), "LIB-143 particle effect asset must read back what it just wrote to disk");
+    kb::tests::Require(reread->materialReference == asset.materialReference, "LIB-143 particle effect asset materialReference must round-trip");
+    kb::tests::Require(reread->looping == asset.looping, "LIB-143 particle effect asset looping must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->durationSeconds, asset.durationSeconds), "LIB-143 particle effect asset durationSeconds must round-trip");
+    kb::tests::Require(reread->maxParticles == asset.maxParticles, "LIB-143 particle effect asset maxParticles must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->emissionRatePerSecond, asset.emissionRatePerSecond), "LIB-143 particle effect asset emissionRatePerSecond must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->startSpeedMin, asset.startSpeedMin) && kb::tests::NearlyEqual(reread->startSpeedMax, asset.startSpeedMax),
+        "LIB-143 particle effect asset startSpeedMin/Max must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->startLifetimeMin, asset.startLifetimeMin) && kb::tests::NearlyEqual(reread->startLifetimeMax, asset.startLifetimeMax),
+        "LIB-143 particle effect asset startLifetimeMin/Max must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->direction.x, asset.direction.x) && kb::tests::NearlyEqual(reread->direction.y, asset.direction.y) && kb::tests::NearlyEqual(reread->direction.z, asset.direction.z),
+        "LIB-143 particle effect asset direction must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->spreadDegrees, asset.spreadDegrees), "LIB-143 particle effect asset spreadDegrees must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->gravityScale, asset.gravityScale), "LIB-143 particle effect asset gravityScale must round-trip");
+
+    kb::tests::Require(reread->sizeOverLifetime.keyframes.size() == asset.sizeOverLifetime.keyframes.size(), "LIB-143 particle effect asset sizeOverLifetime keyframe count must round-trip");
+    for (std::size_t i = 0; i < asset.sizeOverLifetime.keyframes.size(); ++i) {
+        kb::tests::Require(kb::tests::NearlyEqual(reread->sizeOverLifetime.keyframes[i].time, asset.sizeOverLifetime.keyframes[i].time) &&
+                kb::tests::NearlyEqual(reread->sizeOverLifetime.keyframes[i].value, asset.sizeOverLifetime.keyframes[i].value) &&
+                reread->sizeOverLifetime.keyframes[i].easing == asset.sizeOverLifetime.keyframes[i].easing,
+            "LIB-143 particle effect asset sizeOverLifetime keyframe fields (including per-segment Easing) must round-trip exactly");
+    }
+    kb::tests::Require(reread->colorOverLifetime.stops.size() == asset.colorOverLifetime.stops.size(), "LIB-143 particle effect asset colorOverLifetime stop count must round-trip");
+    for (std::size_t i = 0; i < asset.colorOverLifetime.stops.size(); ++i) {
+        kb::tests::Require(kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].time, asset.colorOverLifetime.stops[i].time) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.r, asset.colorOverLifetime.stops[i].color.r) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.g, asset.colorOverLifetime.stops[i].color.g) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.b, asset.colorOverLifetime.stops[i].color.b) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.a, asset.colorOverLifetime.stops[i].color.a),
+            "LIB-143 particle effect asset colorOverLifetime stop fields must round-trip exactly");
+    }
+
+    const std::optional<kb::scene::ParticleEffectAsset> missing = kb::scene::ParticleEffectAssetIO::Load(root / "DoesNotExist.kbvfx");
+    kb::tests::Require(!missing.has_value(), "LIB-143 particle effect asset Load must honestly fail for a missing file");
+
+    // A freshly default-constructed asset (author left the size curve empty) must still load
+    // to a visible constant size (Curve::Evaluate's own contract returns 0 for zero
+    // keyframes) - ParticleEffectAssetIO::Load fills a default keyframe, see its own comment.
+    kb::scene::ParticleEffectAsset minimal{};
+    minimal.materialReference = "/Game/Materials/Minimal.kbmat";
+    const std::filesystem::path minimalPath = root / "Minimal.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(minimalPath, minimal), "LIB-143 minimal particle effect asset must write to disk");
+    const std::optional<kb::scene::ParticleEffectAsset> rereadMinimal = kb::scene::ParticleEffectAssetIO::Load(minimalPath);
+    kb::tests::Require(rereadMinimal.has_value() && rereadMinimal->sizeOverLifetime.keyframes.size() == 1U && kb::tests::NearlyEqual(rereadMinimal->sizeOverLifetime.keyframes.front().value, 1.0F),
+        "LIB-143 particle effect asset with no authored size curve must default to a constant, visible size");
+}
+
+// LIB-143: kb::scene::SceneParticleSystems' own native contract - explicit lifetime
+// (Create/Release/Exists), Play/Stop/IsPlaying, SetSeed, SetParameterScalar/ClearParameter
+// against the fixed recognized field set, Emit's silent-clamp-to-capacity contract, real
+// spawn/kill via Advance(), owner-death auto-release (mirrors SceneTimerService::OwnerGone),
+// and the live-instance cap - mirrors RunSceneMaterialInstancesLifecycleAndLimitTest's shape.
+void RunSceneParticleSystemsLifecycleTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_particle_systems_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
+    kb::tests::Require(!resetError, "LIB-143 particle systems test project root could not be prepared");
+
+    kb::scene::ParticleEffectAsset effect{};
+    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 424242U });
+    effect.looping = true;
+    effect.emissionRatePerSecond = 1000.0F;
+    effect.startSpeedMin = 1.0F;
+    effect.startSpeedMax = 1.0F;
+    effect.startLifetimeMin = 0.05F;
+    effect.startLifetimeMax = 0.05F;
+    effect.spreadDegrees = 0.0F;
+    effect.gravityScale = 0.0F;
+    effect.maxParticles = 8U;
+    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "Test.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "LIB-143 particle effect asset must write to disk");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(root), "LIB-143 particle systems test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "LIB-143 particle systems test did not discover exactly the effect asset");
+    const kb::assets::AssetMetadata* effectMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Fx/Test.kbvfx");
+    kb::tests::Require(effectMetadata != nullptr && effectMetadata->type == kb::scene::kParticleEffectAssetType,
+        "LIB-143 particle systems test discovered wrong effect metadata");
+    const std::uint64_t effectAssetId = effectMetadata->id.value;
+
+    // Registered AFTER Discover() (not before): DiscoverMountedAssets sweeps away any
+    // registered entry whose virtualPath falls under a mounted prefix but has no
+    // corresponding real file on disk - a synthetic, file-less asset like this one must be
+    // registered only after the one discovery pass this test needs has already run.
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = kb::assets::AssetId{ 424242U },
+                           .type = "RenderMaterial",
+                           .name = "FakeParticleMaterial",
+                           .virtualPath = "/Game/FakeParticleMaterial.kbmat",
+                           .physicalPath = "FakeParticleMaterial.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "LIB-143 particle systems test fake material registration failed");
+
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "ParticleOwner",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F } },
+    });
+    kb::tests::Require(owner.IsValid(), "LIB-143 particle systems test owner entity creation failed");
+    scene.Runtime().SynchronizeTransforms();
+
+    kb::tests::Require(scene.Particles().Create(0U, owner) == 0U, "SceneParticleSystems::Create must reject a zero effect asset id");
+    kb::tests::Require(scene.Particles().Create(effectAssetId, kb::scene::SceneEntity{}) == 0U, "SceneParticleSystems::Create must reject an invalid owner entity");
+
+    const std::uint64_t instance = scene.Particles().Create(effectAssetId, owner);
+    kb::tests::Require(instance != 0U, "SceneParticleSystems::Create must return a non-zero handle for a valid effect+owner");
+    kb::tests::Require(scene.Particles().Exists(instance), "SceneParticleSystems::Exists must report true for a just-created instance");
+    kb::tests::Require(scene.Particles().EffectAsset(instance) == effectAssetId, "SceneParticleSystems::EffectAsset must return the exact effect asset id passed to Create");
+    kb::tests::Require(scene.Particles().ResolvedMaterialAsset(instance) == 424242U, "SceneParticleSystems::ResolvedMaterialAsset must resolve the effect's authored material reference");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "SceneParticleSystems::Create must not auto-play - Play() is a separate, explicit verb");
+
+    kb::tests::Require(scene.Particles().Play(instance), "SceneParticleSystems::Play must report true for a live instance");
+    kb::tests::Require(scene.Particles().IsPlaying(instance), "SceneParticleSystems::IsPlaying must report true after Play");
+
+    scene.Particles().Advance(0.01F);
+    scene.Particles().Advance(0.01F);
+    const std::uint32_t liveAfterPlay = scene.Particles().LiveParticleCount(instance);
+    kb::tests::Require(liveAfterPlay > 0U && liveAfterPlay <= 8U, "SceneParticleSystems::Advance must spawn particles while playing, honoring maxParticles");
+
+    const std::span<const kb::scene::ParticleState> particles = scene.Particles().Particles(instance);
+    kb::tests::Require(particles.size() == liveAfterPlay, "SceneParticleSystems::Particles must expose exactly the live particle array");
+    kb::tests::Require(std::abs(particles.front().position.x - 5.0F) < 2.0F, "SceneParticleSystems particles must spawn near the owner's world position");
+
+    kb::tests::Require(scene.Particles().Stop(instance), "SceneParticleSystems::Stop must report true for a live instance");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "SceneParticleSystems::IsPlaying must report false after Stop");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == liveAfterPlay, "SceneParticleSystems::Stop must not clear already-live particles, only halt new emission");
+
+    // Every particle's lifetime is 0.05s - advancing well past that kills them all, even
+    // though the instance is stopped (integration/kill is unconditional, only spawning is
+    // gated by `playing`).
+    scene.Particles().Advance(0.2F);
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 0U, "SceneParticleSystems::Advance must kill particles past their lifetime even while stopped");
+
+    kb::tests::Require(scene.Particles().Emit(instance, 3U), "SceneParticleSystems::Emit must report true for a live instance");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 3U, "SceneParticleSystems::Emit must spawn exactly the requested count when under capacity");
+    kb::tests::Require(scene.Particles().Emit(instance, 100U), "SceneParticleSystems::Emit must report true even when the request exceeds remaining capacity");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 8U, "SceneParticleSystems::Emit must silently clamp to maxParticles rather than failing");
+    kb::tests::Require(!scene.Particles().Emit(0U, 1U), "SceneParticleSystems::Emit must honestly fail for a handle naming no live instance");
+
+    kb::tests::Require(scene.Particles().SetSeed(instance, 12345U), "SceneParticleSystems::SetSeed must report true for a live instance");
+    kb::tests::Require(scene.Particles().SetParameterScalar(instance, "emissionRatePerSecond", 5.0F), "SceneParticleSystems::SetParameterScalar must accept a recognized field name");
+    kb::tests::Require(!scene.Particles().SetParameterScalar(instance, "notARealField", 1.0F), "SceneParticleSystems::SetParameterScalar must honestly reject an unrecognized field name");
+    kb::tests::Require(scene.Particles().ClearParameter(instance, "emissionRatePerSecond"), "SceneParticleSystems::ClearParameter must report true for a set override");
+    kb::tests::Require(!scene.Particles().ClearParameter(instance, "emissionRatePerSecond"), "SceneParticleSystems::ClearParameter must be idempotent-false for an already-cleared override");
+
+    // Owner death auto-releases the instance - mirrors SceneTimerService::OwnerGone's exact
+    // convention, checked on the next Advance() call.
+    scene.Entities().Destroy(owner);
+    scene.Particles().Advance(0.01F);
+    kb::tests::Require(!scene.Particles().Exists(instance), "SceneParticleSystems must auto-release an instance whose owner has been destroyed");
+    kb::tests::Require(!scene.Particles().Release(instance), "SceneParticleSystems::Release must be idempotent-false for an already-auto-released instance");
+
+    // LIB-143's own "limit" analog to LIB-139's variant cap - exhaust it and prove the next
+    // Create honestly fails rather than growing unbounded.
+    std::vector<std::uint64_t> filled;
+    std::uint64_t lastCreated = 0U;
+    for (std::size_t i = 0; i < 300U; ++i) {
+        const kb::scene::SceneEntity capOwner = scene.Entities().CreateEntity();
+        lastCreated = scene.Particles().Create(effectAssetId, capOwner);
+        if (lastCreated == 0U) {
+            break;
+        }
+        filled.push_back(lastCreated);
+    }
+    kb::tests::Require(lastCreated == 0U, "SceneParticleSystems::Create must honestly fail once the scene's live-instance cap is reached");
+    kb::tests::Require(filled.size() == 256U, "SceneParticleSystems live-instance cap must be exactly 256");
+}
+
+// LIB-139: kb::scene::SceneMaterialInstances' native contract, independent of the script
+// layer - explicit lifetime (Create/Release/Exists/Parent), monotonic never-reused ids
+// (mirrors SceneTimers' TimerHandle convention exactly), and the "limit wariantów" hard cap
+// the ticket names explicitly.
+void RunSceneMaterialInstancesLifecycleAndLimitTest() {
+    kb::scene::Scene scene;
+
+    kb::tests::Require(scene.MaterialInstances().Create(0U) == 0U, "SceneMaterialInstances::Create must reject a zero parent material asset id");
+
+    const std::uint64_t first = scene.MaterialInstances().Create(111U);
+    kb::tests::Require(first != 0U, "SceneMaterialInstances::Create must return a non-zero handle for a real parent asset id");
+    kb::tests::Require(scene.MaterialInstances().Exists(first), "SceneMaterialInstances::Exists must report true for a just-created instance");
+    kb::tests::Require(scene.MaterialInstances().Parent(first) == 111U, "SceneMaterialInstances::Parent must return the exact parent asset id passed to Create");
+
+    const std::uint64_t second = scene.MaterialInstances().Create(222U);
+    kb::tests::Require(second != 0U && second != first, "SceneMaterialInstances::Create must return a distinct handle for a second instance");
+
+    kb::tests::Require(scene.MaterialInstances().Release(first), "SceneMaterialInstances::Release must report true for a live instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(first), "SceneMaterialInstances::Exists must report false immediately after Release");
+    kb::tests::Require(scene.MaterialInstances().Parent(first) == 0U, "SceneMaterialInstances::Parent must return 0 for a released instance");
+    kb::tests::Require(!scene.MaterialInstances().Release(first), "SceneMaterialInstances::Release must be idempotent-false for an already-released instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(0U), "SceneMaterialInstances::Exists must report false for handle 0 (never a valid id)");
+
+    // The released `first` id must never be handed out again (monotonic, same convention as
+    // SceneTimers::TimerHandle) - a stale id can never collide with a live one.
+    const std::uint64_t third = scene.MaterialInstances().Create(333U);
+    kb::tests::Require(third != first && third != second, "SceneMaterialInstances::Create must never reuse a released id");
+    kb::tests::Require(scene.MaterialInstances().Exists(second), "Releasing one instance must not disturb an unrelated live instance");
+
+    // LIB-139's "limit wariantów" - exhaust the cap and prove the NEXT Create honestly fails
+    // (returns 0), not silently evicting an older instance or growing past the documented
+    // limit.
+    std::vector<std::uint64_t> filled{ second, third };
+    std::uint64_t lastCreated = 0U;
+    for (std::size_t i = 0; i < 600U; ++i) {
+        lastCreated = scene.MaterialInstances().Create(1000U + static_cast<std::uint64_t>(i));
+        if (lastCreated == 0U) {
+            break;
+        }
+        filled.push_back(lastCreated);
+    }
+    kb::tests::Require(lastCreated == 0U, "SceneMaterialInstances::Create must honestly fail once the scene's live-instance cap is reached, not grow unbounded");
+    const std::uint64_t afterCapCreate = scene.MaterialInstances().Create(9999U);
+    kb::tests::Require(afterCapCreate == 0U, "SceneMaterialInstances::Create must keep failing while the scene remains at capacity");
+
+    kb::tests::Require(scene.MaterialInstances().Release(second), "SceneMaterialInstances::Release must succeed for an instance created before the cap was hit");
+    const std::uint64_t afterRelease = scene.MaterialInstances().Create(8888U);
+    kb::tests::Require(afterRelease != 0U, "SceneMaterialInstances::Create must succeed again once capacity is freed by a Release");
+}
+
+// LIB-139: script-facing MaterialInstance.Create/Release/Exists/Parent (LIB-140 will add
+// per-parameter overrides on top - this ticket only proves the object/lifetime/cap
+// contract), and MeshRenderer.SetMaterialInstance/ClearMaterialInstance's interaction with
+// the fields LIB-137/138 already exposed.
+void RunScriptMaterialInstanceApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script material instance API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Create") != nullptr, "Script material instance API did not register MaterialInstance.Create");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Release") != nullptr, "Script material instance API did not register MaterialInstance.Release");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Exists") != nullptr, "Script material instance API did not register MaterialInstance.Exists");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Parent") != nullptr, "Script material instance API did not register MaterialInstance.Parent");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterialInstance") != nullptr, "Script material instance API did not register MeshRenderer.SetMaterialInstance");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MaterialInstance.Create") != nullptr,
+        "Script material instance API did not register VisualGraph runtime binding for MaterialInstance.Create");
+
+    const kb::assets::AssetId parentMaterialId{ 9301U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = parentMaterialId,
+                           .type = "RenderMaterial",
+                           .name = "InstanceParent",
+                           .virtualPath = "/Game/Materials/InstanceParent.kbmat",
+                           .physicalPath = "InstanceParent.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance API test parent material registration failed");
+    const kb::assets::AssetId meshId{ 9302U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "InstanceMesh",
+                           .virtualPath = "/Game/Meshes/InstanceMesh.21kbmesh",
+                           .physicalPath = "InstanceMesh.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance API test mesh registration failed");
+
+    // Wrong-type parent (a real RenderMesh, not a material) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeCreate = host.Functions().Call(
+        "MaterialInstance.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/InstanceMesh.21kbmesh" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeCreate.Succeeded(), "MaterialInstance.Create must reject a real asset of the wrong type (RenderMesh, not a material)");
+
+    const kb::script::ScriptFunctionCallResult create = host.Functions().Call(
+        "MaterialInstance.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(parentMaterialId) } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(create.Succeeded(), "MaterialInstance.Create (id string) failed for a valid parent material");
+    const std::uint64_t instance = create.Output("instance").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(instance != 0U, "MaterialInstance.Create must return a non-zero instance handle on success");
+
+    const kb::script::ScriptFunctionCallResult exists = host.Functions().Call(
+        "MaterialInstance.Exists",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(exists.Succeeded() && exists.Output("exists").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.Exists must report true for a just-created instance");
+
+    const kb::script::ScriptFunctionCallResult parent = host.Functions().Call(
+        "MaterialInstance.Parent",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(parent.Succeeded() && parent.Output("material").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(parentMaterialId),
+        "MaterialInstance.Parent must return the resolved parent material asset id");
+
+    // Assign the live instance to a MeshRenderer - this is the payoff: a script can hold a
+    // "private" material reference distinct from any shared asset.
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Material Instance Subject" });
+    const kb::script::ScriptFunctionCallResult setInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setInstance.Succeeded(), "MeshRenderer.SetMaterialInstance failed for a live instance handle");
+    const kb::scene::MeshRendererComponent* afterSetInstance = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetInstance != nullptr && afterSetInstance->materialInstanceHandle == instance, "MeshRenderer.SetMaterialInstance did not store the instance handle on the component");
+
+    // A stale (never-created) or released handle must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult setStaleInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance + 999999U, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!setStaleInstance.Succeeded(), "MeshRenderer.SetMaterialInstance must reject a handle that names no live instance");
+    kb::tests::Require(scene.Components().MeshRenderers().TryGet(subject.Entity())->materialInstanceHandle == instance, "A rejected SetMaterialInstance call must not disturb the existing live assignment");
+
+    const kb::script::ScriptFunctionCallResult clearInstance = host.Functions().Call(
+        "MeshRenderer.ClearMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearInstance.Succeeded(), "MeshRenderer.ClearMaterialInstance failed");
+    kb::tests::Require(scene.Components().MeshRenderers().TryGet(subject.Entity())->materialInstanceHandle == 0U, "MeshRenderer.ClearMaterialInstance did not reset materialInstanceHandle to 0");
+
+    const kb::script::ScriptFunctionCallResult release = host.Functions().Call(
+        "MaterialInstance.Release",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(release.Succeeded() && release.Output("released").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.Release must report true for a live instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(instance), "MaterialInstance.Release must actually release the instance in the scene's own table");
+
+    // Assigning an ALREADY-released instance must fail too, not silently succeed with a
+    // dangling reference.
+    const kb::script::ScriptFunctionCallResult setReleasedInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!setReleasedInstance.Succeeded(), "MeshRenderer.SetMaterialInstance must reject an already-released instance handle");
+
+    // Lua wrapper, exercising Create -> SetMaterialInstance -> Release across the C wrapper
+    // layer this session's own LIB-137 finding requires (host.RegisterFunction alone is not
+    // enough for Lua).
+    const kb::assets::AssetId luaAsset{ 9303U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Material Instance Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance, err = MaterialInstance.Create("/Game/Materials/InstanceParent.kbmat")
+    local assigned = MeshRenderer.SetMaterialInstance(instance, { entity = self.entity })
+    local existsBefore = MaterialInstance.Exists(instance)
+    local released = MaterialInstance.Release(instance)
+    local existsAfter = MaterialInstance.Exists(instance)
+    SetShared("luaInstanceCreated", instance ~= nil and instance ~= 0)
+    SetShared("luaInstanceAssigned", assigned)
+    SetShared("luaInstanceExistedBefore", existsBefore)
+    SetShared("luaInstanceReleased", released)
+    SetShared("luaInstanceExistedAfter", existsAfter)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script material instance API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script material instance API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaInstanceCreated").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper Create did not return a real instance handle");
+    kb::tests::Require(host.SharedState().Get("luaInstanceAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper SetMaterialInstance did not report success");
+    kb::tests::Require(host.SharedState().Get("luaInstanceExistedBefore").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper instance did not exist before Release");
+    kb::tests::Require(host.SharedState().Get("luaInstanceReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper Release did not report success");
+    kb::tests::Require(!host.SharedState().Get("luaInstanceExistedAfter").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script material instance API Lua wrapper instance must not exist after Release");
+}
+
+// LIB-143: script-facing Particles.Create/Release/Exists/Play/Stop/IsPlaying/SetSeed/
+// SetParameterScalar/ClearParameter/Emit/LiveCount - the object/lifetime/simulation contract
+// itself is proven natively by RunSceneParticleSystemsLifecycleTest; this test proves the
+// SCRIPT LAYER's own resolve-by-path-or-hex+type-check on Create, the
+// optional-entity-defaults-to-caller convention (mirrors MeshRenderer.SetMesh), and the Lua
+// wrapper chain (LIB-137 lesson: host.RegisterFunction alone does not wire up Lua).
+void RunScriptParticleSystemApiTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_script_particle_api_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
+    kb::tests::Require(!resetError, "Script particle API test project root could not be prepared");
+
+    kb::scene::ParticleEffectAsset effect{};
+    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 434343U });
+    effect.looping = true;
+    effect.emissionRatePerSecond = 1000.0F;
+    effect.startSpeedMin = 1.0F;
+    effect.startSpeedMax = 1.0F;
+    effect.startLifetimeMin = 5.0F;
+    effect.startLifetimeMax = 5.0F;
+    effect.maxParticles = 16U;
+    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "ScriptTest.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "Script particle API test effect asset must write to disk");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script particle API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Create") != nullptr, "Script particle API did not register Particles.Create");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Release") != nullptr, "Script particle API did not register Particles.Release");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Exists") != nullptr, "Script particle API did not register Particles.Exists");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Play") != nullptr, "Script particle API did not register Particles.Play");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Stop") != nullptr, "Script particle API did not register Particles.Stop");
+    kb::tests::Require(host.Functions().FindSignature("Particles.IsPlaying") != nullptr, "Script particle API did not register Particles.IsPlaying");
+    kb::tests::Require(host.Functions().FindSignature("Particles.SetSeed") != nullptr, "Script particle API did not register Particles.SetSeed");
+    kb::tests::Require(host.Functions().FindSignature("Particles.SetParameterScalar") != nullptr, "Script particle API did not register Particles.SetParameterScalar");
+    kb::tests::Require(host.Functions().FindSignature("Particles.ClearParameter") != nullptr, "Script particle API did not register Particles.ClearParameter");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Emit") != nullptr, "Script particle API did not register Particles.Emit");
+    kb::tests::Require(host.Functions().FindSignature("Particles.LiveCount") != nullptr, "Script particle API did not register Particles.LiveCount");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Particles.Create") != nullptr,
+        "Script particle API did not register VisualGraph runtime binding for Particles.Create");
+
+    kb::tests::Require(scene.Assets().MountProject(root), "Script particle API test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Script particle API test did not discover exactly the effect asset");
+
+    // Registered AFTER Discover() (not before): DiscoverMountedAssets sweeps away any
+    // registered entry whose virtualPath falls under a mounted prefix but has no
+    // corresponding real file on disk - synthetic, file-less assets like these two must be
+    // registered only after the one discovery pass this test needs has already run.
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = kb::assets::AssetId{ 434343U },
+                           .type = "RenderMaterial",
+                           .name = "FakeScriptParticleMaterial",
+                           .virtualPath = "/Game/FakeScriptParticleMaterial.kbmat",
+                           .physicalPath = "FakeScriptParticleMaterial.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script particle API test fake material registration failed");
+    const kb::assets::AssetId wrongTypeAssetId{ 434344U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = wrongTypeAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script particle API test wrong-type asset registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Particle Subject" });
+
+    // Wrong-type effect (a real RenderMesh, not a ParticleEffect) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeCreate = host.Functions().Call(
+        "Particles.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "effect", .value = kb::script::ScriptValue{ std::string{ "/Game/WrongTypeAsset.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeCreate.Succeeded(), "Particles.Create must reject a real asset of the wrong type (RenderMesh, not a ParticleEffect)");
+
+    const kb::script::ScriptFunctionCallResult create = host.Functions().Call(
+        "Particles.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "effect", .value = kb::script::ScriptValue{ std::string{ "/Game/Fx/ScriptTest.kbvfx" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(create.Succeeded(), "Particles.Create (path) failed for a valid effect+entity");
+    const std::uint64_t instance = create.Output("instance").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(instance != 0U, "Particles.Create must return a non-zero instance handle on success");
+    kb::tests::Require(scene.Particles().Exists(instance), "Particles.Create must actually create the instance in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult play = host.Functions().Call(
+        "Particles.Play",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(play.Succeeded() && play.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Play must report true for a live instance");
+    kb::tests::Require(scene.Particles().IsPlaying(instance), "Particles.Play must actually set the instance's playing state");
+
+    const kb::script::ScriptFunctionCallResult emit = host.Functions().Call(
+        "Particles.Emit",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "count", .value = kb::script::ScriptValue{ 4 } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(emit.Succeeded() && emit.Output("emitted").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Emit must report true for a live instance");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 4U, "Particles.Emit did not actually spawn the requested count");
+
+    const kb::script::ScriptFunctionCallResult liveCount = host.Functions().Call(
+        "Particles.LiveCount",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(liveCount.Succeeded() && liveCount.Output("count").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 4, "Particles.LiveCount must report the real live particle count");
+
+    const kb::script::ScriptFunctionCallResult stop = host.Functions().Call(
+        "Particles.Stop",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(stop.Succeeded() && stop.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Stop must report true for a live instance");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "Particles.Stop must actually clear the instance's playing state");
+
+    const kb::script::ScriptFunctionCallResult setSeed = host.Functions().Call(
+        "Particles.SetSeed",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "seed", .value = kb::script::ScriptValue{ std::uint64_t{ 777U }, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSeed.Succeeded() && setSeed.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.SetSeed must report true for a live instance");
+
+    const kb::script::ScriptFunctionCallResult setParam = host.Functions().Call(
+        "Particles.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "gravityScale" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 2.0F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setParam.Succeeded() && setParam.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.SetParameterScalar must report true for a recognized field name");
+
+    const kb::script::ScriptFunctionCallResult clearParam = host.Functions().Call(
+        "Particles.ClearParameter",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "gravityScale" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearParam.Succeeded() && clearParam.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.ClearParameter must report true for a set override");
+
+    const kb::script::ScriptFunctionCallResult release = host.Functions().Call(
+        "Particles.Release",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(release.Succeeded() && release.Output("released").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Release must report true for a live instance");
+    kb::tests::Require(!scene.Particles().Exists(instance), "Particles.Release must actually release the instance in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult existsAfterRelease = host.Functions().Call(
+        "Particles.Exists",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(existsAfterRelease.Succeeded() && !existsAfterRelease.Output("exists").value_or(kb::script::ScriptValue{ true }).AsBool(), "Particles.Exists must report false after Release");
+
+    // Lua wrapper, exercising Create (entity defaults to self.entity) -> Play -> Emit ->
+    // LiveCount -> Release across the C wrapper layer (LIB-137 lesson: host.RegisterFunction
+    // alone does not wire up Lua).
+    const kb::assets::AssetId luaAsset{ 9401U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Particle Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance = Particles.Create("/Game/Fx/ScriptTest.kbvfx", { entity = self.entity })
+    local played = Particles.Play(instance)
+    local emitted = Particles.Emit(instance, 2)
+    local count = Particles.LiveCount(instance)
+    local released = Particles.Release(instance)
+    SetShared("luaParticlesCreated", instance ~= nil and instance ~= 0)
+    SetShared("luaParticlesPlayed", played)
+    SetShared("luaParticlesEmitted", emitted)
+    SetShared("luaParticlesCount", count)
+    SetShared("luaParticlesReleased", released)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script particle API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult luaTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(luaTick.Succeeded(), "Script particle API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaParticlesCreated").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Create did not return a real instance handle");
+    kb::tests::Require(host.SharedState().Get("luaParticlesPlayed").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Play did not report success");
+    kb::tests::Require(host.SharedState().Get("luaParticlesEmitted").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Emit did not report success");
+    kb::tests::Require(host.SharedState().Get("luaParticlesCount").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 2, "Script particle API Lua wrapper LiveCount did not report the real count");
+    kb::tests::Require(host.SharedState().Get("luaParticlesReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Release did not report success");
+}
+
+// LIB-140: SceneMaterialInstances::SetParameterScalar/SetParameterBool/Parameters/
+// ClearParameter storage - proves the upsert-by-name (last-write-wins), Scalar-vs-Bool value
+// separation, false-for-a-nonexistent-instance/empty-name behavior, and that a released
+// instance's overrides are gone with it (not resurrectable via a future Create reusing... the
+// id is never reused anyway, see SceneMaterialInstances.hpp's own doc comment).
+void RunSceneMaterialInstancesParameterOverridesTest() {
+    kb::scene::Scene scene;
+
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(0U, "roughness", 0.5F), "SetParameterScalar must reject handle 0 (never a valid instance)");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterBool(999999U, "enabled", true), "SetParameterBool must reject a handle naming no live instance");
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(999999U, "roughness"), "ClearParameter must reject a handle naming no live instance");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(111U);
+    kb::tests::Require(instance != 0U, "Scene material instance parameter test setup failed to create an instance");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).empty(), "A freshly created instance must start with no parameter overrides");
+
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "", 0.5F), "SetParameterScalar must reject an empty parameter name");
+
+    kb::tests::Require(scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.25F), "SetParameterScalar must succeed for a live instance");
+    kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "useEmissive", true), "SetParameterBool must succeed for a live instance");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Parameters must report both overrides after two distinct SetParameter calls");
+        const auto findByName = [&](std::string_view name) -> const kb::scene::MaterialParameterOverride* {
+            for (const kb::scene::MaterialParameterOverride& override_ : parameters) {
+                if (override_.name == name) {
+                    return &override_;
+                }
+            }
+            return nullptr;
+        };
+        const kb::scene::MaterialParameterOverride* roughness = findByName("roughness");
+        const kb::scene::MaterialParameterOverride* useEmissive = findByName("useEmissive");
+        kb::tests::Require(roughness != nullptr && roughness->type == kb::scene::MaterialParameterType::Scalar && roughness->scalarValue == 0.25F,
+            "Parameters must preserve the exact Scalar override that was set");
+        kb::tests::Require(useEmissive != nullptr && useEmissive->type == kb::scene::MaterialParameterType::Bool && useEmissive->boolValue,
+            "Parameters must preserve the exact Bool override that was set");
+    }
+
+    // Upsert-by-name: setting "roughness" again must overwrite in place, not append a duplicate.
+    kb::tests::Require(scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.75F), "SetParameterScalar must succeed when overwriting an existing override");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Overwriting an existing override by name must not append a duplicate entry");
+        bool foundUpdated = false;
+        for (const kb::scene::MaterialParameterOverride& override_ : parameters) {
+            if (override_.name == "roughness") {
+                kb::tests::Require(override_.scalarValue == 0.75F, "Overwriting an existing Scalar override must replace its value (last-write-wins)");
+                foundUpdated = true;
+            }
+        }
+        kb::tests::Require(foundUpdated, "Overwritten override must still be present under the same name");
+    }
+
+    // A name can also change type across calls (SetParameterBool on a name previously set via
+    // SetParameterScalar) - still last-write-wins, no leftover stale numeric value.
+    kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "roughness", false), "SetParameterBool must be able to retype an existing Scalar override's name");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Retyping an override by name must still not append a duplicate entry");
+    }
+
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(instance, "neverSet"), "ClearParameter must be idempotent-false for a name with no override set");
+    kb::tests::Require(scene.MaterialInstances().ClearParameter(instance, "useEmissive"), "ClearParameter must succeed for a name with a live override");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 1U, "ClearParameter must remove exactly the named override and no other");
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(instance, "useEmissive"), "ClearParameter must be idempotent-false the second time for the same name");
+
+    kb::tests::Require(scene.MaterialInstances().Release(instance), "Scene material instance parameter test setup failed to release the instance");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).empty(), "Parameters must report empty for a released (no-longer-live) instance handle");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "roughness", 1.0F), "SetParameterScalar must reject a released instance handle");
+}
+
+// LIB-140: script-facing MaterialInstance.SetParameterScalar/SetParameterBool/ClearParameter -
+// proves the native ScriptFunctionRegistry path stores overrides through to
+// kb::scene::SceneMaterialInstances, and that the Lua wrapper layer (a separate, hand-written
+// C function per this session's own LIB-137 finding - host.RegisterFunction alone never
+// reaches Lua) exercises the same functions correctly.
+void RunScriptMaterialInstanceParameterApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script material instance parameter API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.SetParameterScalar") != nullptr, "Script material instance API did not register MaterialInstance.SetParameterScalar");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.SetParameterBool") != nullptr, "Script material instance API did not register MaterialInstance.SetParameterBool");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.ClearParameter") != nullptr, "Script material instance API did not register MaterialInstance.ClearParameter");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MaterialInstance.SetParameterScalar") != nullptr,
+        "Script material instance API did not register VisualGraph runtime binding for MaterialInstance.SetParameterScalar");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(444U);
+    kb::tests::Require(instance != 0U, "Script material instance parameter API test setup failed to create an instance");
+
+    const kb::script::ScriptFunctionCallResult setScalar = host.Functions().Call(
+        "MaterialInstance.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "roughness" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.4F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setScalar.Succeeded() && setScalar.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.SetParameterScalar must report applied=true for a live instance");
+
+    const kb::script::ScriptFunctionCallResult setBool = host.Functions().Call(
+        "MaterialInstance.SetParameterBool",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "useEmissive" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ true } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setBool.Succeeded() && setBool.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.SetParameterBool must report applied=true for a live instance");
+
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 2U, "MaterialInstance.SetParameterScalar/SetParameterBool must actually store overrides in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult setScalarOnDeadInstance = host.Functions().Call(
+        "MaterialInstance.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance + 999999U, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "roughness" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.1F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setScalarOnDeadInstance.Succeeded() && !setScalarOnDeadInstance.Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "MaterialInstance.SetParameterScalar must report applied=false for a handle naming no live instance, not throw or crash");
+
+    const kb::script::ScriptFunctionCallResult clear = host.Functions().Call(
+        "MaterialInstance.ClearParameter",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "useEmissive" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clear.Succeeded() && clear.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.ClearParameter must report cleared=true for a name with a live override");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 1U, "MaterialInstance.ClearParameter must actually remove the override from the scene's own table");
+
+    // Lua wrapper layer - needs a REAL registered asset (unlike the direct
+    // scene.MaterialInstances().Create(444U) above, which bypasses asset resolution
+    // entirely) since the script-facing MaterialInstance.Create resolves its "material"
+    // argument against the scene's AssetRegistry, same as MaterialInstance.Create's own doc
+    // comment describes.
+    const kb::assets::AssetId luaParentMaterialId{ 9311U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = luaParentMaterialId,
+                           .type = "RenderMaterial",
+                           .name = "LuaParamParent",
+                           .virtualPath = "/Game/Materials/LuaParamParent.kbmat",
+                           .physicalPath = "LuaParamParent.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance parameter API Lua wrapper test parent material registration failed");
+    const kb::assets::AssetId luaAsset{ 9310U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Material Instance Parameter Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance, err = MaterialInstance.Create("/Game/Materials/LuaParamParent.kbmat")
+    local appliedScalar = MaterialInstance.SetParameterScalar(instance, "roughness", 0.6)
+    local appliedBool = MaterialInstance.SetParameterBool(instance, "useEmissive", true)
+    local cleared = MaterialInstance.ClearParameter(instance, "useEmissive")
+    SetShared("luaAppliedScalar", appliedScalar)
+    SetShared("luaAppliedBool", appliedBool)
+    SetShared("luaCleared", cleared)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script material instance parameter API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script material instance parameter API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAppliedScalar").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterScalar did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaAppliedBool").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterBool did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper ClearParameter did not report cleared=true");
+}
+
+// LIB-142: kb::scene::ScenePostProcessAccess - proves the scene-global active-profile toggle
+// (default 0/none, set/get round trip, independent per Scene instance).
+void RunScenePostProcessAccessTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "ScenePostProcessAccess::ActiveProfile must default to 0 (no profile assigned)");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 4242U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 4242U, "ScenePostProcessAccess::SetActiveProfile did not persist the assigned profile asset id");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 0U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "ScenePostProcessAccess::SetActiveProfile(0) did not clear the assigned profile");
+
+    kb::scene::Scene otherScene;
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 111U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(otherScene) == 0U, "ScenePostProcessAccess state must not leak between distinct Scene instances");
+}
+
+// LIB-142: script-facing PostProcess.SetProfile/ClearProfile/ActiveProfile - proves the
+// EXCLUSIVELY-asset-based convention: SetProfile resolves+type-checks against the
+// AssetRegistry exactly like MeshRenderer.SetMaterial (honest fail for a real asset of the
+// wrong type), a successful call actually mutates kb::scene::ScenePostProcessAccess's own
+// table (not just returns success), and the real Lua wrapper layer (a separate, hand-written
+// C function per this session's own LIB-137 finding) exercises the same functions correctly.
+void RunScriptPostProcessApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script post process API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.SetProfile") != nullptr, "Script post process API did not register PostProcess.SetProfile");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.ClearProfile") != nullptr, "Script post process API did not register PostProcess.ClearProfile");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.ActiveProfile") != nullptr, "Script post process API did not register PostProcess.ActiveProfile");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.PostProcess.SetProfile") != nullptr,
+        "Script post process API did not register VisualGraph runtime binding for PostProcess.SetProfile");
+
+    const kb::assets::AssetId profileAssetId{ 9401U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = profileAssetId,
+                           .type = "PostProcessProfile",
+                           .name = "TestProfile",
+                           .virtualPath = "/Game/PostProcess/TestProfile.kbppfx",
+                           .physicalPath = "TestProfile.kbppfx",
+                           .contentHash = 1U,
+                       }),
+        "Script post process API test profile asset registration failed");
+    const kb::assets::AssetId meshAssetId{ 9402U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/Meshes/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script post process API test wrong-type asset registration failed");
+
+    // Wrong-type asset (a real RenderMesh, not a PostProcessProfile) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeSet = host.Functions().Call(
+        "PostProcess.SetProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "profile", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/WrongTypeAsset.21kbmesh" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeSet.Succeeded(), "PostProcess.SetProfile must reject a real asset of the wrong type (RenderMesh, not PostProcessProfile)");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "A rejected SetProfile call must not mutate the scene's active profile");
+
+    const kb::script::ScriptFunctionCallResult set = host.Functions().Call(
+        "PostProcess.SetProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "profile", .value = kb::script::ScriptValue{ kb::assets::ToString(profileAssetId) } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(set.Succeeded() && set.Output("assigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "PostProcess.SetProfile (id string) failed for a valid PostProcessProfile asset");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == profileAssetId.value, "PostProcess.SetProfile did not actually store the resolved profile asset id in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult active = host.Functions().Call(
+        "PostProcess.ActiveProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{},
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(active.Succeeded() && active.Output("profile").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(profileAssetId),
+        "PostProcess.ActiveProfile must return the resolved active profile asset id");
+
+    const kb::script::ScriptFunctionCallResult clear = host.Functions().Call(
+        "PostProcess.ClearProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{},
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clear.Succeeded() && clear.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "PostProcess.ClearProfile must report cleared=true");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "PostProcess.ClearProfile did not actually reset the scene's active profile to 0");
+
+    // Lua wrapper layer.
+    const kb::assets::AssetId luaAsset{ 9403U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Post Process Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned = PostProcess.SetProfile("/Game/PostProcess/TestProfile.kbppfx")
+    local active = PostProcess.ActiveProfile()
+    local cleared = PostProcess.ClearProfile()
+    local activeAfterClear = PostProcess.ActiveProfile()
+    SetShared("luaAssigned", assigned)
+    SetShared("luaActive", active)
+    SetShared("luaCleared", cleared)
+    SetShared("luaActiveAfterClear", activeAfterClear)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script post process API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script post process API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper SetProfile did not report assigned=true");
+    kb::tests::Require(host.SharedState().Get("luaActive").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(profileAssetId),
+        "Script post process API Lua wrapper ActiveProfile did not return the assigned profile asset id");
+    kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper ClearProfile did not report cleared=true");
+    kb::tests::Require(host.SharedState().Get("luaActiveAfterClear").value_or(kb::script::ScriptValue{ std::string{ "not empty" } }).AsString().empty(),
+        "Script post process API Lua wrapper ActiveProfile must return empty after ClearProfile");
+}
+
+// LIB-147: the authored AudioMixer asset - text IO round-trip, structural validation
+// (broken routing graphs must never load), and the scene-global active-mixer/snapshot
+// selection (SceneAudioMixerAccess, mirror of ScenePostProcessAccess).
+void RunAudioMixerAssetIOAndAccessTest() {
+    ResetTestRoot();
+    const std::filesystem::path mixerPath = TestRoot() / "MainMixer.kbmixer";
+
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {
+        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 1.0F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 0.6F, .mute = true },
+    };
+    mixer.snapshots = {
+        kb::audio::AudioMixerSnapshot{
+            .name = "Combat",
+            .busVolumes = {
+                kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Music", .volume = 0.25F },
+                kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Weapons", .volume = 1.0F },
+            },
+        },
+        kb::audio::AudioMixerSnapshot{ .name = "Calm", .busVolumes = {} },
+    };
+    kb::tests::Require(kb::audio::ValidateAudioMixerAsset(mixer).empty(), "A well-formed audio mixer must validate cleanly");
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Audio mixer asset save failed");
+
+    const std::optional<kb::audio::AudioMixerAsset> loaded = kb::audio::AudioMixerAssetIO::Load(mixerPath);
+    kb::tests::Require(loaded.has_value(), "Audio mixer asset load failed");
+    kb::tests::Require(loaded->buses.size() == 3U && loaded->snapshots.size() == 2U, "Audio mixer asset did not round-trip its record counts");
+    const kb::audio::AudioMixerBus* weapons = loaded->FindBus("Weapons");
+    kb::tests::Require(weapons != nullptr && weapons->parentBus == "Sfx" && kb::tests::NearlyEqual(weapons->volume, 0.6F) && weapons->mute,
+        "Audio mixer bus fields did not round-trip");
+    kb::tests::Require(loaded->FindBus("Music") != nullptr && loaded->FindBus("Music")->parentBus.empty(), "Audio mixer implicit-master parent did not round-trip");
+    const kb::audio::AudioMixerSnapshot* combat = loaded->FindSnapshot("Combat");
+    kb::tests::Require(combat != nullptr && combat->busVolumes.size() == 2U && combat->busVolumes[0].bus == "Music" && kb::tests::NearlyEqual(combat->busVolumes[0].volume, 0.25F),
+        "Audio mixer snapshot overrides did not round-trip");
+    kb::tests::Require(loaded->FindSnapshot("Calm") != nullptr && loaded->FindSnapshot("Calm")->busVolumes.empty(), "Audio mixer empty snapshot did not round-trip");
+    kb::tests::Require(loaded->FindBus("Nope") == nullptr && loaded->FindSnapshot("Nope") == nullptr, "Audio mixer lookups must miss honestly");
+
+    // Structural validation - each broken graph is rejected with a non-empty reason, and
+    // Save refuses to write it (a broken mixer must never reach disk or the backend).
+    kb::audio::AudioMixerAsset duplicate = mixer;
+    duplicate.buses.push_back(kb::audio::AudioMixerBus{ .name = "Music" });
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(duplicate).empty(), "A duplicate bus name must fail validation");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Save(mixerPath, duplicate), "Save must refuse a mixer with a duplicate bus name");
+    kb::audio::AudioMixerAsset unknownParent = mixer;
+    unknownParent.buses[0].parentBus = "Ghost";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(unknownParent).empty(), "An unknown parent bus must fail validation");
+    kb::audio::AudioMixerAsset cycle = mixer;
+    cycle.buses[1].parentBus = "Weapons"; // Sfx -> Weapons -> Sfx
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(cycle).empty(), "A parent-routing cycle must fail validation");
+    kb::audio::AudioMixerAsset unknownSnapshotBus = mixer;
+    unknownSnapshotBus.snapshots[0].busVolumes[0].bus = "Ghost";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(unknownSnapshotBus).empty(), "A snapshot override for an unknown bus must fail validation");
+    kb::audio::AudioMixerAsset badName = mixer;
+    badName.buses[0].name = "two words";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(badName).empty(), "A whitespace bus name must fail validation (single-token text format)");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "missing.kbmixer").has_value(), "Loading a missing mixer file must fail honestly");
+
+    // SceneAudioMixerAccess - defaults, round-trip, per-scene isolation.
+    kb::scene::Scene scene;
+    kb::scene::Scene otherScene;
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "A fresh scene must have no active mixer and no active snapshot");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 777U);
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Combat");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 777U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat",
+        "SceneAudioMixerAccess set/get did not round-trip");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(otherScene) == 0U, "SceneAudioMixerAccess must be isolated per scene");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, {});
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "SceneAudioMixerAccess must clear back to the defaults");
+
+    // LIB-150: runtime bus volume overrides - upsert-by-name, remove-by-name.
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.5F);
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.25F);
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Sfx", 0.75F);
+    const std::span<const kb::scene::AudioMixerBusVolumeOverride> overrides = kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene);
+    kb::tests::Require(overrides.size() == 2U && overrides[0].bus == "Music" && kb::tests::NearlyEqual(overrides[0].volume, 0.25F),
+        "Bus volume overrides must upsert by name, not duplicate");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing a set bus override must report true");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing an unset bus override must be idempotent-false");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U, "Clearing must remove exactly the named override");
+
+    // LIB-150: snapshot transition - deterministic scene-delta advance, FROM state stays
+    // active until completion, retarget completes the previous transition first.
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm",
+        "A running transition must keep the FROM snapshot active");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 0.25F)
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).Progress(), 0.25F),
+        "A partial advance must report progress without completing");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 0.75F)
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Completing a transition must promote the TO snapshot and clear the transition");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Calm", 2.0F);
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm"
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot.empty(),
+        "Retargeting mid-transition must complete the previous transition instantly first");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "A non-positive duration must apply the snapshot immediately");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 1.0F),
+        "Advancing with no running transition must be a false no-op");
+
+    // LIB-151: scene-global occlusion settings - honest defaults (disabled = zero raycast
+    // cost), configure round-trip, per-scene isolation.
+    const kb::scene::AudioOcclusionSettings& defaults = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(!defaults.enabled && kb::tests::NearlyEqual(defaults.occludedVolumeScale, 0.35F)
+            && kb::tests::NearlyEqual(defaults.maxDistance, 100.0F) && defaults.maxRaycastsPerTick == 8U,
+        "Audio occlusion must default to disabled with the documented tuning");
+    kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+                                                               .enabled = true,
+                                                               .occludedVolumeScale = 0.2F,
+                                                               .maxDistance = 50.0F,
+                                                               .layerMask = 0x3U,
+                                                               .maxRaycastsPerTick = 4U,
+                                                           });
+    const kb::scene::AudioOcclusionSettings& configured = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(configured.enabled && kb::tests::NearlyEqual(configured.occludedVolumeScale, 0.2F)
+            && kb::tests::NearlyEqual(configured.maxDistance, 50.0F) && configured.layerMask == 0x3U && configured.maxRaycastsPerTick == 4U,
+        "Audio occlusion Configure/Settings did not round-trip");
+    kb::tests::Require(!kb::scene::SceneAudioOcclusionAccess::Settings(otherScene).enabled,
+        "Audio occlusion settings must be isolated per scene");
+}
+
+// LIB-147: Audio.SetMixer/ActiveMixer/SetSnapshot/ActiveSnapshot's script layer -
+// registration on all three frontends, honest errors (wrong asset type, snapshot without
+// a mixer, snapshot name the mixer does not declare), real mutation of the scene's
+// selection, and the real Lua wrappers.
+void RunScriptAudioMixerApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path mixerPath = TestRoot() / "ScriptMixer.kbmixer";
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = { kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false } };
+    mixer.snapshots = { kb::audio::AudioMixerSnapshot{ .name = "Calm", .busVolumes = { kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Music", .volume = 0.1F } } } };
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Script audio mixer fixture save failed");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script audio mixer API host did not initialize");
+    for (const char* name : { "Audio.SetMixer", "Audio.ActiveMixer", "Audio.SetSnapshot", "Audio.ActiveSnapshot" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio mixer API did not register a LIB-147 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.SetMixer") != nullptr,
+        "Script audio mixer API did not register VisualGraph runtime binding for Audio.SetMixer");
+
+    const kb::assets::AssetId mixerAssetId{ 9601U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = mixerAssetId,
+                           .type = kb::audio::kAudioMixerAssetType,
+                           .name = "ScriptMixer",
+                           .virtualPath = "/Game/Audio/ScriptMixer.kbmixer",
+                           .physicalPath = mixerPath.string(),
+                           .contentHash = 1U,
+                       }),
+        "Script audio mixer API test mixer asset registration failed");
+    const kb::assets::AssetId meshAssetId{ 9602U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/Meshes/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script audio mixer API test wrong-type asset registration failed");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callString = [&host, &context](const char* function, const char* pin, const std::string& value) {
+        return host.Functions().Call(
+            function,
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = pin, .value = kb::script::ScriptValue{ value } },
+            } },
+            context);
+    };
+
+    kb::tests::Require(!callString("Audio.SetMixer", "mixer", "/Game/Meshes/WrongTypeAsset.21kbmesh").Succeeded(),
+        "Audio.SetMixer must reject a real asset of the wrong type");
+    kb::tests::Require(!callString("Audio.SetSnapshot", "snapshot", "Calm").Succeeded(),
+        "Audio.SetSnapshot must honestly error while no mixer is active");
+
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "/Game/Audio/ScriptMixer.kbmixer").Succeeded(),
+        "Audio.SetMixer failed for a valid AudioMixer asset");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == mixerAssetId.value,
+        "Audio.SetMixer did not store the resolved mixer asset id in the scene's own state");
+    const kb::script::ScriptFunctionCallResult activeMixer = host.Functions().Call("Audio.ActiveMixer", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(activeMixer.Succeeded() && activeMixer.Output("mixer").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(mixerAssetId),
+        "Audio.ActiveMixer must return the assigned mixer asset id");
+
+    kb::tests::Require(!callString("Audio.SetSnapshot", "snapshot", "Ghost").Succeeded(),
+        "Audio.SetSnapshot must reject a snapshot name the active mixer does not declare");
+    kb::tests::Require(callString("Audio.SetSnapshot", "snapshot", "Calm").Succeeded(), "Audio.SetSnapshot failed for a declared snapshot");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm", "Audio.SetSnapshot did not store the active snapshot name");
+    const kb::script::ScriptFunctionCallResult activeSnapshot = host.Functions().Call("Audio.ActiveSnapshot", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(activeSnapshot.Succeeded() && activeSnapshot.Output("snapshot").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "Calm",
+        "Audio.ActiveSnapshot must return the active snapshot name");
+    kb::tests::Require(callString("Audio.SetSnapshot", "snapshot", "").Succeeded() && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "An empty Audio.SetSnapshot must reset to the authored volumes");
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded()
+            && kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "An empty Audio.SetMixer must clear the mixer selection back to the implicit master");
+
+    // Lua wrapper layer - the full cycle through the C wrappers.
+    const kb::assets::AssetId luaAsset{ 9603U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Mixer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaAssigned", Audio.SetMixer("/Game/Audio/ScriptMixer.kbmixer"))
+    SetShared("luaMixer", Audio.ActiveMixer())
+    SetShared("luaApplied", Audio.SetSnapshot("Calm"))
+    SetShared("luaSnapshot", Audio.ActiveSnapshot())
+    local ok, err = Audio.SetSnapshot("Ghost")
+    SetShared("luaGhostRejected", ok == nil and err ~= nil)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio mixer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script audio mixer API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua Audio.SetMixer did not report assigned=true");
+    kb::tests::Require(host.SharedState().Get("luaMixer").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(mixerAssetId),
+        "Lua Audio.ActiveMixer did not return the assigned mixer id");
+    kb::tests::Require(host.SharedState().Get("luaApplied").value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua Audio.SetSnapshot did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaSnapshot").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "Calm",
+        "Lua Audio.ActiveSnapshot did not return the active snapshot");
+    kb::tests::Require(host.SharedState().Get("luaGhostRejected").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Lua Audio.SetSnapshot must surface nil+error for an undeclared snapshot name");
+
+    // LIB-150: bus volume overrides + snapshot transition through the script layer (the
+    // Lua Tick above left the mixer active with snapshot "Calm").
+    for (const char* name : { "Audio.SetBusVolume", "Audio.ClearBusVolume", "Audio.TransitionToSnapshot" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio mixer API did not register a LIB-150 function");
+    }
+    const auto callBusVolume = [&host, &context](const std::string& bus, float volume) {
+        return host.Functions().Call(
+            "Audio.SetBusVolume",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "bus", .value = kb::script::ScriptValue{ bus } },
+                kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ volume } },
+            } },
+            context);
+    };
+    kb::tests::Require(!callBusVolume("Ghost", 0.5F).Succeeded(), "Audio.SetBusVolume must reject a bus the active mixer does not declare");
+    kb::tests::Require(callBusVolume("Music", 0.5F).Succeeded()
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene)[0].bus == "Music",
+        "Audio.SetBusVolume did not store the runtime override in the scene's own state");
+    kb::tests::Require(callString("Audio.ClearBusVolume", "bus", "Music").Succeeded()
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty(),
+        "Audio.ClearBusVolume did not remove the runtime override");
+    const auto callTransition = [&host, &context](const std::string& snapshot, float duration) {
+        return host.Functions().Call(
+            "Audio.TransitionToSnapshot",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "snapshot", .value = kb::script::ScriptValue{ snapshot } },
+                kb::script::ScriptFunctionArgument{ .name = "durationSeconds", .value = kb::script::ScriptValue{ duration } },
+            } },
+            context);
+    };
+    kb::tests::Require(!callTransition("Ghost", 1.0F).Succeeded(), "Audio.TransitionToSnapshot must reject an undeclared snapshot");
+    kb::tests::Require(callTransition("Calm", 1.0F).Succeeded()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot == "Calm",
+        "Audio.TransitionToSnapshot did not start the scene's transition state");
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded(), "Clearing the mixer after the transition probe failed");
+    kb::tests::Require(!callBusVolume("Music", 0.5F).Succeeded() && !callTransition("Calm", 1.0F).Succeeded(),
+        "Bus volume and transition requests must honestly error without an active mixer");
+
+    // LIB-151: occlusion configuration through the script layer - partial updates keep
+    // the untouched tuning values.
+    for (const char* name : { "Audio.ConfigureOcclusion", "Audio.OcclusionEnabled" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio API did not register a LIB-151 function");
+    }
+    const kb::script::ScriptFunctionCallResult configure = host.Functions().Call(
+        "Audio.ConfigureOcclusion",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "enabled", .value = kb::script::ScriptValue{ true } },
+            kb::script::ScriptFunctionArgument{ .name = "occludedVolume", .value = kb::script::ScriptValue{ 0.1F } },
+            kb::script::ScriptFunctionArgument{ .name = "maxRaycastsPerTick", .value = kb::script::ScriptValue{ 3 } },
+        } },
+        context);
+    const kb::scene::AudioOcclusionSettings& scriptConfigured = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(configure.Succeeded() && scriptConfigured.enabled && kb::tests::NearlyEqual(scriptConfigured.occludedVolumeScale, 0.1F)
+            && scriptConfigured.maxRaycastsPerTick == 3U && kb::tests::NearlyEqual(scriptConfigured.maxDistance, 100.0F),
+        "Audio.ConfigureOcclusion must apply given values and keep omitted ones");
+    const kb::script::ScriptFunctionCallResult occlusionEnabled = host.Functions().Call("Audio.OcclusionEnabled", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(occlusionEnabled.Succeeded() && occlusionEnabled.Output("enabled").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Audio.OcclusionEnabled must report the configured state");
+}
+
+// LIB-148: per-voice playback control - the AudioPlayback facade contract without a
+// backend (everything honestly false), the full per-voice flow through a fake backend
+// (no plugin required), registration of all eight functions on Native+VisualGraph, and
+// the real Lua wrappers.
+void RunScriptAudioVoiceControlApiTest() {
+    // A minimal recording backend - one live voice id, every operation notes its call.
+    struct FakeAudioBackend final : kb::audio::IAudioPlaybackBackend {
+        std::uint64_t liveVoice = 7U;
+        float lastSeekSeconds = -1.0F;
+        float lastVolume = -1.0F;
+        float lastPitch = -1.0F;
+        bool lastLoop = false;
+        bool paused = false;
+
+        [[nodiscard]] kb::audio::AudioPlayResult PlayOneShot(kb::scene::Scene&, const kb::audio::AudioPlayDesc& desc) override {
+            lastVolume = desc.volume;
+            return kb::audio::AudioPlayResult{ .started = true, .voiceId = liveVoice, .error = {} };
+        }
+        void StopAll(kb::scene::Scene&) noexcept override {}
+        [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            liveVoice = 0U;
+            return true;
+        }
+        [[nodiscard]] bool PauseVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            paused = voiceId == liveVoice ? true : paused;
+            return voiceId == liveVoice;
+        }
+        [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            paused = voiceId == liveVoice ? false : paused;
+            return voiceId == liveVoice;
+        }
+        [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float positionSeconds) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastSeekSeconds = positionSeconds;
+            return true;
+        }
+        [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float volume) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastVolume = volume;
+            return true;
+        }
+        [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float pitch) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastPitch = pitch;
+            return true;
+        }
+        [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool loop) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastLoop = loop;
+            return true;
+        }
+        [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            return voiceId == liveVoice && !paused;
+        }
+    };
+
+    kb::scene::Scene scene;
+    // Without a backend every facade call is honestly false.
+    kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, 7U) && !kb::audio::AudioPlayback::PauseVoice(scene, 7U)
+            && !kb::audio::AudioPlayback::SeekVoice(scene, 7U, 1.0F) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, 7U),
+        "AudioPlayback per-voice facade must be honestly false without a registered backend");
+
+    FakeAudioBackend backend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script audio voice control API host did not initialize");
+    for (const char* name : { "Audio.Stop", "Audio.Pause", "Audio.Resume", "Audio.Seek", "Audio.SetVolume", "Audio.SetPitch", "Audio.SetLoop", "Audio.IsPlaying" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio voice control API did not register a LIB-148 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.Stop") != nullptr,
+        "Script audio voice control API did not register VisualGraph runtime binding for Audio.Stop");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callVoice = [&host, &context](const char* function, std::initializer_list<kb::script::ScriptFunctionArgument> extra) {
+        std::vector<kb::script::ScriptFunctionArgument> arguments{ kb::script::ScriptFunctionArgument{ .name = "voice", .value = kb::script::ScriptValue{ 7 } } };
+        arguments.insert(arguments.end(), extra.begin(), extra.end());
+        return host.Functions().Call(function, std::span<const kb::script::ScriptFunctionArgument>{ arguments }, context);
+    };
+
+    kb::tests::Require(callVoice("Audio.Pause", {}).Output("paused").value_or(kb::script::ScriptValue{ false }).AsBool() && backend.paused,
+        "Audio.Pause did not reach the backend");
+    kb::tests::Require(!callVoice("Audio.IsPlaying", {}).Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Audio.IsPlaying must report false for a paused voice");
+    kb::tests::Require(callVoice("Audio.Resume", {}).Output("resumed").value_or(kb::script::ScriptValue{ false }).AsBool() && !backend.paused,
+        "Audio.Resume did not reach the backend");
+    kb::tests::Require(callVoice("Audio.Seek", { kb::script::ScriptFunctionArgument{ .name = "positionSeconds", .value = kb::script::ScriptValue{ 2.5F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastSeekSeconds, 2.5F),
+        "Audio.Seek did not carry its position to the backend");
+    kb::tests::Require(callVoice("Audio.SetVolume", { kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ 0.4F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastVolume, 0.4F),
+        "Audio.SetVolume did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.SetPitch", { kb::script::ScriptFunctionArgument{ .name = "pitch", .value = kb::script::ScriptValue{ 1.2F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastPitch, 1.2F),
+        "Audio.SetPitch did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.SetLoop", { kb::script::ScriptFunctionArgument{ .name = "loop", .value = kb::script::ScriptValue{ true } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastLoop,
+        "Audio.SetLoop did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.Stop", {}).Output("stopped").value_or(kb::script::ScriptValue{ false }).AsBool(), "Audio.Stop did not reach the backend");
+    kb::tests::Require(!callVoice("Audio.IsPlaying", {}).Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && !callVoice("Audio.Pause", {}).Output("paused").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Every operation on a stopped voice must be honestly false, never a resurrection");
+
+    // Lua wrapper layer - reset the fake voice and drive the full cycle through Lua.
+    backend.liveVoice = 7U;
+    backend.paused = false;
+    const kb::assets::AssetId luaAsset{ 9702U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Voice Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaPaused", Audio.Pause(7))
+    SetShared("luaResumed", Audio.Resume(7))
+    SetShared("luaSeeked", Audio.Seek(7, 1.5))
+    SetShared("luaVolume", Audio.SetVolume(7, 0.6))
+    SetShared("luaPlaying", Audio.IsPlaying(7))
+    SetShared("luaStopped", Audio.Stop(7))
+    SetShared("luaDeadStop", Audio.Stop(7))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio voice control Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script audio voice control Lua wrapper execution failed");
+    for (const char* key : { "luaPaused", "luaResumed", "luaSeeked", "luaVolume", "luaPlaying", "luaStopped" }) {
+        kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua per-voice wrapper did not report success");
+    }
+    kb::tests::Require(!host.SharedState().Get("luaDeadStop").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Lua Audio.Stop on an already-stopped voice must be honestly false");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+}
+
+// LIB-144: the native contract of the scene-held, renderer-published visibility feedback
+// table (SceneRenderFeedback) - the pure kb::scene side, no renderer involved: honest empty
+// results before any publish, binary-searched entry lookup after one, the exact
+// sphere-vs-plane convention documented on SceneRenderFrustumPlane, capacity-reusing
+// publish swap, and Clear returning to the never-published state.
+void RunSceneRenderFeedbackTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity trackedEntity{ 5U };
+    const kb::scene::SceneEntity hiddenEntity{ 10U };
+
+    // Never-published state: every query reports its honest empty result.
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::HasFrame(scene), "A fresh scene must not report a published visibility frame");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 0U, "A fresh scene must report publish count 0");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "IsVisible must be false before any frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, trackedEntity).IsValid(), "WorldBounds must be invalid before any frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must be fail-closed false before any frame was published");
+
+    // An axis-aligned +/-10 box as a stand-in frustum (ax + by + cz + w >= 0 half-spaces).
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.viewportId = 7U;
+    frame.frustumPlanes = {
+        kb::scene::SceneRenderFrustumPlane{ 1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ -1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, -1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, 1.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, -1.0F, 10.0F },
+    };
+    frame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = trackedEntity.Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 1.0F, 2.0F, 3.0F }, .radius = 4.0F },
+            .visible = true,
+        },
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = hiddenEntity.Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 50.0F, 0.0F, 0.0F }, .radius = 1.0F },
+            .visible = false,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    kb::tests::Require(kb::scene::SceneRenderFeedback::HasFrame(scene), "Publish must make HasFrame true");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 1U, "Publish must advance the publish count to 1");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "IsVisible must report the published visible entry");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "IsVisible must report the published culled entry as not visible");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, kb::scene::SceneEntity{ 999U }), "IsVisible must be false for an entity with no published entry");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, kb::scene::SceneEntity{}), "IsVisible must be false for the invalid entity");
+    const kb::scene::SceneRenderBounds bounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, trackedEntity);
+    kb::tests::Require(bounds.IsValid() && bounds.center.x == 1.0F && bounds.center.y == 2.0F && bounds.center.z == 3.0F && bounds.radius == 4.0F,
+        "WorldBounds must return the exact published bounds sphere");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, kb::scene::SceneEntity{ 999U }).IsValid(), "WorldBounds must be invalid for an entity with no published entry");
+
+    kb::tests::Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must accept the origin point inside the published box frustum");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 100.0F, 0.0F, 0.0F }, 0.0F), "TestFrustum must reject a point far outside the published box frustum");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 12.0F, 0.0F, 0.0F }, 5.0F), "TestFrustum must accept a sphere straddling the published frustum boundary");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 16.0F, 0.0F, 0.0F }, 5.0F), "TestFrustum must reject a sphere fully past the published frustum boundary");
+
+    // Second publish replaces the frame (last publish wins) and keeps counting.
+    kb::scene::SceneRenderVisibilityFrame secondFrame;
+    secondFrame.frustumValid = false;
+    secondFrame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{ .entityId = hiddenEntity.Id(), .worldBounds = {}, .visible = true },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, secondFrame);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 2U, "A second publish must advance the publish count to 2");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "A second publish must fully replace the previous frame's entries");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "A second publish's entries must be queryable");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must be fail-closed false when the last published frame had no camera frustum");
+    // Publish swaps entry storage back into the caller's frame, so the previous frame's
+    // capacity is what secondFrame now holds - the steady state allocates nothing.
+    kb::tests::Require(secondFrame.entries.size() == 2U, "Publish must swap the previously published entries back into the caller's frame for capacity reuse");
+
+    kb::scene::SceneRenderFeedback::Clear(scene);
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::HasFrame(scene) && kb::scene::SceneRenderFeedback::PublishCount(scene) == 0U,
+        "Clear must return the scene to the never-published state");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "Clear must drop every published entry");
+
+    // LIB-145: screen/world conversions. Before any camera-carrying frame: honest invalid.
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{}).valid,
+        "WorldToScreen must be invalid before a camera frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 0.0F, 0.0F).valid,
+        "ScreenPointToRay must be invalid before a camera frame was published");
+
+    // Identity view + identity projection (projection[15]==1 -> orthographic with unit
+    // half-extents), 100x100 viewport: NDC == world x/y directly.
+    kb::scene::SceneRenderVisibilityFrame cameraFrame;
+    cameraFrame.cameraValid = true;
+    cameraFrame.viewportWidth = 100U;
+    cameraFrame.viewportHeight = 100U;
+    cameraFrame.view[0] = cameraFrame.view[5] = cameraFrame.view[10] = cameraFrame.view[15] = 1.0F;
+    cameraFrame.projection[0] = cameraFrame.projection[5] = cameraFrame.projection[10] = cameraFrame.projection[15] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, cameraFrame);
+
+    const kb::scene::SceneRenderScreenPoint centerPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 0.0F, 0.0F, 0.5F });
+    kb::tests::Require(centerPoint.valid && centerPoint.onScreen && std::abs(centerPoint.screenX - 50.0F) < 0.001F && std::abs(centerPoint.screenY - 50.0F) < 0.001F,
+        "WorldToScreen must map the identity-camera origin ray to the viewport center pixel");
+    kb::tests::Require(std::abs(centerPoint.viewDepth - 0.5F) < 0.001F, "WorldToScreen must report the view-space depth");
+    const kb::scene::SceneRenderScreenPoint cornerPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 1.0F, 1.0F, 0.5F });
+    kb::tests::Require(cornerPoint.valid && std::abs(cornerPoint.screenX - 100.0F) < 0.001F && std::abs(cornerPoint.screenY - 0.0F) < 0.001F,
+        "WorldToScreen must map NDC +1/+1 to the top-right viewport corner (top-left pixel origin, +Y down)");
+    const kb::scene::SceneRenderScreenPoint offPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 5.0F, 0.0F, 0.5F });
+    kb::tests::Require(offPoint.valid && !offPoint.onScreen, "WorldToScreen must report an out-of-viewport point as off-screen");
+
+    // Orthographic ray: direction is always forward, origin offset laterally.
+    const kb::scene::SceneRenderCameraRay orthoRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 0.0F, 50.0F);
+    kb::tests::Require(orthoRay.valid && std::abs(orthoRay.ray.origin.x - (-1.0F)) < 0.001F && std::abs(orthoRay.ray.origin.y) < 0.001F
+            && std::abs(orthoRay.ray.direction.z - 1.0F) < 0.001F,
+        "ScreenPointToRay must offset an orthographic ray's origin by the projection half-extents and keep its direction forward");
+
+    // Perspective (projection[15]==0, unit x/y scales -> 90-degree square frustum): the
+    // right viewport edge's center row ray points 45 degrees right.
+    kb::scene::SceneRenderVisibilityFrame perspectiveFrame = cameraFrame;
+    perspectiveFrame.projection = {};
+    perspectiveFrame.projection[0] = 1.0F;
+    perspectiveFrame.projection[5] = 1.0F;
+    perspectiveFrame.projection[10] = 1.0F;
+    perspectiveFrame.projection[11] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, perspectiveFrame);
+    const kb::scene::SceneRenderCameraRay perspectiveRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 100.0F, 50.0F);
+    const float invSqrt2 = 0.7071F;
+    kb::tests::Require(perspectiveRay.valid && std::abs(perspectiveRay.ray.origin.x) < 0.001F
+            && std::abs(perspectiveRay.ray.direction.x - invSqrt2) < 0.001F && std::abs(perspectiveRay.ray.direction.z - invSqrt2) < 0.001F,
+        "ScreenPointToRay must build the editor-equivalent perspective ray from the camera basis and projection scales");
+    kb::math::Vec3 alongRay{};
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenToWorld(scene, 50.0F, 50.0F, 3.0F, alongRay)
+            && std::abs(alongRay.x) < 0.001F && std::abs(alongRay.y) < 0.001F && std::abs(alongRay.z - 3.0F) < 0.001F,
+        "ScreenToWorld must return the point `distance` units along the center pixel's forward ray");
+
+    // LIB-145: the async screen-capture request/result channel's native contract.
+    kb::tests::Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "") == 0U, "RequestScreenCapture must reject an empty path");
+    const std::uint64_t firstCapture = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_one.png");
+    kb::tests::Require(firstCapture != 0U, "RequestScreenCapture must return a non-zero id for a valid request");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_two.png") == 0U,
+        "RequestScreenCapture must reject a second request while one is pending (single in-flight per scene)");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A requested capture must report Pending");
+    const kb::scene::SceneScreenCaptureRequest peeked = kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene);
+    kb::tests::Require(peeked.id == firstCapture && peeked.path == "capture_one.png", "Peek must expose the pending, un-consumed request");
+    kb::scene::SceneRenderFeedback::ConsumeScreenCaptureRequest(scene, firstCapture);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene).id == 0U, "A consumed request must not be peeked again");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A consumed-but-unfinished capture must still report Pending");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, firstCapture, true);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Completed,
+        "A finished capture must report Completed");
+    const std::uint64_t secondCapture = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_two.png");
+    kb::tests::Require(secondCapture == firstCapture + 1U, "Capture ids must be monotonic and never reused");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, secondCapture, false);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, secondCapture) == kb::scene::SceneScreenCaptureStatus::Failed,
+        "A failed capture must report Failed");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Unknown,
+        "Only the latest terminal capture result is retained - an older id honestly reports Unknown");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, 999U) == kb::scene::SceneScreenCaptureStatus::Unknown,
+        "An id that never named a request must report Unknown");
+}
+
+// LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame's script layer - registration
+// on all three frontends (Native, VisualGraph binding, real Lua wrappers), honest error for
+// a dead entity, honest false/not-found for an alive-but-untracked entity, and real reads
+// of a published feedback frame.
+void RunScriptRendererApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script renderer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.IsVisible") != nullptr, "Script renderer API did not register Renderer.IsVisible");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.GetBounds") != nullptr, "Script renderer API did not register Renderer.GetBounds");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.TestFrustum") != nullptr, "Script renderer API did not register Renderer.TestFrustum");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.HasFrame") != nullptr, "Script renderer API did not register Renderer.HasFrame");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Renderer.IsVisible") != nullptr,
+        "Script renderer API did not register VisualGraph runtime binding for Renderer.IsVisible");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Renderer Feedback Target" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // Dead entity: honest error, mirroring Particles.Create's owner validation.
+    const kb::script::ScriptFunctionCallResult deadEntity = host.Functions().Call(
+        "Renderer.IsVisible",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ std::uint64_t{ 987654321U }, kb::script::ScriptValueType::Entity } },
+        } },
+        context);
+    kb::tests::Require(!deadEntity.Succeeded(), "Renderer.IsVisible must honestly error for a dead entity");
+
+    // Alive entity, no frame published yet: visible=false / found=false, not an error.
+    const std::vector<kb::script::ScriptFunctionArgument> entityArguments{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noFrameVisible = host.Functions().Call("Renderer.IsVisible", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(noFrameVisible.Succeeded() && !noFrameVisible.Output("visible").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.IsVisible must report visible=false before any frame was published");
+    const kb::script::ScriptFunctionCallResult hasFrameBefore = host.Functions().Call("Renderer.HasFrame", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(hasFrameBefore.Succeeded() && !hasFrameBefore.Output("published").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.HasFrame must report published=false before any frame was published");
+
+    // Publish a frame tracking the entity (same axis-aligned box frustum as the native test).
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.frustumPlanes = {
+        kb::scene::SceneRenderFrustumPlane{ 1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ -1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, -1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, 1.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, -1.0F, 10.0F },
+    };
+    frame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = object.Entity().Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 1.0F, 2.0F, 3.0F }, .radius = 4.0F },
+            .visible = true,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::script::ScriptFunctionCallResult visible = host.Functions().Call("Renderer.IsVisible", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(visible.Succeeded() && visible.Output("visible").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.IsVisible must report the published visible entry");
+    const kb::script::ScriptFunctionCallResult boundsResult = host.Functions().Call("Renderer.GetBounds", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(boundsResult.Succeeded() && boundsResult.Output("found").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.GetBounds must report found=true for a published entry");
+    kb::tests::Require(boundsResult.Output("centerY").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 2.0F
+            && boundsResult.Output("radius").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 4.0F,
+        "Renderer.GetBounds must return the exact published bounds values");
+    const kb::script::ScriptFunctionCallResult frustumInside = host.Functions().Call(
+        "Renderer.TestFrustum",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 1.0F } },
+        } },
+        context);
+    kb::tests::Require(frustumInside.Succeeded() && frustumInside.Output("inside").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.TestFrustum must accept a sphere inside the published frustum");
+    const kb::script::ScriptFunctionCallResult frustumOutside = host.Functions().Call(
+        "Renderer.TestFrustum",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 100.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        } },
+        context);
+    kb::tests::Require(frustumOutside.Succeeded() && !frustumOutside.Output("inside").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.TestFrustum must reject a point outside the published frustum");
+
+    // Lua wrapper layer: the ticking behaviour entity itself is the tracked entity, so the
+    // no-argument IsVisible/GetBounds default-to-self path is what actually executes.
+    const kb::assets::AssetId luaAsset{ 9501U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Renderer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::scene::SceneRenderVisibilityFrame luaFrame;
+    luaFrame.frustumValid = true;
+    luaFrame.frustumPlanes = frame.frustumPlanes;
+    luaFrame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = luaObject.Entity().Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 0.0F, 0.0F, 0.0F }, .radius = 2.5F },
+            .visible = true,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, luaFrame);
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaHasFrame", Renderer.HasFrame())
+    SetShared("luaVisible", Renderer.IsVisible())
+    local bounds = Renderer.GetBounds()
+    SetShared("luaBoundsFound", bounds.found)
+    SetShared("luaBoundsRadius", bounds.radius)
+    SetShared("luaInside", Renderer.TestFrustum(0, 0, 0, 1))
+    SetShared("luaOutside", Renderer.TestFrustum(100, 0, 0))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script renderer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script renderer API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaHasFrame").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper HasFrame did not report published=true");
+    kb::tests::Require(host.SharedState().Get("luaVisible").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper IsVisible (default self entity) did not report visible=true");
+    kb::tests::Require(host.SharedState().Get("luaBoundsFound").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper GetBounds did not report found=true");
+    kb::tests::Require(host.SharedState().Get("luaBoundsRadius").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 2.5F, "Script renderer API Lua wrapper GetBounds did not return the published radius");
+    kb::tests::Require(host.SharedState().Get("luaInside").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not accept an inside sphere");
+    kb::tests::Require(!host.SharedState().Get("luaOutside").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not reject an outside point");
+
+    // LIB-145: conversions + capture registration and behavior through the script layer.
+    for (const char* name : { "Renderer.WorldToScreen", "Renderer.ScreenPointToRay", "Renderer.ScreenToWorld", "Renderer.CaptureScreen", "Renderer.CaptureStatus" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script renderer API did not register a LIB-145 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Renderer.ScreenPointToRay") != nullptr,
+        "Script renderer API did not register VisualGraph runtime binding for Renderer.ScreenPointToRay");
+
+    // Publish an identity camera frame (orthographic unit half-extents, 100x100 pixels).
+    kb::scene::SceneRenderVisibilityFrame cameraFrame;
+    cameraFrame.cameraValid = true;
+    cameraFrame.viewportWidth = 100U;
+    cameraFrame.viewportHeight = 100U;
+    cameraFrame.view[0] = cameraFrame.view[5] = cameraFrame.view[10] = cameraFrame.view[15] = 1.0F;
+    cameraFrame.projection[0] = cameraFrame.projection[5] = cameraFrame.projection[10] = cameraFrame.projection[15] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, cameraFrame);
+
+    const kb::script::ScriptFunctionCallResult worldToScreen = host.Functions().Call(
+        "Renderer.WorldToScreen",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 0.5F } },
+        } },
+        context);
+    kb::tests::Require(worldToScreen.Succeeded()
+            && worldToScreen.Output("onScreen").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && std::abs(worldToScreen.Output("screenX").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - 50.0F) < 0.001F,
+        "Renderer.WorldToScreen must project through the published camera");
+    const kb::script::ScriptFunctionCallResult ray = host.Functions().Call(
+        "Renderer.ScreenPointToRay",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "screenX", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "screenY", .value = kb::script::ScriptValue{ 50.0F } },
+        } },
+        context);
+    kb::tests::Require(ray.Succeeded() && ray.Output("valid").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && std::abs(ray.Output("originX").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - (-1.0F)) < 0.001F
+            && std::abs(ray.Output("directionZ").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - 1.0F) < 0.001F,
+        "Renderer.ScreenPointToRay must build the published camera's ray");
+
+    const kb::script::ScriptFunctionCallResult emptyPathCapture = host.Functions().Call(
+        "Renderer.CaptureScreen",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ std::string{} } },
+        } },
+        context);
+    kb::tests::Require(!emptyPathCapture.Succeeded(), "Renderer.CaptureScreen must honestly error for an empty path");
+    const std::vector<kb::script::ScriptFunctionArgument> captureArguments{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ std::string{ "script_capture.png" } } },
+    };
+    const kb::script::ScriptFunctionCallResult capture = host.Functions().Call("Renderer.CaptureScreen", std::span<const kb::script::ScriptFunctionArgument>{ captureArguments }, context);
+    kb::tests::Require(capture.Succeeded(), "Renderer.CaptureScreen must accept a valid request");
+    const std::uint64_t captureId = capture.Output("capture").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(captureId != 0U, "Renderer.CaptureScreen must return a non-zero capture id");
+    kb::tests::Require(!host.Functions().Call("Renderer.CaptureScreen", std::span<const kb::script::ScriptFunctionArgument>{ captureArguments }, context).Succeeded(),
+        "Renderer.CaptureScreen must honestly error while another capture is pending");
+    const std::vector<kb::script::ScriptFunctionArgument> statusArguments{
+        kb::script::ScriptFunctionArgument{ .name = "capture", .value = kb::script::ScriptValue{ captureId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pendingStatus = host.Functions().Call("Renderer.CaptureStatus", std::span<const kb::script::ScriptFunctionArgument>{ statusArguments }, context);
+    kb::tests::Require(pendingStatus.Succeeded() && pendingStatus.Output("status").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "pending",
+        "Renderer.CaptureStatus must report pending for an unfinished capture");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, captureId, true);
+    const kb::script::ScriptFunctionCallResult completedStatus = host.Functions().Call("Renderer.CaptureStatus", std::span<const kb::script::ScriptFunctionArgument>{ statusArguments }, context);
+    kb::tests::Require(completedStatus.Succeeded() && completedStatus.Output("status").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "completed",
+        "Renderer.CaptureStatus must report completed after the renderer finishes the capture");
 }
 
 void RunScriptWorldTimePhysicsApiTest() {
@@ -2651,6 +4769,122 @@ void RunScriptPhysicsForceVelocitySleepApiTest() {
 
     kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
     kb::tests::Require(!kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report false after UnregisterBackend");
+}
+
+// LIB-131: CharacterMove/CharacterJump/CharacterVelocity/CharacterIsGrounded/
+// CharacterGroundNormal/CharacterGroundVelocity dispatch. Same isolated fake-backend
+// approach as RunScriptPhysicsForceVelocitySleepApiTest above - proves the honest
+// "no backend"/"unknown entity" failure paths and that ScriptPhysicsApi forwards
+// arguments/results through to kb::scene::PhysicsBackend unmodified (real Jolt-backed
+// slope/step/grounding/platform/gravity behavior is proven separately in
+// PhysicsSceneSystemTests.cpp).
+void RunScriptPhysicsCharacterApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject character = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Character Backend Subject" });
+    const kb::scene::SceneObject unknownObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Not Backed By Character Controller" });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script physics character API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CharacterMove") != nullptr, "Physics.CharacterMove was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.CharacterIsGrounded") != nullptr, "Physics.CharacterIsGrounded was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .deltaSeconds = 0.02F };
+    const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "moveX", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "moveZ", .value = kb::script::ScriptValue{ -2.5F } },
+    };
+
+    // --- No backend registered: honest failure, never fabricated success.
+    const kb::script::ScriptFunctionCallResult noBackendMove = host.Functions().Call("Physics.CharacterMove", moveArgs, context);
+    kb::tests::Require(noBackendMove.Succeeded() && !noBackendMove.Output("applied")->AsBool(), "Physics.CharacterMove must report applied=false when no physics backend is registered");
+    const std::vector<kb::script::ScriptFunctionArgument> entityOnlyArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noBackendVelocity = host.Functions().Call("Physics.CharacterVelocity", entityOnlyArgs, context);
+    kb::tests::Require(noBackendVelocity.Succeeded() && !noBackendVelocity.Output("found")->AsBool(), "Physics.CharacterVelocity must report found=false when no physics backend is registered");
+
+    // --- Register the fake backend; only `character` is "known" to it.
+    ProbePhysicsBackend backend;
+    backend.knownCharacterEntity = character.Entity();
+    backend.characterVelocity = kb::scene::Vec3{ 0.0F, -1.0F, 0.0F };
+    backend.characterGrounded = true;
+    backend.characterGroundNormal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F };
+    backend.characterGroundVelocity = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+    kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
+
+    const kb::script::ScriptFunctionCallResult moveResult = host.Functions().Call("Physics.CharacterMove", moveArgs, context);
+    kb::tests::Require(moveResult.Succeeded() && moveResult.Output("applied")->AsBool(), "Physics.CharacterMove must report applied=true once a backend is registered for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterMove.x, 1.5F) && kb::tests::NearlyEqual(backend.lastCharacterMove.z, -2.5F),
+        "Physics.CharacterMove must pass the exact moveX/moveZ vector through to the backend");
+
+    const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ character.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "speed", .value = kb::script::ScriptValue{ 6.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.CharacterJump", jumpArgs, context).Output("applied")->AsBool(), "Physics.CharacterJump must report applied=true for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterJumpSpeed, 6.0F), "Physics.CharacterJump must pass the exact jump speed through to the backend");
+
+    const kb::script::ScriptFunctionCallResult velocity = host.Functions().Call("Physics.CharacterVelocity", entityOnlyArgs, context);
+    kb::tests::Require(velocity.Output("found")->AsBool() && kb::tests::NearlyEqual(velocity.Output("y")->AsFloat(), -1.0F), "Physics.CharacterVelocity must read back the backend's real resulting velocity");
+
+    kb::tests::Require(host.Functions().Call("Physics.CharacterIsGrounded", entityOnlyArgs, context).Output("grounded")->AsBool(), "Physics.CharacterIsGrounded must report true when the backend reports the character grounded");
+
+    const kb::script::ScriptFunctionCallResult groundNormal = host.Functions().Call("Physics.CharacterGroundNormal", entityOnlyArgs, context);
+    kb::tests::Require(groundNormal.Output("found")->AsBool() && kb::tests::NearlyEqual(groundNormal.Output("y")->AsFloat(), 1.0F), "Physics.CharacterGroundNormal must read back the backend's real ground normal");
+
+    const kb::script::ScriptFunctionCallResult groundVelocity = host.Functions().Call("Physics.CharacterGroundVelocity", entityOnlyArgs, context);
+    kb::tests::Require(groundVelocity.Output("found")->AsBool() && kb::tests::NearlyEqual(groundVelocity.Output("x")->AsFloat(), 3.0F), "Physics.CharacterGroundVelocity must read back the backend's real ground velocity (platform motion)");
+
+    // --- An entity the backend does not know about must honestly fail too.
+    const std::vector<kb::script::ScriptFunctionArgument> unknownMoveArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "moveX", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "moveZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(!host.Functions().Call("Physics.CharacterMove", unknownMoveArgs, context).Output("applied")->AsBool(), "Physics.CharacterMove must report applied=false for an entity the backend does not know about");
+
+    // --- Lua round-trip: dedicated wrappers (LuaPhysicsCharacterMove etc.)
+    // parse `entity` via luaL_checkinteger and explicitly tag it
+    // Entity-typed, mirroring CheckEntityArg's use for every other
+    // entity-taking Physics.* wrapper in PucLuaFunctionApi.cpp.
+    const kb::assets::AssetId luaAsset{ 9411U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Character Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const std::string luaScript = "function Tick(self, dt)\n"
+                                  "    local entityId = " +
+        std::to_string(character.Entity().Id()) + "\n"
+                                                    "    local moved = Physics.CharacterMove(entityId, 4.0, 5.0)\n"
+                                                    "    local jumped = Physics.CharacterJump(entityId, 7.0)\n"
+                                                    "    local velocity = Physics.CharacterVelocity(entityId)\n"
+                                                    "    local grounded = Physics.CharacterIsGrounded(entityId)\n"
+                                                    "    local groundNormal = Physics.CharacterGroundNormal(entityId)\n"
+                                                    "    local groundVelocity = Physics.CharacterGroundVelocity(entityId)\n"
+                                                    "    SetShared(\"luaCharacterMoved\", moved)\n"
+                                                    "    SetShared(\"luaCharacterJumped\", jumped)\n"
+                                                    "    SetShared(\"luaCharacterVelocityY\", velocity.y)\n"
+                                                    "    SetShared(\"luaCharacterGrounded\", grounded)\n"
+                                                    "    SetShared(\"luaCharacterGroundNormalY\", groundNormal.y)\n"
+                                                    "    SetShared(\"luaCharacterGroundVelocityX\", groundVelocity.x)\n"
+                                                    "end\n";
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Script physics character API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.02F);
+    kb::tests::Require(tick.Succeeded(), "Script physics character API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaCharacterMoved")->AsBool(), "Lua Physics.CharacterMove must report applied=true for a known character entity");
+    kb::tests::Require(host.SharedState().Get("luaCharacterJumped")->AsBool(), "Lua Physics.CharacterJump must report applied=true for a known character entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterVelocityY")->AsFloat(), -1.0F), "Lua Physics.CharacterVelocity must read back the backend's real resulting velocity");
+    kb::tests::Require(host.SharedState().Get("luaCharacterGrounded")->AsBool(), "Lua Physics.CharacterIsGrounded must report true when the backend reports the character grounded");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterGroundNormalY")->AsFloat(), 1.0F), "Lua Physics.CharacterGroundNormal must read back the backend's real ground normal");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaCharacterGroundVelocityX")->AsFloat(), 3.0F), "Lua Physics.CharacterGroundVelocity must read back the backend's real ground velocity");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterMove.x, 4.0F) && kb::tests::NearlyEqual(backend.lastCharacterMove.z, 5.0F), "Lua Physics.CharacterMove must pass the exact moveX/moveZ vector through");
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastCharacterJumpSpeed, 7.0F), "Lua Physics.CharacterJump must pass the exact jump speed through");
+
+    kb::scene::PhysicsBackend::UnregisterBackend(scene, backend);
 }
 
 // LIB-125: SphereCast/BoxCast/CapsuleCast/OverlapSphere/OverlapBox/
@@ -6812,7 +9046,19 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
         }
     }
-    kb::tests::Require(fieldsChecked == 79U, "Script component API generated accessor coverage test did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields (slopeLimitDegrees/
+    // stepOffset/gravityScale/useGravity), so the total climbs from 79 to 83.
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
+    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
+    // total climbs from 92 to 97.
+    kb::tests::Require(fieldsChecked == 97U, "Script component API generated accessor coverage test did not exercise the expected total field count (97) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -6857,7 +9103,19 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             kb::tests::Require(get.value.Type() == property.type, ("Script component property " + fieldLabel + "'s returned ScriptValue::Type() must match its declared property type").c_str());
         }
     }
-    kb::tests::Require(propertiesChecked == 79U, "LIB-082 raw-pointer audit did not exercise the expected total field count (79) across all 10 components");
+    // LIB-131: CharacterController grew 5->9 script-writable fields, so the total climbs
+    // from 79 to 83.
+    // LIB-133: Rigidbody grew one more field (useContinuousCollision), so the total climbs
+    // from 83 to 84.
+    // LIB-135: Camera grew two more fields (viewportId/priority), so the total climbs from
+    // 84 to 86.
+    // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
+    // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
+    // 86 to 92.
+    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
+    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
+    // total climbs from 92 to 97.
+    kb::tests::Require(propertiesChecked == 97U, "LIB-082 raw-pointer audit did not exercise the expected total field count (97) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -9239,8 +11497,25 @@ void RunScriptRuntimeTests() {
     RunVisualGraphFullLifecycleOrderTest();
     RunCrossBackendLifecycleOrderParityTest();
     RunScriptAudioApiTest();
+    RunScriptMeshRendererApiTest();
+    RunScriptMeshRendererMaterialSlotApiTest();
+    RunSceneMaterialInstancesLifecycleAndLimitTest();
+    RunParticleEffectAssetIORoundTripTest();
+    RunSceneParticleSystemsLifecycleTest();
+    RunScriptParticleSystemApiTest();
+    RunScriptMaterialInstanceApiTest();
+    RunSceneMaterialInstancesParameterOverridesTest();
+    RunScriptMaterialInstanceParameterApiTest();
+    RunScenePostProcessAccessTest();
+    RunScriptPostProcessApiTest();
+    RunAudioMixerAssetIOAndAccessTest();
+    RunScriptAudioMixerApiTest();
+    RunScriptAudioVoiceControlApiTest();
+    RunSceneRenderFeedbackTest();
+    RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
+    RunScriptPhysicsCharacterApiTest();
     RunScriptPhysicsCastOverlapClosestPointApiTest();
     RunPhysicsBackendNonAllocQueriesTest();
     RunScriptPhysicsCollisionTriggerEventDispatchTest();

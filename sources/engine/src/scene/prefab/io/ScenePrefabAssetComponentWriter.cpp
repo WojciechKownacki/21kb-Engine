@@ -24,6 +24,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "camera.nearClip=" << components.camera->nearClip << '\n';
         output << "camera.farClip=" << components.camera->farClip << '\n';
         output << "camera.primary=" << (components.camera->primary ? 1 : 0) << '\n';
+        output << "camera.viewportId=" << components.camera->viewportId << '\n';
+        output << "camera.priority=" << components.camera->priority << '\n';
+        output << "camera.cullingMask=" << components.camera->cullingMask << '\n';
+        output << "camera.clearMode=" << static_cast<int>(components.camera->clearMode) << '\n';
+        WriteVec3(output, "camera.clearColor", components.camera->clearColor);
     }
 
     output << "meshRenderer=" << (components.meshRenderer.has_value() ? 1 : 0) << '\n';
@@ -36,6 +41,7 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         }
         output << "meshRenderer.castsShadow=" << (components.meshRenderer->castsShadow ? 1 : 0) << '\n';
         output << "meshRenderer.receivesShadow=" << (components.meshRenderer->receivesShadow ? 1 : 0) << '\n';
+        output << "meshRenderer.layer=" << components.meshRenderer->layer << '\n';
     }
 
     output << "light=" << (components.light.has_value() ? 1 : 0) << '\n';
@@ -51,6 +57,9 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.contactShadowLength=" << components.light->contactShadowLength << '\n';
         output << "light.volumetricScattering=" << components.light->volumetricScattering << '\n';
         output << "light.castsShadow=" << (components.light->castsShadow ? 1 : 0) << '\n';
+        output << "light.useColorTemperature=" << (components.light->useColorTemperature ? 1 : 0) << '\n';
+        output << "light.colorTemperatureKelvin=" << components.light->colorTemperatureKelvin << '\n';
+        output << "light.layerMask=" << components.light->layerMask << '\n';
     }
 
     output << "input=" << (components.input.has_value() ? 1 : 0) << '\n';
@@ -113,6 +122,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "audioSource.maxDistance=" << components.audioSource->maxDistance << '\n';
         output << "audioSource.rolloff=" << components.audioSource->rolloff << '\n';
         output << "audioSource.dopplerFactor=" << components.audioSource->dopplerFactor << '\n';
+        // LIB-147: written only when routed off the implicit master, so pre-LIB-147
+        // prefab files stay byte-identical on a pure re-save.
+        if (!AudioSourceOutputBus(*components.audioSource).empty()) {
+            output << "audioSource.outputBus=" << AudioSourceOutputBus(*components.audioSource) << '\n';
+        }
     }
 
     output << "audioListener=" << (components.audioListener.has_value() ? 1 : 0) << '\n';

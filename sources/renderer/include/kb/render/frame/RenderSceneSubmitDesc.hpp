@@ -3,6 +3,7 @@
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
+#include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -24,6 +25,12 @@ struct RenderSceneTargetBinding {
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     RenderViewportDesc viewport{};
     std::uint8_t msaaSamples = 0U;
+    // LIB-145: the color texture's pixel format (SceneRenderTarget::ColorSelection().format
+    // at the binding's construction site). bgfx cannot query a format back from a texture
+    // handle, and the async screen capture needs it to size its readback staging texture
+    // and decode the captured bytes. Count = unknown - captures against such a binding
+    // honestly fail instead of guessing.
+    bgfx::TextureFormat::Enum colorFormat = bgfx::TextureFormat::Count;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return viewport.IsValid();
@@ -166,6 +173,7 @@ struct RenderSceneSubmitDesc {
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
+    std::span<const PhysicsDebugLine> physicsDebugLines{};
     bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();

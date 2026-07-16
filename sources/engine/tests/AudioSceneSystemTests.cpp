@@ -1,12 +1,18 @@
 #include "SceneSystemTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -145,6 +151,151 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         kb::tests::Require(
             played.Succeeded() || played.error == "miniaudio playback device is not available",
             "Audio playback backend did not start a one-shot voice or report a controlled no-device error");
+
+        // LIB-147: the mixer bus path against the REAL plugin - authored .kbmixer asset,
+        // active mixer + snapshot, an entity source routed to a child bus, a one-shot
+        // routed by outputBus, then the mixer cleared mid-play (bus topology teardown).
+        // Exercises the full ma_sound_group lifecycle; audibility itself cannot be
+        // asserted headlessly, honest no-device runs already skip via playbackAvailable.
+        const std::filesystem::path mixerPath = TestRoot() / "External" / "Main.kbmixer";
+        kb::audio::AudioMixerAsset mixerAsset;
+        mixerAsset.buses = {
+            kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 0.5F, .mute = false },
+            kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 1.0F, .mute = false },
+        };
+        mixerAsset.snapshots = {
+            kb::audio::AudioMixerSnapshot{ .name = "Quiet", .busVolumes = { kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Sfx", .volume = 0.0F } } },
+        };
+        kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixerAsset), "Audio scene system test mixer save failed");
+        const kb::assets::AssetId mixerAssetId{ 9701U };
+        kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                               .id = mixerAssetId,
+                               .type = kb::audio::kAudioMixerAssetType,
+                               .name = "MainMixer",
+                               .virtualPath = "/Game/Audio/Main.kbmixer",
+                               .physicalPath = mixerPath.string(),
+                               .contentHash = 1U,
+                           }),
+            "Audio scene system test mixer asset registration failed");
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerAssetId.value);
+        kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet");
+        // LIB-150: runtime override + a mid-flight snapshot transition exercise the full
+        // volume-resolution stack (authored -> snapshot lerp -> override) on the real
+        // plugin across the ticks below.
+        kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Weapons", 0.2F);
+        kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 0.25F);
+
+        // LIB-151: occlusion against the real collider raycast geometry - a wall between
+        // the listener (origin) and the routed source exercises the budget-capped sampler
+        // on the real plugin across the ticks below.
+        kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+                                                                   .enabled = true,
+                                                                   .occludedVolumeScale = 0.25F,
+                                                                   .maxDistance = 100.0F,
+                                                                   .layerMask = 0xFFFFFFFFU,
+                                                                   .maxRaycastsPerTick = 4U,
+                                                               });
+        const kb::scene::SceneObject wall = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Occluding Wall",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+                .worldPosition = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+                .worldDirty = false,
+            },
+        });
+        scene.Components().Colliders().Set(wall.Entity(), kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = kb::scene::Vec3{ 4.0F, 4.0F, 0.2F },
+        });
+        const kb::scene::SceneObject occludedSourceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Occluded Source",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 2.0F },
+                .worldPosition = kb::scene::Vec3{ 0.0F, 0.0F, 2.0F },
+                .worldDirty = false,
+            },
+        });
+        scene.Components().AudioSources().Set(occludedSourceObject.Entity(), kb::scene::AudioSourceComponent{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = true,
+            .autoplay = true,
+        });
+
+        kb::scene::AudioSourceComponent routedSource{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .autoplay = true,
+        };
+        kb::scene::SetAudioSourceOutputBus(routedSource, "Weapons");
+        scene.Components().AudioSources().Set(source.Entity(), routedSource);
+        for (int i = 0; i < 3; ++i) {
+            [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+        }
+        kb::audio::AudioPlayDesc routedOneShot{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = false,
+            .spatial = false,
+        };
+        routedOneShot.outputBus = "Weapons";
+        const kb::audio::AudioPlayResult routedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, routedOneShot);
+        kb::tests::Require(
+            routedPlayed.Succeeded() || routedPlayed.error == "miniaudio playback device is not available",
+            "Bus-routed one-shot did not start or report a controlled no-device error");
+
+        // LIB-148: per-voice control against the REAL plugin (only when a device exists -
+        // the honest no-device error above already covered the headless case).
+        if (routedPlayed.Succeeded()) {
+            const std::uint64_t voice = routedPlayed.voiceId;
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, voice), "A started one-shot voice must report playing");
+            kb::tests::Require(kb::audio::AudioPlayback::PauseVoice(scene, voice), "PauseVoice failed for a live voice");
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, voice), "A paused voice must not report playing");
+            [[maybe_unused]] const bool ticked = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(kb::audio::AudioPlayback::ResumeVoice(scene, voice), "ResumeVoice failed for a paused voice (it must survive the frame tick, never be reclaimed)");
+            kb::tests::Require(kb::audio::AudioPlayback::SeekVoice(scene, voice, 0.01F), "SeekVoice failed for a live voice");
+            kb::tests::Require(kb::audio::AudioPlayback::SetVoiceVolume(scene, voice, 0.0F) && kb::audio::AudioPlayback::SetVoicePitch(scene, voice, 1.1F)
+                    && kb::audio::AudioPlayback::SetVoiceLoop(scene, voice, true),
+                "Per-voice volume/pitch/loop setters failed for a live voice");
+            kb::tests::Require(kb::audio::AudioPlayback::StopVoice(scene, voice), "StopVoice failed for a live voice");
+            kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, voice) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, voice)
+                    && !kb::audio::AudioPlayback::PauseVoice(scene, voice),
+                "Every operation on a stopped voice must be honestly false");
+        }
+
+        // LIB-149: an owner-attached looping voice must die with its owner - never leak
+        // its source (only when a device exists; the no-device path was covered above).
+        if (routedPlayed.Succeeded()) {
+            const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Voice Owner" });
+            kb::audio::AudioPlayDesc attachedDesc{
+                .clipAssetId = importedClip.id.value,
+                .volume = 0.0F,
+                .loop = true,
+                .spatial = true,
+            };
+            attachedDesc.ownerEntityId = ownerObject.Entity().Id();
+            const kb::audio::AudioPlayResult attachedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, attachedDesc);
+            kb::tests::Require(attachedPlayed.Succeeded(), "Owner-attached one-shot did not start");
+            [[maybe_unused]] const bool tickedAttached = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId),
+                "An attached looping voice must survive ticks while its owner lives");
+            scene.Entities().Destroy(ownerObject.Entity());
+            [[maybe_unused]] const bool tickedAfterDestroy = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId)
+                    && !kb::audio::AudioPlayback::StopVoice(scene, attachedPlayed.voiceId),
+                "An attached looping voice must be fully released with its owner - no leaked source record");
+        }
+
+        // Topology teardown mid-play: clearing the mixer must rebuild routing to the
+        // implicit master on the next tick without crashing or dangling groups.
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+        for (int i = 0; i < 3; ++i) {
+            [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+        }
+
         kb::audio::AudioPlayback::StopAll(scene);
     }
 }

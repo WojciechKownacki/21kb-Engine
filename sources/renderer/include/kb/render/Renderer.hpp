@@ -26,6 +26,8 @@
 #include "kb/render/scene/RenderSceneStore.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
 
+#include "engine/scene/SceneRenderFeedback.hpp"
+
 #include <cstdint>
 #include <array>
 #include <memory>
@@ -40,6 +42,8 @@ class BgfxContext;
 class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
+class RendererScreenCapture;
+class SceneParticleRenderSynchronizer;
 class SceneRenderer;
 
 } // namespace kb::render
@@ -196,6 +200,14 @@ public:
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
+    // LIB-142: the fully-resolved post-process settings (the caller's own per-submit desc
+    // override if it supplied one, otherwise the scene's own asset-based active
+    // PostProcessProfile if resolvable, otherwise nullopt) from the most recent
+    // SubmitScene(s) call - a diagnostic/test accessor mirroring LastSceneDiagnostics' own
+    // shape. Computed unconditionally (unlike the GPU-facing PostProcessChain evaluation,
+    // which only runs when RenderSceneSubmitDesc::finalComposite.enabled is set), so it stays
+    // observable even for a minimal offscreen-only submission.
+    [[nodiscard]] const std::optional<ScenePostProcessSettings>& LastResolvedPostProcessSettings() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
@@ -242,6 +254,7 @@ private:
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
     std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
+    std::unique_ptr<SceneParticleRenderSynchronizer> particleRenderSynchronizer_;
     // Lazily created worker pool that parallelizes the columnar render-sync (H6).
     std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;
@@ -262,6 +275,14 @@ private:
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
     std::vector<std::string> lastAaPipelineTraceLines_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
+    std::optional<ScenePostProcessSettings> lastResolvedPostProcessSettings_{};
+    // LIB-144: scratch frame reused across every SubmitSceneToViewport - Publish swaps its
+    // entries vector with the scene's stored frame, so both sides keep their capacity and
+    // the steady state allocates nothing per frame.
+    kb::scene::SceneRenderVisibilityFrame sceneRenderVisibilityScratch_{};
+    // LIB-145: the async screen-capture controller (frame-gated blit+readTexture+PNG, see
+    // RendererScreenCapture.hpp).
+    std::unique_ptr<RendererScreenCapture> screenCapture_;
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;

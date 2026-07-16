@@ -4,6 +4,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
@@ -16,6 +17,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
+#include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderWorldTransformReader.hpp"
 #include "scene/SceneTransformMatrices.hpp"
 
@@ -65,6 +67,18 @@ namespace {
         return RenderCameraProjection::Orthographic;
     }
     return RenderCameraProjection::Perspective;
+}
+
+[[nodiscard]] RenderCameraClearMode CameraClearModeOf(kb::scene::CameraClearMode clearMode) noexcept {
+    switch (clearMode) {
+    case kb::scene::CameraClearMode::SolidColor:
+        return RenderCameraClearMode::SolidColor;
+    case kb::scene::CameraClearMode::DepthOnly:
+        return RenderCameraClearMode::DepthOnly;
+    case kb::scene::CameraClearMode::DontClear:
+        return RenderCameraClearMode::DontClear;
+    }
+    return RenderCameraClearMode::SolidColor;
 }
 
 [[nodiscard]] RenderLightKind LightKindOf(kb::scene::LightKind kind) noexcept {
@@ -124,8 +138,34 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
         .farClip = camera.farClip,
         .primary = camera.primary,
         .visible = IsVisible(*sync->scene, entity),
+        .viewportId = camera.viewportId,
+        .priority = camera.priority,
+        .cullingMask = camera.cullingMask,
+        .clearMode = CameraClearModeOf(camera.clearMode),
+        .clearColor = { camera.clearColor.x, camera.clearColor.y, camera.clearColor.z },
     }));
     static_cast<void>(transform);
+}
+
+// LIB-139/LIB-140: a runtime MaterialInstance handle wins over the authored
+// materialAssetId. LIB-140 changed what "wins" means here: the RAW instance
+// handle is now passed through into MeshRenderProxyDesc::materialAssetId
+// unresolved (rather than being resolved to its parent asset id at sync
+// time), so RuntimeMaterialResourceEnsurer can recognize it
+// (scene.MaterialInstances().Exists(...)) and resolve parent + live
+// parameter overrides together as one unit - if this function resolved to
+// the parent asset id here instead, a SetParameterScalar/SetParameterBool
+// call made after this sync would have no way to invalidate the renderer's
+// already-cached-by-parent-asset-id material, since the cache key would be
+// indistinguishable from a plain (non-instance) material reference.
+// Released/nonexistent handles still honestly resolve to 0 (no material),
+// exactly the same shape RuntimeMaterialResourceEnsurer already handles for
+// an authored-but-unresolvable materialAssetId.
+[[nodiscard]] std::uint64_t ResolveMaterialAssetId(const kb::scene::Scene& scene, const kb::scene::MeshRendererComponent& renderer) noexcept {
+    if (renderer.materialInstanceHandle == 0U) {
+        return renderer.materialAssetId;
+    }
+    return scene.MaterialInstances().Exists(renderer.materialInstanceHandle) ? renderer.materialInstanceHandle : 0U;
 }
 
 void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
@@ -137,7 +177,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
-        .materialAssetId = renderer.materialAssetId,
+        .materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer),
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
@@ -145,6 +185,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .visible = IsVisible(*sync->scene, entity),
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
+        .layer = renderer.layer,
     }));
     static_cast<void>(transform);
 }
@@ -158,7 +199,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .kind = LightKindOf(light.kind),
         .position = PositionOf(renderTransform),
         .rotation = RotationOf(renderTransform),
-        .color = { light.color.x, light.color.y, light.color.z },
+        .color = SceneLightColor::Resolve(light),
         .intensity = light.intensity,
         .range = light.range,
         .innerConeDegrees = light.innerConeDegrees,
@@ -169,6 +210,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .volumetricScattering = light.volumetricScattering,
         .castsShadow = light.castsShadow,
         .visible = IsVisible(*sync->scene, entity),
+        .layer = light.layerMask,
     }));
     static_cast<void>(transform);
 }

@@ -151,6 +151,17 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_CAMERA_CLEAR_MODE(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::CameraClearMode::DontClear)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::CameraClearMode>(value.AsInt()); \
+            return true; \
+        } }
+
 #define KB_LIGHT_KIND(Component, field) \
     FieldBinding{ #field, \
         [](const void* component) noexcept -> ScriptValue { \
@@ -230,16 +241,23 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kVisibilityPropertyDes
     ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kCameraPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "verticalFovDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "orthographicHeight", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "nearClip", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "farClip", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "viewportId", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "cullingMask", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "clearMode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "clearColor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "clearColor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -248,15 +266,23 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "range", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "innerConeDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "outerConeDegrees", ScriptValueType::Float },
+    // LIB-141: areaWidth/areaHeight already existed on LightComponent (AreaRect/AreaDisk/Tube
+    // authoring) but were never in this reflection table - a pre-existing gap, closed here.
+    ScriptSceneComponentPropertyDesc{ "areaWidth", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "areaHeight", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "contactShadowLength", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "volumetricScattering", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "useColorTemperature", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "colorTemperatureKelvin", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "layerMask", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kMeshRendererPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
@@ -265,7 +291,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDesc
     ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kRigidbodyPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "mass", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "linearVelocity.x", ScriptValueType::Float },
@@ -277,6 +303,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "lockRotation", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "useContinuousCollision", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDescs{
@@ -295,12 +322,16 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kColliderPropertyDesc
     ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kCharacterControllerPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "slopeLimitDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "stepOffset", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
 };
 
 // LIB-082: connectedEntity is deliberately NOT in this table - Script
@@ -349,16 +380,23 @@ constexpr std::array<FieldBinding, 1> kVisibilityFields{
     KB_BOOL(kb::scene::VisibilityComponent, visible),
 };
 
-constexpr std::array<FieldBinding, 6> kCameraFields{
+constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_CAMERA_PROJECTION(kb::scene::CameraComponent, projection),
     KB_FLOAT(kb::scene::CameraComponent, verticalFovDegrees),
     KB_FLOAT(kb::scene::CameraComponent, orthographicHeight),
     KB_FLOAT(kb::scene::CameraComponent, nearClip),
     KB_FLOAT(kb::scene::CameraComponent, farClip),
     KB_BOOL(kb::scene::CameraComponent, primary),
+    KB_UINT32(kb::scene::CameraComponent, viewportId),
+    KB_INT(kb::scene::CameraComponent, priority),
+    KB_UINT32(kb::scene::CameraComponent, cullingMask),
+    KB_CAMERA_CLEAR_MODE(kb::scene::CameraComponent, clearMode),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, x),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, y),
+    KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
-constexpr std::array<FieldBinding, 11> kLightFields{
+constexpr std::array<FieldBinding, 16> kLightFields{
     KB_LIGHT_KIND(kb::scene::LightComponent, kind),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
@@ -367,15 +405,21 @@ constexpr std::array<FieldBinding, 11> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, range),
     KB_FLOAT(kb::scene::LightComponent, innerConeDegrees),
     KB_FLOAT(kb::scene::LightComponent, outerConeDegrees),
+    KB_FLOAT(kb::scene::LightComponent, areaWidth),
+    KB_FLOAT(kb::scene::LightComponent, areaHeight),
     KB_FLOAT(kb::scene::LightComponent, contactShadowLength),
     KB_FLOAT(kb::scene::LightComponent, volumetricScattering),
     KB_BOOL(kb::scene::LightComponent, castsShadow),
+    KB_BOOL(kb::scene::LightComponent, useColorTemperature),
+    KB_FLOAT(kb::scene::LightComponent, colorTemperatureKelvin),
+    KB_UINT32(kb::scene::LightComponent, layerMask),
 };
 
-constexpr std::array<FieldBinding, 3> kMeshRendererFields{
+constexpr std::array<FieldBinding, 4> kMeshRendererFields{
     KB_UINT32(kb::scene::MeshRendererComponent, materialSlotOverrideCount),
     KB_BOOL(kb::scene::MeshRendererComponent, castsShadow),
     KB_BOOL(kb::scene::MeshRendererComponent, receivesShadow),
+    KB_UINT32(kb::scene::MeshRendererComponent, layer),
 };
 
 constexpr std::array<FieldBinding, 3> kBehaviourFields{
@@ -384,7 +428,7 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
     KB_INT(kb::scene::BehaviourComponent, executionOrder),
 };
 
-constexpr std::array<FieldBinding, 11> kRigidbodyFields{
+constexpr std::array<FieldBinding, 12> kRigidbodyFields{
     KB_RIGIDBODY_BODY_TYPE(kb::scene::RigidbodyComponent, bodyType),
     KB_FLOAT(kb::scene::RigidbodyComponent, mass),
     KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, x),
@@ -396,6 +440,7 @@ constexpr std::array<FieldBinding, 11> kRigidbodyFields{
     KB_FLOAT(kb::scene::RigidbodyComponent, gravityScale),
     KB_BOOL(kb::scene::RigidbodyComponent, useGravity),
     KB_BOOL(kb::scene::RigidbodyComponent, lockRotation),
+    KB_BOOL(kb::scene::RigidbodyComponent, useContinuousCollision),
 };
 
 constexpr std::array<FieldBinding, 13> kColliderFields{
@@ -414,12 +459,16 @@ constexpr std::array<FieldBinding, 13> kColliderFields{
     KB_UINT32(kb::scene::ColliderComponent, layer),
 };
 
-constexpr std::array<FieldBinding, 5> kCharacterControllerFields{
+constexpr std::array<FieldBinding, 9> kCharacterControllerFields{
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, x),
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, y),
     KB_NESTED_FLOAT(kb::scene::CharacterControllerComponent, center, z),
     KB_FLOAT(kb::scene::CharacterControllerComponent, radius),
     KB_FLOAT(kb::scene::CharacterControllerComponent, height),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, slopeLimitDegrees),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, stepOffset),
+    KB_FLOAT(kb::scene::CharacterControllerComponent, gravityScale),
+    KB_BOOL(kb::scene::CharacterControllerComponent, useGravity),
 };
 
 constexpr std::array<FieldBinding, 13> kJointFields{

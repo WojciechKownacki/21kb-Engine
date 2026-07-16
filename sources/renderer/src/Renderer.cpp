@@ -6,12 +6,19 @@
 #include "kb/render/SceneDeferredLightingPass.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
+#include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
+#include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "renderer/RendererScreenCapture.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
@@ -91,6 +98,31 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
 
 [[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
     return handle.idx;
+}
+
+// LIB-142: resolves the scene's own asset-based PostProcessProfile (kb::scene::
+// ScenePostProcessAccess::ActiveProfile) into a live ScenePostProcessSettings value - the
+// ONLY engine-side (script/scene-driven) producer of post-process settings; every other
+// producer today is editor viewport code supplying RenderSceneSubmitDesc::postProcessSettings
+// directly (see this ticket's own research). Called only when the caller's own desc did NOT
+// already supply an explicit override, so an editor/player caller's explicit per-submit
+// override still always wins - this is purely an ADDITIVE fallback, not a new precedence
+// rule. An unset (0) or unresolvable profile asset id honestly resolves to std::nullopt (no
+// override at all, falling through to defaultPostProcessSettings_ exactly as before this
+// ticket), never a crash - the same "unresolvable reference silently falls back" shape every
+// other renderer-consumed asset reference already follows.
+[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(const kb::scene::Scene& scene) {
+    const std::uint64_t profileAssetId = kb::scene::ScenePostProcessAccess::ActiveProfile(scene);
+    if (profileAssetId == 0U) {
+        return std::nullopt;
+    }
+    kb::assets::AssetManager& manager = const_cast<kb::scene::Scene&>(scene).Assets().Manager();
+    const kb::assets::AssetHandle<ScenePostProcessSettings> handle =
+        manager.Load<ScenePostProcessSettings>(kb::assets::AssetId{ profileAssetId });
+    if (!handle.IsLoaded()) {
+        return std::nullopt;
+    }
+    return *handle;
 }
 
 void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::optional<ScenePostProcessSettings>& settingsOverride) noexcept {
@@ -195,6 +227,8 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
+    particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
+    screenCapture_ = std::make_unique<RendererScreenCapture>();
     ApplyRuntimeSceneResourceReserve();
 
     scenePostProcessRenderer_ = std::make_unique<ScenePostProcessRenderer>();
@@ -268,6 +302,11 @@ void Renderer::Shutdown() {
     defaultSceneGBuffer_.Shutdown();
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
+    particleRenderSynchronizer_.reset();
+    if (screenCapture_ != nullptr) {
+        screenCapture_->Shutdown();
+        screenCapture_.reset();
+    }
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
@@ -365,6 +404,7 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
                 .extent = extent,
                 .viewportIndex = 0U,
             },
+            .colorFormat = defaultSceneTarget_.ColorSelection().format,
         },
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
@@ -405,6 +445,7 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastAaPipelineTraceLines_.clear();
     lastAaPipelineTraceLines_.reserve(submissions.size() * 3U);
     lastSceneDiagnostics_.Clear();
+    lastResolvedPostProcessSettings_ = std::nullopt;
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     lastDefaultMaterialFallbackCount_ = 0U;
     lastErrorMaterialFallbackCount_ = 0U;
@@ -559,6 +600,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
     }
+    if (particleRenderSynchronizer_ == nullptr || screenCapture_ == nullptr) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing particleRenderSynchronizer");
+        return false;
+    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
@@ -608,6 +653,15 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    // LIB-143: injects one real MeshRenderProxyDesc per live particle (billboard quad,
+    // camera-facing) into renderScene, BEFORE EnsureSceneResources below so those new
+    // proxies' mesh/material get resolved this same frame - deliberately AFTER the ECS
+    // mesh/camera/light sync above (so FindPrimaryCameraProxy sees this frame's resolved
+    // camera) and independent of desc.synchronizeScene (particles are not ECS entities, so
+    // the partial-sync dirty-entity-list path above never covers them).
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
+    particleRenderSynchronizer_->Sync(scene, renderScene, desc.target.viewport.id.value);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
     SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
@@ -709,6 +763,35 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
         WriteRendererBreadcrumb("renderer", message.str());
     }
+    // LIB-136: resolve the selected ECS camera's clear settings (if any - cameraOverride
+    // callers, e.g. the editor's fly camera, keep desc's own submission-level clear) BEFORE
+    // configuring the opaque view's clear state below. This is a cheap, matrix-free lookup
+    // (FindPrimaryCameraProxy, not the full BuildPrimaryCamera) so it does not duplicate the
+    // real camera resolution work done later in this function. GBuffer/deferred clearing is
+    // intentionally NOT affected - see CameraComponent.hpp's CameraClearMode doc comment.
+    std::uint16_t opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+    std::uint32_t opaqueClearRgba = desc.clearRgba;
+    if (!desc.cameraOverride.has_value()) {
+        const CameraRenderProxyDesc* clearCameraProxy = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
+        if (clearCameraProxy != nullptr) {
+            switch (clearCameraProxy->clearMode) {
+            case RenderCameraClearMode::SolidColor:
+                opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+                break;
+            case RenderCameraClearMode::DepthOnly:
+                opaqueClearFlags = BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+                break;
+            case RenderCameraClearMode::DontClear:
+                opaqueClearFlags = BGFX_CLEAR_NONE;
+                break;
+            }
+            const std::array<float, 3>& clearColor = clearCameraProxy->clearColor;
+            const auto channel = [](float value) noexcept -> std::uint32_t {
+                return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
+            };
+            opaqueClearRgba = (channel(clearColor[0]) << 24U) | (channel(clearColor[1]) << 16U) | (channel(clearColor[2]) << 8U) | 0xFFU;
+        }
+    }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
         RendererViewConfigurator::ConfigureGBufferClear(
@@ -720,7 +803,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
     } else {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear begin");
-        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
+        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc, opaqueClearFlags, opaqueClearRgba);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear end");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure transparent no-clear begin");
@@ -759,19 +842,49 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
-    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height, desc.target.viewport.id.value);
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // LIB-144: publish the CPU-side per-entity visibility/bounds feedback frame
+    // (Renderer.IsVisible/GetBounds/TestFrustum's backing data) into the scene, computed
+    // unconditionally (mirrors lastResolvedPostProcessSettings_ above - observable even for
+    // a minimal offscreen submission) with the pre-jitter camera this submit actually
+    // renders with. The const_cast follows the exact same convention EnsureSceneResources
+    // already established a few lines up: a scene's runtime-derived caches are mutable
+    // during its own submit. Mesh resources were ensured above, so bounds resolve this same
+    // frame; when the same scene is submitted to several viewports, the last submit in the
+    // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
+    SceneRenderVisibilityPublisher::BuildFrame(
+        renderScene,
+        overlayCamera,
+        desc.target.viewport.id.value,
+        width,
+        height,
+        &sceneRenderer_->Resources(),
+        &sceneRenderer_->ResourceMap(),
+        sceneRenderVisibilityScratch_);
+    kb::scene::SceneRenderFeedback::Publish(const_cast<kb::scene::Scene&>(scene), sceneRenderVisibilityScratch_);
+    // LIB-145: drive the scene's async screen-capture channel (finish a ready readback,
+    // start a newly requested one) - same scene-mutable-during-its-own-submit convention
+    // as the feedback publish above.
+    screenCapture_->Process(scene, desc, viewportPlan.viewIds, static_cast<std::uint32_t>(lastCompletedFrame_));
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
+    // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly
+    // as before this ticket; only when the caller supplied none do we fall back to the
+    // scene's own asset-based active PostProcessProfile, and only when that resolves to
+    // nothing does defaultPostProcessSettings_ apply (unchanged pre-LIB-142 behavior).
+    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
+        desc.postProcessSettings.has_value() ? desc.postProcessSettings : ResolveScenePostProcessProfile(scene);
+    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
     const bool temporalAntiAliasingEnabled = desc.postProcessEnabled &&
-        (desc.postProcessSettings.has_value()
-                ? desc.postProcessSettings->temporalAntiAliasingEnabled
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->temporalAntiAliasingEnabled
                 : defaultPostProcessSettings_.temporalAntiAliasingEnabled);
     const bool temporalJitterEnabled = temporalAntiAliasingEnabled &&
-        (desc.postProcessSettings.has_value()
-                ? desc.postProcessSettings->temporalJitterEnabled
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
     {
         std::ostringstream message;
@@ -780,18 +893,18 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " postProcessEnabled=" << BoolText(desc.postProcessEnabled)
                 << " postTargetsEnabled=" << BoolText(desc.postProcess.enabled)
                 << " targetMsaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples)
-                << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                << " overridePresent=" << BoolText(resolvedPostProcessSettings.has_value())
                 << " defaultFxaa=" << BoolText(defaultPostProcessSettings_.fxaaEnabled)
                 << " defaultTaa=" << BoolText(defaultPostProcessSettings_.temporalAntiAliasingEnabled)
                 << " defaultJitter=" << BoolText(defaultPostProcessSettings_.temporalJitterEnabled)
                 << " temporalTaaEnabled=" << BoolText(temporalAntiAliasingEnabled)
                 << " temporalJitterEnabled=" << BoolText(temporalJitterEnabled)
                 << " editorOverlays=" << BoolText(desc.editorSceneOverlaysEnabled);
-        if (desc.postProcessSettings.has_value()) {
-            message << " overrideFxaa=" << BoolText(desc.postProcessSettings->fxaaEnabled)
-                    << " overrideTaa=" << BoolText(desc.postProcessSettings->temporalAntiAliasingEnabled)
-                    << " overrideJitter=" << BoolText(desc.postProcessSettings->temporalJitterEnabled)
-                    << " overrideBloom=" << BoolText(desc.postProcessSettings->bloomEnabled);
+        if (resolvedPostProcessSettings.has_value()) {
+            message << " overrideFxaa=" << BoolText(resolvedPostProcessSettings->fxaaEnabled)
+                    << " overrideTaa=" << BoolText(resolvedPostProcessSettings->temporalAntiAliasingEnabled)
+                    << " overrideJitter=" << BoolText(resolvedPostProcessSettings->temporalJitterEnabled)
+                    << " overrideBloom=" << BoolText(resolvedPostProcessSettings->bloomEnabled);
         }
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
@@ -1032,11 +1145,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                         << " producer=" << PostProcessPassKindName(postProcessOutput.producer);
                 WriteRendererBreadcrumb("aa_trace", message.str());
             }
-            ApplyPostProcessSettingsOverride(postProcessOutput, desc.postProcessSettings);
+            ApplyPostProcessSettingsOverride(postProcessOutput, resolvedPostProcessSettings);
             {
                 std::ostringstream message;
                 message << "PostProcess after override"
-                        << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                        << " overridePresent=" << BoolText(resolvedPostProcessSettings.has_value())
                         << " finalFxaa=" << BoolText(postProcessOutput.fxaaEnabled)
                         << " finalTaa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
                         << " finalBloom=" << BoolText(postProcessOutput.bloomEnabled)
@@ -1282,6 +1395,10 @@ std::span<const std::string> Renderer::LastAaPipelineTraceLines() const noexcept
 
 const SceneRenderDiagnostics& Renderer::LastSceneDiagnostics() const noexcept {
     return lastSceneDiagnostics_;
+}
+
+const std::optional<ScenePostProcessSettings>& Renderer::LastResolvedPostProcessSettings() const noexcept {
+    return lastResolvedPostProcessSettings_;
 }
 
 MaterialProgramRegistryStats Renderer::MaterialProgramStats() const noexcept {

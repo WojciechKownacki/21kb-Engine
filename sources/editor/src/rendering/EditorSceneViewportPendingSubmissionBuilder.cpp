@@ -103,6 +103,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
                 .viewportIndex = session.viewportIndex,
             },
             .msaaSamples = session.sceneTarget.MsaaSamples(),
+            .colorFormat = session.sceneTarget.ColorSelection().format,
         },
         .postProcess = present.settings.postProcessEnabled ? session.postProcessTargets.Binding() : render::RenderPostProcessTargetBinding{},
         .finalComposite = render::RenderFinalCompositeTargetBinding{
@@ -120,6 +121,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .selectedEntityIds = SelectedEntitySpan(session),
         .dirtySceneEntityIds = dirtySceneEntityIds,
         .editorLightWireframes = std::span<const render::EditorLightWireframeDesc>{present.settings.editorLightWireframes.data(), present.settings.editorLightWireframes.size()},
+        .physicsDebugLines = std::span<const render::PhysicsDebugLine>{present.settings.physicsDebugLines.data(), present.settings.physicsDebugLines.size()},
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
         .shadowPassEnabled = present.settings.shadowPassEnabled,

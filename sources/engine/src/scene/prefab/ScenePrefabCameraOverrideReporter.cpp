@@ -14,7 +14,14 @@ namespace {
         && lhs.orthographicHeight == rhs.orthographicHeight
         && lhs.nearClip == rhs.nearClip
         && lhs.farClip == rhs.farClip
-        && lhs.primary == rhs.primary;
+        && lhs.primary == rhs.primary
+        && lhs.viewportId == rhs.viewportId
+        && lhs.priority == rhs.priority
+        && lhs.cullingMask == rhs.cullingMask
+        && lhs.clearMode == rhs.clearMode
+        && lhs.clearColor.x == rhs.clearColor.x
+        && lhs.clearColor.y == rhs.clearColor.y
+        && lhs.clearColor.z == rhs.clearColor.z;
 }
 
 } // namespace
@@ -39,6 +46,11 @@ void ScenePrefabCameraOverrideReporter::Append(SceneComponents components, Scene
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.nearClip", ScenePrefabOverrideValueFormatter::ToString(actual->nearClip), ScenePrefabOverrideFlag::Camera);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.farClip", ScenePrefabOverrideValueFormatter::ToString(actual->farClip), ScenePrefabOverrideFlag::Camera);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.primary", ScenePrefabOverrideValueFormatter::ToString(actual->primary), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.viewportId", std::to_string(actual->viewportId), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.priority", std::to_string(actual->priority), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.cullingMask", std::to_string(actual->cullingMask), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.clearMode", std::to_string(static_cast<int>(actual->clearMode)), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.clearColor", ScenePrefabOverrideValueFormatter::ToString(actual->clearColor), ScenePrefabOverrideFlag::Camera);
         return;
     }
     if (actual->projection != expected->projection) {
@@ -58,6 +70,21 @@ void ScenePrefabCameraOverrideReporter::Append(SceneComponents components, Scene
     }
     if (actual->primary != expected->primary) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.primary", ScenePrefabOverrideValueFormatter::ToString(actual->primary), ScenePrefabOverrideFlag::Camera);
+    }
+    if (actual->viewportId != expected->viewportId) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.viewportId", std::to_string(actual->viewportId), ScenePrefabOverrideFlag::Camera);
+    }
+    if (actual->priority != expected->priority) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.priority", std::to_string(actual->priority), ScenePrefabOverrideFlag::Camera);
+    }
+    if (actual->cullingMask != expected->cullingMask) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.cullingMask", std::to_string(actual->cullingMask), ScenePrefabOverrideFlag::Camera);
+    }
+    if (actual->clearMode != expected->clearMode) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.clearMode", std::to_string(static_cast<int>(actual->clearMode)), ScenePrefabOverrideFlag::Camera);
+    }
+    if (actual->clearColor.x != expected->clearColor.x || actual->clearColor.y != expected->clearColor.y || actual->clearColor.z != expected->clearColor.z) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.clearColor", ScenePrefabOverrideValueFormatter::ToString(actual->clearColor), ScenePrefabOverrideFlag::Camera);
     }
 }
 

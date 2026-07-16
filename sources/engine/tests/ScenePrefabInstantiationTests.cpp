@@ -2076,6 +2076,112 @@ void RunPrefabApplyOverrideToAssetTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+// LIB-135: exercises the actual on-disk text asset round trip (ScenePrefabAssetComponentWriter
+// -> ScenePrefabAssetCameraParser), not just the in-memory ScenePrefabBakedData copy the other
+// Camera-bearing prefab tests use - proves viewportId/priority (and every pre-existing Camera
+// field) actually survive a real Save()/Load() cycle through the text format.
+void RunPrefabCameraAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_camera_round_trip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t cameraNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Camera Round Trip",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{
+                .projection = kb::scene::CameraProjection::Orthographic,
+                .verticalFovDegrees = 45.0F,
+                .orthographicHeight = 8.0F,
+                .nearClip = 0.5F,
+                .farClip = 500.0F,
+                .primary = true,
+                .viewportId = 2U,
+                .priority = 9,
+                .cullingMask = 0x00000003U,
+                .clearMode = kb::scene::CameraClearMode::DepthOnly,
+                .clearColor = kb::scene::Vec3{ 0.4F, 0.5F, 0.6F },
+            },
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("CameraRoundTripPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Camera prefab asset save failed");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Camera prefab asset did not load");
+    const kb::scene::ScenePrefabInstance instance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    const kb::scene::CameraComponent* camera = loadedScene.Components().Cameras().TryGet(instance.ObjectAt(cameraNode).Entity());
+    kb::tests::Require(camera != nullptr, "Camera prefab asset round trip did not instantiate a Camera component");
+    kb::tests::Require(camera->projection == kb::scene::CameraProjection::Orthographic, "Camera prefab asset round trip lost projection");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->verticalFovDegrees, 45.0F), "Camera prefab asset round trip lost verticalFovDegrees");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->orthographicHeight, 8.0F), "Camera prefab asset round trip lost orthographicHeight");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->nearClip, 0.5F), "Camera prefab asset round trip lost nearClip");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->farClip, 500.0F), "Camera prefab asset round trip lost farClip");
+    kb::tests::Require(camera->primary, "Camera prefab asset round trip lost primary");
+    kb::tests::Require(camera->viewportId == 2U, "Camera prefab asset round trip lost viewportId");
+    kb::tests::Require(camera->priority == 9, "Camera prefab asset round trip lost priority");
+    kb::tests::Require(camera->cullingMask == 0x00000003U, "Camera prefab asset round trip lost cullingMask");
+    kb::tests::Require(camera->clearMode == kb::scene::CameraClearMode::DepthOnly, "Camera prefab asset round trip lost clearMode");
+    kb::tests::Require(kb::tests::NearlyEqual(camera->clearColor.x, 0.4F) && kb::tests::NearlyEqual(camera->clearColor.y, 0.5F) && kb::tests::NearlyEqual(camera->clearColor.z, 0.6F),
+        "Camera prefab asset round trip lost clearColor");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
+// LIB-141: mirrors RunPrefabCameraAssetSaveLoadRoundTripTest exactly - exercises the actual
+// on-disk text asset round trip (ScenePrefabAssetComponentWriter -> ScenePrefabAssetLightParser)
+// for Light's new useColorTemperature/colorTemperatureKelvin/layerMask fields (plus the
+// pre-existing areaWidth/areaHeight, whose script-reflection gap LIB-141 also closed), not
+// just the in-memory ScenePrefabBakedData copy the other Light-bearing prefab tests use.
+void RunPrefabLightAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_light_round_trip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t lightNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Light Round Trip",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .light = kb::scene::LightComponent{
+                .kind = kb::scene::LightKind::AreaRect,
+                .color = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F },
+                .intensity = 7.0F,
+                .range = 12.0F,
+                .innerConeDegrees = 15.0F,
+                .outerConeDegrees = 30.0F,
+                .areaWidth = 2.5F,
+                .areaHeight = 1.25F,
+                .contactShadowLength = 0.1F,
+                .volumetricScattering = 0.6F,
+                .castsShadow = false,
+                .useColorTemperature = true,
+                .colorTemperatureKelvin = 3200.0F,
+                .layerMask = 0x00000005U,
+            },
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("LightRoundTripPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Light prefab asset save failed");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Light prefab asset did not load");
+    const kb::scene::ScenePrefabInstance instance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    const kb::scene::LightComponent* light = loadedScene.Components().Lights().TryGet(instance.ObjectAt(lightNode).Entity());
+    kb::tests::Require(light != nullptr, "Light prefab asset round trip did not instantiate a Light component");
+    kb::tests::Require(light->kind == kb::scene::LightKind::AreaRect, "Light prefab asset round trip lost kind");
+    kb::tests::Require(kb::tests::NearlyEqual(light->areaWidth, 2.5F) && kb::tests::NearlyEqual(light->areaHeight, 1.25F),
+        "Light prefab asset round trip lost areaWidth/areaHeight");
+    kb::tests::Require(light->useColorTemperature, "Light prefab asset round trip lost useColorTemperature");
+    kb::tests::Require(kb::tests::NearlyEqual(light->colorTemperatureKelvin, 3200.0F), "Light prefab asset round trip lost colorTemperatureKelvin");
+    kb::tests::Require(light->layerMask == 0x00000005U, "Light prefab asset round trip lost layerMask");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 void RunPrefabAssetLoadMigratesMissingNodeStableIdsTest() {
     const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_missing_node_ids.kbprefab";
     std::error_code removeError;
@@ -2589,6 +2695,8 @@ void RunScenePrefabInstantiationTests() {
     run("RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest", RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest);
     run("RunPrefabRefreshLargeInstanceSetTest", RunPrefabRefreshLargeInstanceSetTest);
     run("RunPrefabApplyOverrideToAssetTest", RunPrefabApplyOverrideToAssetTest);
+    run("RunPrefabCameraAssetSaveLoadRoundTripTest", RunPrefabCameraAssetSaveLoadRoundTripTest);
+    run("RunPrefabLightAssetSaveLoadRoundTripTest", RunPrefabLightAssetSaveLoadRoundTripTest);
     run("RunPrefabAssetLoadMigratesMissingNodeStableIdsTest", RunPrefabAssetLoadMigratesMissingNodeStableIdsTest);
     run("RunNestedPrefabCompositionTest", RunNestedPrefabCompositionTest);
     run("RunNestedPrefabCaptureAndRefreshTest", RunNestedPrefabCaptureAndRefreshTest);

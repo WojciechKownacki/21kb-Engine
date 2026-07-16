@@ -1,6 +1,9 @@
 add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
+    include/engine/audio/AudioMixerAsset.hpp
+    include/engine/audio/AudioMixerAssetIO.hpp
+    include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
     include/engine/audio/AudioSettings.hpp
     include/engine/assets/AssetHandle.hpp
@@ -126,6 +129,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneInputComponents.hpp
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneLightingAccess.hpp
+    include/engine/scene/ScenePostProcessAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneCharacterControllerComponents.hpp
@@ -134,6 +138,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneMode.hpp
     include/engine/scene/PhysicsBackend.hpp
+    include/engine/scene/PhysicsDebugDraw.hpp
     include/engine/scene/PhysicsLayersAsset.hpp
     include/engine/scene/PhysicsLayersAssetIO.hpp
     include/engine/scene/PhysicsLayersAssetLoader.hpp
@@ -152,7 +157,15 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabNode.hpp
     include/engine/scene/ScenePrefabOverrides.hpp
     include/engine/scene/ScenePrefabPrivateScene.hpp
+    include/engine/scene/SceneMaterialInstances.hpp
+    include/engine/scene/ParticleEffectAsset.hpp
+    include/engine/scene/ParticleEffectAssetIO.hpp
+    include/engine/scene/ParticleEffectAssetLoader.hpp
+    include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
+    include/engine/scene/SceneAudioMixerAccess.hpp
+    include/engine/scene/SceneAudioOcclusionAccess.hpp
+    include/engine/scene/SceneRenderFeedback.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
@@ -195,8 +208,13 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptMaterialInstanceApi.hpp
     include/engine/script/ScriptMathApi.hpp
+    include/engine/script/ScriptMeshRendererApi.hpp
+    include/engine/script/ScriptParticleSystemApi.hpp
+    include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
+    include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
@@ -287,6 +305,8 @@ add_library(kb_engine STATIC
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
     src/audio/AudioClipAssetLoader.cpp
+    src/audio/AudioMixerAssetIO.cpp
+    src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
     src/assets/AssetDiscoveryService.cpp
@@ -400,6 +420,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/PhysicsBackend.cpp
+    src/scene/PhysicsDebugDraw.cpp
     src/scene/PhysicsGeometryQueries.cpp
     src/scene/PhysicsLayersAssetIO.cpp
     src/scene/PhysicsLayersAssetLoader.cpp
@@ -410,6 +431,10 @@ add_library(kb_engine STATIC
     src/scene/SceneLoadedContentService.cpp
     src/scene/SceneMeshRendererIterationService.cpp
     src/scene/ScenePhysicsBodyIterationService.cpp
+    src/scene/SceneMaterialInstanceService.cpp
+    src/scene/ParticleEffectAssetIO.cpp
+    src/scene/ParticleEffectAssetLoader.cpp
+    src/scene/SceneParticleSystemService.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
@@ -521,7 +546,10 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneEntityQueries.cpp
     src/scene/modules/SceneHierarchyAccess.cpp
     src/scene/modules/SceneLoadedContent.cpp
+    src/scene/modules/SceneMaterialInstances.cpp
+    src/scene/modules/SceneParticleSystems.cpp
     src/scene/modules/ScenePrefabConnectionModule.cpp
+    src/scene/modules/SceneRenderFeedback.cpp
     src/scene/modules/ScenePrefabInstantiationModule.cpp
     src/scene/modules/ScenePrefabOverrideModule.cpp
     src/scene/modules/ScenePrefabs.cpp
@@ -675,8 +703,13 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
+    src/script/ScriptMeshRendererApi.cpp
+    src/script/ScriptParticleSystemApi.cpp
+    src/script/ScriptPostProcessApi.cpp
     src/script/ScriptPhysicsApi.cpp
+    src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp
@@ -783,6 +816,8 @@ add_library(kb_engine STATIC
     src/private/scene/SceneHistoryService.hpp
     src/private/scene/SceneIterationService.hpp
     src/private/scene/SceneLoadedContentService.hpp
+    src/private/scene/SceneMaterialInstanceService.hpp
+    src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTaskService.hpp

@@ -5799,6 +5799,17 @@ void RunProjectFilesMaterialEditorMeshRendererRenderPathE2ETest() {
     kb::editor::tests::Require(renderer.Initialize(surface, &config), "KBMAT-1006: Renderer did not initialize for Material Editor E2E");
     kb::editor::tests::Require(renderer.BeginFrame(), "KBMAT-1006: Renderer did not begin frame for Material Editor E2E");
 
+    // LIB-132: a real, non-empty physicsDebugLines span - editorSceneOverlaysEnabled defaults
+    // to true (RenderSceneSubmitDesc.hpp), so this exercises the actual new
+    // SceneGizmoPass::Submit line-vertex-buffer-and-bgfx::submit path under this test's real
+    // headless Noop Renderer, not merely the empty-span early-out every other test here
+    // (and, before this task, every editorLightWireframes-using code path in the whole repo)
+    // leaves untouched.
+    const std::array<kb::render::PhysicsDebugLine, 2U> physicsDebugLinesStorage{ {
+        kb::render::PhysicsDebugLine{ .from = { -1.0F, 0.0F, 0.0F }, .to = { 1.0F, 0.0F, 0.0F }, .color = { 0.35F, 0.9F, 0.35F }, .alpha = 0.85F },
+        kb::render::PhysicsDebugLine{ .from = { 0.0F, -1.0F, 0.0F }, .to = { 0.0F, 1.0F, 0.0F }, .color = { 1.0F, 0.25F, 0.25F }, .alpha = 1.0F },
+    } };
+
     const kb::render::RenderSceneSubmitDesc baseDesc{
         .target = kb::render::RenderSceneTargetBinding{
             .frameBuffer = BGFX_INVALID_HANDLE,
@@ -5815,6 +5826,7 @@ void RunProjectFilesMaterialEditorMeshRendererRenderPathE2ETest() {
             .maxVisibleInstances = 8U,
         },
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly,
+        .physicsDebugLines = std::span<const kb::render::PhysicsDebugLine>{ physicsDebugLinesStorage },
         .shadowPassEnabled = false,
         .postProcessEnabled = false,
         .selectionMaskEnabled = false,

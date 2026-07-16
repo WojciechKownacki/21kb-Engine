@@ -145,6 +145,228 @@ int LuaAudioPlay(lua_State* state) {
     return 1;
 }
 
+[[nodiscard]] int PushCallError(lua_State* state, const ScriptFunctionCallResult& result, std::string_view fallback);
+
+// LIB-147: Audio.SetMixer(mixer) -> assigned (boolean, nil+error on an unresolvable/
+// wrong-type mixer asset; an empty/absent argument clears back to the implicit master) -
+// mirrors LuaPostProcessSetProfile's exact shape.
+int LuaAudioSetMixer(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* mixer = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = "mixer",
+            .value = ScriptValue{ std::string{ mixer != nullptr ? mixer : "", mixer != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (mixer != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetMixer", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio mixer assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioActiveMixer(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ActiveMixer", {});
+    const std::string mixer = result.Output("mixer").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, mixer.data(), mixer.size());
+    return 1;
+}
+
+// LIB-147: Audio.SetSnapshot(snapshot) -> applied (boolean, nil+error when no mixer is
+// active or the name is not declared by it; empty/absent resets to authored volumes).
+int LuaAudioSetSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* snapshot = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = "snapshot",
+            .value = ScriptValue{ std::string{ snapshot != nullptr ? snapshot : "", snapshot != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (snapshot != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetSnapshot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio snapshot request failed");
+    }
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+[[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value);
+
+// LIB-148: the eight per-voice wrappers share one shape - voice handle at index 1, the
+// operation value (when any) at index 2, one boolean back (honest false for a dead voice).
+int LuaAudioVoiceCall(lua_State* state, const char* function, const char* resultPin, const char* valuePin, bool valueIsBool) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+    };
+    if (valuePin != nullptr) {
+        if (valueIsBool) {
+            arguments.push_back(Arg(valuePin, ScriptValue{ lua_toboolean(state, 2) != 0 }));
+        } else {
+            arguments.push_back(Arg(valuePin, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    lua_pushboolean(state, result.Output(resultPin).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioStop(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Stop", "stopped", nullptr, false); }
+int LuaAudioPause(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Pause", "paused", nullptr, false); }
+int LuaAudioResume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Resume", "resumed", nullptr, false); }
+int LuaAudioSeek(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Seek", "applied", "positionSeconds", false); }
+int LuaAudioSetVolume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetVolume", "applied", "volume", false); }
+int LuaAudioSetPitch(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetPitch", "applied", "pitch", false); }
+int LuaAudioSetLoop(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetLoop", "applied", "loop", true); }
+int LuaAudioIsPlaying(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.IsPlaying", "playing", nullptr, false); }
+
+int LuaAudioActiveSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ActiveSnapshot", {});
+    const std::string snapshot = result.Output("snapshot").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, snapshot.data(), snapshot.size());
+    return 1;
+}
+
+// LIB-150: Audio.SetBusVolume(bus, volume) -> applied (nil+error for an undeclared bus or
+// no active mixer) - the same resolve-then-single-value-or-nil+error shape as SetSnapshot.
+int LuaAudioSetBusVolume(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::size_t length = 0;
+    const char* bus = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("bus", ScriptValue{ std::string{ bus != nullptr ? bus : "", bus != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (bus != nullptr) {
+        lua_pop(state, 1);
+    }
+    arguments.push_back(Arg("volume", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetBusVolume", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio bus volume request failed");
+    }
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioClearBusVolume(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::size_t length = 0;
+    const char* bus = luaL_tolstring(state, 1, &length);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("bus", ScriptValue{ std::string{ bus != nullptr ? bus : "", bus != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (bus != nullptr) {
+        lua_pop(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ClearBusVolume", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-151: Audio.ConfigureOcclusion(enabled [, options{occludedVolume, maxDistance,
+// layerMask, maxRaycastsPerTick}]) -> applied - omitted options keep the current values.
+int LuaAudioConfigureOcclusion(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("enabled", ScriptValue{ lua_toboolean(state, 1) != 0 }),
+    };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ConfigureOcclusion", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioOcclusionEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.OcclusionEnabled", {});
+    lua_pushboolean(state, result.Output("enabled").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-150: Audio.TransitionToSnapshot(snapshot, durationSeconds) -> started (nil+error for
+// an undeclared snapshot or no active mixer; nil/"" snapshot = back to authored volumes).
+int LuaAudioTransitionToSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* snapshot = luaL_tolstring(state, 1, &length);
+        arguments.push_back(Arg("snapshot", ScriptValue{ std::string{ snapshot != nullptr ? snapshot : "", snapshot != nullptr ? length : std::size_t{ 0 } } }));
+        if (snapshot != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    arguments.push_back(Arg("durationSeconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.TransitionToSnapshot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio snapshot transition request failed");
+    }
+    lua_pushboolean(state, result.Output("started").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 [[nodiscard]] int PushCallError(lua_State* state, const ScriptFunctionCallResult& result, std::string_view fallback) {
     lua_pushnil(state);
     const std::string error = result.errors.empty() ? std::string{ fallback } : result.errors.front();
@@ -154,6 +376,740 @@ int LuaAudioPlay(lua_State* state) {
 
 [[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value) {
     return ScriptFunctionArgument{ std::move(name), std::move(value) };
+}
+
+// LIB-137: shared shape for MeshRenderer.SetMesh/SetMaterial - a single required asset
+// reference (virtual path or numeric/hex id string, resolved server-side exactly like
+// Audio.Play's "clip" argument) plus an optional {entity=...} table, mirroring LuaAudioPlay's
+// exact string-or-table-first-arg / optional-table-second-arg shape.
+int LuaMeshRendererAssign(lua_State* state, const char* functionName, const char* assetArgumentName) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        std::size_t length = 0;
+        const char* asset = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = assetArgumentName,
+            .value = ScriptValue{ std::string{ asset != nullptr ? asset : "", asset != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (asset != nullptr) {
+            lua_pop(state, 1);
+        }
+        if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+            std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+            arguments.insert(arguments.end(), options.begin(), options.end());
+        }
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction(functionName, arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererSetMesh(lua_State* state) {
+    return LuaMeshRendererAssign(state, "MeshRenderer.SetMesh", "mesh");
+}
+
+// LIB-138: MeshRenderer.SetMaterialSlot(slot, material, {entity=...}) - a leading integer
+// slot index ahead of the same asset-reference-plus-optional-options shape LuaMeshRendererAssign
+// already uses for SetMesh/SetMaterial.
+int LuaMeshRendererSetMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::size_t length = 0;
+    const char* material = luaL_tolstring(state, 2, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("slot", ScriptValue{ slot }),
+        ScriptFunctionArgument{
+            .name = "material",
+            .value = ScriptValue{ std::string{ material != nullptr ? material : "", material != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (material != nullptr) {
+        lua_pop(state, 1);
+    }
+    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.SetMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererGetMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.GetMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot query failed");
+    }
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaMeshRendererClearMaterialSlot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const int slot = static_cast<int>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("slot", ScriptValue{ slot }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.ClearMaterialSlot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material slot clear failed");
+    }
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-139: MeshRenderer.SetMaterialInstance(instance, {entity=...}) - a leading integer
+// instance handle (see LuaMaterialInstanceCreate below) plus the same optional-options-table
+// shape every other MeshRenderer wrapper already uses.
+int LuaMeshRendererSetMaterialInstance(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.SetMaterialInstance", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material instance assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererClearMaterialInstance(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.ClearMaterialInstance", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material instance clear failed");
+    }
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-139: MaterialInstance.Create(material) -> instance handle (an integer, nil+error on
+// an unresolvable/wrong-type parent or a full instance table) - mirrors LuaAudioPlay's
+// resolve-then-single-value-or-nil+error shape exactly.
+int LuaMaterialInstanceCreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* material = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "material",
+            .value = ScriptValue{ std::string{ material != nullptr ? material : "", material != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (material != nullptr) {
+        lua_pop(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "material instance create failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("instance").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaMaterialInstanceRelease(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Release", arguments);
+    lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMaterialInstanceExists(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Exists", arguments);
+    lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMaterialInstanceParent(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Parent", arguments);
+    const std::string material = result.Output("material").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, material.data(), material.size());
+    return 1;
+}
+
+// LIB-140: MaterialInstance.SetParameterScalar(instance, name, value) -> applied (boolean).
+int LuaMaterialInstanceSetParameterScalar(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.SetParameterScalar", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-140: MaterialInstance.SetParameterBool(instance, name, value) -> applied (boolean).
+int LuaMaterialInstanceSetParameterBool(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const bool value = lua_toboolean(state, 3) != 0;
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.SetParameterBool", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-140: MaterialInstance.ClearParameter(instance, name) -> cleared (boolean).
+int LuaMaterialInstanceClearParameter(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.ClearParameter", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-143: Particles.Create(effect, {entity=...}) -> instance handle (an integer, nil+error
+// on an unresolvable/wrong-type effect, unresolvable material reference, dead/missing owner
+// entity, or a full instance table) - mirrors LuaMaterialInstanceCreate's exact
+// resolve-then-single-value-or-nil+error shape, plus the optional-entity-table convention
+// every MeshRenderer wrapper already uses (entity defaults to self when omitted).
+int LuaParticlesCreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* effect = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "effect",
+            .value = ScriptValue{ std::string{ effect != nullptr ? effect : "", effect != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (effect != nullptr) {
+        lua_pop(state, 1);
+    }
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "particle system create failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("instance").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaParticlesRelease(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Release", arguments);
+    lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesExists(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Exists", arguments);
+    lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesPlay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Play", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesStop(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Stop", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesIsPlaying(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.IsPlaying", arguments);
+    lua_pushboolean(state, result.Output("playing").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesSetSeed(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto seed = static_cast<std::uint64_t>(luaL_checkinteger(state, 2));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("seed", ScriptValue{ seed, ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.SetSeed", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-143: Particles.SetParameterScalar(instance, name, value) -> applied (boolean).
+int LuaParticlesSetParameterScalar(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.SetParameterScalar", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesClearParameter(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.ClearParameter", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-143: Particles.Emit(instance, count) -> emitted (boolean) - the ticket's "event" verb,
+// an immediate on-demand burst independent of Play/Stop state.
+int LuaParticlesEmit(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto count = static_cast<int>(luaL_checkinteger(state, 2));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("count", ScriptValue{ count }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Emit", arguments);
+    lua_pushboolean(state, result.Output("emitted").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesLiveCount(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.LiveCount", arguments);
+    lua_pushinteger(state, result.Output("count").value_or(ScriptValue{ 0 }).AsInt());
+    return 1;
+}
+
+// LIB-142: PostProcess.SetProfile(profile) -> assigned (boolean, nil+error on an
+// unresolvable/wrong-type profile asset) - mirrors LuaMeshRendererAssign's exact
+// resolve-then-single-value-or-nil+error shape.
+int LuaPostProcessSetProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* profile = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "profile",
+            .value = ScriptValue{ std::string{ profile != nullptr ? profile : "", profile != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (profile != nullptr) {
+        lua_pop(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.SetProfile", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "post process profile assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPostProcessClearProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.ClearProfile", {});
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPostProcessActiveProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.ActiveProfile", {});
+    const std::string profile = result.Output("profile").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, profile.data(), profile.size());
+    return 1;
+}
+
+// LIB-144: Renderer.IsVisible([options{entity=...}]) -> visible (boolean, nil+error for a
+// dead entity) - entity defaults to self, the same optional-entity-table convention every
+// MeshRenderer wrapper already uses.
+int LuaRendererIsVisible(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{};
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.IsVisible", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "renderer visibility query failed");
+    }
+    lua_pushboolean(state, result.Output("visible").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-144: Renderer.GetBounds([options{entity=...}]) -> {found, centerX, centerY, centerZ,
+// radius} (nil+error for a dead entity) - mirrors LuaPhysicsGetVelocity's exact
+// every-output-as-table-field shape.
+int LuaRendererGetBounds(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{};
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.GetBounds", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "renderer bounds query failed");
+    }
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-144: Renderer.TestFrustum(centerX, centerY, centerZ [, radius]) -> inside (boolean,
+// fail-closed false before any visibility frame was published - see
+// SceneRenderFeedback.hpp's contract).
+int LuaRendererTestFrustum(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.0)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.TestFrustum", arguments);
+    lua_pushboolean(state, result.Output("inside").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaRendererHasFrame(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.HasFrame", {});
+    lua_pushboolean(state, result.Output("published").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-145: Renderer.WorldToScreen(x, y, z) -> {valid, onScreen, screenX, screenY, depth} -
+// mirrors LuaPhysicsGetVelocity's every-output-as-table-field shape.
+int LuaRendererWorldToScreen(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.WorldToScreen", arguments);
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-145: Renderer.ScreenPointToRay(screenX, screenY) -> {valid, originX/Y/Z,
+// directionX/Y/Z} - the outputs feed Physics.Raycast's pins directly.
+int LuaRendererScreenPointToRay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenPointToRay", arguments);
+    lua_createtable(state, 0, 7);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaRendererScreenToWorld(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("distance", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenToWorld", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-145: Renderer.CaptureScreen(path) -> capture id (nil+error when the path is empty or
+// another capture is still pending) - mirrors LuaParticlesCreate's
+// single-value-or-nil+error shape.
+int LuaRendererCaptureScreen(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::size_t length = 0;
+    const char* path = luaL_tolstring(state, 1, &length);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("path", ScriptValue{ std::string{ path != nullptr ? path : "", path != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (path != nullptr) {
+        lua_pop(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.CaptureScreen", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "screen capture request failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("capture").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaRendererCaptureStatus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "unknown");
+        return 1;
+    }
+    const auto capture = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("capture", ScriptValue{ capture, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.CaptureStatus", arguments);
+    const std::string status = result.Output("status").value_or(ScriptValue{ std::string{ "unknown" } }).AsString();
+    lua_pushlstring(state, status.data(), status.size());
+    return 1;
+}
+
+int LuaMeshRendererSetMaterial(lua_State* state) {
+    return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
 
 int LuaWorldFindByName(lua_State* state) {
@@ -625,6 +1581,123 @@ int LuaPhysicsLayerBit(lua_State* state) {
     const std::vector<ScriptFunctionArgument> arguments{ Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }) };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.LayerBit", arguments);
     lua_pushinteger(state, static_cast<lua_Integer>(result.Output("bit").value_or(ScriptValue{ 0 }).AsInt()));
+    return 1;
+}
+
+// LIB-131: Physics.CharacterMove(entity, moveX, moveZ) -> bool. Only two positional numeric
+// args (no table form needed - unlike Cast/Overlap below, this always takes an entity so
+// mirrors AddForce/SetVelocity's CheckEntityArg pattern).
+int LuaPhysicsCharacterMove(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("moveX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("moveZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterMove", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterJump(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("speed", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterJump", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsCharacterIsGrounded(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterIsGrounded", arguments);
+    lua_pushboolean(state, result.Output("grounded").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPhysicsCharacterGroundNormal(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterGroundNormal", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaPhysicsCharacterGroundVelocity(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.CharacterGroundVelocity", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-132: Physics.SetDebugDrawEnabled(bool) / Physics.IsDebugDrawEnabled() -> bool. No
+// entity argument, so a plain lua_toboolean/lua_pushboolean pair suffices.
+int LuaPhysicsSetDebugDrawEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        return 0;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("enabled", ScriptValue{ lua_toboolean(state, 1) != 0 }) };
+    static_cast<void>(context->CallFunction("Physics.SetDebugDrawEnabled", arguments));
+    return 0;
+}
+
+int LuaPhysicsIsDebugDrawEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.IsDebugDrawEnabled", {});
+    lua_pushboolean(state, result.Output("enabled").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
 }
 
@@ -1140,11 +2213,80 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 1);
+    lua_createtable(state, 0, 18);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
+    SetClosure(state, "SetMixer", &LuaAudioSetMixer, context);
+    SetClosure(state, "ActiveMixer", &LuaAudioActiveMixer, context);
+    SetClosure(state, "SetSnapshot", &LuaAudioSetSnapshot, context);
+    SetClosure(state, "ActiveSnapshot", &LuaAudioActiveSnapshot, context);
+    SetClosure(state, "Stop", &LuaAudioStop, context);
+    SetClosure(state, "Pause", &LuaAudioPause, context);
+    SetClosure(state, "Resume", &LuaAudioResume, context);
+    SetClosure(state, "Seek", &LuaAudioSeek, context);
+    SetClosure(state, "SetVolume", &LuaAudioSetVolume, context);
+    SetClosure(state, "SetPitch", &LuaAudioSetPitch, context);
+    SetClosure(state, "SetLoop", &LuaAudioSetLoop, context);
+    SetClosure(state, "IsPlaying", &LuaAudioIsPlaying, context);
+    SetClosure(state, "SetBusVolume", &LuaAudioSetBusVolume, context);
+    SetClosure(state, "ClearBusVolume", &LuaAudioClearBusVolume, context);
+    SetClosure(state, "TransitionToSnapshot", &LuaAudioTransitionToSnapshot, context);
+    SetClosure(state, "ConfigureOcclusion", &LuaAudioConfigureOcclusion, context);
+    SetClosure(state, "OcclusionEnabled", &LuaAudioOcclusionEnabled, context);
     lua_setfield(state, environmentIndex, "Audio");
+
+    lua_createtable(state, 0, 7);
+    SetClosure(state, "SetMesh", &LuaMeshRendererSetMesh, context);
+    SetClosure(state, "SetMaterial", &LuaMeshRendererSetMaterial, context);
+    SetClosure(state, "SetMaterialSlot", &LuaMeshRendererSetMaterialSlot, context);
+    SetClosure(state, "GetMaterialSlot", &LuaMeshRendererGetMaterialSlot, context);
+    SetClosure(state, "ClearMaterialSlot", &LuaMeshRendererClearMaterialSlot, context);
+    SetClosure(state, "SetMaterialInstance", &LuaMeshRendererSetMaterialInstance, context);
+    SetClosure(state, "ClearMaterialInstance", &LuaMeshRendererClearMaterialInstance, context);
+    lua_setfield(state, environmentIndex, "MeshRenderer");
+
+    lua_createtable(state, 0, 7);
+    SetClosure(state, "Create", &LuaMaterialInstanceCreate, context);
+    SetClosure(state, "Release", &LuaMaterialInstanceRelease, context);
+    SetClosure(state, "Exists", &LuaMaterialInstanceExists, context);
+    SetClosure(state, "Parent", &LuaMaterialInstanceParent, context);
+    SetClosure(state, "SetParameterScalar", &LuaMaterialInstanceSetParameterScalar, context);
+    SetClosure(state, "SetParameterBool", &LuaMaterialInstanceSetParameterBool, context);
+    SetClosure(state, "ClearParameter", &LuaMaterialInstanceClearParameter, context);
+    lua_setfield(state, environmentIndex, "MaterialInstance");
+
+    lua_createtable(state, 0, 3);
+    SetClosure(state, "SetProfile", &LuaPostProcessSetProfile, context);
+    SetClosure(state, "ClearProfile", &LuaPostProcessClearProfile, context);
+    SetClosure(state, "ActiveProfile", &LuaPostProcessActiveProfile, context);
+    lua_setfield(state, environmentIndex, "PostProcess");
+
+    lua_createtable(state, 0, 11);
+    SetClosure(state, "Create", &LuaParticlesCreate, context);
+    SetClosure(state, "Release", &LuaParticlesRelease, context);
+    SetClosure(state, "Exists", &LuaParticlesExists, context);
+    SetClosure(state, "Play", &LuaParticlesPlay, context);
+    SetClosure(state, "Stop", &LuaParticlesStop, context);
+    SetClosure(state, "IsPlaying", &LuaParticlesIsPlaying, context);
+    SetClosure(state, "SetSeed", &LuaParticlesSetSeed, context);
+    SetClosure(state, "SetParameterScalar", &LuaParticlesSetParameterScalar, context);
+    SetClosure(state, "ClearParameter", &LuaParticlesClearParameter, context);
+    SetClosure(state, "Emit", &LuaParticlesEmit, context);
+    SetClosure(state, "LiveCount", &LuaParticlesLiveCount, context);
+    lua_setfield(state, environmentIndex, "Particles");
+
+    lua_createtable(state, 0, 9);
+    SetClosure(state, "IsVisible", &LuaRendererIsVisible, context);
+    SetClosure(state, "GetBounds", &LuaRendererGetBounds, context);
+    SetClosure(state, "TestFrustum", &LuaRendererTestFrustum, context);
+    SetClosure(state, "HasFrame", &LuaRendererHasFrame, context);
+    SetClosure(state, "WorldToScreen", &LuaRendererWorldToScreen, context);
+    SetClosure(state, "ScreenPointToRay", &LuaRendererScreenPointToRay, context);
+    SetClosure(state, "ScreenToWorld", &LuaRendererScreenToWorld, context);
+    SetClosure(state, "CaptureScreen", &LuaRendererCaptureScreen, context);
+    SetClosure(state, "CaptureStatus", &LuaRendererCaptureStatus, context);
+    lua_setfield(state, environmentIndex, "Renderer");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);
@@ -1169,7 +2311,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Translate", &LuaTransformTranslate, context);
     lua_setfield(state, environmentIndex, "Transform");
 
-    lua_createtable(state, 0, 19);
+    lua_createtable(state, 0, 27);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
     SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
@@ -1189,6 +2331,14 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "OverlapCapsule", &LuaPhysicsOverlapCapsule, context);
     SetClosure(state, "ClosestPoint", &LuaPhysicsClosestPoint, context);
     SetClosure(state, "LayerBit", &LuaPhysicsLayerBit, context);
+    SetClosure(state, "CharacterMove", &LuaPhysicsCharacterMove, context);
+    SetClosure(state, "CharacterJump", &LuaPhysicsCharacterJump, context);
+    SetClosure(state, "CharacterVelocity", &LuaPhysicsCharacterVelocity, context);
+    SetClosure(state, "CharacterIsGrounded", &LuaPhysicsCharacterIsGrounded, context);
+    SetClosure(state, "CharacterGroundNormal", &LuaPhysicsCharacterGroundNormal, context);
+    SetClosure(state, "CharacterGroundVelocity", &LuaPhysicsCharacterGroundVelocity, context);
+    SetClosure(state, "SetDebugDrawEnabled", &LuaPhysicsSetDebugDrawEnabled, context);
+    SetClosure(state, "IsDebugDrawEnabled", &LuaPhysicsIsDebugDrawEnabled, context);
     lua_setfield(state, environmentIndex, "Physics");
 
     lua_createtable(state, 0, 20);

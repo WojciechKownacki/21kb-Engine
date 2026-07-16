@@ -6,6 +6,7 @@
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTasks.hpp"
@@ -91,6 +92,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
+    AdvanceParticleSystems(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
@@ -195,6 +197,10 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
         event.arguments.push_back(ScriptEventArgument{ .name = "task", .value = ScriptValue{ completion.id, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
+}
+
+void ScriptRuntimeSceneSystem::AdvanceParticleSystems(kb::scene::Scene& scene, float deltaSeconds) {
+    scene.Particles().Advance(deltaSeconds);
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds) {

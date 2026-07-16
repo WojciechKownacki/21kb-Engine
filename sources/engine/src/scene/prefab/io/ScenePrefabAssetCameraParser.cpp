@@ -23,6 +23,7 @@ bool ScenePrefabAssetCameraParser::Parse(const ScenePrefabAssetFieldMap& fields,
     }
 
     int projection = 0;
+    int clearMode = 0;
     CameraComponent camera;
     bool primary = false;
     if (!ParseField(fields, "camera.projection", projection)
@@ -32,12 +33,20 @@ bool ScenePrefabAssetCameraParser::Parse(const ScenePrefabAssetFieldMap& fields,
         || !ParseField(fields, "camera.orthographicHeight", camera.orthographicHeight)
         || !ParseField(fields, "camera.nearClip", camera.nearClip)
         || !ParseField(fields, "camera.farClip", camera.farClip)
-        || !ScenePrefabAssetFieldParser::ParseBool(fields, "camera.primary", primary)) {
+        || !ScenePrefabAssetFieldParser::ParseBool(fields, "camera.primary", primary)
+        || !ParseField(fields, "camera.viewportId", camera.viewportId)
+        || !ParseField(fields, "camera.priority", camera.priority)
+        || !ParseField(fields, "camera.cullingMask", camera.cullingMask)
+        || !ParseField(fields, "camera.clearMode", clearMode)
+        || clearMode < static_cast<int>(CameraClearMode::SolidColor)
+        || clearMode > static_cast<int>(CameraClearMode::DontClear)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "camera.clearColor", camera.clearColor)) {
         return false;
     }
 
     camera.projection = static_cast<CameraProjection>(projection);
     camera.primary = primary;
+    camera.clearMode = static_cast<CameraClearMode>(clearMode);
     components.camera = camera;
     return true;
 }

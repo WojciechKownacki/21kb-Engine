@@ -150,6 +150,26 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = ToString(camera->primary);
             return true;
         }
+        if (propertyPath == "camera.viewportId") {
+            property.value = std::to_string(camera->viewportId);
+            return true;
+        }
+        if (propertyPath == "camera.priority") {
+            property.value = std::to_string(camera->priority);
+            return true;
+        }
+        if (propertyPath == "camera.cullingMask") {
+            property.value = std::to_string(camera->cullingMask);
+            return true;
+        }
+        if (propertyPath == "camera.clearMode") {
+            property.value = std::to_string(static_cast<int>(camera->clearMode));
+            return true;
+        }
+        if (propertyPath == "camera.clearColor") {
+            property.value = ToString(camera->clearColor);
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "meshRenderer")) {
         const MeshRendererComponent* meshRenderer = components.MeshRenderers().TryGet(entity);
@@ -188,6 +208,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "meshRenderer.receivesShadow") {
             property.value = ToString(meshRenderer->receivesShadow);
+            return true;
+        }
+        if (propertyPath == "meshRenderer.layer") {
+            property.value = std::to_string(meshRenderer->layer);
             return true;
         }
     }
@@ -242,6 +266,18 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "light.castsShadow") {
             property.value = ToString(light->castsShadow);
+            return true;
+        }
+        if (propertyPath == "light.useColorTemperature") {
+            property.value = ToString(light->useColorTemperature);
+            return true;
+        }
+        if (propertyPath == "light.colorTemperatureKelvin") {
+            property.value = std::to_string(light->colorTemperatureKelvin);
+            return true;
+        }
+        if (propertyPath == "light.layerMask") {
+            property.value = std::to_string(light->layerMask);
             return true;
         }
     }
@@ -452,6 +488,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "audioSource.dopplerFactor") {
             property.value = std::to_string(audioSource->dopplerFactor);
+            return true;
+        }
+        if (propertyPath == "audioSource.outputBus") {
+            property.value = std::string{ AudioSourceOutputBus(*audioSource) };
             return true;
         }
     }

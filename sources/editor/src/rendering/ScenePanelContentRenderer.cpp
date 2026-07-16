@@ -8,6 +8,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -349,6 +350,27 @@ struct LightWireframeBasis {
     return context.wireframes;
 }
 
+// LIB-132: honest empty vector (zero cost beyond the IsEnabled check) whenever debug draw is
+// off - which it is by default, and which kb_standalone_player never turns on (it never calls
+// this function at all, see PhysicsDebugDraw.hpp's own "zero release-path impact" comment).
+[[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext) {
+    if (!kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
+        return {};
+    }
+    const std::vector<kb::scene::PhysicsDebugLineDesc> shapes = kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene());
+    std::vector<kb::render::PhysicsDebugLine> lines;
+    lines.reserve(shapes.size());
+    for (const kb::scene::PhysicsDebugLineDesc& shape : shapes) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = { shape.from.x, shape.from.y, shape.from.z },
+            .to = { shape.to.x, shape.to.y, shape.to.z },
+            .color = { shape.color.x, shape.color.y, shape.color.z },
+            .alpha = shape.alpha,
+        });
+    }
+    return lines;
+}
+
 [[nodiscard]] SceneViewportToolbarEcsStats BuildEcsStats(const EditorSceneContext& sceneContext) {
     const kb::ecs::SystemSchedulerTrace& trace = sceneContext.Scene().Runtime().LastEcsProfilerTrace();
     SceneViewportToolbarEcsStats stats{
@@ -487,6 +509,7 @@ struct LightWireframeBasis {
         },
         .editorGizmo = gizmo,
         .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
+        .physicsDebugLines = BuildPhysicsDebugLines(sceneContext),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = lightingConfig,

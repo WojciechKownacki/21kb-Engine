@@ -16,7 +16,7 @@ bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteRe
             return false;
         }
     }
-    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow);
+    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow) && input.ReadUInt32(output.layer);
 }
 
 void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer) {
@@ -28,11 +28,13 @@ void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>
     }
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.castsShadow ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, meshRenderer.receivesShadow ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, meshRenderer.layer);
 }
 
 bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, LightComponent& output) {
     std::uint32_t kind = 0;
     bool castsShadow = true;
+    bool useColorTemperature = false;
     if (!input.ReadUInt32(kind) ||
         kind > static_cast<std::uint32_t>(LightKind::Tube) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.color) ||
@@ -44,11 +46,15 @@ bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& i
         !input.ReadFloat(output.areaHeight) ||
         !input.ReadFloat(output.contactShadowLength) ||
         !input.ReadFloat(output.volumetricScattering) ||
-        !input.ReadBool(castsShadow)) {
+        !input.ReadBool(castsShadow) ||
+        !input.ReadBool(useColorTemperature) ||
+        !input.ReadFloat(output.colorTemperatureKelvin) ||
+        !input.ReadUInt32(output.layerMask)) {
         return false;
     }
     output.kind = static_cast<LightKind>(kind);
     output.castsShadow = castsShadow;
+    output.useColorTemperature = useColorTemperature;
     return true;
 }
 
@@ -64,6 +70,9 @@ void SceneAssetRenderComponentCodec::WriteLight(std::vector<std::uint8_t>& outpu
     SceneAssetBinaryIO::WriteFloat(output, light.contactShadowLength);
     SceneAssetBinaryIO::WriteFloat(output, light.volumetricScattering);
     SceneAssetBinaryIO::WriteUInt8(output, light.castsShadow ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt8(output, light.useColorTemperature ? 1U : 0U);
+    SceneAssetBinaryIO::WriteFloat(output, light.colorTemperatureKelvin);
+    SceneAssetBinaryIO::WriteUInt32(output, light.layerMask);
 }
 
 } // namespace kb::scene

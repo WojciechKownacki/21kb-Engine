@@ -1,9 +1,26 @@
 cmake_minimum_required(VERSION 3.27)
+
+# Must be set before project() to actually take effect. FORCEd because
+# GitHub's macOS runner images export a MACOSX_DEPLOYMENT_TARGET
+# environment variable that CMake reads into CMAKE_OSX_DEPLOYMENT_TARGET
+# before this line ever runs, so a plain unconditional set() would still
+# lose to that pre-populated cache entry. A reasonably modern floor for a
+# game engine target in general; NOT a fix for anything specific (see
+# EngineLibraryParsing.cpp - std::from_chars<double> turned out to be
+# genuinely absent from Apple's shipped libc++, not deployment-target
+# gated, so no CMAKE_OSX_DEPLOYMENT_TARGET/availability-macro combination
+# was ever going to restore it).
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target" FORCE)
+
 project(Engine21kb LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(APPLE)
+    add_compile_definitions(_LIBCPP_DISABLE_AVAILABILITY)
+endif()
 
 include(CTest)
 include(FetchContent)

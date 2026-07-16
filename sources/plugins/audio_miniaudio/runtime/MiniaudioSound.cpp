@@ -30,13 +30,13 @@ namespace {
     return MA_SOUND_FLAG_STREAM;
 }
 
-[[nodiscard]] ma_result InitSoundFromFile(ma_engine& engine, const std::filesystem::path& path, ma_uint32 flags, ma_sound& sound) {
+[[nodiscard]] ma_result InitSoundFromFile(ma_engine& engine, const std::filesystem::path& path, ma_uint32 flags, ma_sound_group* group, ma_sound& sound) {
 #if defined(_WIN32)
     const std::wstring nativePath = path.wstring();
-    return ma_sound_init_from_file_w(&engine, nativePath.c_str(), flags, nullptr, nullptr, &sound);
+    return ma_sound_init_from_file_w(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
 #else
     const std::string nativePath = path.string();
-    return ma_sound_init_from_file(&engine, nativePath.c_str(), flags, nullptr, nullptr, &sound);
+    return ma_sound_init_from_file(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
 #endif
 }
 
@@ -46,9 +46,56 @@ MiniaudioSound::~MiniaudioSound() {
     Reset();
 }
 
-ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial) {
+void MiniaudioSound::Stop() noexcept {
+    if (initialized_) {
+        static_cast<void>(ma_sound_stop(&sound_));
+    }
+}
+
+bool MiniaudioSound::IsPlaying() const noexcept {
+    return initialized_ && ma_sound_is_playing(&sound_) != MA_FALSE;
+}
+
+ma_result MiniaudioSound::SeekSeconds(float positionSeconds) noexcept {
+    if (!initialized_) {
+        return MA_INVALID_OPERATION;
+    }
+    const ma_engine* engine = ma_sound_get_engine(const_cast<ma_sound*>(&sound_));
+    const ma_uint32 sampleRate = engine == nullptr ? 0U : ma_engine_get_sample_rate(const_cast<ma_engine*>(engine));
+    if (sampleRate == 0U) {
+        return MA_INVALID_OPERATION;
+    }
+    const float clamped = std::max(0.0F, ValidOr(positionSeconds, 0.0F));
+    return ma_sound_seek_to_pcm_frame(&sound_, static_cast<ma_uint64>(static_cast<double>(clamped) * sampleRate));
+}
+
+void MiniaudioSound::SetVolume(float volume) noexcept {
+    if (initialized_) {
+        ma_sound_set_volume(&sound_, std::max(0.0F, ValidOr(volume, 1.0F)));
+    }
+}
+
+void MiniaudioSound::SetPitch(float pitch) noexcept {
+    if (initialized_) {
+        ma_sound_set_pitch(&sound_, std::max(0.01F, ValidOr(pitch, 1.0F)));
+    }
+}
+
+void MiniaudioSound::SetLooping(bool loop) noexcept {
+    if (initialized_) {
+        ma_sound_set_looping(&sound_, loop ? MA_TRUE : MA_FALSE);
+    }
+}
+
+void MiniaudioSound::SetPosition(const kb::scene::Vec3& position) noexcept {
+    if (initialized_) {
+        ma_sound_set_position(&sound_, ValidOr(position.x, 0.0F), ValidOr(position.y, 0.0F), ValidOr(position.z, 0.0F));
+    }
+}
+
+ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group) {
     Reset();
-    const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), sound_);
+    const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);
     initialized_ = result == MA_SUCCESS;
     return result;
 }

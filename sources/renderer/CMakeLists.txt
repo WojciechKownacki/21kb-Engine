@@ -29,6 +29,7 @@ add_library(kb_renderer STATIC
     include/kb/render/frame/RenderViewportViewIds.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
     include/kb/render/overlay/EditorLightWireframe.hpp
+    include/kb/render/overlay/PhysicsDebugLine.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/post/PostProcessChain.hpp
@@ -52,6 +53,8 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMaterialInstanceAssetWriter.hpp
     include/kb/render/resources/RenderMaterialTypeAssetLoader.hpp
     include/kb/render/resources/RenderMaterialTypeSchema.hpp
+    include/kb/render/resources/PostProcessProfileAssetLoader.hpp
+    include/kb/render/resources/BuiltInParticleQuadMesh.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -64,6 +67,7 @@ add_library(kb_renderer STATIC
     include/kb/render/runtime/RuntimeRenderResourceCache.hpp
     include/kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp
     include/kb/render/scene/EcsRenderSceneSynchronizer.hpp
+    include/kb/render/scene/SceneParticleRenderSynchronizer.hpp
     include/kb/render/scene/RenderBridgeTelemetry.hpp
     include/kb/render/scene/SceneGpuDrivenCullingPass.hpp
     include/kb/render/scene/SceneGpuDrivenFeatureState.hpp
@@ -177,6 +181,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialInstanceAssetLoader.cpp
     src/resources/RenderMaterialInstanceAssetWriter.cpp
     src/resources/RenderMaterialTypeAssetLoader.cpp
+    src/resources/PostProcessProfileAssetLoader.cpp
     src/resources/RenderMaterialTextureFieldParser.cpp
     src/resources/RenderMaterialTextureFieldParser.hpp
     src/resources/RenderMaterialResourceBuilder.cpp
@@ -198,6 +203,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfTransforms.cpp
     src/resources/RenderMeshGltfTransforms.hpp
     src/resources/RenderMeshAssetLoader.cpp
+    src/resources/BuiltInParticleQuadMesh.cpp
     src/resources/RenderMeshObjImporter.cpp
     src/resources/RenderMeshObjImporter.hpp
     src/resources/RenderMeshObjMaterialResolver.cpp
@@ -228,6 +234,11 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/SceneParticleRenderSynchronizer.cpp
+    src/scene/SceneRenderVisibilityPublisher.cpp
+    src/scene/SceneRenderVisibilityPublisher.hpp
+    src/renderer/RendererScreenCapture.cpp
+    src/renderer/RendererScreenCapture.hpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
     src/scene/SceneRenderWorldTransformReader.cpp
@@ -279,6 +290,8 @@ add_library(kb_renderer STATIC
     src/scene/RenderSceneStore.cpp
     src/scene/SceneTransformMatrices.cpp
     src/scene/SceneTransformMatrices.hpp
+    src/scene/SceneLightColor.cpp
+    src/scene/SceneLightColor.hpp
     src/shadow/DirectionalShadowPassPlanner.cpp
     src/shadow/DirectionalShadowLightSelector.cpp
     src/shadow/DirectionalShadowLightSelector.hpp
