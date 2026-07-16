@@ -2100,6 +2100,34 @@ void RunRendererPublishesSceneVisibilityFeedbackTest() {
     Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 2U, "A second submit must publish a second visibility frame");
     Require(kb::scene::SceneRenderFeedback::IsVisible(scene, onScreenEntity), "The second published frame must still track the on-screen entity");
 
+    // LIB-145: the published frame carries the submit camera, so the screen/world
+    // conversions work end-to-end. IdentityCamera + 64x64 viewport: the world origin
+    // projects to the viewport center, and the center pixel's ray runs along +Z.
+    const kb::scene::SceneRenderScreenPoint projected = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{});
+    Require(projected.valid && projected.onScreen && std::abs(projected.screenX - 32.0F) < 0.01F && std::abs(projected.screenY - 32.0F) < 0.01F,
+        "WorldToScreen must project the world origin to the identity camera's viewport center after a real submit");
+    const kb::scene::SceneRenderCameraRay centerRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 32.0F, 32.0F);
+    Require(centerRay.valid && std::abs(centerRay.ray.direction.z - 1.0F) < 0.01F,
+        "ScreenPointToRay must build a forward ray through the identity camera's viewport center after a real submit");
+
+    // LIB-145: async screen capture through a real submit. The headless Noop backend has
+    // no TEXTURE_READ_BACK/TEXTURE_BLIT caps, so the honest terminal answer is Failed -
+    // delivered through the request->consume->complete channel, never a forever-Pending
+    // hang and never a fake success.
+    const std::filesystem::path capturePath = root / "capture.png";
+    const std::uint64_t captureId = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, capturePath.string());
+    Require(captureId != 0U, "Visibility feedback test could not request a screen capture");
+    Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, captureId) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A requested capture must report Pending before the next submit");
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin capture frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit capture frame");
+    renderer.EndFrame();
+    Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, captureId) == kb::scene::SceneScreenCaptureStatus::Failed,
+        "A capture that can never succeed under the Noop backend must be honestly completed as Failed on its submit");
+    Require(!std::filesystem::exists(capturePath), "A failed capture must not leave a file behind");
+    Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, capturePath.string()) != 0U,
+        "A terminal capture result must free the single pending slot for the next request");
+
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }

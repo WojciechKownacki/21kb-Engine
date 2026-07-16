@@ -170,6 +170,10 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
         // renderer publishes into the scene at every SubmitScene, computed with the exact
         // same frustum/bounds math the mesh pipeline culls with - one-frame latency, zero
         // GPU occlusion queries/readbacks/fences (see ScriptRendererApi.hpp's doc comment).
+        // LIB-145 adds WorldToScreen/ScreenPointToRay/ScreenToWorld (CPU conversions
+        // through the same published camera - ray outputs feed Physics.Raycast's pins
+        // directly) and CaptureScreen/CaptureStatus (async PNG capture through the
+        // frame-gated, never-stalling readback pattern the auto-exposure meter uses).
         LibraryModuleDesc{
             .name = "Renderer",
             .ownerRuntime = "kb::scene::SceneRenderFeedback",

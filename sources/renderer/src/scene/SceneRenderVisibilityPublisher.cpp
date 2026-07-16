@@ -14,12 +14,19 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     const RenderScene& renderScene,
     const SceneRenderCamera* camera,
     std::uint32_t viewportId,
+    std::uint32_t viewportWidth,
+    std::uint32_t viewportHeight,
     const RenderResourceRegistry* resources,
     const SceneRenderResourceMap* resourceMap,
     kb::scene::SceneRenderVisibilityFrame& outFrame) {
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(camera);
     outFrame.frustumValid = frustum.valid;
     outFrame.viewportId = viewportId;
+    outFrame.viewportWidth = viewportWidth;
+    outFrame.viewportHeight = viewportHeight;
+    outFrame.cameraValid = camera != nullptr;
+    outFrame.view = camera != nullptr ? camera->view : std::array<float, 16>{};
+    outFrame.projection = camera != nullptr ? camera->projection : std::array<float, 16>{};
     for (std::size_t planeIndex = 0U; planeIndex < outFrame.frustumPlanes.size(); ++planeIndex) {
         const MeshPipelineFrustumPlane& plane = frustum.planes[planeIndex];
         outFrame.frustumPlanes[planeIndex] = kb::scene::SceneRenderFrustumPlane{ plane.x, plane.y, plane.z, plane.w };

@@ -438,6 +438,17 @@ public:
     // latency/last-submit-wins contract.
     SceneRenderVisibilityFrame renderVisibilityFrame{};
     std::uint64_t renderVisibilityPublishCount = 0U;
+    // LIB-145: the single-slot async screen-capture request/result channel. A script's
+    // RequestScreenCapture fills the pending slot (one in-flight per scene, mirroring
+    // SceneExposureGpuReadback's own single-pending rule); the renderer consumes it during
+    // SubmitScene, performs the frame-gated GPU readback + PNG encode across later frames,
+    // and reports through CompleteScreenCapture. Ids are monotonic, never reused.
+    std::uint64_t nextScreenCaptureId = 1U;
+    std::uint64_t pendingScreenCaptureId = 0U;
+    std::string pendingScreenCapturePath;
+    bool pendingScreenCaptureConsumed = false;
+    std::uint64_t lastScreenCaptureId = 0U;
+    bool lastScreenCaptureSucceeded = false;
 };
 
 } // namespace kb::scene
