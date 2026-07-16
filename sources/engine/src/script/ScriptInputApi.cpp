@@ -4,6 +4,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputLocalUser.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
@@ -330,6 +331,87 @@ bool RegisterIsGamepadConnected(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
+// LIB-153: haptics capability for a gamepad slot - honest supported/connected/limits
+// through the host-registered backend (supported=false with a reason when no backend or
+// platform support exists, never a fake no-op actuator).
+bool RegisterHasHaptics(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.HasHaptics";
+    desc.signature.inputs = {ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, true}};
+    desc.signature.outputs = {
+        ScriptFunctionPin{"supported", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"connected", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"dualMotor", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"maxGamepads", ScriptValueType::Int, true},
+        ScriptFunctionPin{"reason", ScriptValueType::String, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
+        const kb::input::InputHapticsCapability capability = kb::input::InputHaptics::Capability(
+            *context.scene,
+            static_cast<std::uint32_t>(indexArg != nullptr ? indexArg->AsInt() : 0));
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{"supported", ScriptValue{capability.supported}},
+                ScriptFunctionArgument{"connected", ScriptValue{capability.connected}},
+                ScriptFunctionArgument{"dualMotor", ScriptValue{capability.dualMotor}},
+                ScriptFunctionArgument{"maxGamepads", ScriptValue{static_cast<int>(capability.maxGamepads)}},
+                ScriptFunctionArgument{"reason", ScriptValue{capability.disabledReason}},
+            },
+            .errors = {},
+        };
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+// LIB-153: the actuator - dual motor magnitudes in [0,1] (the platform limit XInput-class
+// devices expose). Honest false for an out-of-range slot, a disconnected pad, or no
+// backend.
+bool RegisterSetVibration(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.SetVibration";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, true},
+        ScriptFunctionPin{"lowFrequency", ScriptValueType::Float, true},
+        ScriptFunctionPin{"highFrequency", ScriptValueType::Float, true},
+    };
+    desc.signature.outputs = {ScriptFunctionPin{"applied", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
+        const ScriptValue* lowArg = FindArg(arguments, "lowFrequency");
+        const ScriptValue* highArg = FindArg(arguments, "highFrequency");
+        const bool applied = kb::input::InputHaptics::SetVibration(
+            *context.scene,
+            static_cast<std::uint32_t>(indexArg != nullptr ? indexArg->AsInt() : 0),
+            lowArg != nullptr ? lowArg->AsFloat() : 0.0F,
+            highArg != nullptr ? highArg->AsFloat() : 0.0F);
+        return BoolResult("applied", applied);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterStopVibration(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.StopVibration";
+    desc.signature.outputs = {ScriptFunctionPin{"stopped", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const bool hasBackend = kb::input::InputHaptics::HasBackend(*context.scene);
+        kb::input::InputHaptics::StopAll(*context.scene);
+        return BoolResult("stopped", hasBackend);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 } // namespace
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
@@ -361,6 +443,9 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
 
     ok = RegisterHasFocus(host) && ok;
     ok = RegisterIsGamepadConnected(host) && ok;
+    ok = RegisterHasHaptics(host) && ok;
+    ok = RegisterSetVibration(host) && ok;
+    ok = RegisterStopVibration(host) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;
