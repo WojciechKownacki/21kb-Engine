@@ -44,6 +44,12 @@ class IAudioPlaybackBackend;
 
 } // namespace kb::audio
 
+namespace kb::input {
+
+class IInputHapticsBackend;
+
+} // namespace kb::input
+
 namespace kb::scene {
 
 class IPhysicsBackend;
@@ -365,6 +371,10 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    // LIB-153: host-registered haptics actuator (mirror of audioPlaybackBackend - the
+    // editor's Win32/XInput layer registers it for Play Mode; nullptr = every haptics
+    // query honestly reports unsupported).
+    kb::input::IInputHapticsBackend* inputHapticsBackend = nullptr;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
     // LIB-142: scene-global active PostProcessProfile asset id (0 = none) - the ONLY

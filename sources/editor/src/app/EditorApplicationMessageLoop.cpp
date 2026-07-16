@@ -4,7 +4,9 @@
 
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -366,9 +368,23 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 }
 
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
+    // LIB-153: the editor is the host that owns the physical XInput devices, so it owns
+    // the haptics actuator too. Function-local static: one process-wide backend whose
+    // destructor (and the not-playing branch below) silences every motor - leaving Play
+    // Mode must never leave a pad buzzing.
+    static Win32XInputHapticsBackend hapticsBackend;
+    static bool hapticsActive = false;
     if (!state.playMode.IsPlaying()) {
+        if (hapticsActive) {
+            hapticsBackend.StopAll();
+            hapticsActive = false;
+        }
         return;
     }
+    if (!kb::input::InputHaptics::HasBackend(state.sceneContext.Scene())) {
+        kb::input::InputHaptics::RegisterBackend(state.sceneContext.Scene(), hapticsBackend);
+    }
+    hapticsActive = true;
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
