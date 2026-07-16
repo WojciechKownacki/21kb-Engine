@@ -58,6 +58,10 @@ void RegisterEditorSceneDocumentAssetLoaders(kb::scene::Scene& scene) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
+    // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's own
+    // constructor (Scene.cpp, mirrors PhysicsLayersAssetLoader's precedent). The built-in
+    // particle quad mesh needs no registration at all - see BuiltInParticleQuadMesh.hpp's own
+    // doc comment for why it deliberately bypasses AssetRegistry entirely.
 }
 
 bool EditorSceneContext::SaveDirtySceneDocument(std::string_view reason) {
