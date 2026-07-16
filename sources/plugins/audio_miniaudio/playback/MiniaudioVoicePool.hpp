@@ -27,6 +27,11 @@ public:
 
     void RemoveFinishedVoices() noexcept;
     void StopAll() noexcept;
+    // LIB-149: per-tick sync for owner-attached voices (AudioPlayDesc::ownerEntityId != 0):
+    // a live, active owner drives the voice's position from its world transform; a
+    // destroyed/deactivated owner releases the voice immediately - even a looping or
+    // paused voice can never leak past its owner.
+    void SyncAttachedVoices(kb::scene::Scene& scene);
 
     // LIB-148: per-voice control - false for a voiceId that is 0, never existed, or
     // already finished/was stolen. Stop REMOVES the record immediately (a stopped
@@ -50,6 +55,9 @@ private:
         // LIB-148: voice-stealing priority (AudioPlayDesc::priority) and the paused guard.
         std::uint8_t priority = 128U;
         bool paused = false;
+        // LIB-149: 0 = free-standing; otherwise the owning entity this voice follows and
+        // dies with (see SyncAttachedVoices).
+        std::uint64_t ownerEntityId = 0U;
         std::unique_ptr<MiniaudioSound> sound;
     };
 

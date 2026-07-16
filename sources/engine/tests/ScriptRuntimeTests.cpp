@@ -2253,6 +2253,27 @@ void RunScriptAudioApiTest() {
     kb::tests::Require(directPlay.mute && directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
     kb::tests::Require(kb::tests::NearlyEqual(directPlay.pan, -0.5F) && kb::tests::NearlyEqual(directPlay.spatialBlend, 0.25F), "Script audio API direct call did not preserve pan or spatial blend");
     kb::tests::Require(directPlay.attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(directPlay.minDistance, 2.0F) && kb::tests::NearlyEqual(directPlay.maxDistance, 75.0F) && kb::tests::NearlyEqual(directPlay.rolloff, 0.5F) && kb::tests::NearlyEqual(directPlay.dopplerFactor, 0.1F), "Script audio API direct call did not preserve attenuation settings");
+    kb::tests::Require(directPlay.ownerEntityId == 0U, "An unattached Audio.Play must not carry an owner entity");
+
+    // LIB-149: attach=true binds the one-shot to the caller (or explicit entity); a dead
+    // target is an honest error.
+    const std::vector<kb::script::ScriptFunctionArgument> attachedArguments{
+        kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+        kb::script::ScriptFunctionArgument{ .name = "attach", .value = kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult attached = host.Functions().Call(
+        "Audio.Play",
+        std::span<const kb::script::ScriptFunctionArgument>{ attachedArguments },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+    kb::tests::Require(attached.Succeeded() && audioBackend.played.back().ownerEntityId == caller.Entity().Id(),
+        "An attached Audio.Play must carry the calling entity as the voice owner");
+    const std::vector<kb::script::ScriptFunctionArgument> deadOwnerArguments{
+        kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+        kb::script::ScriptFunctionArgument{ .name = "attach", .value = kb::script::ScriptValue{ true } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ std::uint64_t{ 987654321U }, kb::script::ScriptValueType::Entity } },
+    };
+    kb::tests::Require(!host.Functions().Call("Audio.Play", std::span<const kb::script::ScriptFunctionArgument>{ deadOwnerArguments }, kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() }).Succeeded(),
+        "An attached Audio.Play must honestly error for a dead owner entity");
 
     const kb::assets::AssetId luaAsset{ 8802U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Caller" });
@@ -2276,8 +2297,10 @@ end
     const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
     kb::tests::Require(tick.Succeeded(), "Script audio API Lua wrapper execution failed");
     const std::optional<kb::script::ScriptValue> luaVoiceValue = host.SharedState().Get("luaAudioVoice");
-    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 2, "Script audio API Lua wrapper did not return a voice");
-    kb::tests::Require(audioBackend.played.size() == 2U, "Script audio API Lua wrapper did not reach audio backend");
+    // Voice 3: the direct call took 1, LIB-149's attached-play probe above took 2 (the
+    // dead-owner attempt errors before ever reaching the backend, so it takes none).
+    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 3, "Script audio API Lua wrapper did not return a voice");
+    kb::tests::Require(audioBackend.played.size() == 3U, "Script audio API Lua wrapper did not reach audio backend");
     const kb::audio::AudioPlayDesc& luaPlay = audioBackend.played.back();
     kb::tests::Require(luaPlay.clipAssetId == clipId.value, "Script audio API Lua wrapper sent the wrong clip id");
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.volume, 0.75F), "Script audio API Lua wrapper did not preserve volume");

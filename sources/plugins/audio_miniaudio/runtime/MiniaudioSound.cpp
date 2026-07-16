@@ -87,6 +87,12 @@ void MiniaudioSound::SetLooping(bool loop) noexcept {
     }
 }
 
+void MiniaudioSound::SetPosition(const kb::scene::Vec3& position) noexcept {
+    if (initialized_) {
+        ma_sound_set_position(&sound_, ValidOr(position.x, 0.0F), ValidOr(position.y, 0.0F), ValidOr(position.z, 0.0F));
+    }
+}
+
 ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group) {
     Reset();
     const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);
