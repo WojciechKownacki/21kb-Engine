@@ -31,6 +31,7 @@
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
@@ -4046,6 +4047,122 @@ end
     kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
         "The marker event queue must be fully drained by dispatch");
     kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+}
+
+// LIB-153: haptics per device through capability - honest unsupported without a backend,
+// full capability/actuator flow through a fake backend, registration on all three
+// frontends, real Lua wrappers.
+void RunScriptInputHapticsApiTest() {
+    struct FakeHapticsBackend final : kb::input::IInputHapticsBackend {
+        [[nodiscard]] kb::input::InputHapticsCapability Capability(std::uint32_t gamepadIndex) override {
+            if (gamepadIndex >= 2U) {
+                return kb::input::InputHapticsCapability{ .maxGamepads = 2U, .disabledReason = "index out of range" };
+            }
+            return kb::input::InputHapticsCapability{ .supported = true, .connected = gamepadIndex == 0U, .dualMotor = true, .maxGamepads = 2U };
+        }
+        [[nodiscard]] bool SetVibration(std::uint32_t gamepadIndex, float lowFrequency, float highFrequency) override {
+            if (gamepadIndex >= 2U) {
+                return false;
+            }
+            lastIndex = gamepadIndex;
+            lastLow = lowFrequency;
+            lastHigh = highFrequency;
+            return true;
+        }
+        void StopAll() noexcept override { ++stopAllCount; }
+        std::uint32_t lastIndex = 99U;
+        float lastLow = -1.0F;
+        float lastHigh = -1.0F;
+        int stopAllCount = 0;
+    };
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script input haptics API host did not initialize");
+    for (const char* name : { "Input.HasHaptics", "Input.SetVibration", "Input.StopVibration" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script input haptics API did not register a LIB-153 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Input.SetVibration") != nullptr,
+        "Script input haptics API did not register VisualGraph runtime binding for Input.SetVibration");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callHasHaptics = [&host, &context](int index) {
+        return host.Functions().Call(
+            "Input.HasHaptics",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ index } },
+            } },
+            context);
+    };
+    const auto callSetVibration = [&host, &context](int index, float low, float high) {
+        return host.Functions().Call(
+            "Input.SetVibration",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ index } },
+                kb::script::ScriptFunctionArgument{ .name = "lowFrequency", .value = kb::script::ScriptValue{ low } },
+                kb::script::ScriptFunctionArgument{ .name = "highFrequency", .value = kb::script::ScriptValue{ high } },
+            } },
+            context);
+    };
+
+    // No backend: honest unsupported with a reason, never a fake success.
+    const kb::script::ScriptFunctionCallResult noBackend = callHasHaptics(0);
+    kb::tests::Require(noBackend.Succeeded() && !noBackend.Output("supported").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && !noBackend.Output("reason").value_or(kb::script::ScriptValue{ std::string{} }).AsString().empty(),
+        "Input.HasHaptics must report unsupported with a reason when no backend is registered");
+    kb::tests::Require(!callSetVibration(0, 1.0F, 1.0F).Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.SetVibration must be honestly false without a backend");
+    kb::tests::Require(!host.Functions().Call("Input.StopVibration", std::span<const kb::script::ScriptFunctionArgument>{}, context)
+                            .Output("stopped").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.StopVibration must be honestly false without a backend");
+
+    FakeHapticsBackend backend;
+    kb::input::InputHaptics::RegisterBackend(scene, backend);
+    const kb::script::ScriptFunctionCallResult supported = callHasHaptics(0);
+    kb::tests::Require(supported.Output("supported").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("connected").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("dualMotor").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("maxGamepads").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 2,
+        "Input.HasHaptics must surface the backend's capability and limits");
+    kb::tests::Require(!callHasHaptics(5).Output("supported").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.HasHaptics must report the platform's slot-range limit honestly");
+    kb::tests::Require(callSetVibration(1, 0.25F, 0.75F).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastIndex == 1U && kb::tests::NearlyEqual(backend.lastLow, 0.25F) && kb::tests::NearlyEqual(backend.lastHigh, 0.75F),
+        "Input.SetVibration did not carry the motor magnitudes to the backend");
+    kb::tests::Require(!callSetVibration(5, 1.0F, 1.0F).Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.SetVibration must be honestly false for an out-of-range slot");
+    kb::tests::Require(host.Functions().Call("Input.StopVibration", std::span<const kb::script::ScriptFunctionArgument>{}, context)
+                            .Output("stopped").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.stopAllCount == 1,
+        "Input.StopVibration did not reach the backend");
+
+    // Lua wrapper layer.
+    const kb::assets::AssetId luaAsset{ 9801U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Haptics Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local haptics = Input.HasHaptics(0)
+    SetShared("luaSupported", haptics.supported)
+    SetShared("luaDualMotor", haptics.dualMotor)
+    SetShared("luaApplied", Input.SetVibration(0, 0.5, 1.0))
+    SetShared("luaStopped", Input.StopVibration())
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script input haptics Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script input haptics Lua wrapper execution failed");
+    for (const char* key : { "luaSupported", "luaDualMotor", "luaApplied", "luaStopped" }) {
+        kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua haptics wrapper did not report success");
+    }
+    kb::tests::Require(backend.lastIndex == 0U && kb::tests::NearlyEqual(backend.lastLow, 0.5F) && kb::tests::NearlyEqual(backend.lastHigh, 1.0F) && backend.stopAllCount == 2,
+        "Lua haptics wrappers did not carry values to the backend");
+    kb::input::InputHaptics::UnregisterBackend(scene, backend);
+    kb::tests::Require(!kb::input::InputHaptics::HasBackend(scene), "UnregisterBackend must clear the scene's haptics backend");
 }
 
 // LIB-144: the native contract of the scene-held, renderer-published visibility feedback
@@ -11587,6 +11704,7 @@ void RunScriptRuntimeTests() {
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
     RunScriptAudioVoiceControlApiTest();
+    RunScriptInputHapticsApiTest();
     RunSceneRenderFeedbackTest();
     RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
