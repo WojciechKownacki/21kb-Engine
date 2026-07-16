@@ -163,6 +163,9 @@ void RunSceneDocumentRoundTripTest() {
     source.Components().Lights().Set(child, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Directional,
         .intensity = 3.0F,
+        .useColorTemperature = true,
+        .colorTemperatureKelvin = 4200.0F,
+        .layerMask = 0x00000006U,
     });
     source.Components().Cameras().Set(secondRoot, kb::scene::CameraComponent{
         .orthographicHeight = 16.0F,
@@ -248,6 +251,8 @@ void RunSceneDocumentRoundTripTest() {
         &iteratedMeshRenderers);
     Require(iteratedMeshRenderers == 1U, "Scene document mesh renderer did not roundtrip into runtime component iteration");
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
+    Require(light->useColorTemperature && NearlyEqual(light->colorTemperatureKelvin, 4200.0F) && light->layerMask == 0x00000006U,
+        "Scene document light did not roundtrip useColorTemperature/colorTemperatureKelvin/layerMask");
     std::uint32_t iteratedLights = 0U;
     target.Components().Visitors().ForEachLight(
         [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::LightComponent& light, void* context) {

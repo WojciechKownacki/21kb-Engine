@@ -212,6 +212,15 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "light.castsShadow") {
         return ParseBool(property.value, Ensure(node.components.light).castsShadow);
     }
+    if (property.propertyPath == "light.useColorTemperature") {
+        return ParseBool(property.value, Ensure(node.components.light).useColorTemperature);
+    }
+    if (property.propertyPath == "light.colorTemperatureKelvin") {
+        return ParseNumber(property.value, Ensure(node.components.light).colorTemperatureKelvin);
+    }
+    if (property.propertyPath == "light.layerMask") {
+        return ParseNumber(property.value, Ensure(node.components.light).layerMask);
+    }
     if (property.propertyPath == "input") {
         return ApplyComponentPresence(property.value, node.components.input);
     }

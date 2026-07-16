@@ -7672,7 +7672,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(fieldsChecked == 92U, "Script component API generated accessor coverage test did not exercise the expected total field count (92) across all 10 components");
+    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
+    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
+    // total climbs from 92 to 97.
+    kb::tests::Require(fieldsChecked == 97U, "Script component API generated accessor coverage test did not exercise the expected total field count (97) across all 10 components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -7726,7 +7729,10 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 92U, "LIB-082 raw-pointer audit did not exercise the expected total field count (92) across all 10 components");
+    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
+    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
+    // total climbs from 92 to 97.
+    kb::tests::Require(propertiesChecked == 97U, "LIB-082 raw-pointer audit did not exercise the expected total field count (97) across all 10 components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
