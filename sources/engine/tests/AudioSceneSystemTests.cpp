@@ -9,7 +9,10 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -181,6 +184,44 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         // plugin across the ticks below.
         kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Weapons", 0.2F);
         kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 0.25F);
+
+        // LIB-151: occlusion against the real collider raycast geometry - a wall between
+        // the listener (origin) and the routed source exercises the budget-capped sampler
+        // on the real plugin across the ticks below.
+        kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+                                                                   .enabled = true,
+                                                                   .occludedVolumeScale = 0.25F,
+                                                                   .maxDistance = 100.0F,
+                                                                   .layerMask = 0xFFFFFFFFU,
+                                                                   .maxRaycastsPerTick = 4U,
+                                                               });
+        const kb::scene::SceneObject wall = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Occluding Wall",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+                .worldPosition = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+                .worldDirty = false,
+            },
+        });
+        scene.Components().Colliders().Set(wall.Entity(), kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = kb::scene::Vec3{ 4.0F, 4.0F, 0.2F },
+        });
+        const kb::scene::SceneObject occludedSourceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Occluded Source",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 2.0F },
+                .worldPosition = kb::scene::Vec3{ 0.0F, 0.0F, 2.0F },
+                .worldDirty = false,
+            },
+        });
+        scene.Components().AudioSources().Set(occludedSourceObject.Entity(), kb::scene::AudioSourceComponent{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = true,
+            .autoplay = true,
+        });
 
         kb::scene::AudioSourceComponent routedSource{
             .clipAssetId = importedClip.id.value,

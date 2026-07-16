@@ -6,6 +6,7 @@
 #include "runtime/MiniaudioEngine.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
 #include "scene/MiniaudioListenerSynchronizer.hpp"
+#include "scene/MiniaudioOcclusionSampler.hpp"
 #include "scene/MiniaudioSourceRegistry.hpp"
 
 namespace kb::scene {
@@ -42,6 +43,7 @@ private:
     MiniaudioClipResolver clipResolver_;
     MiniaudioListenerSynchronizer listenerSynchronizer_;
     MiniaudioBusRegistry busRegistry_;
+    MiniaudioOcclusionSampler occlusionSampler_;
     MiniaudioSourceRegistry sourceRegistry_;
     MiniaudioVoicePool voicePool_;
 };

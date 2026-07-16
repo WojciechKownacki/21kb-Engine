@@ -12,6 +12,7 @@
 namespace kb::audio_miniaudio {
 
 class MiniaudioClipResolver;
+class MiniaudioOcclusionSampler;
 
 class MiniaudioVoicePool final {
 public:
@@ -30,8 +31,13 @@ public:
     // LIB-149: per-tick sync for owner-attached voices (AudioPlayDesc::ownerEntityId != 0):
     // a live, active owner drives the voice's position from its world transform; a
     // destroyed/deactivated owner releases the voice immediately - even a looping or
-    // paused voice can never leak past its owner.
-    void SyncAttachedVoices(kb::scene::Scene& scene);
+    // paused voice can never leak past its owner. LIB-151: a non-null `occlusionSampler`
+    // additionally scales each spatial attached voice's volume by its budget-capped
+    // occlusion sample (keyed by voiceId, the owner's collider excluded).
+    void SyncAttachedVoices(
+        kb::scene::Scene& scene,
+        MiniaudioOcclusionSampler* occlusionSampler,
+        const kb::scene::Vec3& listenerPosition);
 
     // LIB-148: per-voice control - false for a voiceId that is 0, never existed, or
     // already finished/was stolen. Stop REMOVES the record immediately (a stopped
@@ -58,6 +64,11 @@ private:
         // LIB-149: 0 = free-standing; otherwise the owning entity this voice follows and
         // dies with (see SyncAttachedVoices).
         std::uint64_t ownerEntityId = 0U;
+        // LIB-151: the caller-authored volume/mute/spatial - the base occlusion scales
+        // from (SetVoiceVolume updates baseVolume, so a scripted change survives it).
+        float baseVolume = 1.0F;
+        bool muted = false;
+        bool spatial = true;
         std::unique_ptr<MiniaudioSound> sound;
     };
 

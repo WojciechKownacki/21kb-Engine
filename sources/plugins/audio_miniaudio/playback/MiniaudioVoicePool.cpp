@@ -2,9 +2,11 @@
 
 #include "assets/MiniaudioClipResolver.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "runtime/MiniaudioSound.hpp"
+#include "scene/MiniaudioOcclusionSampler.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -59,12 +61,18 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .looping = desc.loop,
         .priority = desc.priority,
         .ownerEntityId = desc.ownerEntityId,
+        .baseVolume = desc.volume,
+        .muted = desc.mute,
+        .spatial = desc.spatial,
         .sound = std::move(sound),
     });
     return kb::audio::AudioPlayResult{ .started = true, .voiceId = voiceId, .error = {} };
 }
 
-void MiniaudioVoicePool::SyncAttachedVoices(kb::scene::Scene& scene) {
+void MiniaudioVoicePool::SyncAttachedVoices(
+    kb::scene::Scene& scene,
+    MiniaudioOcclusionSampler* occlusionSampler,
+    const kb::scene::Vec3& listenerPosition) {
     for (auto iter = voices_.begin(); iter != voices_.end();) {
         if (iter->ownerEntityId == 0U) {
             ++iter;
@@ -79,7 +87,20 @@ void MiniaudioVoicePool::SyncAttachedVoices(kb::scene::Scene& scene) {
             continue;
         }
         if (iter->sound != nullptr) {
-            iter->sound->SetPosition(scene.Transforms().Get(owner).worldPosition);
+            const kb::scene::Vec3 position = scene.Transforms().Get(owner).worldPosition;
+            iter->sound->SetPosition(position);
+            // LIB-151: budget-capped occlusion for spatial attached voices, keyed by
+            // voiceId; the owner's own collider never occludes its voice.
+            if (occlusionSampler != nullptr && iter->spatial) {
+                const float scale = occlusionSampler->Sample(
+                    scene,
+                    kb::scene::SceneAudioOcclusionAccess::Settings(scene),
+                    iter->voiceId,
+                    listenerPosition,
+                    position,
+                    iter->ownerEntityId);
+                iter->sound->SetVolume(iter->muted ? 0.0F : iter->baseVolume * scale);
+            }
         }
         ++iter;
     }
@@ -124,6 +145,8 @@ bool MiniaudioVoicePool::SetVoiceVolume(std::uint64_t voiceId, float volume) noe
     if (voice == nullptr || voice->sound == nullptr) {
         return false;
     }
+    voice->baseVolume = volume;
+    voice->muted = false;
     voice->sound->SetVolume(volume);
     return true;
 }

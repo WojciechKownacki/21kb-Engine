@@ -1,7 +1,9 @@
 #include "scene/MiniaudioSourceRegistry.hpp"
 
 #include "assets/MiniaudioClipResolver.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
+#include "scene/MiniaudioOcclusionSampler.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -39,6 +41,8 @@ void MiniaudioSourceRegistry::Sync(
     kb::scene::SceneSystemContext& context,
     const MiniaudioClipResolver& clipResolver,
     MiniaudioBusRegistry& busRegistry,
+    MiniaudioOcclusionSampler* occlusionSampler,
+    const kb::scene::Vec3& listenerPosition,
     bool playbackAvailable) {
     seenEntities_.clear();
     SourceSyncContext syncContext{
@@ -47,6 +51,8 @@ void MiniaudioSourceRegistry::Sync(
         .scene = &context.GetScene(),
         .clipResolver = &clipResolver,
         .busRegistry = &busRegistry,
+        .occlusionSampler = occlusionSampler,
+        .listenerPosition = listenerPosition,
         .playbackAvailable = playbackAvailable,
     };
     context.Transforms().ForEach(&SyncSourceFromTransform, &syncContext);
@@ -66,6 +72,8 @@ void MiniaudioSourceRegistry::SyncSourceFromTransform(kb::scene::SceneEntity ent
         transform,
         *syncContext->clipResolver,
         *syncContext->busRegistry,
+        syncContext->occlusionSampler,
+        syncContext->listenerPosition,
         syncContext->playbackAvailable);
 }
 
@@ -76,6 +84,8 @@ void MiniaudioSourceRegistry::SyncSource(
     const kb::scene::TransformComponent& transform,
     const MiniaudioClipResolver& clipResolver,
     MiniaudioBusRegistry& busRegistry,
+    MiniaudioOcclusionSampler* occlusionSampler,
+    const kb::scene::Vec3& listenerPosition,
     bool playbackAvailable) {
     const kb::scene::AudioSourceComponent* source = scene.Components().AudioSources().TryGet(entity);
     if (source == nullptr) {
@@ -108,7 +118,19 @@ void MiniaudioSourceRegistry::SyncSource(
         return;
     }
 
-    record->sound->Apply(ToSoundSettings(*source, transform));
+    MiniaudioSoundSettings settings = ToSoundSettings(*source, transform);
+    // LIB-151: budget-capped occlusion scale for spatial component sources - the source's
+    // own collider never occludes itself.
+    if (occlusionSampler != nullptr && source->spatial) {
+        settings.volume *= occlusionSampler->Sample(
+            scene,
+            kb::scene::SceneAudioOcclusionAccess::Settings(scene),
+            entity.Id(),
+            listenerPosition,
+            transform.worldPosition,
+            entity.Id());
+    }
+    record->sound->Apply(settings);
 }
 
 MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(

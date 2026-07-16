@@ -8,6 +8,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
@@ -425,6 +426,48 @@ ScriptFunctionCallResult AudioTransitionToSnapshot(const ScriptFunctionCallConte
     };
 }
 
+// LIB-151: one configuration call for the scene-global occlusion (runs on the engine's
+// existing collider raycast geometry with a hard per-tick ray budget - see
+// SceneAudioOcclusionAccess.hpp). Omitted optional arguments keep the current value, so
+// scripts can toggle `enabled` without re-stating the tuning.
+ScriptFunctionCallResult AudioConfigureOcclusion(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* enabledArgument = FindArg(arguments, "enabled");
+    if (enabledArgument == nullptr) {
+        return Error("occlusion configuration requires the enabled argument");
+    }
+    kb::scene::AudioOcclusionSettings settings = kb::scene::SceneAudioOcclusionAccess::Settings(*context.scene);
+    settings.enabled = enabledArgument->AsBool(false);
+    settings.occludedVolumeScale = std::clamp(FloatArg(arguments, "occludedVolume", settings.occludedVolumeScale), 0.0F, 1.0F);
+    settings.maxDistance = std::max(0.0F, FloatArg(arguments, "maxDistance", settings.maxDistance));
+    const ScriptValue* layerMaskArgument = FindArg(arguments, "layerMask");
+    if (layerMaskArgument != nullptr) {
+        settings.layerMask = static_cast<std::uint32_t>(layerMaskArgument->AsInt64(static_cast<std::int64_t>(settings.layerMask)));
+    }
+    settings.maxRaycastsPerTick = static_cast<std::uint32_t>(std::clamp(IntArg(arguments, "maxRaycastsPerTick", static_cast<int>(settings.maxRaycastsPerTick)), 0, 1024));
+
+    kb::scene::SceneAudioOcclusionAccess::Configure(*context.scene, settings);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioOcclusionEnabled(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "enabled", ScriptValue{ kb::scene::SceneAudioOcclusionAccess::Settings(*context.scene).enabled } } },
+        .errors = {},
+    };
+}
+
 ScriptFunctionCallResult AudioActiveSnapshot(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     static_cast<void>(arguments);
     if (context.scene == nullptr) {
@@ -586,7 +629,34 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "started", ScriptValueType::Bool, true },
     };
     transitionToSnapshot.callback = &AudioTransitionToSnapshot;
-    return host.RegisterFunction(std::move(transitionToSnapshot));
+    if (!host.RegisterFunction(std::move(transitionToSnapshot))) {
+        return false;
+    }
+
+    ScriptFunctionDesc configureOcclusion;
+    configureOcclusion.signature.name = "Audio.ConfigureOcclusion";
+    configureOcclusion.signature.inputs = {
+        ScriptFunctionPin{ "enabled", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "occludedVolume", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "maxDistance", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false },
+        ScriptFunctionPin{ "maxRaycastsPerTick", ScriptValueType::Int, false },
+    };
+    configureOcclusion.signature.outputs = {
+        ScriptFunctionPin{ "applied", ScriptValueType::Bool, true },
+    };
+    configureOcclusion.callback = &AudioConfigureOcclusion;
+    if (!host.RegisterFunction(std::move(configureOcclusion))) {
+        return false;
+    }
+
+    ScriptFunctionDesc occlusionEnabled;
+    occlusionEnabled.signature.name = "Audio.OcclusionEnabled";
+    occlusionEnabled.signature.outputs = {
+        ScriptFunctionPin{ "enabled", ScriptValueType::Bool, true },
+    };
+    occlusionEnabled.callback = &AudioOcclusionEnabled;
+    return host.RegisterFunction(std::move(occlusionEnabled));
 }
 
 } // namespace kb::script

@@ -25,14 +25,20 @@ namespace kb::audio_miniaudio {
 
 class MiniaudioBusRegistry;
 class MiniaudioClipResolver;
+class MiniaudioOcclusionSampler;
 
 class MiniaudioSourceRegistry final {
 public:
+    // LIB-151: `occlusionSampler` + `listenerPosition` drive the per-source occlusion
+    // volume scale (spatial sources only; sampler is budget-capped, see
+    // MiniaudioOcclusionSampler.hpp). nullptr sampler = occlusion disabled.
     void Sync(
         ma_engine& engine,
         kb::scene::SceneSystemContext& context,
         const MiniaudioClipResolver& clipResolver,
         MiniaudioBusRegistry& busRegistry,
+        MiniaudioOcclusionSampler* occlusionSampler,
+        const kb::scene::Vec3& listenerPosition,
         bool playbackAvailable);
 
     void StopAll() noexcept;
@@ -61,6 +67,8 @@ private:
         kb::scene::Scene* scene = nullptr;
         const MiniaudioClipResolver* clipResolver = nullptr;
         MiniaudioBusRegistry* busRegistry = nullptr;
+        MiniaudioOcclusionSampler* occlusionSampler = nullptr;
+        kb::scene::Vec3 listenerPosition{};
         bool playbackAvailable = false;
     };
 
@@ -73,6 +81,8 @@ private:
         const kb::scene::TransformComponent& transform,
         const MiniaudioClipResolver& clipResolver,
         MiniaudioBusRegistry& busRegistry,
+        MiniaudioOcclusionSampler* occlusionSampler,
+        const kb::scene::Vec3& listenerPosition,
         bool playbackAvailable);
 
     [[nodiscard]] SoundRecord* EnsureSound(

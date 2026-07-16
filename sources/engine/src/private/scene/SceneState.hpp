@@ -12,6 +12,7 @@
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -382,6 +383,9 @@ public:
     // transition (advanced with scene delta time by the audio backend each tick).
     std::vector<AudioMixerBusVolumeOverride> audioMixerBusVolumeOverrides;
     AudioMixerSnapshotTransition audioMixerSnapshotTransition;
+    // LIB-151: scene-global audio occlusion configuration (disabled by default - zero
+    // raycast cost until a game opts in).
+    AudioOcclusionSettings audioOcclusionSettings;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors
