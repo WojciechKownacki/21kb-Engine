@@ -180,17 +180,21 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneRenderFeedback",
             .Register = &kb::script::ScriptRendererApi::Register,
         },
-        // LIB-155/156: Assets.Find/IsLoaded/Load/LoadAsync/Unload — a
-        // generic, type-erased script surface over the SAME
-        // kb::assets::AssetManager cache Load<T>/Unload/IsLoaded already
-        // drive natively. The returned `asset` Hash is a bare
+        // LIB-155/156/157: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
+        // LoadAsync/Unload — a generic, type-erased script surface over the
+        // SAME kb::assets::AssetManager cache Load<T>/Unload/IsLoaded
+        // already drive natively. The returned `asset` Hash is a bare
         // cache-membership token, NOT yet refcounted like a native
         // AssetHandle<T>'s Shared ownership (see ScriptAssetsApi.cpp's
         // Load() doc comment) — real per-holder refcount/weak-reference
         // policy is LIB-158's separately-scoped job. Find/resolution is
         // exclusively by stable id or virtual/logical project path — never
         // a physical OS path (see ScriptAssetsApi.cpp's ResolveReference
-        // doc comment). LoadAsync is an honestly-synchronous Task facade
+        // doc comment). FindTyped/KindOf are typed references (LIB-157):
+        // resolve-and-validate / classify against kb::assets::AssetKind's
+        // single-source-of-truth kind<->type tag mapping — see
+        // EngineLibraryAssetRef.hpp for the parallel native typed AssetRef
+        // aliases. LoadAsync is an honestly-synchronous Task facade
         // (completes on its first poll, exactly the shape SceneTasks.hpp's
         // own LIB-098 doc comment anticipated for asset load). No Lua sugar
         // table (mirrors Task/Timer/Scene/Math, which also rely on the
