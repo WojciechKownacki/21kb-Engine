@@ -10074,6 +10074,132 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
     kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
 }
 
+// LIB-155: Assets.IsLoaded/Load/LoadAsync/Unload — the generic, type-erased
+// script surface over AssetManager::LoadOpaque/Unload/IsLoaded. Proves
+// registration (Native+VisualGraph parity via host.Functions().Call +
+// VisualGraphRuntimeBindings, mirroring RunScriptTaskApiTest/
+// RunScriptMaterialInstanceApiTest's established no-Lua-sugar-module
+// pattern — see EngineLibraryModule.cpp's Assets entry doc comment for why
+// no PucLuaFunctionApi wrapper is added), reference resolution by BOTH
+// numeric id and virtual path, honest false for an unresolved reference on
+// every function (never an error), and LoadAsync's real Task-based
+// completion end-to-end — Completed for a loadable asset, genuinely Failed
+// (not silently swallowed) for one whose type has no registered loader —
+// through a real scene.Tasks().Advance.
+void RunScriptAssetsApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "AssetsApiSubject.lua", "function Tick(self, dt)\nend\n");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Assets API test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Assets API test discovery did not find the Lua fixture asset");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/AssetsApiSubject.lua");
+    kb::tests::Require(metadata != nullptr, "Assets API test fixture asset could not be resolved");
+    const kb::assets::AssetId assetId = metadata->id;
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script assets API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Assets.IsLoaded") != nullptr, "Assets.IsLoaded was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Load") != nullptr, "Assets.Load was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.LoadAsync") != nullptr, "Assets.LoadAsync was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Unload") != nullptr, "Assets.Unload was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.Load") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.Load");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // Unresolved reference: honest false everywhere, never an error.
+    const std::vector<kb::script::ScriptFunctionArgument> unknownArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/DoesNotExist.lua" } } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownIsLoaded = host.Functions().Call("Assets.IsLoaded", unknownArgs, context);
+    kb::tests::Require(unknownIsLoaded.Succeeded() && !unknownIsLoaded.Output("loaded")->AsBool(), "Assets.IsLoaded must honestly report false for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownLoad = host.Functions().Call("Assets.Load", unknownArgs, context);
+    kb::tests::Require(unknownLoad.Succeeded() && !unknownLoad.Output("success")->AsBool() && unknownLoad.Output("asset")->AsUInt64() == 0U, "Assets.Load must honestly report failure for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownUnload = host.Functions().Call("Assets.Unload", unknownArgs, context);
+    kb::tests::Require(unknownUnload.Succeeded() && !unknownUnload.Output("unloaded")->AsBool(), "Assets.Unload must honestly report false for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownLoadAsync = host.Functions().Call("Assets.LoadAsync", unknownArgs, context);
+    kb::tests::Require(unknownLoadAsync.Succeeded() && !unknownLoadAsync.Output("started")->AsBool() && unknownLoadAsync.Output("task")->AsUInt64() == 0U,
+        "Assets.LoadAsync must honestly report failure for an unresolved reference without creating a task");
+
+    // Resolve by virtual path.
+    const std::vector<kb::script::ScriptFunctionArgument> pathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/AssetsApiSubject.lua" } } },
+    };
+    const kb::script::ScriptFunctionCallResult beforeLoad = host.Functions().Call("Assets.IsLoaded", pathArgs, context);
+    kb::tests::Require(beforeLoad.Succeeded() && !beforeLoad.Output("loaded")->AsBool(), "Assets.IsLoaded must report false before the asset has been loaded");
+
+    const kb::script::ScriptFunctionCallResult load = host.Functions().Call("Assets.Load", pathArgs, context);
+    kb::tests::Require(load.Succeeded() && load.Output("success")->AsBool(), "Assets.Load (virtual path) must succeed for a real, loader-backed asset");
+    kb::tests::Require(load.Output("asset")->AsUInt64() == assetId.value, "Assets.Load must return the resolved asset's own id as the ownership handle");
+
+    const kb::script::ScriptFunctionCallResult afterLoad = host.Functions().Call("Assets.IsLoaded", pathArgs, context);
+    kb::tests::Require(afterLoad.Succeeded() && afterLoad.Output("loaded")->AsBool(), "Assets.IsLoaded must report true immediately after Assets.Load succeeds");
+    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.Load must populate the SAME AssetManager cache Load<T> observes");
+
+    // Resolve by numeric id string — must reach the identical cache entry.
+    const std::vector<kb::script::ScriptFunctionArgument> idArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(assetId) } },
+    };
+    const kb::script::ScriptFunctionCallResult idIsLoaded = host.Functions().Call("Assets.IsLoaded", idArgs, context);
+    kb::tests::Require(idIsLoaded.Succeeded() && idIsLoaded.Output("loaded")->AsBool(), "Assets.IsLoaded must resolve a numeric-id-string reference identically to a virtual path");
+
+    const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
+    kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Unload must remove the asset from AssetManager's cache");
+    const kb::script::ScriptFunctionCallResult unloadAgain = host.Functions().Call("Assets.Unload", idArgs, context);
+    kb::tests::Require(unloadAgain.Succeeded() && !unloadAgain.Output("unloaded")->AsBool(), "Assets.Unload must be idempotent — a second unload of an already-unloaded asset must report unloaded=false, not error");
+
+    // No-scene context must fail honestly (executed=false), never silently
+    // fabricate a result.
+    const kb::script::ScriptFunctionCallContext noSceneContext{ .scene = nullptr };
+    const kb::script::ScriptFunctionCallResult noSceneLoad = host.Functions().Call("Assets.Load", pathArgs, noSceneContext);
+    kb::tests::Require(!noSceneLoad.Succeeded(), "Assets.Load must fail honestly without a scene rather than silently succeeding");
+
+    // LoadAsync end-to-end: the task's poll performs the REAL load on its
+    // first Advance (honest one-tick-delayed completion — see
+    // ScriptAssetsApi.cpp's doc comment on LoadAsync), never within the
+    // starting call itself.
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Assets LoadAsync Caller" });
+    const kb::script::ScriptFunctionCallContext callerContext{ .scene = &scene, .caller = caller.Entity() };
+    const kb::script::ScriptFunctionCallResult loadAsync = host.Functions().Call("Assets.LoadAsync", pathArgs, callerContext);
+    kb::tests::Require(loadAsync.Succeeded() && loadAsync.Output("started")->AsBool(), "Assets.LoadAsync must succeed for a resolvable reference");
+    const std::uint64_t asyncTaskId = loadAsync.Output("task")->AsUInt64();
+    kb::tests::Require(asyncTaskId != 0U && scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync must create a real, live SceneTasks task");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself — only its task's first poll does");
+
+    const std::vector<kb::scene::TaskCompletionRecord> asyncCompletions = scene.Tasks().Advance(0.1F);
+    kb::tests::Require(!scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync's task must resolve on its very first poll");
+    kb::tests::Require(asyncCompletions.size() == 1U && asyncCompletions[0].id == asyncTaskId && asyncCompletions[0].succeeded && asyncCompletions[0].owner == caller.Entity(),
+        "Assets.LoadAsync's task must report Completed, owned by the calling entity, on its first Advance");
+    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync's task poll must have performed the real load by the time it reports Completed");
+
+    // LoadAsync failure path: a resolvable reference whose type has no
+    // registered loader must start a task that genuinely reports Failed —
+    // not silently swallowed, not fabricated as Completed.
+    const kb::assets::AssetId noLoaderId{ assetId.value + 1U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = noLoaderId,
+                           .type = "GhostType",
+                           .name = "GhostAsset",
+                           .virtualPath = "/Game/Logic/Ghost.ghost",
+                           .physicalPath = "Ghost.ghost",
+                           .contentHash = 1U,
+                       }),
+        "Registration of the no-loader LoadAsync failure fixture failed");
+    const std::vector<kb::script::ScriptFunctionArgument> ghostArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(noLoaderId) } },
+    };
+    const kb::script::ScriptFunctionCallResult ghostLoadAsync = host.Functions().Call("Assets.LoadAsync", ghostArgs, callerContext);
+    kb::tests::Require(ghostLoadAsync.Succeeded() && ghostLoadAsync.Output("started")->AsBool(), "Assets.LoadAsync must start a task even for an asset whose loader will fail (the failure surfaces through the task, not the start call)");
+    const std::uint64_t ghostTaskId = ghostLoadAsync.Output("task")->AsUInt64();
+    const std::vector<kb::scene::TaskCompletionRecord> ghostCompletions = scene.Tasks().Advance(0.1F);
+    kb::tests::Require(ghostCompletions.size() == 1U && ghostCompletions[0].id == ghostTaskId && !ghostCompletions[0].succeeded,
+        "Assets.LoadAsync's task must genuinely report Failed for an asset type with no registered loader, not fake Completed");
+}
+
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
 // std::function objects — no scene needed, these are pure closures.
 void RunEngineLibraryTaskFactoriesTest() {
@@ -11829,6 +11955,7 @@ void RunScriptRuntimeTests() {
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunScriptAssetsApiTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();

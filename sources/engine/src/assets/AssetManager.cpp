@@ -188,6 +188,28 @@ bool AssetManager::DeleteAsset(AssetId id) {
     return true;
 }
 
+bool AssetManager::LoadOpaque(AssetId id) {
+    lastError_.clear();
+    if (!id.IsValid()) {
+        lastError_ = "Invalid asset id";
+        return false;
+    }
+
+    const AssetMetadata* metadata = registry_.Find(id);
+    if (metadata == nullptr) {
+        lastError_ = "Asset is not registered";
+        return false;
+    }
+
+    IAssetLoader* loader = LoaderForType(metadata->type);
+    if (loader == nullptr) {
+        lastError_ = "No loader registered for asset type: " + metadata->type;
+        return false;
+    }
+
+    return LoadUntyped(id, loader->PayloadType()) != nullptr;
+}
+
 bool AssetManager::Unload(AssetId id) noexcept {
     return cache_.erase(id.value) > 0;
 }

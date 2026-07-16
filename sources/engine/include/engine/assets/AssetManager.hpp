@@ -62,6 +62,20 @@ public:
         return metadata == nullptr ? AssetHandle<T>{} : Load<T>(metadata->id);
     }
 
+    // Type-erased force-load: caches the payload through whatever loader is
+    // registered for the asset's own metadata.type, without the caller
+    // knowing (or being able to name) the C++ payload type at compile time.
+    // This is the ONLY way kb_engine code can force-load an asset whose
+    // payload type lives in another module (e.g. kb_render's RenderMesh/
+    // Material/Texture types) — the generic script-facing Assets.Load
+    // surface (ScriptAssetsApi) is the reason this exists. Trusts the
+    // registered loader's own IAssetLoader::PayloadType() as the expected
+    // type, so it never mismatches by construction. Returns false (with
+    // LastError() set) for an invalid id, unregistered asset, or an asset
+    // type with no registered loader; matches Load<T>'s existing error
+    // reporting via the same LoadUntyped path.
+    [[nodiscard]] bool LoadOpaque(AssetId id);
+
     [[nodiscard]] bool Unload(AssetId id) noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
