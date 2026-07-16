@@ -110,6 +110,10 @@ private:
     // LIB-152: fired audio voice markers -> ENTITY-LOCAL "OnAudioMarker" events, the same
     // drain-and-dispatch shape as the collision events above.
     void DispatchPendingAudioMarkerEvents(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-160: queued prefab-instantiation completions -> ENTITY-LOCAL
+    // "OnPrefabInstantiated" events on the requesting caller, same
+    // drain-and-dispatch shape as the collision/marker events above.
+    void DispatchPendingPrefabInstantiatedEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);
