@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/AssetCompatibility.hpp"
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetManifest.hpp"
 #include "engine/assets/AssetMountTable.hpp"
@@ -137,6 +138,25 @@ public:
     }
 
     [[nodiscard]] bool HasLoaderForType(std::string_view type) const noexcept;
+
+    // LIB-159: validate that `id` and its entire declared dependency closure
+    // can be loaded in this runtime, WITHOUT loading anything. Reports a
+    // MissingDependency for the asset itself or any declared dependency that
+    // is not registered, and an IncompatibleType for any registered asset in
+    // the closure whose type has no loader here. Registry-level only (no disk
+    // I/O): it does not check that a file still exists on disk (see the asset
+    // reload lifecycle work for content-hash freshness) — it answers "are all
+    // the pieces present and loadable in this runtime." Cycle-safe. The
+    // report is compatible exactly when it has no diagnostics. It also does
+    // NOT consider AssetMetadata::runtimeLoadable (an asset legitimately
+    // flagged editor-only is not an incompatibility) — only presence and a
+    // usable loader. A missing dependency referenced by several distinct
+    // parents is reported once per depending parent, so each diagnostic
+    // names a concrete owner of the problem.
+    [[nodiscard]] AssetCompatibilityReport ValidateCompatibility(AssetId id) const;
+    // Convenience: ValidateCompatibility(id).compatible.
+    [[nodiscard]] bool IsCompatible(AssetId id) const;
+
     [[nodiscard]] std::string LastError() const;
     void SetError(std::string error) const;
     void ClearRuntimeCache() noexcept;
