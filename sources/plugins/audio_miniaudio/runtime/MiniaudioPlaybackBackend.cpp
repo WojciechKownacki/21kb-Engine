@@ -57,4 +57,44 @@ void MiniaudioPlaybackBackend::StopAll(kb::scene::Scene& scene) noexcept {
     voicePool_.StopAll();
 }
 
+bool MiniaudioPlaybackBackend::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.StopVoice(voiceId);
+}
+
+bool MiniaudioPlaybackBackend::PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.PauseVoice(voiceId);
+}
+
+bool MiniaudioPlaybackBackend::ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.ResumeVoice(voiceId);
+}
+
+bool MiniaudioPlaybackBackend::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.SeekVoice(voiceId, positionSeconds);
+}
+
+bool MiniaudioPlaybackBackend::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.SetVoiceVolume(voiceId, volume);
+}
+
+bool MiniaudioPlaybackBackend::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.SetVoicePitch(voiceId, pitch);
+}
+
+bool MiniaudioPlaybackBackend::SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.SetVoiceLoop(voiceId, loop);
+}
+
+bool MiniaudioPlaybackBackend::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.IsVoicePlaying(voiceId);
+}
+
 } // namespace kb::audio_miniaudio

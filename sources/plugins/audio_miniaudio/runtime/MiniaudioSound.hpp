@@ -44,6 +44,16 @@ public:
     [[nodiscard]] ma_result Start() noexcept;
     [[nodiscard]] bool AtEnd() const noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    // LIB-148: per-voice control. Pause() stops the device-side playback WITHOUT moving
+    // the play cursor, so Start() (resume) continues where it left off; SeekSeconds
+    // positions from the clip start (clamped by miniaudio); the single-field setters
+    // mirror Apply's per-field semantics live.
+    void Stop() noexcept;
+    [[nodiscard]] bool IsPlaying() const noexcept;
+    [[nodiscard]] ma_result SeekSeconds(float positionSeconds) noexcept;
+    void SetVolume(float volume) noexcept;
+    void SetPitch(float pitch) noexcept;
+    void SetLooping(bool loop) noexcept;
 
 private:
     ma_sound sound_{};
