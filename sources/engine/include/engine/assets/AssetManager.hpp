@@ -18,6 +18,23 @@ namespace kb::assets {
 class AssetDiscoveryService;
 class AssetRuntimeLoadService;
 
+// LIB-158: how the runtime cache retains a loaded asset's payload.
+//   Retain (default): the cache holds its own strong reference — the payload
+//     stays resident until an explicit Unload(id), exactly the pre-LIB-158
+//     behaviour. Load handles are additional strong holders.
+//   ReleaseWhenUnreferenced: the cache holds only a weak reference — the
+//     payload lives exactly as long as at least one AssetHandle<T> (strong
+//     holder) is alive, and is freed the moment the last one drops. A later
+//     Load reloads it from disk. IsLoaded/ReferenceCount report the live
+//     state; PruneUnreferenced sweeps the now-empty map entries.
+enum class AssetUnloadPolicy : std::uint8_t {
+    Retain,
+    ReleaseWhenUnreferenced,
+};
+
+[[nodiscard]] std::string_view ToString(AssetUnloadPolicy policy) noexcept;
+[[nodiscard]] bool TryParseAssetUnloadPolicy(std::string_view name, AssetUnloadPolicy& out) noexcept;
+
 struct AssetMoveResult {
     bool succeeded = false;
     std::filesystem::path virtualPath{};
@@ -79,6 +96,46 @@ public:
     [[nodiscard]] bool Unload(AssetId id) noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
+
+    // LIB-158: the number of live strong holders (AssetHandle<T>/AssetRef<T>)
+    // of a cached asset's payload — 0 if the asset is not cached or its
+    // payload has already been released. Does NOT count the cache's own
+    // Retain reference, so under Retain this is "external holders" and under
+    // ReleaseWhenUnreferenced it is the full holder count. Deterministic in
+    // this single-threaded-asset engine (no background thread ever touches a
+    // payload's refcount).
+    [[nodiscard]] std::size_t ReferenceCount(AssetId id) const noexcept;
+    // The cache retention policy for a cached asset (Retain if the asset is
+    // not cached — the default a fresh Load would use).
+    [[nodiscard]] AssetUnloadPolicy UnloadPolicy(AssetId id) const noexcept;
+    // Changes the retention policy of an already-cached asset. Returns false
+    // if the asset is not currently cached (Load it first). Switching to
+    // ReleaseWhenUnreferenced drops the cache's strong reference immediately
+    // — if no AssetHandle holds the payload at that moment, it is freed and
+    // the entry pruned right away; otherwise it lives until the last handle
+    // drops. Switching back to Retain re-pins the still-live payload.
+    [[nodiscard]] bool SetUnloadPolicy(AssetId id, AssetUnloadPolicy policy);
+    // Removes cache entries whose payload has already been released (their
+    // last strong holder dropped under ReleaseWhenUnreferenced), keeping
+    // LoadedCount and the map honest. Returns the number of entries removed.
+    std::size_t PruneUnreferenced() noexcept;
+
+    // LIB-158: a non-owning weak reference to a currently-cached asset of
+    // type T — empty if the asset is not cached, its payload was released, or
+    // it was cached under a different type. See kb::assets::WeakAssetHandle.
+    template <typename T>
+    [[nodiscard]] WeakAssetHandle<T> WeakHandle(AssetId id) const {
+        const auto cached = cache_.find(id.value);
+        if (cached == cache_.end() || cached->second.type != typeid(T)) {
+            return {};
+        }
+        std::shared_ptr<void> alive = cached->second.weak.lock();
+        if (alive == nullptr) {
+            return {};
+        }
+        return WeakAssetHandle<T>{ id, std::static_pointer_cast<const T>(std::move(alive)) };
+    }
+
     [[nodiscard]] bool HasLoaderForType(std::string_view type) const noexcept;
     [[nodiscard]] std::string LastError() const;
     void SetError(std::string error) const;
@@ -90,8 +147,16 @@ private:
     friend class AssetRuntimeLoadService;
 
     struct CachedAsset {
-        std::shared_ptr<void> payload;
+        // Strong reference the cache itself holds — present only under
+        // AssetUnloadPolicy::Retain. Null under ReleaseWhenUnreferenced, so
+        // the payload's lifetime is governed entirely by external handles.
+        std::shared_ptr<void> retained;
+        // Always tracks the payload without extending its lifetime — the
+        // source of truth for "is this asset still alive" (IsLoaded) and the
+        // holder count (ReferenceCount).
+        std::weak_ptr<void> weak;
         std::type_index type = typeid(void);
+        AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
     };
 
     [[nodiscard]] std::shared_ptr<void> LoadUntyped(AssetId id, std::type_index expectedType);

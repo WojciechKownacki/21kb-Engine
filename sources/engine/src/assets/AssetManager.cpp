@@ -12,6 +12,28 @@
 
 namespace kb::assets {
 
+std::string_view ToString(AssetUnloadPolicy policy) noexcept {
+    switch (policy) {
+    case AssetUnloadPolicy::Retain:
+        return "Retain";
+    case AssetUnloadPolicy::ReleaseWhenUnreferenced:
+        return "ReleaseWhenUnreferenced";
+    }
+    return "Retain";
+}
+
+bool TryParseAssetUnloadPolicy(std::string_view name, AssetUnloadPolicy& out) noexcept {
+    if (name == "Retain") {
+        out = AssetUnloadPolicy::Retain;
+        return true;
+    }
+    if (name == "ReleaseWhenUnreferenced") {
+        out = AssetUnloadPolicy::ReleaseWhenUnreferenced;
+        return true;
+    }
+    return false;
+}
+
 AssetMountTable& AssetManager::Mounts() noexcept {
     return mounts_;
 }
@@ -215,11 +237,68 @@ bool AssetManager::Unload(AssetId id) noexcept {
 }
 
 bool AssetManager::IsLoaded(AssetId id) const noexcept {
-    return cache_.contains(id.value);
+    const auto cached = cache_.find(id.value);
+    return cached != cache_.end() && !cached->second.weak.expired();
 }
 
 std::size_t AssetManager::LoadedCount() const noexcept {
-    return cache_.size();
+    std::size_t count = 0;
+    for (const auto& [key, entry] : cache_) {
+        if (!entry.weak.expired()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t AssetManager::ReferenceCount(AssetId id) const noexcept {
+    const auto cached = cache_.find(id.value);
+    if (cached == cache_.end()) {
+        return 0;
+    }
+    const long total = cached->second.weak.use_count();
+    const long cacheOwned = cached->second.retained != nullptr ? 1 : 0;
+    const long external = total - cacheOwned;
+    return external <= 0 ? 0 : static_cast<std::size_t>(external);
+}
+
+AssetUnloadPolicy AssetManager::UnloadPolicy(AssetId id) const noexcept {
+    const auto cached = cache_.find(id.value);
+    return cached == cache_.end() ? AssetUnloadPolicy::Retain : cached->second.policy;
+}
+
+bool AssetManager::SetUnloadPolicy(AssetId id, AssetUnloadPolicy policy) {
+    const auto cached = cache_.find(id.value);
+    if (cached == cache_.end() || cached->second.weak.expired()) {
+        return false;
+    }
+    cached->second.policy = policy;
+    if (policy == AssetUnloadPolicy::ReleaseWhenUnreferenced) {
+        // Drop the cache's strong reference; the payload now lives only as
+        // long as some external AssetHandle holds it. If none does, it is
+        // freed here and the dead entry pruned immediately.
+        cached->second.retained.reset();
+        if (cached->second.weak.expired()) {
+            cache_.erase(cached);
+        }
+    } else {
+        // Re-pin the still-live payload so the cache keeps it resident.
+        cached->second.retained = cached->second.weak.lock();
+    }
+    return true;
+}
+
+std::size_t AssetManager::PruneUnreferenced() noexcept {
+    std::size_t removed = 0;
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        if (it->second.weak.expired()) {
+            it = cache_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
 }
 
 bool AssetManager::HasLoaderForType(std::string_view type) const noexcept {

@@ -19,13 +19,20 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
 
+    // LIB-158: a cache entry may exist but have already released its payload
+    // (ReleaseWhenUnreferenced, last handle dropped) — its `weak` is then
+    // expired and we must reload, preserving the entry's chosen policy.
+    AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
     const auto cached = cache.find(id.value);
     if (cached != cache.end()) {
         if (cached->second.type != expectedType) {
             errorMessage = "Cached asset payload type mismatch";
             return {};
         }
-        return cached->second.payload;
+        if (std::shared_ptr<void> alive = cached->second.weak.lock(); alive != nullptr) {
+            return alive;
+        }
+        policy = cached->second.policy;
     }
 
     const AssetMetadata* metadata = registry.Find(id);
@@ -60,7 +67,12 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
 
-    cache.emplace(id.value, AssetManager::CachedAsset{ .payload = result.asset, .type = expectedType });
+    cache[id.value] = AssetManager::CachedAsset{
+        .retained = policy == AssetUnloadPolicy::Retain ? result.asset : std::shared_ptr<void>{},
+        .weak = result.asset,
+        .type = expectedType,
+        .policy = policy,
+    };
     return result.asset;
 }
 

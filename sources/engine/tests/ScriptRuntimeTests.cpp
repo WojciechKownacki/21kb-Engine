@@ -10238,6 +10238,53 @@ void RunScriptAssetsApiTest() {
     const kb::script::ScriptFunctionCallResult kindOfUnknown = host.Functions().Call("Assets.KindOf", unknownArgs, context);
     kb::tests::Require(kindOfUnknown.Succeeded() && !kindOfUnknown.Output("found")->AsBool(), "Assets.KindOf must report not-found for an unresolvable reference");
 
+    // LIB-158: cache reference count / unload policy through the script
+    // surface. RefCount observes NATIVE strong holders; drive it with a real
+    // native AssetHandle held in this test over the graph fixture.
+    kb::tests::Require(host.Functions().FindSignature("Assets.RefCount") != nullptr, "Assets.RefCount was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.SetUnloadPolicy") != nullptr, "Assets.SetUnloadPolicy was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.UnloadPolicy") != nullptr, "Assets.UnloadPolicy was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.PruneUnreferenced") != nullptr, "Assets.PruneUnreferenced was not registered");
+
+    const kb::script::ScriptFunctionCallResult refCountUncached = host.Functions().Call("Assets.RefCount", graphArgs, context);
+    kb::tests::Require(refCountUncached.Succeeded() && refCountUncached.Output("count")->AsInt() == 0, "Assets.RefCount must report 0 for an asset that is not cached");
+    const kb::script::ScriptFunctionCallResult policyUncached = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+    kb::tests::Require(policyUncached.Succeeded() && !policyUncached.Output("cached")->AsBool() && policyUncached.Output("policy")->AsString() == "Retain",
+        "Assets.UnloadPolicy must report cached=false and the default Retain policy for an uncached asset");
+    const kb::script::ScriptFunctionCallResult setPolicyUncached = host.Functions().Call("Assets.SetUnloadPolicy",
+        std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "Retain" } } } }, context);
+    kb::tests::Require(setPolicyUncached.Succeeded() && !setPolicyUncached.Output("applied")->AsBool(), "Assets.SetUnloadPolicy must report applied=false for an asset that is not cached");
+
+    {
+        const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> nativeGraphHandle = scene.Assets().Manager().Load<kb::visual::VisualGraphAsset>(graphId);
+        kb::tests::Require(nativeGraphHandle.IsLoaded(), "LIB-158 script test could not load the graph fixture natively");
+        const kb::script::ScriptFunctionCallResult refCountHeld = host.Functions().Call("Assets.RefCount", graphArgs, context);
+        kb::tests::Require(refCountHeld.Succeeded() && refCountHeld.Output("count")->AsInt() == 1, "Assets.RefCount must report the one live native AssetHandle holder");
+        const kb::script::ScriptFunctionCallResult policyCached = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+        kb::tests::Require(policyCached.Succeeded() && policyCached.Output("cached")->AsBool() && policyCached.Output("policy")->AsString() == "Retain",
+            "Assets.UnloadPolicy must report cached=true and Retain for a freshly loaded asset");
+
+        // Unknown policy is a malformed request: honest error, not applied=false.
+        const kb::script::ScriptFunctionCallResult badPolicy = host.Functions().Call("Assets.SetUnloadPolicy",
+            std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "Sometimes" } } } }, context);
+        kb::tests::Require(!badPolicy.Succeeded(), "Assets.SetUnloadPolicy must honestly error on an unknown policy name");
+
+        const kb::script::ScriptFunctionCallResult setRelease = host.Functions().Call("Assets.SetUnloadPolicy",
+            std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "ReleaseWhenUnreferenced" } } } }, context);
+        kb::tests::Require(setRelease.Succeeded() && setRelease.Output("applied")->AsBool(), "Assets.SetUnloadPolicy(ReleaseWhenUnreferenced) must apply to a cached, live asset");
+        const kb::script::ScriptFunctionCallResult policyReleased = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+        kb::tests::Require(policyReleased.Succeeded() && policyReleased.Output("policy")->AsString() == "ReleaseWhenUnreferenced", "Assets.UnloadPolicy must report the newly set ReleaseWhenUnreferenced policy");
+        const kb::script::ScriptFunctionCallResult stillLoaded = host.Functions().Call("Assets.IsLoaded", graphArgs, context);
+        kb::tests::Require(stillLoaded.Succeeded() && stillLoaded.Output("loaded")->AsBool(), "Under ReleaseWhenUnreferenced, the asset must stay loaded while a native handle still holds it");
+    }
+    // The native handle is gone — the graph payload is released.
+    const kb::script::ScriptFunctionCallResult afterRelease = host.Functions().Call("Assets.IsLoaded", graphArgs, context);
+    kb::tests::Require(afterRelease.Succeeded() && !afterRelease.Output("loaded")->AsBool(), "Dropping the last native handle under ReleaseWhenUnreferenced must free the graph payload");
+    const kb::script::ScriptFunctionCallResult refCountReleased = host.Functions().Call("Assets.RefCount", graphArgs, context);
+    kb::tests::Require(refCountReleased.Succeeded() && refCountReleased.Output("count")->AsInt() == 0, "Assets.RefCount must be 0 after the released payload is freed");
+    const kb::script::ScriptFunctionCallResult pruned = host.Functions().Call("Assets.PruneUnreferenced", std::vector<kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(pruned.Succeeded() && pruned.Output("removed")->AsInt() >= 1, "Assets.PruneUnreferenced must remove the dead graph cache entry");
+
     const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
     kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");
     kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Unload must remove the asset from AssetManager's cache");

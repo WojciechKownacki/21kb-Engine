@@ -253,6 +253,85 @@ ScriptFunctionCallResult Unload(const ScriptFunctionCallContext& context, std::s
     };
 }
 
+// LIB-158: the number of live strong holders (native AssetHandle/AssetRef)
+// of a cached asset — 0 when the asset is not cached or its payload was
+// released. A script has no shared_ptr, so it never contributes to this
+// count itself; it observes how many NATIVE consumers still hold the asset,
+// e.g. to decide whether an Unload/ReleaseWhenUnreferenced would actually
+// free memory. (A script's own "weak reference" to an asset is simply the
+// reference string plus Assets.IsLoaded — the id owns nothing.)
+ScriptFunctionCallResult RefCount(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    const std::size_t count = id.IsValid() ? context.scene->Assets().Manager().ReferenceCount(id) : 0U;
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "count", ScriptValue{ static_cast<int>(count) } } },
+        .errors = {},
+    };
+}
+
+// LIB-158: set the cache retention policy of an already-loaded asset. An
+// unknown policy name is a malformed request (honest error), mirroring
+// Assets.FindTyped's unknown-kind handling; a valid policy on a not-cached
+// (or already-released) asset is a legitimate applied=false, not an error.
+ScriptFunctionCallResult SetUnloadPolicy(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const ScriptValue* policyValue = FindArg(arguments, "policy");
+    const std::string policyName = policyValue == nullptr ? std::string{} : policyValue->AsString();
+    kb::assets::AssetUnloadPolicy policy{};
+    if (!kb::assets::TryParseAssetUnloadPolicy(policyName, policy)) {
+        return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { "unknown asset unload policy: " + policyName } };
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    const bool applied = id.IsValid() && context.scene->Assets().Manager().SetUnloadPolicy(id, policy);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
+        .errors = {},
+    };
+}
+
+// LIB-158: report the retention policy of a cached asset. `cached` honestly
+// distinguishes "not cached" (policy reports the Retain default a fresh Load
+// would use) from a real cached entry.
+ScriptFunctionCallResult UnloadPolicy(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    kb::assets::AssetManager& manager = context.scene->Assets().Manager();
+    const bool cached = id.IsValid() && manager.IsLoaded(id);
+    const kb::assets::AssetUnloadPolicy policy = id.IsValid() ? manager.UnloadPolicy(id) : kb::assets::AssetUnloadPolicy::Retain;
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "cached", ScriptValue{ cached } },
+            ScriptFunctionArgument{ "policy", ScriptValue{ std::string{ kb::assets::ToString(policy) } } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-158: sweep cache entries whose payload was already released under
+// ReleaseWhenUnreferenced, returning how many dead entries were removed.
+ScriptFunctionCallResult PruneUnreferenced(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::size_t removed = context.scene->Assets().Manager().PruneUnreferenced();
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "removed", ScriptValue{ static_cast<int>(removed) } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -293,6 +372,22 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Assets.Unload",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
               { ScriptFunctionPin{ "unloaded", ScriptValueType::Bool, true } }, &Unload)
+        && ok;
+    ok = RegisterFunction(host, "Assets.RefCount",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "count", ScriptValueType::Int, true } }, &RefCount)
+        && ok;
+    ok = RegisterFunction(host, "Assets.SetUnloadPolicy",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true }, ScriptFunctionPin{ "policy", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } }, &SetUnloadPolicy)
+        && ok;
+    ok = RegisterFunction(host, "Assets.UnloadPolicy",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "cached", ScriptValueType::Bool, true }, ScriptFunctionPin{ "policy", ScriptValueType::String, true } }, &UnloadPolicy)
+        && ok;
+    ok = RegisterFunction(host, "Assets.PruneUnreferenced",
+              {},
+              { ScriptFunctionPin{ "removed", ScriptValueType::Int, true } }, &PruneUnreferenced)
         && ok;
     return ok;
 }
