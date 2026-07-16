@@ -268,6 +268,18 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = ToString(light->castsShadow);
             return true;
         }
+        if (propertyPath == "light.useColorTemperature") {
+            property.value = ToString(light->useColorTemperature);
+            return true;
+        }
+        if (propertyPath == "light.colorTemperatureKelvin") {
+            property.value = std::to_string(light->colorTemperatureKelvin);
+            return true;
+        }
+        if (propertyPath == "light.layerMask") {
+            property.value = std::to_string(light->layerMask);
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "input")) {
         const InputComponent* input = components.Inputs().TryGet(entity);
