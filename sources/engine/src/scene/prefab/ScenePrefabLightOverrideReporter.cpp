@@ -19,7 +19,10 @@ namespace {
         && lhs.areaHeight == rhs.areaHeight
         && lhs.contactShadowLength == rhs.contactShadowLength
         && lhs.volumetricScattering == rhs.volumetricScattering
-        && lhs.castsShadow == rhs.castsShadow;
+        && lhs.castsShadow == rhs.castsShadow
+        && lhs.useColorTemperature == rhs.useColorTemperature
+        && lhs.colorTemperatureKelvin == rhs.colorTemperatureKelvin
+        && lhs.layerMask == rhs.layerMask;
 }
 
 } // namespace
@@ -49,6 +52,9 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.contactShadowLength", ScenePrefabOverrideValueFormatter::ToString(actual->contactShadowLength), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.volumetricScattering", ScenePrefabOverrideValueFormatter::ToString(actual->volumetricScattering), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.castsShadow", ScenePrefabOverrideValueFormatter::ToString(actual->castsShadow), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.useColorTemperature", ScenePrefabOverrideValueFormatter::ToString(actual->useColorTemperature), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.colorTemperatureKelvin", ScenePrefabOverrideValueFormatter::ToString(actual->colorTemperatureKelvin), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.layerMask", std::to_string(actual->layerMask), ScenePrefabOverrideFlag::Light);
         return;
     }
     if (actual->kind != expected->kind) {
@@ -83,6 +89,15 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
     }
     if (actual->castsShadow != expected->castsShadow) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.castsShadow", actual->castsShadow ? "true" : "false", ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->useColorTemperature != expected->useColorTemperature) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.useColorTemperature", actual->useColorTemperature ? "true" : "false", ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->colorTemperatureKelvin != expected->colorTemperatureKelvin) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.colorTemperatureKelvin", ScenePrefabOverrideValueFormatter::ToString(actual->colorTemperatureKelvin), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->layerMask != expected->layerMask) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.layerMask", std::to_string(actual->layerMask), ScenePrefabOverrideFlag::Light);
     }
 }
 

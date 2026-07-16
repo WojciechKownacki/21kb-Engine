@@ -29,7 +29,8 @@ public:
         std::uint32_t capacity,
         const std::array<float, 4>& cameraPosition,
         SceneRenderSubmitStats& stats,
-        SceneRenderLightingConfig config) noexcept;
+        SceneRenderLightingConfig config,
+        std::uint32_t cameraCullingMask = 0xFFFFFFFFU) noexcept;
 };
 
 } // namespace kb::render
