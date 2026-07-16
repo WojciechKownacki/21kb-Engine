@@ -30,10 +30,22 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
         sourceRegistry_.StopAll();
         voicePool_.StopAll();
     }
-    sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, busRegistry_, engine_.IsPlaybackAvailable());
+    // LIB-151: budget-capped audio occlusion against the engine's collider raycast
+    // geometry - the listener position was just synced above, so reading it back from the
+    // engine is exact. Disabled settings spend zero raycasts (nullptr sampler).
+    const kb::scene::AudioOcclusionSettings& occlusionSettings = kb::scene::SceneAudioOcclusionAccess::Settings(context.GetScene());
+    MiniaudioOcclusionSampler* occlusionSampler = nullptr;
+    kb::scene::Vec3 listenerPosition{};
+    if (occlusionSettings.enabled && engine_.IsPlaybackAvailable()) {
+        const ma_vec3f listener = ma_engine_listener_get_position(&engine_.Native(), 0U);
+        listenerPosition = kb::scene::Vec3{ listener.x, listener.y, listener.z };
+        occlusionSampler_.BeginTick(occlusionSettings);
+        occlusionSampler = &occlusionSampler_;
+    }
+    sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, busRegistry_, occlusionSampler, listenerPosition, engine_.IsPlaybackAvailable());
     // LIB-149: owner-attached voices follow their owner's transform and die with it -
     // BEFORE the finished sweep, so an owner-released voice never lingers a frame.
-    voicePool_.SyncAttachedVoices(context.GetScene());
+    voicePool_.SyncAttachedVoices(context.GetScene(), occlusionSampler, listenerPosition);
     voicePool_.RemoveFinishedVoices();
 }
 
@@ -41,6 +53,7 @@ void MiniaudioPlaybackBackend::Shutdown() noexcept {
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
     busRegistry_.StopAll();
+    occlusionSampler_.Clear();
     engine_.Shutdown();
 }
 

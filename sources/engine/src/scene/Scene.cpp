@@ -15,6 +15,7 @@
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
@@ -262,6 +263,14 @@ void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
     SceneState& state = SceneAccess::State(scene);
     state.audioMixerBusVolumeOverrides.clear();
     state.audioMixerSnapshotTransition = {};
+}
+
+void SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
+    SceneAccess::State(scene).audioOcclusionSettings = settings;
+}
+
+const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioOcclusionSettings;
 }
 
 void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {

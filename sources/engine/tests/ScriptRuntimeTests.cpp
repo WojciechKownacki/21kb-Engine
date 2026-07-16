@@ -32,6 +32,7 @@
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -3634,6 +3635,26 @@ void RunAudioMixerAssetIOAndAccessTest() {
         "A non-positive duration must apply the snapshot immediately");
     kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 1.0F),
         "Advancing with no running transition must be a false no-op");
+
+    // LIB-151: scene-global occlusion settings - honest defaults (disabled = zero raycast
+    // cost), configure round-trip, per-scene isolation.
+    const kb::scene::AudioOcclusionSettings& defaults = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(!defaults.enabled && kb::tests::NearlyEqual(defaults.occludedVolumeScale, 0.35F)
+            && kb::tests::NearlyEqual(defaults.maxDistance, 100.0F) && defaults.maxRaycastsPerTick == 8U,
+        "Audio occlusion must default to disabled with the documented tuning");
+    kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+                                                               .enabled = true,
+                                                               .occludedVolumeScale = 0.2F,
+                                                               .maxDistance = 50.0F,
+                                                               .layerMask = 0x3U,
+                                                               .maxRaycastsPerTick = 4U,
+                                                           });
+    const kb::scene::AudioOcclusionSettings& configured = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(configured.enabled && kb::tests::NearlyEqual(configured.occludedVolumeScale, 0.2F)
+            && kb::tests::NearlyEqual(configured.maxDistance, 50.0F) && configured.layerMask == 0x3U && configured.maxRaycastsPerTick == 4U,
+        "Audio occlusion Configure/Settings did not round-trip");
+    kb::tests::Require(!kb::scene::SceneAudioOcclusionAccess::Settings(otherScene).enabled,
+        "Audio occlusion settings must be isolated per scene");
 }
 
 // LIB-147: Audio.SetMixer/ActiveMixer/SetSnapshot/ActiveSnapshot's script layer -
@@ -3783,6 +3804,27 @@ end
     kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded(), "Clearing the mixer after the transition probe failed");
     kb::tests::Require(!callBusVolume("Music", 0.5F).Succeeded() && !callTransition("Calm", 1.0F).Succeeded(),
         "Bus volume and transition requests must honestly error without an active mixer");
+
+    // LIB-151: occlusion configuration through the script layer - partial updates keep
+    // the untouched tuning values.
+    for (const char* name : { "Audio.ConfigureOcclusion", "Audio.OcclusionEnabled" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio API did not register a LIB-151 function");
+    }
+    const kb::script::ScriptFunctionCallResult configure = host.Functions().Call(
+        "Audio.ConfigureOcclusion",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "enabled", .value = kb::script::ScriptValue{ true } },
+            kb::script::ScriptFunctionArgument{ .name = "occludedVolume", .value = kb::script::ScriptValue{ 0.1F } },
+            kb::script::ScriptFunctionArgument{ .name = "maxRaycastsPerTick", .value = kb::script::ScriptValue{ 3 } },
+        } },
+        context);
+    const kb::scene::AudioOcclusionSettings& scriptConfigured = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(configure.Succeeded() && scriptConfigured.enabled && kb::tests::NearlyEqual(scriptConfigured.occludedVolumeScale, 0.1F)
+            && scriptConfigured.maxRaycastsPerTick == 3U && kb::tests::NearlyEqual(scriptConfigured.maxDistance, 100.0F),
+        "Audio.ConfigureOcclusion must apply given values and keep omitted ones");
+    const kb::script::ScriptFunctionCallResult occlusionEnabled = host.Functions().Call("Audio.OcclusionEnabled", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(occlusionEnabled.Succeeded() && occlusionEnabled.Output("enabled").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Audio.OcclusionEnabled must report the configured state");
 }
 
 // LIB-148: per-voice playback control - the AudioPlayback facade contract without a
