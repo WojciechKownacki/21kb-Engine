@@ -309,6 +309,37 @@ int LuaAudioClearBusVolume(lua_State* state) {
     return 1;
 }
 
+// LIB-151: Audio.ConfigureOcclusion(enabled [, options{occludedVolume, maxDistance,
+// layerMask, maxRaycastsPerTick}]) -> applied - omitted options keep the current values.
+int LuaAudioConfigureOcclusion(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("enabled", ScriptValue{ lua_toboolean(state, 1) != 0 }),
+    };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ConfigureOcclusion", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioOcclusionEnabled(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.OcclusionEnabled", {});
+    lua_pushboolean(state, result.Output("enabled").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 // LIB-150: Audio.TransitionToSnapshot(snapshot, durationSeconds) -> started (nil+error for
 // an undeclared snapshot or no active mixer; nil/"" snapshot = back to authored volumes).
 int LuaAudioTransitionToSnapshot(lua_State* state) {
@@ -2182,7 +2213,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 16);
+    lua_createtable(state, 0, 18);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
@@ -2201,6 +2232,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetBusVolume", &LuaAudioSetBusVolume, context);
     SetClosure(state, "ClearBusVolume", &LuaAudioClearBusVolume, context);
     SetClosure(state, "TransitionToSnapshot", &LuaAudioTransitionToSnapshot, context);
+    SetClosure(state, "ConfigureOcclusion", &LuaAudioConfigureOcclusion, context);
+    SetClosure(state, "OcclusionEnabled", &LuaAudioOcclusionEnabled, context);
     lua_setfield(state, environmentIndex, "Audio");
 
     lua_createtable(state, 0, 7);
