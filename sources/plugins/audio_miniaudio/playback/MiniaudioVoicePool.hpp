@@ -8,6 +8,9 @@
 #include <cstdint>
 #include <list>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace kb::audio_miniaudio {
 
@@ -52,8 +55,21 @@ public:
     [[nodiscard]] bool SetVoicePitch(std::uint64_t voiceId, float pitch) noexcept;
     [[nodiscard]] bool SetVoiceLoop(std::uint64_t voiceId, bool loop) noexcept;
     [[nodiscard]] bool IsVoicePlaying(std::uint64_t voiceId) noexcept;
+    // LIB-152: audio-clock playback position (negative for a dead voice) and named
+    // markers. Fired markers queue "OnAudioMarker" events through
+    // AudioPlayback::QueueMarkerEvent inside DispatchMarkers (called once per tick).
+    [[nodiscard]] float VoicePlaybackSeconds(std::uint64_t voiceId) noexcept;
+    [[nodiscard]] bool AddVoiceMarker(std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
+    void DispatchMarkers(kb::scene::Scene& scene);
 
 private:
+    struct VoiceMarker {
+        std::string name;
+        float positionSeconds = 0.0F;
+        kb::scene::SceneEntity target{};
+        bool fired = false;
+    };
+
     struct VoiceRecord {
         std::uint64_t voiceId = 0U;
         std::uint64_t clipAssetId = 0U;
@@ -69,6 +85,8 @@ private:
         float baseVolume = 1.0F;
         bool muted = false;
         bool spatial = true;
+        // LIB-152: named playback markers (see AddVoiceMarker/DispatchMarkers).
+        std::vector<VoiceMarker> markers;
         std::unique_ptr<MiniaudioSound> sound;
     };
 
