@@ -128,11 +128,13 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneMeshRendererComponents",
             .Register = &kb::script::ScriptMeshRendererApi::Register,
         },
-        // LIB-139: MaterialInstance.Create/Release/Exists/Parent - a scene-owned,
-        // explicit-lifetime handle table (kb::scene::SceneMaterialInstances), NOT a GPU
-        // resource itself (see ScriptMaterialInstanceApi.hpp's doc comment) - resolved into
-        // a real material asset id at ECS-sync time (EcsRenderSceneSynchronizer::SyncMesh),
-        // exactly like a plain materialAssetId always was.
+        // LIB-139/LIB-140: MaterialInstance.Create/Release/Exists/Parent/SetParameterScalar/
+        // SetParameterBool/ClearParameter - a scene-owned, explicit-lifetime handle table plus
+        // per-parameter overrides (kb::scene::SceneMaterialInstances), NOT a GPU resource
+        // itself (see ScriptMaterialInstanceApi.hpp's doc comment) - the raw handle passes
+        // through unresolved at ECS-sync time (EcsRenderSceneSynchronizer::SyncMesh) and is
+        // resolved (parent + live overrides) at render-resolution time instead
+        // (RuntimeMaterialResourceEnsurer's material-instance path).
         LibraryModuleDesc{
             .name = "MaterialInstance",
             .ownerRuntime = "kb::scene::SceneMaterialInstances",

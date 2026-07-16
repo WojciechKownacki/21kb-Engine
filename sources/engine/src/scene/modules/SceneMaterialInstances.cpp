@@ -15,6 +15,10 @@ std::uint64_t SceneMaterialInstanceQueries::Parent(std::uint64_t id) const noexc
     return SceneMaterialInstanceService::Parent(scene_, id);
 }
 
+std::span<const MaterialParameterOverride> SceneMaterialInstanceQueries::Parameters(std::uint64_t id) const noexcept {
+    return SceneMaterialInstanceService::Parameters(scene_, id);
+}
+
 SceneMaterialInstances::SceneMaterialInstances(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -32,6 +36,22 @@ bool SceneMaterialInstances::Exists(std::uint64_t id) const noexcept {
 
 std::uint64_t SceneMaterialInstances::Parent(std::uint64_t id) const noexcept {
     return SceneMaterialInstanceService::Parent(scene_, id);
+}
+
+std::span<const MaterialParameterOverride> SceneMaterialInstances::Parameters(std::uint64_t id) const noexcept {
+    return SceneMaterialInstanceService::Parameters(scene_, id);
+}
+
+bool SceneMaterialInstances::SetParameterScalar(std::uint64_t id, std::string_view name, float value) noexcept {
+    return SceneMaterialInstanceService::SetParameterScalar(scene_, id, name, value);
+}
+
+bool SceneMaterialInstances::SetParameterBool(std::uint64_t id, std::string_view name, bool value) noexcept {
+    return SceneMaterialInstanceService::SetParameterBool(scene_, id, name, value);
+}
+
+bool SceneMaterialInstances::ClearParameter(std::uint64_t id, std::string_view name) noexcept {
+    return SceneMaterialInstanceService::ClearParameter(scene_, id, name);
 }
 
 } // namespace kb::scene

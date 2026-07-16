@@ -118,6 +118,61 @@ ScriptFunctionCallResult MaterialInstanceParent(const ScriptFunctionCallContext&
     };
 }
 
+ScriptFunctionCallResult MaterialInstanceSetParameterScalar(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("material instance api requires an active scene");
+    }
+    const ScriptValue* instanceArgument = FindArg(arguments, "instance");
+    const ScriptValue* nameArgument = FindArg(arguments, "name");
+    const ScriptValue* valueArgument = FindArg(arguments, "value");
+    const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
+    const std::string name = nameArgument == nullptr ? std::string{} : nameArgument->AsString();
+    const float value = valueArgument == nullptr ? 0.0F : valueArgument->AsFloat();
+    const bool applied = instance != 0U && context.scene->MaterialInstances().SetParameterScalar(instance, name, value);
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult MaterialInstanceSetParameterBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("material instance api requires an active scene");
+    }
+    const ScriptValue* instanceArgument = FindArg(arguments, "instance");
+    const ScriptValue* nameArgument = FindArg(arguments, "name");
+    const ScriptValue* valueArgument = FindArg(arguments, "value");
+    const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
+    const std::string name = nameArgument == nullptr ? std::string{} : nameArgument->AsString();
+    const bool value = valueArgument != nullptr && valueArgument->AsBool();
+    const bool applied = instance != 0U && context.scene->MaterialInstances().SetParameterBool(instance, name, value);
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult MaterialInstanceClearParameter(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("material instance api requires an active scene");
+    }
+    const ScriptValue* instanceArgument = FindArg(arguments, "instance");
+    const ScriptValue* nameArgument = FindArg(arguments, "name");
+    const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
+    const std::string name = nameArgument == nullptr ? std::string{} : nameArgument->AsString();
+    const bool cleared = instance != 0U && context.scene->MaterialInstances().ClearParameter(instance, name);
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ cleared } } },
+        .errors = {},
+    };
+}
+
 } // namespace
 
 bool ScriptMaterialInstanceApi::Register(ScriptRuntimeHost& host) {
@@ -169,7 +224,51 @@ bool ScriptMaterialInstanceApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "material", ScriptValueType::String, true },
     };
     parent.callback = &MaterialInstanceParent;
-    return host.RegisterFunction(std::move(parent));
+    if (!host.RegisterFunction(std::move(parent))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setParameterScalar;
+    setParameterScalar.signature.name = "MaterialInstance.SetParameterScalar";
+    setParameterScalar.signature.inputs = {
+        ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+        ScriptFunctionPin{ "name", ScriptValueType::String, true },
+        ScriptFunctionPin{ "value", ScriptValueType::Float, true },
+    };
+    setParameterScalar.signature.outputs = {
+        ScriptFunctionPin{ "applied", ScriptValueType::Bool, true },
+    };
+    setParameterScalar.callback = &MaterialInstanceSetParameterScalar;
+    if (!host.RegisterFunction(std::move(setParameterScalar))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setParameterBool;
+    setParameterBool.signature.name = "MaterialInstance.SetParameterBool";
+    setParameterBool.signature.inputs = {
+        ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+        ScriptFunctionPin{ "name", ScriptValueType::String, true },
+        ScriptFunctionPin{ "value", ScriptValueType::Bool, true },
+    };
+    setParameterBool.signature.outputs = {
+        ScriptFunctionPin{ "applied", ScriptValueType::Bool, true },
+    };
+    setParameterBool.callback = &MaterialInstanceSetParameterBool;
+    if (!host.RegisterFunction(std::move(setParameterBool))) {
+        return false;
+    }
+
+    ScriptFunctionDesc clearParameter;
+    clearParameter.signature.name = "MaterialInstance.ClearParameter";
+    clearParameter.signature.inputs = {
+        ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+        ScriptFunctionPin{ "name", ScriptValueType::String, true },
+    };
+    clearParameter.signature.outputs = {
+        ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true },
+    };
+    clearParameter.callback = &MaterialInstanceClearParameter;
+    return host.RegisterFunction(std::move(clearParameter));
 }
 
 } // namespace kb::script

@@ -106,6 +106,16 @@ struct RenderMaterialInstanceValidationResult {
     const RenderMaterialAssetData& parentMaterial,
     const RenderMaterialInstanceAssetData& instance);
 
+// Upserts `materialValues` by stableId onto a copy of `parentValues` (override wins on a
+// name collision, parent-only entries pass through unchanged). Shared by
+// BuildEffectiveRenderMaterialInstanceAsset (authored .kbmatinstance overrides) and, since
+// LIB-140, RuntimeMaterialResourceEnsurer's runtime MaterialInstance parameter-override
+// resolution - both are "named override values merged onto a parent's baked values" in the
+// same shape, so this is deliberate reuse rather than a new merge algorithm.
+void MergeGraphParameterValues(
+    std::vector<RenderMaterialGraphParameterValue>& materialValues,
+    const std::vector<RenderMaterialGraphParameterValue>& parentValues);
+
 class RenderMaterialInstanceAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;

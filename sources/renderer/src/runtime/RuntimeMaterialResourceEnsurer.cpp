@@ -5,13 +5,17 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
+#include <functional>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -109,6 +113,146 @@ void EmitCachedRuntimeMaterialState(
     return RuntimeMaterialResolver::MaterialRuntimeContentHash(manager, *metadata);
 }
 
+// LIB-140: mirrors RuntimeMaterialResolver.cpp's own private HashCombine - duplicated rather
+// than exposed, since it is a generic bit-mixer with no material-domain meaning of its own
+// (unlike MergeGraphParameterValues, which IS domain logic worth sharing).
+[[nodiscard]] std::uint64_t CombineHash(std::uint64_t lhs, std::uint64_t rhs) noexcept {
+    return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
+
+[[nodiscard]] std::uint64_t HashMaterialParameterOverrides(std::span<const kb::scene::MaterialParameterOverride> overrides) {
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    for (const kb::scene::MaterialParameterOverride& override_ : overrides) {
+        hash = CombineHash(hash, std::hash<std::string>{}(override_.name));
+        hash = CombineHash(hash, static_cast<std::uint64_t>(override_.type));
+        if (override_.type == kb::scene::MaterialParameterType::Scalar) {
+            hash = CombineHash(hash, std::hash<float>{}(override_.scalarValue));
+        } else {
+            hash = CombineHash(hash, override_.boolValue ? 1U : 0U);
+        }
+    }
+    return hash;
+}
+
+[[nodiscard]] std::vector<RenderMaterialGraphParameterValue> ToGraphParameterValues(std::span<const kb::scene::MaterialParameterOverride> overrides) {
+    std::vector<RenderMaterialGraphParameterValue> values;
+    values.reserve(overrides.size());
+    for (const kb::scene::MaterialParameterOverride& override_ : overrides) {
+        RenderMaterialGraphParameterValue value{};
+        value.stableId = override_.name;
+        if (override_.type == kb::scene::MaterialParameterType::Scalar) {
+            value.type = RenderMaterialParameterType::Scalar;
+            value.numbers[0] = override_.scalarValue;
+        } else {
+            value.type = RenderMaterialParameterType::Bool;
+            value.boolValue = override_.boolValue;
+        }
+        values.push_back(std::move(value));
+    }
+    return values;
+}
+
+// LIB-140: the isolated, additive resolution path for a runtime MaterialInstance handle -
+// entered only when `instanceHandle` names a currently live scene.MaterialInstances() id
+// (see the call site in Ensure()'s ensureMaterial lambda). Deliberately does NOT touch
+// AssetManager's load state for the parent asset (unlike the ordinary RenderMaterial path's
+// manager.Unload calls) - the parent asset's own content did not change when an override
+// changes, only this instance's derived RenderMaterialHandle needs replacing.
+// v1 scope simplification: unlike the generic RenderMaterial path, this does not implement
+// RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial retention (an ErrorMaterial
+// resolution always rebuilds fresh here) - that nuance exists to smooth over authored-asset
+// hot-reload glitches, which does not apply to a scene-lifetime-bound runtime instance.
+void EnsureMaterialInstance(
+    const RuntimeRenderResourceEnsureContext& context,
+    RuntimeMaterialResourceMap& materials,
+    kb::assets::AssetManager& manager,
+    std::uint64_t instanceHandle,
+    const RuntimeAssetKey& runtimeKey) {
+    const std::uint64_t parentAssetId = context.scene.MaterialInstances().Parent(instanceHandle);
+    auto cacheIt = materials.find(runtimeKey);
+    if (parentAssetId == 0U) {
+        if (cacheIt != materials.end()) {
+            context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
+            context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
+            materials.erase(cacheIt);
+        }
+        context.sceneRenderer.ResourceMap().UnbindMaterial(instanceHandle);
+        return;
+    }
+
+    const kb::assets::AssetId parentId{ parentAssetId };
+    const std::span<const kb::scene::MaterialParameterOverride> overrides = context.scene.MaterialInstances().Parameters(instanceHandle);
+    const std::optional<std::uint64_t> parentContentHash = CachedRuntimeMaterialContentHash(manager, parentId);
+    const std::uint64_t contentHash = CombineHash(parentContentHash.value_or(parentAssetId), HashMaterialParameterOverrides(overrides));
+
+    if (cacheIt != materials.end() &&
+        cacheIt->second.contentHash == contentHash &&
+        context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {
+        RuntimeMaterialResource& cached = cacheIt->second;
+        cached.lastReferencedFrame = context.currentFrame;
+        context.sceneRenderer.ResourceMap().BindMaterial(instanceHandle, cached.handle);
+        EmitCachedRuntimeMaterialState(context, cached, instanceHandle);
+        return;
+    }
+
+    const std::vector<RenderMaterialGraphParameterValue> graphOverrides = ToGraphParameterValues(overrides);
+    const ResolvedRuntimeMaterialAsset resolvedAsset = context.materialResolver.ResolveAssetWithParameterOverrides(manager, parentId, graphOverrides);
+    if (!resolvedAsset.resolved) {
+        if (cacheIt != materials.end()) {
+            context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
+            context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
+            materials.erase(cacheIt);
+        }
+        context.sceneRenderer.ResourceMap().UnbindMaterial(instanceHandle);
+        return;
+    }
+
+    if (resolvedAsset.status == RuntimeMaterialResolveStatus::DefaultMaterial) {
+        ++context.defaultMaterialFallbackCount;
+        ++context.materialFallbackCount;
+    } else if (resolvedAsset.status == RuntimeMaterialResolveStatus::ErrorMaterial) {
+        ++context.materialErrorCount;
+        ++context.errorMaterialFallbackCount;
+        ++context.materialFallbackCount;
+    }
+    EmitRuntimeMaterialResolverDiagnostics(context, resolvedAsset, instanceHandle);
+
+    const bool reloadsExistingMaterial = cacheIt != materials.end();
+    if (cacheIt != materials.end()) {
+        context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
+        context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
+        materials.erase(cacheIt);
+    }
+
+    const ResolvedRuntimeMaterialDesc materialDesc = resolvedAsset.material;
+    context.unresolvedMaterialTexturePathCount += materialDesc.unresolvedTexturePathCount;
+    EmitUnresolvedMaterialTexturePathDiagnostic(context.diagnostics, instanceHandle, materialDesc.unresolvedTexturePathCount);
+    const RenderMaterialHandle handle = context.sceneRenderer.Resources().RegisterMaterial(materialDesc.desc, materialDesc.graphProgram);
+    if (!handle.IsValid()) {
+        context.sceneRenderer.ResourceMap().UnbindMaterial(instanceHandle);
+        return;
+    }
+    ++context.materialLoadedCount;
+    if (reloadsExistingMaterial) {
+        ++context.materialReloadCount;
+    }
+    if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
+        ++context.graphMaterialCpuFallbackCount;
+    } else if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
+        ++context.graphMaterialGpuCount;
+    }
+
+    materials[runtimeKey] = RuntimeMaterialResource{
+        .handle = handle,
+        .contentHash = contentHash,
+        .lastReferencedFrame = context.currentFrame,
+        .status = resolvedAsset.status,
+        .renderMode = resolvedAsset.renderMode,
+        .diagnostics = resolvedAsset.diagnostics,
+    };
+    context.sceneRenderer.ResourceMap().BindMaterial(instanceHandle, handle);
+}
+
 } // namespace
 
 void RuntimeMaterialResourceEnsurer::Ensure(
@@ -139,6 +283,13 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             context.sceneRenderer.ResourceMap().UnbindMaterialHandle(embeddedIt->second.handle);
             embeddedMaterials.erase(embeddedIt);
             context.sceneRenderer.ResourceMap().UnbindMaterial(materialAssetId);
+            return;
+        }
+
+        // LIB-140: a runtime MaterialInstance handle wins over the ordinary
+        // AssetRegistry-keyed path below - see EnsureMaterialInstance's own doc comment.
+        if (context.scene.MaterialInstances().Exists(materialAssetId)) {
+            EnsureMaterialInstance(context, materials, manager, materialAssetId, runtimeKey);
             return;
         }
 

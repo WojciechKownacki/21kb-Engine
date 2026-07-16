@@ -9,6 +9,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -201,6 +202,10 @@ public:
     struct MaterialInstanceRecord {
         std::uint64_t id = 0U;
         std::uint64_t parentMaterialAssetId = 0U;
+        // LIB-140: unvalidated named overrides - see MaterialParameterOverride's own doc
+        // comment (SceneMaterialInstances.hpp) for why kb::scene cannot validate these
+        // itself.
+        std::vector<MaterialParameterOverride> parameterOverrides;
     };
     std::vector<MaterialInstanceRecord> materialInstances;
     std::uint64_t nextMaterialInstanceId = 1U;
