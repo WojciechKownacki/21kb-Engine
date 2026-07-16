@@ -2258,6 +2258,167 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     return resolved;
 }
 
+ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAssetWithParameterOverrides(
+    kb::assets::AssetManager& manager,
+    kb::assets::AssetId parentAssetId,
+    const std::vector<RenderMaterialGraphParameterValue>& overrides) const {
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(parentAssetId);
+    if (metadata == nullptr) {
+        return FallbackMaterial(
+            RuntimeMaterialResolveStatus::DefaultMaterial,
+            RuntimeMaterialResolveDiagnosticKind::MissingMaterialAsset,
+            RuntimeMaterialResolveDiagnosticSeverity::Warning,
+            parentAssetId,
+            {},
+            "Material instance's parent material asset is not registered; using the default material.");
+    }
+    if (metadata->type != "RenderMaterial") {
+        // LIB-140 v1 scope cut: a runtime MaterialInstance's parent must be a plain
+        // RenderMaterial, not itself a RenderMaterialInstance - see this method's own doc
+        // comment in RuntimeMaterialResolver.hpp.
+        ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+            RuntimeMaterialResolveStatus::ErrorMaterial,
+            RuntimeMaterialResolveDiagnosticKind::UnsupportedAssetType,
+            RuntimeMaterialResolveDiagnosticSeverity::Error,
+            parentAssetId,
+            ResolveAssetPhysicalPath(manager, *metadata),
+            "Runtime MaterialInstance parent must be a plain RenderMaterial asset; using the error material.");
+        fallback.contentHash = MaterialRuntimeContentHash(manager, *metadata);
+        return fallback;
+    }
+
+    const std::uint64_t runtimeContentHash = MaterialRuntimeContentHash(manager, *metadata);
+    const std::filesystem::path path = ResolveAssetPhysicalPath(manager, *metadata);
+    RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata->id);
+    if (!loaded.asset.has_value()) {
+        ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+            RuntimeMaterialResolveStatus::ErrorMaterial,
+            RuntimeMaterialResolveDiagnosticKind::MaterialLoadFailed,
+            RuntimeMaterialResolveDiagnosticSeverity::Error,
+            metadata->id,
+            path,
+            "Material instance's parent material asset could not be loaded; using the error material.");
+        fallback.contentHash = runtimeContentHash;
+        fallback.diagnostics.clear();
+        AppendParseDiagnostics(fallback, loaded, metadata->id);
+        if (fallback.diagnostics.empty()) {
+            fallback.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+                .kind = RuntimeMaterialResolveDiagnosticKind::MaterialLoadFailed,
+                .assetId = metadata->id,
+                .path = path,
+                .message = "Material instance's parent material asset could not be loaded; using the error material.",
+            });
+        }
+        return fallback;
+    }
+
+    const RuntimeMaterialSourceGraphLoadResult authoritativeGraph =
+        LoadRuntimeMaterialSourceGraph(manager, *loaded.asset);
+    if (!authoritativeGraph.graph.has_value()) {
+        ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+            RuntimeMaterialResolveStatus::ErrorMaterial,
+            RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+            RuntimeMaterialResolveDiagnosticSeverity::Error,
+            metadata->id,
+            path,
+            "The parent material's authoritative sourceGraph asset is missing or invalid.");
+        fallback.contentHash = runtimeContentHash;
+        fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
+        AppendParseDiagnostics(
+            fallback,
+            authoritativeGraph.parseResult,
+            authoritativeGraph.assetId.IsValid() ? authoritativeGraph.assetId : metadata->id);
+        return fallback;
+    }
+    loaded.asset->graph = *authoritativeGraph.graph;
+
+    const RenderMaterialTypeReferenceValidationResult typeReferenceValidation =
+        ValidateRenderMaterialTypeReference(*loaded.asset, *metadata, manager);
+    if (!typeReferenceValidation.Succeeded()) {
+        ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+            RuntimeMaterialResolveStatus::ErrorMaterial,
+            RuntimeMaterialResolveDiagnosticKind::MaterialTypeReferenceValidationFailed,
+            RuntimeMaterialResolveDiagnosticSeverity::Error,
+            metadata->id,
+            path,
+            "Material Type reference is invalid; using the error material.");
+        fallback.contentHash = runtimeContentHash;
+        fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
+        fallback.diagnostics.clear();
+        AppendParseDiagnostics(fallback, loaded, metadata->id);
+        AppendParseDiagnostics(
+            fallback,
+            authoritativeGraph.parseResult,
+            authoritativeGraph.assetId.IsValid() ? authoritativeGraph.assetId : metadata->id);
+        AppendMaterialTypeReferenceDiagnostics(fallback, typeReferenceValidation, metadata->id, path);
+        return fallback;
+    }
+
+    // LIB-140: merge the runtime instance's parameter overrides onto the parent's own baked
+    // graph parameter values before graph validation/resolution, so an override lands exactly
+    // where an authored .kbmatinstance override would (mirrors
+    // BuildEffectiveRenderMaterialInstanceAsset's own merge step for the authored case).
+    std::vector<RenderMaterialGraphParameterValue> mergedParameterValues = overrides;
+    MergeGraphParameterValues(mergedParameterValues, loaded.asset->graphParameterValues);
+    loaded.asset->graphParameterValues = std::move(mergedParameterValues);
+
+    const std::vector<RenderMaterialGraphDiagnostic> graphDiagnostics = ValidateMaterialOutputRuntimeGraphDiagnostics(*loaded.asset);
+    const bool graphHasError = std::any_of(graphDiagnostics.begin(), graphDiagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    if (graphHasError) {
+        ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
+            RuntimeMaterialResolveStatus::ErrorMaterial,
+            RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+            RuntimeMaterialResolveDiagnosticSeverity::Error,
+            metadata->id,
+            path,
+            "Material graph validation failed; using the error material.");
+        fallback.contentHash = runtimeContentHash;
+        fallback.failurePolicy = loaded.asset->graph.artifactFailurePolicy;
+        fallback.diagnostics.clear();
+        AppendParseDiagnostics(fallback, loaded, metadata->id);
+        AppendParseDiagnostics(
+            fallback,
+            authoritativeGraph.parseResult,
+            authoritativeGraph.assetId.IsValid() ? authoritativeGraph.assetId : metadata->id);
+        AppendGraphValidationDiagnostics(fallback, graphDiagnostics, metadata->id, path);
+        return fallback;
+    }
+
+    ResolvedRuntimeMaterialAsset resolved{
+        .material = ResolveLoadedMaterial(manager, *metadata, *loaded.asset),
+        .contentHash = runtimeContentHash,
+        .status = RuntimeMaterialResolveStatus::Resolved,
+        .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
+        .failurePolicy = loaded.asset->graph.artifactFailurePolicy,
+        .resolved = true,
+    };
+    if (HasGraphAuthoringData(loaded.asset->graph)) {
+        if (resolved.material.graphProgram.active) {
+            resolved.renderMode = RuntimeMaterialRenderMode::GpuMaterialGraph;
+        } else {
+            resolved.renderMode = RuntimeMaterialRenderMode::CpuPbrFlatteningFallback;
+            resolved.cpuFallbackReason = RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable;
+            resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
+                .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                .assetId = metadata->id,
+                .path = path,
+                .message = "Material graph has no GPU program; falling back to CPU PBR flattening.",
+            });
+            AppendGraphValidationDiagnostics(resolved, resolved.material.graphDiagnostics, metadata->id, path);
+        }
+    }
+    AppendParseDiagnostics(resolved, loaded, metadata->id);
+    AppendParseDiagnostics(
+        resolved,
+        authoritativeGraph.parseResult,
+        authoritativeGraph.assetId.IsValid() ? authoritativeGraph.assetId : metadata->id);
+    return resolved;
+}
+
 std::uint64_t RuntimeMaterialResolver::ResolveTextureAssetId(
     const kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& ownerMetadata,

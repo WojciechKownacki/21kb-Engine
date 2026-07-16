@@ -11,6 +11,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -1285,6 +1286,166 @@ void RunRuntimeMaterialInstanceDynamicParameterOverrideTest() {
             }),
         "MAT-40 invalid material instance override must fail with typed validation diagnostics");
 
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-140: proves RuntimeMaterialResolver::ResolveAssetWithParameterOverrides - the isolated
+// resolution path RuntimeMaterialResourceEnsurer uses for a runtime kb::scene::MaterialInstance
+// handle - actually changes the resolved material's roughness when a Scalar override is
+// supplied (not just accepted-but-ignored), keeps a no-override resolve at the parent's own
+// baked default, honestly falls back to the default material for an unresolvable parent, and
+// rejects a RenderMaterialInstance parent as out of the LIB-140 v1 scope cut (error material).
+void RunRuntimeMaterialResolverResolvesInstanceParameterOverridesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_runtime_material_instance_scalar_override";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-140 instance override test could not create temp root");
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ParameterScalar, "roughnessOverride", "0.1"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-140 instance override test could not save parent material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-140 instance override test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "MAT-140 instance override test could not register instance loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-140 instance override test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "MAT-140 instance override test did not discover parent material");
+    const kb::assets::AssetMetadata* parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(parentMeta != nullptr, "MAT-140 instance override test did not find parent material metadata");
+
+    RuntimeMaterialResolver resolver;
+
+    const ResolvedRuntimeMaterialAsset withoutOverride = resolver.ResolveAssetWithParameterOverrides(manager, parentMeta->id, {});
+    Require(withoutOverride.resolved && withoutOverride.status == RuntimeMaterialResolveStatus::Resolved,
+        "MAT-140: parent material with no overrides must resolve cleanly");
+    Require(NearlyEqual(withoutOverride.material.desc.roughnessFactor, 0.1F),
+        "MAT-140: parent material with no overrides must keep its baked roughness default");
+
+    const std::vector<RenderMaterialGraphParameterValue> overrides{
+        RenderMaterialGraphParameterValue{
+            .stableId = "roughnessOverride",
+            .type = RenderMaterialParameterType::Scalar,
+            .numbers = { 0.9F, 0.0F, 0.0F, 0.0F },
+        },
+    };
+    const ResolvedRuntimeMaterialAsset withOverride = resolver.ResolveAssetWithParameterOverrides(manager, parentMeta->id, overrides);
+    Require(withOverride.resolved && withOverride.status == RuntimeMaterialResolveStatus::Resolved,
+        "MAT-140: parent material with a scalar override must resolve cleanly");
+    Require(NearlyEqual(withOverride.material.desc.roughnessFactor, 0.9F),
+        "MAT-140: a runtime MaterialInstance parameter override must change the resolved roughness value");
+
+    const ResolvedRuntimeMaterialAsset missingParent = resolver.ResolveAssetWithParameterOverrides(manager, kb::assets::AssetId{ 999999U }, overrides);
+    Require(missingParent.resolved && missingParent.status == RuntimeMaterialResolveStatus::DefaultMaterial,
+        "MAT-140: an unresolvable parent material asset must fall back to the default material");
+
+    RenderMaterialInstanceAssetData instanceAsset{};
+    instanceAsset.parentMaterialAssetId = parentMeta->id;
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Parent_Inst.kbmatinst", instanceAsset), "MAT-140 instance override test could not save a material instance parent fixture");
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-140 instance override test did not discover the instance fixture");
+    const kb::assets::AssetMetadata* instanceMeta = manager.Registry().FindByPath("/Game/Parent_Inst.kbmatinst");
+    Require(instanceMeta != nullptr, "MAT-140 instance override test did not find the instance fixture metadata");
+    const ResolvedRuntimeMaterialAsset instanceParent = resolver.ResolveAssetWithParameterOverrides(manager, instanceMeta->id, overrides);
+    Require(instanceParent.resolved && instanceParent.status == RuntimeMaterialResolveStatus::ErrorMaterial,
+        "MAT-140: a RenderMaterialInstance parent must be rejected as out of scope (error material), not silently accepted");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-140: end-to-end through Renderer::SubmitScene - proves a live kb::scene::MaterialInstance
+// handle on a MeshRendererComponent actually drives material resolution (materialLoadedCount
+// increments once for the first submit), that a SetParameterScalar call between frames is
+// detected and reloads the bound material (materialReloadCount increments), and that
+// resubmitting with no further change is a cache hit (no further reload).
+void RunRendererAppliesMaterialInstanceParameterOverrideTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_instance_override";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-140 renderer override test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ParameterScalar, "roughnessOverride", "0.1"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-140 renderer override test could not save parent material");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-140 renderer override test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-140 renderer override test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-140 renderer override test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-140 renderer override test did not discover mesh and material assets");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(meshMetadata != nullptr && materialMetadata != nullptr, "MAT-140 renderer override test discovered wrong metadata");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(materialMetadata->id.value);
+    Require(instance != 0U, "MAT-140 renderer override test could not create a material instance");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Instance Override Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialInstanceHandle = instance,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "MAT-140 renderer override test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit first frame");
+    const Renderer::RuntimeSceneResourceStats afterFirstSubmit = renderer.RuntimeResourceStats();
+    Require(afterFirstSubmit.materialLoadedCount == 1U, "MAT-140: the first submit must resolve and load the instance's material exactly once");
+    Require(afterFirstSubmit.materialReloadCount == 0U, "MAT-140: the first submit is not a reload");
+    Require(afterFirstSubmit.materialErrorCount == 0U, "MAT-140: the first submit must not report a material error");
+    renderer.EndFrame();
+
+    Require(scene.MaterialInstances().SetParameterScalar(instance, "roughnessOverride", 0.9F),
+        "MAT-140 renderer override test could not set a parameter override");
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit second frame");
+    const Renderer::RuntimeSceneResourceStats afterOverride = renderer.RuntimeResourceStats();
+    Require(afterOverride.materialReloadCount == 1U,
+        "MAT-140: changing a material instance parameter must invalidate the cache and reload the bound material");
+    renderer.EndFrame();
+
+    Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin third frame");
+    Require(renderer.SubmitScene(scene, desc), "MAT-140 renderer override test renderer did not submit third frame");
+    const Renderer::RuntimeSceneResourceStats afterStableResubmit = renderer.RuntimeResourceStats();
+    // Renderer::SubmitScene(s) resets these stats to zero at the start of every call (see
+    // Renderer::SubmitScenes), so "no reload this frame" is materialReloadCount == 0, not a
+    // carried-over count from the previous frame's genuine reload.
+    Require(afterStableResubmit.materialReloadCount == 0U,
+        "MAT-140: resubmitting with no further parameter change must be a cache hit, not another reload");
+    Require(afterStableResubmit.materialErrorCount == 0U, "MAT-140: a stable resubmit must not report a material error");
+    renderer.EndFrame();
+
+    renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
 
@@ -3928,6 +4089,8 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();
     RunRuntimeMaterialInstanceDynamicParameterOverrideTest();
+    RunRuntimeMaterialResolverResolvesInstanceParameterOverridesTest();
+    RunRendererAppliesMaterialInstanceParameterOverrideTest();
     RunRuntimeMaterialInstanceStaticBaseOverrideChainTest();
     RunRendererBindsGraphMaterialGpuProgramTest();
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)

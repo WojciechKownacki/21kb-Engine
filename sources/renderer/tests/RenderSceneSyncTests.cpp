@@ -189,10 +189,13 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
 }
 
-// LIB-139: proves EcsRenderSceneSynchronizer::SyncMesh actually resolves a live
-// materialInstanceHandle to its parent material asset id (winning over the authored
-// materialAssetId), and honestly falls back to "no material" (0) once the instance is
-// Release()d - not a crash, not silently keeping the stale parent.
+// LIB-139/LIB-140: proves EcsRenderSceneSynchronizer::SyncMesh actually resolves a live
+// materialInstanceHandle - winning over the authored materialAssetId - and honestly falls
+// back to "no material" (0) once the instance is Release()d - not a crash, not silently
+// keeping the stale parent. Since LIB-140, the proxy carries the RAW instance handle
+// (unresolved), not the parent asset id - see EcsRenderSceneSynchronizer.cpp's
+// ResolveMaterialAssetId doc comment for why (RuntimeMaterialResourceEnsurer needs the raw
+// handle to recognize + resolve parameter overrides).
 void RunEcsSyncResolvesMaterialInstanceHandleTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Instanced Mesh" });
@@ -208,8 +211,10 @@ void RunEcsSyncResolvesMaterialInstanceHandleTest() {
     RenderScene renderScene;
     EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
     const MeshRenderProxy* liveProxy = renderScene.FindMeshByEntity(mesh.Id());
-    Require(liveProxy != nullptr && liveProxy->desc.materialAssetId == 777U,
-        "EcsRenderSceneSynchronizer did not resolve a live materialInstanceHandle to its parent material asset id (must win over the authored materialAssetId)");
+    Require(liveProxy != nullptr && liveProxy->desc.materialAssetId == instance,
+        "EcsRenderSceneSynchronizer did not pass through the live materialInstanceHandle unresolved (must win over the authored materialAssetId)");
+    Require(scene.MaterialInstances().Parent(instance) == 777U,
+        "RenderScene sync test setup's instance did not resolve to its parent material asset id via SceneMaterialInstances().Parent");
 
     Require(scene.MaterialInstances().Release(instance), "RenderScene sync test setup failed to release the material instance");
     EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);

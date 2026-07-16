@@ -404,6 +404,64 @@ int LuaMaterialInstanceParent(lua_State* state) {
     return 1;
 }
 
+// LIB-140: MaterialInstance.SetParameterScalar(instance, name, value) -> applied (boolean).
+int LuaMaterialInstanceSetParameterScalar(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.SetParameterScalar", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-140: MaterialInstance.SetParameterBool(instance, name, value) -> applied (boolean).
+int LuaMaterialInstanceSetParameterBool(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const bool value = lua_toboolean(state, 3) != 0;
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.SetParameterBool", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-140: MaterialInstance.ClearParameter(instance, name) -> cleared (boolean).
+int LuaMaterialInstanceClearParameter(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.ClearParameter", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaMeshRendererSetMaterial(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
@@ -1525,11 +1583,14 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "ClearMaterialInstance", &LuaMeshRendererClearMaterialInstance, context);
     lua_setfield(state, environmentIndex, "MeshRenderer");
 
-    lua_createtable(state, 0, 4);
+    lua_createtable(state, 0, 7);
     SetClosure(state, "Create", &LuaMaterialInstanceCreate, context);
     SetClosure(state, "Release", &LuaMaterialInstanceRelease, context);
     SetClosure(state, "Exists", &LuaMaterialInstanceExists, context);
     SetClosure(state, "Parent", &LuaMaterialInstanceParent, context);
+    SetClosure(state, "SetParameterScalar", &LuaMaterialInstanceSetParameterScalar, context);
+    SetClosure(state, "SetParameterBool", &LuaMaterialInstanceSetParameterBool, context);
+    SetClosure(state, "ClearParameter", &LuaMaterialInstanceClearParameter, context);
     lua_setfield(state, environmentIndex, "MaterialInstance");
 
     lua_createtable(state, 0, 10);

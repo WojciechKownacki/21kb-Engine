@@ -490,28 +490,6 @@ void ApplyTexturePathOverrides(RenderMaterialAssetData& material, const RenderMa
     if (!overrides.layerMaskTexturePath.empty()) material.layerMaskTexturePath = overrides.layerMaskTexturePath;
 }
 
-void MergeGraphParameterValues(
-    std::vector<RenderMaterialGraphParameterValue>& materialValues,
-    const std::vector<RenderMaterialGraphParameterValue>& parentValues) {
-    if (materialValues.empty()) {
-        materialValues = parentValues;
-        return;
-    }
-
-    std::vector<RenderMaterialGraphParameterValue> merged = parentValues;
-    for (const RenderMaterialGraphParameterValue& overrideValue : materialValues) {
-        const auto existing = std::find_if(merged.begin(), merged.end(), [&overrideValue](const RenderMaterialGraphParameterValue& value) {
-            return value.stableId == overrideValue.stableId;
-        });
-        if (existing != merged.end()) {
-            *existing = overrideValue;
-        } else {
-            merged.push_back(overrideValue);
-        }
-    }
-    materialValues = std::move(merged);
-}
-
 template <std::size_t Count>
 [[nodiscard]] bool FloatArrayDiffers(const float (&lhs)[Count], const float (&rhs)[Count]) noexcept {
     for (std::size_t index = 0U; index < Count; ++index) {
@@ -862,6 +840,28 @@ void ApplyBasePropertyOverrides(
 }
 
 } // namespace
+
+void MergeGraphParameterValues(
+    std::vector<RenderMaterialGraphParameterValue>& materialValues,
+    const std::vector<RenderMaterialGraphParameterValue>& parentValues) {
+    if (materialValues.empty()) {
+        materialValues = parentValues;
+        return;
+    }
+
+    std::vector<RenderMaterialGraphParameterValue> merged = parentValues;
+    for (const RenderMaterialGraphParameterValue& overrideValue : materialValues) {
+        const auto existing = std::find_if(merged.begin(), merged.end(), [&overrideValue](const RenderMaterialGraphParameterValue& value) {
+            return value.stableId == overrideValue.stableId;
+        });
+        if (existing != merged.end()) {
+            *existing = overrideValue;
+        } else {
+            merged.push_back(overrideValue);
+        }
+    }
+    materialValues = std::move(merged);
+}
 
 std::string_view RenderMaterialInstanceAssetParseDiagnosticCodeName(RenderMaterialInstanceAssetParseDiagnosticCode code) noexcept {
     switch (code) {

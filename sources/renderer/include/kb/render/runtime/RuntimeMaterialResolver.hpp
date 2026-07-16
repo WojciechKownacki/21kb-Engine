@@ -127,6 +127,16 @@ public:
         kb::assets::AssetManager& manager,
         const kb::assets::AssetMetadata& metadata) const;
 
+    // LIB-140: resolves a runtime MaterialInstance's parent material with `overrides` merged
+    // onto its own baked graph parameter values (overrides win by stableId - see
+    // MergeGraphParameterValues). Scope: `parentAssetId` must name a plain "RenderMaterial"
+    // asset; a "RenderMaterialInstance" parent (instance-of-an-instance) is out of scope for
+    // LIB-140 and resolves to the error material, same as an unsupported asset type.
+    [[nodiscard]] ResolvedRuntimeMaterialAsset ResolveAssetWithParameterOverrides(
+        kb::assets::AssetManager& manager,
+        kb::assets::AssetId parentAssetId,
+        const std::vector<RenderMaterialGraphParameterValue>& overrides) const;
+
 private:
     [[nodiscard]] std::uint64_t ResolveTextureAssetId(
         const kb::assets::AssetManager& manager,

@@ -1,6 +1,10 @@
 #pragma once
 
+#include "engine/scene/SceneMaterialInstances.hpp"
+
 #include <cstdint>
+#include <span>
+#include <string_view>
 
 namespace kb::scene {
 
@@ -18,6 +22,11 @@ public:
     [[nodiscard]] static bool Release(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool Exists(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t Parent(const Scene& scene, std::uint64_t id) noexcept;
+    // LIB-140
+    [[nodiscard]] static std::span<const MaterialParameterOverride> Parameters(const Scene& scene, std::uint64_t id) noexcept;
+    [[nodiscard]] static bool SetParameterScalar(Scene& scene, std::uint64_t id, std::string_view name, float value) noexcept;
+    [[nodiscard]] static bool SetParameterBool(Scene& scene, std::uint64_t id, std::string_view name, bool value) noexcept;
+    [[nodiscard]] static bool ClearParameter(Scene& scene, std::uint64_t id, std::string_view name) noexcept;
 };
 
 } // namespace kb::scene
