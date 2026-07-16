@@ -258,7 +258,8 @@ PackedSceneLighting SceneLightingPacker::Build(
     stats.sceneLightCount = static_cast<std::uint32_t>(renderScene.LightProxies().size());
     stats.forwardLightCapacity = capacity;
     const std::array<float, 4> cameraPosition = CameraPosition(camera);
-    const SceneForwardLightSelection selection = SceneForwardLightSelector::Select(renderScene.LightProxies(), capacity, cameraPosition, stats, config);
+    const std::uint32_t cameraCullingMask = camera != nullptr ? camera->cullingMask : 0xFFFFFFFFU;
+    const SceneForwardLightSelection selection = SceneForwardLightSelector::Select(renderScene.LightProxies(), capacity, cameraPosition, stats, config, cameraCullingMask);
     std::uint32_t submittedSceneLightCount = 0U;
     for (std::uint32_t slot = 0U; slot < selection.selectedCount; ++slot) {
         if (selection.selected[slot].light != nullptr && PackLight(*selection.selected[slot].light, slot, lighting)) {

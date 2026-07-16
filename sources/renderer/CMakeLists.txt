@@ -280,6 +280,8 @@ add_library(kb_renderer STATIC
     src/scene/RenderSceneStore.cpp
     src/scene/SceneTransformMatrices.cpp
     src/scene/SceneTransformMatrices.hpp
+    src/scene/SceneLightColor.cpp
+    src/scene/SceneLightColor.hpp
     src/shadow/DirectionalShadowPassPlanner.cpp
     src/shadow/DirectionalShadowLightSelector.cpp
     src/shadow/DirectionalShadowLightSelector.hpp

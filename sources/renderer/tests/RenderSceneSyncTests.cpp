@@ -24,6 +24,8 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
+#include "scene/lighting/SceneForwardLightSelector.hpp"
+#include "scene/SceneLightColor.hpp"
 
 #include <algorithm>
 #include <array>
@@ -242,6 +244,7 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
         .contactShadowLength = 0.25F,
         .volumetricScattering = 0.4F,
         .castsShadow = false,
+        .layerMask = 3U,
     });
 
     RenderScene renderScene;
@@ -251,13 +254,14 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
     Require(proxy != nullptr && proxy->id.IsValid(), "RenderScene did not create a light proxy for ECS light");
     Require(proxy->desc.kind == RenderLightKind::Spot, "RenderScene did not preserve ECS light kind");
     Require(NearlyEqual(proxy->desc.position[0], 2.0F) && NearlyEqual(proxy->desc.position[1], 3.0F) && NearlyEqual(proxy->desc.position[2], 4.0F), "RenderScene did not preserve ECS light position");
-    Require(NearlyEqual(proxy->desc.color[0], 0.7F) && NearlyEqual(proxy->desc.color[1], 0.8F) && NearlyEqual(proxy->desc.color[2], 0.9F), "RenderScene did not preserve ECS light color");
+    Require(NearlyEqual(proxy->desc.color[0], 0.7F) && NearlyEqual(proxy->desc.color[1], 0.8F) && NearlyEqual(proxy->desc.color[2], 0.9F), "RenderScene did not preserve ECS light color when useColorTemperature is false");
     Require(NearlyEqual(proxy->desc.intensity, 6.0F), "RenderScene did not preserve ECS light intensity");
     Require(NearlyEqual(proxy->desc.range, 25.0F), "RenderScene did not preserve ECS light range");
     Require(NearlyEqual(proxy->desc.areaWidth, 3.0F) && NearlyEqual(proxy->desc.areaHeight, 1.5F), "RenderScene did not preserve ECS light area size");
     Require(NearlyEqual(proxy->desc.contactShadowLength, 0.25F), "RenderScene did not preserve ECS light contact shadow length");
     Require(NearlyEqual(proxy->desc.volumetricScattering, 0.4F), "RenderScene did not preserve ECS light volumetric scattering");
     Require(!proxy->desc.castsShadow, "RenderScene did not preserve ECS light shadow flag");
+    Require(proxy->desc.layer == 3U, "RenderScene did not preserve ECS light layerMask");
 
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
@@ -291,6 +295,38 @@ void RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest() {
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
     Require(snapshot.lights.empty(), "RenderScene snapshot exposed lights while Basic Lighting provider was inactive");
+}
+
+// LIB-141: proves EcsRenderSceneSynchronizer::SyncLight actually calls
+// SceneLightColor::Resolve when building the proxy (integration wiring) - not just that the
+// pure math itself is correct (already proven in isolation by
+// RunSceneLightColorResolvesTemperatureTest). A single-light scene keeps this independent
+// of RunRenderSceneSyncsLightPipelineFieldsTest's own byte-for-byte color pass-through
+// assertion (useColorTemperature=false), which proves the opposite direction: zero behavior
+// change for existing (non-temperature) content.
+void RunRenderSceneSyncResolvesLightColorTemperatureTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Temperature Light",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .color = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+        .intensity = 1.0F,
+        .range = 5.0F,
+        .useColorTemperature = true,
+        .colorTemperatureKelvin = 1000.0F,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+
+    const LightRenderProxy* proxy = renderScene.FindLightByEntity(light.Id());
+    Require(proxy != nullptr, "RenderScene did not create a light proxy for the color-temperature ECS light");
+    Require(proxy->desc.color[2] < proxy->desc.color[0] * 0.5F,
+        "EcsRenderSceneSynchronizer::SyncLight must actually resolve useColorTemperature into the proxy's color, not pass the raw authored color through");
 }
 
 void RunTracksUpdatesWithoutReplacingProxyTest() {
@@ -1328,6 +1364,83 @@ void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
     Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
 }
 
+// LIB-141: proves SceneForwardLightSelector::Select filters lights by the light-side
+// layer bitmask against the camera's cullingMask - the light-side mirror of
+// MeshPipelinePassPolicy's mesh-vs-camera cullingMask filtering (LIB-136). A masked-out
+// light must not be selected (it never reaches the camera's forward lighting), but must
+// also not count toward validLightCount (it was never a candidate for THIS camera), and a
+// default (all-bits) cullingMask must keep selecting every layer, matching pre-LIB-141
+// behavior.
+void RunSceneForwardLightSelectorAppliesLayerMaskTest() {
+    RenderScene scene;
+    const RenderProxyId layerOneLight = scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 1U,
+        .kind = RenderLightKind::Point,
+        .position = { 0.0F, 0.0F, 0.0F },
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 2.0F,
+        .range = 10.0F,
+        .visible = true,
+        .layer = 1U,
+    });
+    const RenderProxyId layerTwoLight = scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 2U,
+        .kind = RenderLightKind::Point,
+        .position = { 0.0F, 0.0F, 0.0F },
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 2.0F,
+        .range = 10.0F,
+        .visible = true,
+        .layer = 2U,
+    });
+    Require(layerOneLight.IsValid() && layerTwoLight.IsValid(), "Light layer mask test setup failed to create both lights");
+
+    SceneRenderSubmitStats restrictedStats{};
+    const SceneForwardLightSelection restricted = SceneForwardLightSelector::Select(
+        scene.LightProxies(), 8U, { 0.0F, 0.0F, 0.0F, 0.0F }, restrictedStats, SceneRenderLightingConfig{}, 0x1U);
+    Require(restricted.selectedCount == 1U, "A camera cullingMask of 0x1 must select exactly the layer-1 light, not both");
+    Require(restricted.selected[0].light != nullptr && restricted.selected[0].light->kind == RenderLightKind::Point &&
+            restricted.selected[0].entityId == 1U,
+        "A camera cullingMask of 0x1 must select the layer-1 light specifically, not the layer-2 one");
+    Require(restricted.validLightCount == 1U, "A layer-masked-out light must not count toward validLightCount for this camera");
+
+    SceneRenderSubmitStats unrestrictedStats{};
+    const SceneForwardLightSelection unrestricted = SceneForwardLightSelector::Select(
+        scene.LightProxies(), 8U, { 0.0F, 0.0F, 0.0F, 0.0F }, unrestrictedStats, SceneRenderLightingConfig{}, 0xFFFFFFFFU);
+    Require(unrestricted.selectedCount == 2U, "A default (all-bits) camera cullingMask must keep selecting every light layer, matching pre-LIB-141 behavior");
+}
+
+// LIB-141: proves SceneLightColor::Resolve leaves `color` untouched when
+// useColorTemperature is false (the default - existing content sees zero behavior change),
+// and actually tints `color` by a blackbody-radiator RGB when enabled - a very warm (1000K,
+// heavily red-shifted) temperature must reduce the blue channel well below the red channel,
+// proving the Kelvin value genuinely drives the result rather than being accepted-but-ignored.
+void RunSceneLightColorResolvesTemperatureTest() {
+    kb::scene::LightComponent plain;
+    plain.color = { 0.5F, 0.6F, 0.7F };
+    plain.useColorTemperature = false;
+    plain.colorTemperatureKelvin = 1000.0F;
+    const std::array<float, 3> plainResolved = SceneLightColor::Resolve(plain);
+    Require(NearlyEqual(plainResolved[0], 0.5F) && NearlyEqual(plainResolved[1], 0.6F) && NearlyEqual(plainResolved[2], 0.7F),
+        "SceneLightColor::Resolve must leave color untouched when useColorTemperature is false");
+
+    kb::scene::LightComponent warm;
+    warm.color = { 1.0F, 1.0F, 1.0F };
+    warm.useColorTemperature = true;
+    warm.colorTemperatureKelvin = 1000.0F;
+    const std::array<float, 3> warmResolved = SceneLightColor::Resolve(warm);
+    Require(warmResolved[2] < warmResolved[0] * 0.5F,
+        "SceneLightColor::Resolve must tint a very warm (1000K) light toward red - blue channel must be well below red");
+
+    kb::scene::LightComponent daylight;
+    daylight.color = { 1.0F, 1.0F, 1.0F };
+    daylight.useColorTemperature = true;
+    daylight.colorTemperatureKelvin = 6500.0F;
+    const std::array<float, 3> daylightResolved = SceneLightColor::Resolve(daylight);
+    Require(daylightResolved[0] > 0.9F && daylightResolved[1] > 0.9F && daylightResolved[2] > 0.9F,
+        "SceneLightColor::Resolve must render the default 6500K daylight temperature as close to neutral white");
+}
+
 void RunRendererStoresDefaultPostProcessSettingsTest() {
     Renderer renderer;
     Require(renderer.ConfigurePostProcessChain(PostProcessChain::DefaultSceneChainDesc()), "Renderer rejected default post-process chain before setting bloom options");
@@ -2034,6 +2147,7 @@ void RunRenderSceneSyncTests() {
     RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
+    RunRenderSceneSyncResolvesLightColorTemperatureTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
@@ -2062,6 +2176,8 @@ void RunRenderSceneSyncTests() {
     RunRendererStoresDefaultSceneDrawBudgetTest();
     RunRendererStoresDefaultSceneLightingConfigTest();
     RunSceneLightingPackerAddsEditorPreviewKeyLightTest();
+    RunSceneForwardLightSelectorAppliesLayerMaskTest();
+    RunSceneLightColorResolvesTemperatureTest();
     RunRendererStoresDefaultPostProcessSettingsTest();
     RunRendererSynchronizesTonemapPostProcessSettingsTest();
     RunSceneExposureMeterEstimatesLightingLuminanceTest();

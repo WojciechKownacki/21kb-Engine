@@ -157,11 +157,21 @@ SceneForwardLightSelection SceneForwardLightSelector::Select(
     std::uint32_t capacity,
     const std::array<float, 4>& cameraPosition,
     SceneRenderSubmitStats& stats,
-    SceneRenderLightingConfig config) noexcept {
+    SceneRenderLightingConfig config,
+    std::uint32_t cameraCullingMask) noexcept {
     SceneForwardLightSelection selection{};
     for (const auto& [entityId, proxy] : lights) {
         if (!IsValidForwardLight(proxy.desc)) {
             ++stats.invalidLightCount;
+            continue;
+        }
+        // LIB-141: a light whose layer bitmask has no overlap with the current camera's
+        // cullingMask does not contribute to that camera's forward lighting - the light-side
+        // mirror of MeshPipelinePassPolicy::PassesCullingMask's exact test. Not counted as
+        // "invalid" (the light is perfectly valid, just filtered for this camera) or toward
+        // validLightCount (which drives skippedForwardLightCount - a masked-out light was
+        // never a forward-light candidate for this camera in the first place).
+        if ((proxy.desc.layer & cameraCullingMask) == 0U) {
             continue;
         }
         ++selection.validLightCount;

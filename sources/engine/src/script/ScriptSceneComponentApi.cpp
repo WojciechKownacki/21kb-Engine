@@ -257,7 +257,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -266,9 +266,16 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "range", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "innerConeDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "outerConeDegrees", ScriptValueType::Float },
+    // LIB-141: areaWidth/areaHeight already existed on LightComponent (AreaRect/AreaDisk/Tube
+    // authoring) but were never in this reflection table - a pre-existing gap, closed here.
+    ScriptSceneComponentPropertyDesc{ "areaWidth", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "areaHeight", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "contactShadowLength", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "volumetricScattering", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "useColorTemperature", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "colorTemperatureKelvin", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "layerMask", ScriptValueType::Int },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
@@ -389,7 +396,7 @@ constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
-constexpr std::array<FieldBinding, 11> kLightFields{
+constexpr std::array<FieldBinding, 16> kLightFields{
     KB_LIGHT_KIND(kb::scene::LightComponent, kind),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
@@ -398,9 +405,14 @@ constexpr std::array<FieldBinding, 11> kLightFields{
     KB_FLOAT(kb::scene::LightComponent, range),
     KB_FLOAT(kb::scene::LightComponent, innerConeDegrees),
     KB_FLOAT(kb::scene::LightComponent, outerConeDegrees),
+    KB_FLOAT(kb::scene::LightComponent, areaWidth),
+    KB_FLOAT(kb::scene::LightComponent, areaHeight),
     KB_FLOAT(kb::scene::LightComponent, contactShadowLength),
     KB_FLOAT(kb::scene::LightComponent, volumetricScattering),
     KB_BOOL(kb::scene::LightComponent, castsShadow),
+    KB_BOOL(kb::scene::LightComponent, useColorTemperature),
+    KB_FLOAT(kb::scene::LightComponent, colorTemperatureKelvin),
+    KB_UINT32(kb::scene::LightComponent, layerMask),
 };
 
 constexpr std::array<FieldBinding, 4> kMeshRendererFields{

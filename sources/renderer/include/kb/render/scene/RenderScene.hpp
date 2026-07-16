@@ -105,6 +105,10 @@ struct LightRenderProxyDesc {
     float volumetricScattering = 0.0F;
     bool castsShadow = true;
     bool visible = true;
+    // LIB-141: mirrors kb::scene::LightComponent::layerMask. Filtered against the current
+    // camera's cullingMask by SceneForwardLightSelector - see LightComponent.hpp's own doc
+    // comment for the default-safety reasoning.
+    std::uint32_t layer = 1U;
 };
 
 struct MeshRenderProxy {

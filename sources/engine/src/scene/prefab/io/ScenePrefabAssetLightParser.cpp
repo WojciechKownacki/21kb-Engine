@@ -56,7 +56,10 @@ bool ScenePrefabAssetLightParser::Parse(const ScenePrefabAssetFieldMap& fields, 
         || !ParseOptionalField(fields, "light.areaHeight", light.areaHeight)
         || !ParseOptionalField(fields, "light.contactShadowLength", light.contactShadowLength)
         || !ParseOptionalField(fields, "light.volumetricScattering", light.volumetricScattering)
-        || !ParseOptionalBool(fields, "light.castsShadow", light.castsShadow)) {
+        || !ParseOptionalBool(fields, "light.castsShadow", light.castsShadow)
+        || !ParseOptionalBool(fields, "light.useColorTemperature", light.useColorTemperature)
+        || !ParseOptionalField(fields, "light.colorTemperatureKelvin", light.colorTemperatureKelvin)
+        || !ParseOptionalField(fields, "light.layerMask", light.layerMask)) {
         return false;
     }
 

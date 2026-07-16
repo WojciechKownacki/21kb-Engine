@@ -17,6 +17,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
+#include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderWorldTransformReader.hpp"
 #include "scene/SceneTransformMatrices.hpp"
 
@@ -198,7 +199,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .kind = LightKindOf(light.kind),
         .position = PositionOf(renderTransform),
         .rotation = RotationOf(renderTransform),
-        .color = { light.color.x, light.color.y, light.color.z },
+        .color = SceneLightColor::Resolve(light),
         .intensity = light.intensity,
         .range = light.range,
         .innerConeDegrees = light.innerConeDegrees,
@@ -209,6 +210,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .volumetricScattering = light.volumetricScattering,
         .castsShadow = light.castsShadow,
         .visible = IsVisible(*sync->scene, entity),
+        .layer = light.layerMask,
     }));
     static_cast<void>(transform);
 }
