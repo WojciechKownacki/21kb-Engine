@@ -97,7 +97,8 @@ namespace {
         && lhs.minDistance == rhs.minDistance
         && lhs.maxDistance == rhs.maxDistance
         && lhs.rolloff == rhs.rolloff
-        && lhs.dopplerFactor == rhs.dopplerFactor;
+        && lhs.dopplerFactor == rhs.dopplerFactor
+        && AudioSourceOutputBus(lhs) == AudioSourceOutputBus(rhs);
 }
 
 [[nodiscard]] bool Equal(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {

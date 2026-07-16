@@ -12,7 +12,8 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     ma_engine& engine,
     kb::scene::Scene& scene,
     const kb::audio::AudioPlayDesc& desc,
-    const MiniaudioClipResolver& clipResolver) {
+    const MiniaudioClipResolver& clipResolver,
+    ma_sound_group* group) {
     const std::filesystem::path path = clipResolver.Resolve(scene, desc.clipAssetId);
     if (path.empty()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip file could not be resolved" };
@@ -22,7 +23,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     PruneVoiceCapacity();
 
     auto sound = std::make_unique<MiniaudioSound>();
-    if (sound->InitializeFromFile(engine, path, desc.spatial) != MA_SUCCESS) {
+    if (sound->InitializeFromFile(engine, path, desc.spatial, group) != MA_SUCCESS) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "miniaudio sound could not be created" };
     }
 

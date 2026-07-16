@@ -30,13 +30,13 @@ namespace {
     return MA_SOUND_FLAG_STREAM;
 }
 
-[[nodiscard]] ma_result InitSoundFromFile(ma_engine& engine, const std::filesystem::path& path, ma_uint32 flags, ma_sound& sound) {
+[[nodiscard]] ma_result InitSoundFromFile(ma_engine& engine, const std::filesystem::path& path, ma_uint32 flags, ma_sound_group* group, ma_sound& sound) {
 #if defined(_WIN32)
     const std::wstring nativePath = path.wstring();
-    return ma_sound_init_from_file_w(&engine, nativePath.c_str(), flags, nullptr, nullptr, &sound);
+    return ma_sound_init_from_file_w(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
 #else
     const std::string nativePath = path.string();
-    return ma_sound_init_from_file(&engine, nativePath.c_str(), flags, nullptr, nullptr, &sound);
+    return ma_sound_init_from_file(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
 #endif
 }
 
@@ -46,9 +46,9 @@ MiniaudioSound::~MiniaudioSound() {
     Reset();
 }
 
-ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial) {
+ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group) {
     Reset();
-    const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), sound_);
+    const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);
     initialized_ = result == MA_SUCCESS;
     return result;
 }

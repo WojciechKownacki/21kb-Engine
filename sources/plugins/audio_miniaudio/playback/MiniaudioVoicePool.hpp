@@ -15,11 +15,15 @@ class MiniaudioClipResolver;
 
 class MiniaudioVoicePool final {
 public:
+    // LIB-147: `group` attaches the voice to its AudioPlayDesc::outputBus mixer bus
+    // (nullptr = implicit master). One-shots do NOT survive a mixer topology rebuild -
+    // the backend stops the pool then (a dangling ma_sound_group would be worse).
     [[nodiscard]] kb::audio::AudioPlayResult PlayOneShot(
         ma_engine& engine,
         kb::scene::Scene& scene,
         const kb::audio::AudioPlayDesc& desc,
-        const MiniaudioClipResolver& clipResolver);
+        const MiniaudioClipResolver& clipResolver,
+        ma_sound_group* group);
 
     void RemoveFinishedVoices() noexcept;
     void StopAll() noexcept;

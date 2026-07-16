@@ -122,6 +122,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "audioSource.maxDistance=" << components.audioSource->maxDistance << '\n';
         output << "audioSource.rolloff=" << components.audioSource->rolloff << '\n';
         output << "audioSource.dopplerFactor=" << components.audioSource->dopplerFactor << '\n';
+        // LIB-147: written only when routed off the implicit master, so pre-LIB-147
+        // prefab files stay byte-identical on a pure re-save.
+        if (!AudioSourceOutputBus(*components.audioSource).empty()) {
+            output << "audioSource.outputBus=" << AudioSourceOutputBus(*components.audioSource) << '\n';
+        }
     }
 
     output << "audioListener=" << (components.audioListener.has_value() ? 1 : 0) << '\n';

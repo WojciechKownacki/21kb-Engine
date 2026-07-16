@@ -145,6 +145,91 @@ int LuaAudioPlay(lua_State* state) {
     return 1;
 }
 
+[[nodiscard]] int PushCallError(lua_State* state, const ScriptFunctionCallResult& result, std::string_view fallback);
+
+// LIB-147: Audio.SetMixer(mixer) -> assigned (boolean, nil+error on an unresolvable/
+// wrong-type mixer asset; an empty/absent argument clears back to the implicit master) -
+// mirrors LuaPostProcessSetProfile's exact shape.
+int LuaAudioSetMixer(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* mixer = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = "mixer",
+            .value = ScriptValue{ std::string{ mixer != nullptr ? mixer : "", mixer != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (mixer != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetMixer", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio mixer assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioActiveMixer(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ActiveMixer", {});
+    const std::string mixer = result.Output("mixer").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, mixer.data(), mixer.size());
+    return 1;
+}
+
+// LIB-147: Audio.SetSnapshot(snapshot) -> applied (boolean, nil+error when no mixer is
+// active or the name is not declared by it; empty/absent resets to authored volumes).
+int LuaAudioSetSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* snapshot = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = "snapshot",
+            .value = ScriptValue{ std::string{ snapshot != nullptr ? snapshot : "", snapshot != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (snapshot != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetSnapshot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio snapshot request failed");
+    }
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioActiveSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ActiveSnapshot", {});
+    const std::string snapshot = result.Output("snapshot").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, snapshot.data(), snapshot.size());
+    return 1;
+}
+
 [[nodiscard]] int PushCallError(lua_State* state, const ScriptFunctionCallResult& result, std::string_view fallback) {
     lua_pushnil(state);
     const std::string error = result.errors.empty() ? std::string{ fallback } : result.errors.front();
@@ -1991,10 +2076,14 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 1);
+    lua_createtable(state, 0, 5);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
+    SetClosure(state, "SetMixer", &LuaAudioSetMixer, context);
+    SetClosure(state, "ActiveMixer", &LuaAudioActiveMixer, context);
+    SetClosure(state, "SetSnapshot", &LuaAudioSetSnapshot, context);
+    SetClosure(state, "ActiveSnapshot", &LuaAudioActiveSnapshot, context);
     lua_setfield(state, environmentIndex, "Audio");
 
     lua_createtable(state, 0, 7);
