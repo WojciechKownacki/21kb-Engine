@@ -14,7 +14,9 @@
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -1992,6 +1994,115 @@ void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
     std::filesystem::remove_all(root, error);
 }
 #endif
+
+// LIB-144: the end-to-end proof that a real Renderer::SubmitScene publishes the CPU-side
+// per-entity visibility/bounds feedback frame into the scene (SceneRenderFeedback) - real
+// mesh asset on disk, real headless Noop submit, real bounds resolved from the mesh
+// resource, real frustum cull against the camera the submit rendered with, zero GPU
+// readback anywhere. IdentityCamera()'s identity view*projection extracts the NDC unit cube
+// as the frustum, so |x|,|y|,|z| <= 1 is inside.
+void RunRendererPublishesSceneVisibilityFeedbackTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_visibility_feedback";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Visibility feedback test could not create temp root");
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Visibility feedback test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "Visibility feedback test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "Visibility feedback test did not discover the mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Visibility feedback test discovered wrong mesh metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+
+    const kb::scene::SceneEntity onScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "On Screen Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(onScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    const kb::scene::SceneEntity offScreenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Off Screen Mesh",
+        .transform = TransformAt(100.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(offScreenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    const kb::scene::SceneEntity hiddenEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Hidden Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(hiddenEntity, kb::scene::MeshRendererComponent{ .meshAssetId = meshAssetId });
+    scene.Components().Visibility().Set(hiddenEntity, kb::scene::VisibilityComponent{ .visible = false });
+    const kb::scene::SceneEntity meshlessEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "No Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+
+    Require(!kb::scene::SceneRenderFeedback::HasFrame(scene), "A never-submitted scene must not report a published visibility frame");
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Visibility feedback test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit first frame");
+    renderer.EndFrame();
+
+    Require(kb::scene::SceneRenderFeedback::HasFrame(scene), "SubmitScene must publish a visibility feedback frame into the scene");
+    Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 1U, "The first submit must publish exactly one visibility frame");
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, onScreenEntity), "An in-frustum, visible mesh entity must be reported visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, offScreenEntity), "A mesh entity far outside the camera frustum must be reported not visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "A VisibilityComponent-disabled mesh entity must be reported not visible");
+    Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, meshlessEntity), "An entity with no MeshRenderer must have no visibility entry");
+
+    // Bounds come from the real mesh resource (triangle.obj, ~0.14 world radius),
+    // transformed by each entity's own model matrix - tracked even for culled/hidden
+    // entities (bounds answer "where is it", not "was it drawn").
+    const kb::scene::SceneRenderBounds onScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, onScreenEntity);
+    Require(onScreenBounds.IsValid() && onScreenBounds.radius > 0.05F && onScreenBounds.radius < 1.0F,
+        "The on-screen entity's world bounds must carry the real mesh-resource bounding sphere");
+    Require(std::abs(onScreenBounds.center.x) < 0.2F, "The on-screen entity's world bounds must be centered near its origin transform");
+    const kb::scene::SceneRenderBounds offScreenBounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, offScreenEntity);
+    Require(offScreenBounds.IsValid() && std::abs(offScreenBounds.center.x - 100.0F) < 0.2F,
+        "The off-screen entity's world bounds must be transformed by its own model matrix");
+    Require(kb::scene::SceneRenderFeedback::WorldBounds(scene, hiddenEntity).IsValid(),
+        "A hidden entity keeps valid bounds - bounds report placement, not draw status");
+    Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, meshlessEntity).IsValid(),
+        "An entity with no MeshRenderer must report invalid bounds");
+
+    // The published frustum is queryable directly (identity clip = NDC unit cube).
+    Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must accept the origin inside the identity-camera frustum");
+    Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 100.0F, 0.0F, 0.0F }, 0.0F), "TestFrustum must reject a point far outside the identity-camera frustum");
+    Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 1.5F, 0.0F, 0.0F }, 1.0F), "TestFrustum must accept a sphere straddling the identity-camera frustum boundary");
+
+    // Every subsequent submit republishes - the feedback tracks the latest frame, never
+    // frozen first-frame state.
+    Require(renderer.BeginFrame(), "Visibility feedback test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, desc), "Visibility feedback test renderer did not submit second frame");
+    renderer.EndFrame();
+    Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 2U, "A second submit must publish a second visibility frame");
+    Require(kb::scene::SceneRenderFeedback::IsVisible(scene, onScreenEntity), "The second published frame must still track the on-screen entity");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
 
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
@@ -4230,6 +4341,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
+    RunRendererPublishesSceneVisibilityFeedbackTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();

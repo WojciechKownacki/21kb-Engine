@@ -26,6 +26,8 @@
 #include "kb/render/scene/RenderSceneStore.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
 
+#include "engine/scene/SceneRenderFeedback.hpp"
+
 #include <cstdint>
 #include <array>
 #include <memory>
@@ -273,6 +275,10 @@ private:
     std::vector<std::string> lastAaPipelineTraceLines_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
     std::optional<ScenePostProcessSettings> lastResolvedPostProcessSettings_{};
+    // LIB-144: scratch frame reused across every SubmitSceneToViewport - Publish swaps its
+    // entries vector with the scene's stored frame, so both sides keep their capacity and
+    // the steady state allocates nothing per frame.
+    kb::scene::SceneRenderVisibilityFrame sceneRenderVisibilityScratch_{};
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;

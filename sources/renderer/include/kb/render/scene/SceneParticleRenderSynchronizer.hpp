@@ -32,6 +32,15 @@ namespace kb::render {
 // explicitly removed rather than rendering a frozen ghost forever.
 class SceneParticleRenderSynchronizer {
 public:
+    // Reserved high-bit namespace so synthetic particle proxy ids can never collide with a
+    // real ECS entity id (RenderScene::MeshProxyMap's key is documented as "just an opaque
+    // uint64", never required to be a real entity - see RuntimeMeshResourceEnsurer's own
+    // entityId-is-just-a-map-key comment). Public since LIB-144 so
+    // SceneRenderVisibilityPublisher can recognize (and skip) synthetic particle proxies
+    // when publishing per-ENTITY visibility feedback - a script can never hold a synthetic
+    // id, so an entry for one would be dead weight in every published frame.
+    static constexpr std::uint64_t kSyntheticProxyIdBase = 0x8000'0000'0000'0000ULL;
+
     // Called once per viewport submission, after the ECS mesh/camera sync (so the resolved
     // primary camera for `targetViewportId` is available for billboard orientation) and
     // BEFORE EnsureSceneResources (so newly injected proxies get their GPU mesh/material

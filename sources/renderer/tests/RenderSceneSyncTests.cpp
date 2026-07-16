@@ -34,6 +34,7 @@
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 #include "scene/lighting/SceneForwardLightSelector.hpp"
 #include "scene/SceneLightColor.hpp"
+#include "scene/SceneRenderVisibilityPublisher.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2255,6 +2256,55 @@ void RunSceneParticleRenderSynchronizerTest() {
     Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove all proxy slots for an instance released since last frame");
 }
 
+// LIB-144: SceneRenderVisibilityPublisher's frame construction against a hand-built
+// RenderScene - no Scene, no bgfx, no resources needed. Proves: deterministic
+// entityId-sorted entries regardless of proxy-map iteration order, synthetic particle
+// proxies skipped, the VisibilityComponent flag and the camera cullingMask both reflected
+// in `visible`, the "no camera = invalid frustum = nothing culled" rule, and the
+// "unresolvable mesh = invalid bounds = never frustum-culled" rule (real bounds resolution
+// and real frustum culling are proven end-to-end through Renderer::SubmitScene in
+// RendererRuntimeSubmitTests' RunRendererPublishesSceneVisibilityFeedbackTest).
+void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
+    RenderScene renderScene;
+    std::array<float, 16> identity{};
+    identity[0] = identity[5] = identity[10] = identity[15] = 1.0F;
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 9U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 1U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 1U, .model = identity, .visible = false, .layer = 1U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 6U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = SceneParticleRenderSynchronizer::kSyntheticProxyIdBase + 42U,
+        .meshAssetId = 1U,
+        .model = identity,
+        .visible = true,
+        .layer = 1U,
+    }));
+
+    // No camera: invalid frustum, all-bits mask - the authored visible flag alone decides.
+    kb::scene::SceneRenderVisibilityFrame frame;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, nullptr, nullptr, frame);
+    Require(!frame.frustumValid, "LIB-144 publisher must report an invalid frustum when the submit had no camera");
+    Require(frame.viewportId == 5U, "LIB-144 publisher must record the submitted viewport id");
+    Require(frame.entries.size() == 3U, "LIB-144 publisher must skip synthetic particle proxies");
+    Require(frame.entries[0].entityId == 3U && frame.entries[1].entityId == 6U && frame.entries[2].entityId == 9U,
+        "LIB-144 publisher entries must be sorted by entityId regardless of proxy-map iteration order");
+    Require(!frame.entries[0].visible, "LIB-144 publisher must report a VisibilityComponent-hidden proxy as not visible");
+    Require(frame.entries[1].visible && frame.entries[2].visible, "LIB-144 publisher must report visible proxies as visible under an all-bits default mask");
+    Require(!frame.entries[0].worldBounds.IsValid(), "LIB-144 publisher must keep invalid bounds for a proxy whose mesh resource is unresolvable");
+
+    // Restrictive camera mask (layer bit 1 only): the layer=2 proxy is mask-rejected,
+    // exactly like MeshPipelinePassPolicy would reject it from every pass of this camera.
+    SceneRenderCamera camera{};
+    camera.view = identity;
+    camera.projection = identity;
+    camera.cullingMask = 1U;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, nullptr, nullptr, frame);
+    Require(frame.frustumValid, "LIB-144 publisher must extract a valid frustum from a real camera");
+    Require(frame.entries.size() == 3U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
+    Require(!frame.entries[1].visible, "LIB-144 publisher must mask-reject a proxy whose layer is outside the camera's cullingMask");
+    Require(frame.entries[2].visible, "LIB-144 publisher must keep a mask-passing, visible proxy visible (invalid bounds are never frustum-culled)");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
@@ -2319,6 +2369,7 @@ void RunRenderSceneSyncTests() {
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();
     RunScenesHaveStableUniqueIdsTest();
     RunSceneParticleRenderSynchronizerTest();
+    RunSceneRenderVisibilityPublisherBuildsFrameTest();
 }
 
 } // namespace kb::render::tests

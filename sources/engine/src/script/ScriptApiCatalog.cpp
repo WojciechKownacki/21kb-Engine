@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 94> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 98> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "MeshRenderer", "SetMesh", "MeshRenderer.SetMesh", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterial", "MeshRenderer.SetMaterial", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
@@ -66,6 +66,10 @@ constexpr std::array<LuaBindingSpec, 94> kLuaBindings{ {
     { "Particles", "ClearParameter", "Particles.ClearParameter", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Particles", "Emit", "Particles.Emit", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Particles", "LiveCount", "Particles.LiveCount", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Renderer", "IsVisible", "Renderer.IsVisible", ScriptApiCatalogLuaReturnKind::SingleOutput, "visible" },
+    { "Renderer", "GetBounds", "Renderer.GetBounds", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Renderer", "TestFrustum", "Renderer.TestFrustum", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Renderer", "HasFrame", "Renderer.HasFrame", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByName", "World.FindByName", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "FindByTag", "World.FindByTag", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "Exists", "World.Exists", ScriptApiCatalogLuaReturnKind::Default, "" },

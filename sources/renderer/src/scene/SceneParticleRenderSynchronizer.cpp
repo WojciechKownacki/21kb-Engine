@@ -17,16 +17,14 @@
 namespace kb::render {
 namespace {
 
-// Reserved high-bit namespace so synthetic particle proxy ids can never collide with a real
-// ECS entity id (RenderScene::MeshProxyMap's key is documented as "just an opaque uint64",
-// never required to be a real entity - see RuntimeMeshResourceEnsurer's own entityId-is-
-// just-a-map-key comment). Sized generously above kb::scene's own kMaxParticlesPerInstance
-// (2048) rather than sharing that constant across the kb_engine/kb_render boundary.
-constexpr std::uint64_t kParticleProxyIdBase = 0x8000'0000'0000'0000ULL;
+// Slot stride sized generously above kb::scene's own kMaxParticlesPerInstance (2048) rather
+// than sharing that constant across the kb_engine/kb_render boundary; the base lives on the
+// class (SceneParticleRenderSynchronizer::kSyntheticProxyIdBase) since LIB-144 so the
+// visibility-feedback publisher can recognize synthetic particle proxies.
 constexpr std::uint64_t kProxyIdSlotStride = 4096ULL;
 
 [[nodiscard]] std::uint64_t ParticleProxyId(std::uint64_t instanceId, std::uint32_t slot) noexcept {
-    return kParticleProxyIdBase + (instanceId * kProxyIdSlotStride) + static_cast<std::uint64_t>(slot);
+    return SceneParticleRenderSynchronizer::kSyntheticProxyIdBase + (instanceId * kProxyIdSlotStride) + static_cast<std::uint64_t>(slot);
 }
 
 [[nodiscard]] std::array<float, 16> FlattenModel(const kb::math::Mat4& model) noexcept {

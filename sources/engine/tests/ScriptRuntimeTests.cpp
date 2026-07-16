@@ -31,6 +31,7 @@
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
@@ -3481,6 +3482,217 @@ end
     kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper ClearProfile did not report cleared=true");
     kb::tests::Require(host.SharedState().Get("luaActiveAfterClear").value_or(kb::script::ScriptValue{ std::string{ "not empty" } }).AsString().empty(),
         "Script post process API Lua wrapper ActiveProfile must return empty after ClearProfile");
+}
+
+// LIB-144: the native contract of the scene-held, renderer-published visibility feedback
+// table (SceneRenderFeedback) - the pure kb::scene side, no renderer involved: honest empty
+// results before any publish, binary-searched entry lookup after one, the exact
+// sphere-vs-plane convention documented on SceneRenderFrustumPlane, capacity-reusing
+// publish swap, and Clear returning to the never-published state.
+void RunSceneRenderFeedbackTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity trackedEntity{ 5U };
+    const kb::scene::SceneEntity hiddenEntity{ 10U };
+
+    // Never-published state: every query reports its honest empty result.
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::HasFrame(scene), "A fresh scene must not report a published visibility frame");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 0U, "A fresh scene must report publish count 0");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "IsVisible must be false before any frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, trackedEntity).IsValid(), "WorldBounds must be invalid before any frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must be fail-closed false before any frame was published");
+
+    // An axis-aligned +/-10 box as a stand-in frustum (ax + by + cz + w >= 0 half-spaces).
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.viewportId = 7U;
+    frame.frustumPlanes = {
+        kb::scene::SceneRenderFrustumPlane{ 1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ -1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, -1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, 1.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, -1.0F, 10.0F },
+    };
+    frame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = trackedEntity.Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 1.0F, 2.0F, 3.0F }, .radius = 4.0F },
+            .visible = true,
+        },
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = hiddenEntity.Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 50.0F, 0.0F, 0.0F }, .radius = 1.0F },
+            .visible = false,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    kb::tests::Require(kb::scene::SceneRenderFeedback::HasFrame(scene), "Publish must make HasFrame true");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 1U, "Publish must advance the publish count to 1");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "IsVisible must report the published visible entry");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "IsVisible must report the published culled entry as not visible");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, kb::scene::SceneEntity{ 999U }), "IsVisible must be false for an entity with no published entry");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, kb::scene::SceneEntity{}), "IsVisible must be false for the invalid entity");
+    const kb::scene::SceneRenderBounds bounds = kb::scene::SceneRenderFeedback::WorldBounds(scene, trackedEntity);
+    kb::tests::Require(bounds.IsValid() && bounds.center.x == 1.0F && bounds.center.y == 2.0F && bounds.center.z == 3.0F && bounds.radius == 4.0F,
+        "WorldBounds must return the exact published bounds sphere");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldBounds(scene, kb::scene::SceneEntity{ 999U }).IsValid(), "WorldBounds must be invalid for an entity with no published entry");
+
+    kb::tests::Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must accept the origin point inside the published box frustum");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 100.0F, 0.0F, 0.0F }, 0.0F), "TestFrustum must reject a point far outside the published box frustum");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 12.0F, 0.0F, 0.0F }, 5.0F), "TestFrustum must accept a sphere straddling the published frustum boundary");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{ 16.0F, 0.0F, 0.0F }, 5.0F), "TestFrustum must reject a sphere fully past the published frustum boundary");
+
+    // Second publish replaces the frame (last publish wins) and keeps counting.
+    kb::scene::SceneRenderVisibilityFrame secondFrame;
+    secondFrame.frustumValid = false;
+    secondFrame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{ .entityId = hiddenEntity.Id(), .worldBounds = {}, .visible = true },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, secondFrame);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PublishCount(scene) == 2U, "A second publish must advance the publish count to 2");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, trackedEntity), "A second publish must fully replace the previous frame's entries");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "A second publish's entries must be queryable");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::TestFrustum(scene, kb::math::Vec3{}, 0.0F), "TestFrustum must be fail-closed false when the last published frame had no camera frustum");
+    // Publish swaps entry storage back into the caller's frame, so the previous frame's
+    // capacity is what secondFrame now holds - the steady state allocates nothing.
+    kb::tests::Require(secondFrame.entries.size() == 2U, "Publish must swap the previously published entries back into the caller's frame for capacity reuse");
+
+    kb::scene::SceneRenderFeedback::Clear(scene);
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::HasFrame(scene) && kb::scene::SceneRenderFeedback::PublishCount(scene) == 0U,
+        "Clear must return the scene to the never-published state");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "Clear must drop every published entry");
+}
+
+// LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame's script layer - registration
+// on all three frontends (Native, VisualGraph binding, real Lua wrappers), honest error for
+// a dead entity, honest false/not-found for an alive-but-untracked entity, and real reads
+// of a published feedback frame.
+void RunScriptRendererApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script renderer API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.IsVisible") != nullptr, "Script renderer API did not register Renderer.IsVisible");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.GetBounds") != nullptr, "Script renderer API did not register Renderer.GetBounds");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.TestFrustum") != nullptr, "Script renderer API did not register Renderer.TestFrustum");
+    kb::tests::Require(host.Functions().FindSignature("Renderer.HasFrame") != nullptr, "Script renderer API did not register Renderer.HasFrame");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Renderer.IsVisible") != nullptr,
+        "Script renderer API did not register VisualGraph runtime binding for Renderer.IsVisible");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Renderer Feedback Target" });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // Dead entity: honest error, mirroring Particles.Create's owner validation.
+    const kb::script::ScriptFunctionCallResult deadEntity = host.Functions().Call(
+        "Renderer.IsVisible",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ std::uint64_t{ 987654321U }, kb::script::ScriptValueType::Entity } },
+        } },
+        context);
+    kb::tests::Require(!deadEntity.Succeeded(), "Renderer.IsVisible must honestly error for a dead entity");
+
+    // Alive entity, no frame published yet: visible=false / found=false, not an error.
+    const std::vector<kb::script::ScriptFunctionArgument> entityArguments{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult noFrameVisible = host.Functions().Call("Renderer.IsVisible", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(noFrameVisible.Succeeded() && !noFrameVisible.Output("visible").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.IsVisible must report visible=false before any frame was published");
+    const kb::script::ScriptFunctionCallResult hasFrameBefore = host.Functions().Call("Renderer.HasFrame", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(hasFrameBefore.Succeeded() && !hasFrameBefore.Output("published").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.HasFrame must report published=false before any frame was published");
+
+    // Publish a frame tracking the entity (same axis-aligned box frustum as the native test).
+    kb::scene::SceneRenderVisibilityFrame frame;
+    frame.frustumValid = true;
+    frame.frustumPlanes = {
+        kb::scene::SceneRenderFrustumPlane{ 1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ -1.0F, 0.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, -1.0F, 0.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, 1.0F, 10.0F },
+        kb::scene::SceneRenderFrustumPlane{ 0.0F, 0.0F, -1.0F, 10.0F },
+    };
+    frame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = object.Entity().Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 1.0F, 2.0F, 3.0F }, .radius = 4.0F },
+            .visible = true,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, frame);
+
+    const kb::script::ScriptFunctionCallResult visible = host.Functions().Call("Renderer.IsVisible", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(visible.Succeeded() && visible.Output("visible").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.IsVisible must report the published visible entry");
+    const kb::script::ScriptFunctionCallResult boundsResult = host.Functions().Call("Renderer.GetBounds", std::span<const kb::script::ScriptFunctionArgument>{ entityArguments }, context);
+    kb::tests::Require(boundsResult.Succeeded() && boundsResult.Output("found").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.GetBounds must report found=true for a published entry");
+    kb::tests::Require(boundsResult.Output("centerY").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 2.0F
+            && boundsResult.Output("radius").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 4.0F,
+        "Renderer.GetBounds must return the exact published bounds values");
+    const kb::script::ScriptFunctionCallResult frustumInside = host.Functions().Call(
+        "Renderer.TestFrustum",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 1.0F } },
+        } },
+        context);
+    kb::tests::Require(frustumInside.Succeeded() && frustumInside.Output("inside").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Renderer.TestFrustum must accept a sphere inside the published frustum");
+    const kb::script::ScriptFunctionCallResult frustumOutside = host.Functions().Call(
+        "Renderer.TestFrustum",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 100.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+        } },
+        context);
+    kb::tests::Require(frustumOutside.Succeeded() && !frustumOutside.Output("inside").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Renderer.TestFrustum must reject a point outside the published frustum");
+
+    // Lua wrapper layer: the ticking behaviour entity itself is the tracked entity, so the
+    // no-argument IsVisible/GetBounds default-to-self path is what actually executes.
+    const kb::assets::AssetId luaAsset{ 9501U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Renderer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::scene::SceneRenderVisibilityFrame luaFrame;
+    luaFrame.frustumValid = true;
+    luaFrame.frustumPlanes = frame.frustumPlanes;
+    luaFrame.entries = {
+        kb::scene::SceneRenderVisibilityEntry{
+            .entityId = luaObject.Entity().Id(),
+            .worldBounds = kb::scene::SceneRenderBounds{ .center = kb::math::Vec3{ 0.0F, 0.0F, 0.0F }, .radius = 2.5F },
+            .visible = true,
+        },
+    };
+    kb::scene::SceneRenderFeedback::Publish(scene, luaFrame);
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaHasFrame", Renderer.HasFrame())
+    SetShared("luaVisible", Renderer.IsVisible())
+    local bounds = Renderer.GetBounds()
+    SetShared("luaBoundsFound", bounds.found)
+    SetShared("luaBoundsRadius", bounds.radius)
+    SetShared("luaInside", Renderer.TestFrustum(0, 0, 0, 1))
+    SetShared("luaOutside", Renderer.TestFrustum(100, 0, 0))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script renderer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script renderer API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaHasFrame").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper HasFrame did not report published=true");
+    kb::tests::Require(host.SharedState().Get("luaVisible").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper IsVisible (default self entity) did not report visible=true");
+    kb::tests::Require(host.SharedState().Get("luaBoundsFound").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper GetBounds did not report found=true");
+    kb::tests::Require(host.SharedState().Get("luaBoundsRadius").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 2.5F, "Script renderer API Lua wrapper GetBounds did not return the published radius");
+    kb::tests::Require(host.SharedState().Get("luaInside").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not accept an inside sphere");
+    kb::tests::Require(!host.SharedState().Get("luaOutside").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not reject an outside point");
 }
 
 void RunScriptWorldTimePhysicsApiTest() {
@@ -10663,6 +10875,8 @@ void RunScriptRuntimeTests() {
     RunScriptMaterialInstanceParameterApiTest();
     RunScenePostProcessAccessTest();
     RunScriptPostProcessApiTest();
+    RunSceneRenderFeedbackTest();
+    RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();

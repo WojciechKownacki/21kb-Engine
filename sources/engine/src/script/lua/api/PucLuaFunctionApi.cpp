@@ -704,6 +704,85 @@ int LuaPostProcessActiveProfile(lua_State* state) {
     return 1;
 }
 
+// LIB-144: Renderer.IsVisible([options{entity=...}]) -> visible (boolean, nil+error for a
+// dead entity) - entity defaults to self, the same optional-entity-table convention every
+// MeshRenderer wrapper already uses.
+int LuaRendererIsVisible(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{};
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.IsVisible", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "renderer visibility query failed");
+    }
+    lua_pushboolean(state, result.Output("visible").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-144: Renderer.GetBounds([options{entity=...}]) -> {found, centerX, centerY, centerZ,
+// radius} (nil+error for a dead entity) - mirrors LuaPhysicsGetVelocity's exact
+// every-output-as-table-field shape.
+int LuaRendererGetBounds(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{};
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.GetBounds", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "renderer bounds query failed");
+    }
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-144: Renderer.TestFrustum(centerX, centerY, centerZ [, radius]) -> inside (boolean,
+// fail-closed false before any visibility frame was published - see
+// SceneRenderFeedback.hpp's contract).
+int LuaRendererTestFrustum(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.0)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.TestFrustum", arguments);
+    lua_pushboolean(state, result.Output("inside").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaRendererHasFrame(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.HasFrame", {});
+    lua_pushboolean(state, result.Output("published").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaMeshRendererSetMaterial(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
@@ -1854,6 +1933,13 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Emit", &LuaParticlesEmit, context);
     SetClosure(state, "LiveCount", &LuaParticlesLiveCount, context);
     lua_setfield(state, environmentIndex, "Particles");
+
+    lua_createtable(state, 0, 4);
+    SetClosure(state, "IsVisible", &LuaRendererIsVisible, context);
+    SetClosure(state, "GetBounds", &LuaRendererGetBounds, context);
+    SetClosure(state, "TestFrustum", &LuaRendererTestFrustum, context);
+    SetClosure(state, "HasFrame", &LuaRendererHasFrame, context);
+    lua_setfield(state, environmentIndex, "Renderer");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);
