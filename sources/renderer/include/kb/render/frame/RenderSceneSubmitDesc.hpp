@@ -25,6 +25,12 @@ struct RenderSceneTargetBinding {
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     RenderViewportDesc viewport{};
     std::uint8_t msaaSamples = 0U;
+    // LIB-145: the color texture's pixel format (SceneRenderTarget::ColorSelection().format
+    // at the binding's construction site). bgfx cannot query a format back from a texture
+    // handle, and the async screen capture needs it to size its readback staging texture
+    // and decode the captured bytes. Count = unknown - captures against such a binding
+    // honestly fail instead of guessing.
+    bgfx::TextureFormat::Enum colorFormat = bgfx::TextureFormat::Count;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return viewport.IsValid();
