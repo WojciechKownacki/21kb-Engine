@@ -6,6 +6,7 @@
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptMeshRendererApi.hpp"
+#include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -150,6 +151,18 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "PostProcess",
             .ownerRuntime = "kb::scene::ScenePostProcessAccess",
             .Register = &kb::script::ScriptPostProcessApi::Register,
+        },
+        // LIB-143: Particles.Create/Release/Exists/Play/Stop/IsPlaying/SetSeed/
+        // SetParameterScalar/ClearParameter/Emit/LiveCount - a scene-owned particle system
+        // instance (kb::scene::SceneParticleSystems) simulated entirely in kb::scene
+        // (position/velocity/age/lifetime, no GPU/kb::render dependency); kb::render's own
+        // SceneParticleRenderSynchronizer reads the SAME instance table read-only each frame
+        // to submit real, GPU-instanced billboard quads through the existing mesh pipeline -
+        // see ScriptParticleSystemApi.hpp's doc comment for the "event" verb's Emit mapping.
+        LibraryModuleDesc{
+            .name = "Particles",
+            .ownerRuntime = "kb::scene::SceneParticleSystems",
+            .Register = &kb::script::ScriptParticleSystemApi::Register,
         },
     };
     return kCatalog;

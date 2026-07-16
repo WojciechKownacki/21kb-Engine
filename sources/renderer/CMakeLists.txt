@@ -54,6 +54,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMaterialTypeAssetLoader.hpp
     include/kb/render/resources/RenderMaterialTypeSchema.hpp
     include/kb/render/resources/PostProcessProfileAssetLoader.hpp
+    include/kb/render/resources/BuiltInParticleQuadMesh.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -66,6 +67,7 @@ add_library(kb_renderer STATIC
     include/kb/render/runtime/RuntimeRenderResourceCache.hpp
     include/kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp
     include/kb/render/scene/EcsRenderSceneSynchronizer.hpp
+    include/kb/render/scene/SceneParticleRenderSynchronizer.hpp
     include/kb/render/scene/RenderBridgeTelemetry.hpp
     include/kb/render/scene/SceneGpuDrivenCullingPass.hpp
     include/kb/render/scene/SceneGpuDrivenFeatureState.hpp
@@ -201,6 +203,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfTransforms.cpp
     src/resources/RenderMeshGltfTransforms.hpp
     src/resources/RenderMeshAssetLoader.cpp
+    src/resources/BuiltInParticleQuadMesh.cpp
     src/resources/RenderMeshObjImporter.cpp
     src/resources/RenderMeshObjImporter.hpp
     src/resources/RenderMeshObjMaterialResolver.cpp
@@ -231,6 +234,7 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/SceneParticleRenderSynchronizer.cpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
     src/scene/SceneRenderWorldTransformReader.cpp
