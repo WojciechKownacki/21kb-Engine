@@ -6,6 +6,7 @@
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptMeshRendererApi.hpp"
+#include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
@@ -139,6 +140,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "MaterialInstance",
             .ownerRuntime = "kb::scene::SceneMaterialInstances",
             .Register = &kb::script::ScriptMaterialInstanceApi::Register,
+        },
+        // LIB-142: PostProcess.SetProfile/ClearProfile/ActiveProfile - a scene-global,
+        // asset-based, serializable post-process parameter set (kb::scene::
+        // ScenePostProcessAccess), NOT a live per-field API - see ScriptPostProcessApi.hpp's
+        // doc comment for why this deliberately mirrors MeshRenderer.SetMaterial instead of
+        // the generic per-field reflection Light/Camera/MeshRenderer's own fields use.
+        LibraryModuleDesc{
+            .name = "PostProcess",
+            .ownerRuntime = "kb::scene::ScenePostProcessAccess",
+            .Register = &kb::script::ScriptPostProcessApi::Register,
         },
     };
     return kCatalog;

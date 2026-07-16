@@ -6,8 +6,12 @@
 #include "kb/render/SceneDeferredLightingPass.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -91,6 +95,31 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
 
 [[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
     return handle.idx;
+}
+
+// LIB-142: resolves the scene's own asset-based PostProcessProfile (kb::scene::
+// ScenePostProcessAccess::ActiveProfile) into a live ScenePostProcessSettings value - the
+// ONLY engine-side (script/scene-driven) producer of post-process settings; every other
+// producer today is editor viewport code supplying RenderSceneSubmitDesc::postProcessSettings
+// directly (see this ticket's own research). Called only when the caller's own desc did NOT
+// already supply an explicit override, so an editor/player caller's explicit per-submit
+// override still always wins - this is purely an ADDITIVE fallback, not a new precedence
+// rule. An unset (0) or unresolvable profile asset id honestly resolves to std::nullopt (no
+// override at all, falling through to defaultPostProcessSettings_ exactly as before this
+// ticket), never a crash - the same "unresolvable reference silently falls back" shape every
+// other renderer-consumed asset reference already follows.
+[[nodiscard]] std::optional<ScenePostProcessSettings> ResolveScenePostProcessProfile(const kb::scene::Scene& scene) {
+    const std::uint64_t profileAssetId = kb::scene::ScenePostProcessAccess::ActiveProfile(scene);
+    if (profileAssetId == 0U) {
+        return std::nullopt;
+    }
+    kb::assets::AssetManager& manager = const_cast<kb::scene::Scene&>(scene).Assets().Manager();
+    const kb::assets::AssetHandle<ScenePostProcessSettings> handle =
+        manager.Load<ScenePostProcessSettings>(kb::assets::AssetId{ profileAssetId });
+    if (!handle.IsLoaded()) {
+        return std::nullopt;
+    }
+    return *handle;
 }
 
 void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::optional<ScenePostProcessSettings>& settingsOverride) noexcept {
@@ -405,6 +434,7 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastAaPipelineTraceLines_.clear();
     lastAaPipelineTraceLines_.reserve(submissions.size() * 3U);
     lastSceneDiagnostics_.Clear();
+    lastResolvedPostProcessSettings_ = std::nullopt;
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     lastDefaultMaterialFallbackCount_ = 0U;
     lastErrorMaterialFallbackCount_ = 0U;
@@ -794,13 +824,20 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
+    // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly
+    // as before this ticket; only when the caller supplied none do we fall back to the
+    // scene's own asset-based active PostProcessProfile, and only when that resolves to
+    // nothing does defaultPostProcessSettings_ apply (unchanged pre-LIB-142 behavior).
+    const std::optional<ScenePostProcessSettings> resolvedPostProcessSettings =
+        desc.postProcessSettings.has_value() ? desc.postProcessSettings : ResolveScenePostProcessProfile(scene);
+    lastResolvedPostProcessSettings_ = resolvedPostProcessSettings;
     const bool temporalAntiAliasingEnabled = desc.postProcessEnabled &&
-        (desc.postProcessSettings.has_value()
-                ? desc.postProcessSettings->temporalAntiAliasingEnabled
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->temporalAntiAliasingEnabled
                 : defaultPostProcessSettings_.temporalAntiAliasingEnabled);
     const bool temporalJitterEnabled = temporalAntiAliasingEnabled &&
-        (desc.postProcessSettings.has_value()
-                ? desc.postProcessSettings->temporalJitterEnabled
+        (resolvedPostProcessSettings.has_value()
+                ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
     {
         std::ostringstream message;
@@ -809,18 +846,18 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " postProcessEnabled=" << BoolText(desc.postProcessEnabled)
                 << " postTargetsEnabled=" << BoolText(desc.postProcess.enabled)
                 << " targetMsaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples)
-                << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                << " overridePresent=" << BoolText(resolvedPostProcessSettings.has_value())
                 << " defaultFxaa=" << BoolText(defaultPostProcessSettings_.fxaaEnabled)
                 << " defaultTaa=" << BoolText(defaultPostProcessSettings_.temporalAntiAliasingEnabled)
                 << " defaultJitter=" << BoolText(defaultPostProcessSettings_.temporalJitterEnabled)
                 << " temporalTaaEnabled=" << BoolText(temporalAntiAliasingEnabled)
                 << " temporalJitterEnabled=" << BoolText(temporalJitterEnabled)
                 << " editorOverlays=" << BoolText(desc.editorSceneOverlaysEnabled);
-        if (desc.postProcessSettings.has_value()) {
-            message << " overrideFxaa=" << BoolText(desc.postProcessSettings->fxaaEnabled)
-                    << " overrideTaa=" << BoolText(desc.postProcessSettings->temporalAntiAliasingEnabled)
-                    << " overrideJitter=" << BoolText(desc.postProcessSettings->temporalJitterEnabled)
-                    << " overrideBloom=" << BoolText(desc.postProcessSettings->bloomEnabled);
+        if (resolvedPostProcessSettings.has_value()) {
+            message << " overrideFxaa=" << BoolText(resolvedPostProcessSettings->fxaaEnabled)
+                    << " overrideTaa=" << BoolText(resolvedPostProcessSettings->temporalAntiAliasingEnabled)
+                    << " overrideJitter=" << BoolText(resolvedPostProcessSettings->temporalJitterEnabled)
+                    << " overrideBloom=" << BoolText(resolvedPostProcessSettings->bloomEnabled);
         }
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
@@ -1061,11 +1098,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                         << " producer=" << PostProcessPassKindName(postProcessOutput.producer);
                 WriteRendererBreadcrumb("aa_trace", message.str());
             }
-            ApplyPostProcessSettingsOverride(postProcessOutput, desc.postProcessSettings);
+            ApplyPostProcessSettingsOverride(postProcessOutput, resolvedPostProcessSettings);
             {
                 std::ostringstream message;
                 message << "PostProcess after override"
-                        << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                        << " overridePresent=" << BoolText(resolvedPostProcessSettings.has_value())
                         << " finalFxaa=" << BoolText(postProcessOutput.fxaaEnabled)
                         << " finalTaa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
                         << " finalBloom=" << BoolText(postProcessOutput.bloomEnabled)
@@ -1311,6 +1348,10 @@ std::span<const std::string> Renderer::LastAaPipelineTraceLines() const noexcept
 
 const SceneRenderDiagnostics& Renderer::LastSceneDiagnostics() const noexcept {
     return lastSceneDiagnostics_;
+}
+
+const std::optional<ScenePostProcessSettings>& Renderer::LastResolvedPostProcessSettings() const noexcept {
+    return lastResolvedPostProcessSettings_;
 }
 
 MaterialProgramRegistryStats Renderer::MaterialProgramStats() const noexcept {
