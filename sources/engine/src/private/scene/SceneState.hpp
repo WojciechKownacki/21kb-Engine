@@ -370,6 +370,13 @@ public:
     // (a spatial, per-camera/per-volume post-process system is explicitly out of scope for
     // this ticket - see ScenePostProcessAccess.hpp's own doc comment).
     std::uint64_t postProcessProfileAssetId = 0U;
+    // LIB-147: scene-global active AudioMixer asset id (0 = none) + active snapshot NAME
+    // (empty = authored bus volumes) - the ONLY mixer selection a scene carries, mirroring
+    // postProcessProfileAssetId's exact scene-global-toggle shape. Content resolution and
+    // application happen entirely in the audio backend each tick - see
+    // SceneAudioMixerAccess.hpp's own doc comment.
+    std::uint64_t audioMixerAssetId = 0U;
+    std::string audioMixerSnapshotName;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors
