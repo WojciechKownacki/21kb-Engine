@@ -1396,6 +1396,28 @@ void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
 
+    // LIB-157: the typed asset-reference aliases for the kinds whose payload
+    // type kb_engine can name are exactly AssetRef<PayloadType> — no second
+    // handle model. (Mesh/Material/Texture have no alias here on purpose:
+    // their payloads live in kb_render; see EngineLibraryAssetRef.hpp.)
+    static_assert(std::is_same_v<kb::library::PrefabRef, kb::assets::AssetHandle<kb::scene::ScenePrefab>>, "kb::library::PrefabRef must alias kb::assets::AssetHandle<ScenePrefab>");
+    static_assert(std::is_same_v<kb::library::GraphRef, kb::assets::AssetHandle<kb::visual::VisualGraphAsset>>, "kb::library::GraphRef must alias kb::assets::AssetHandle<VisualGraphAsset>");
+    static_assert(std::is_same_v<kb::library::AudioClipRef, kb::assets::AssetHandle<kb::audio::AudioClipAsset>>, "kb::library::AudioClipRef must alias kb::assets::AssetHandle<AudioClipAsset>");
+    static_assert(std::is_same_v<kb::library::InputActionRef, kb::assets::AssetHandle<kb::input::InputActionAsset>>, "kb::library::InputActionRef must alias kb::assets::AssetHandle<InputActionAsset>");
+    static_assert(std::is_same_v<kb::library::InputMapRef, kb::assets::AssetHandle<kb::input::InputMappingContextAsset>>, "kb::library::InputMapRef must alias kb::assets::AssetHandle<InputMappingContextAsset>");
+
+    // A typed alias is a real, usable handle, not just a name: construct one
+    // over an AssetManager-shaped shared payload and prove it dereferences
+    // and reports its id/loaded state exactly like the generic AssetHandle
+    // it aliases (the file-backed Load<T> path itself is covered by
+    // RunAssetRuntimeTests; here we only prove the alias carries a payload).
+    const kb::assets::AssetId clipId{ 90201U };
+    const kb::library::AudioClipRef clipRef{ clipId, std::make_shared<const kb::audio::AudioClipAsset>(kb::audio::AudioClipAsset{ .path = "/Game/Audio/Typed.wav" }) };
+    kb::tests::Require(clipRef.IsLoaded() && clipRef.Id() == clipId, "Engine21kbLibrary AudioClipRef must behave as a loaded AssetHandle carrying its id");
+    kb::tests::Require(clipRef->path == std::filesystem::path{ "/Game/Audio/Typed.wav" }, "Engine21kbLibrary AudioClipRef must dereference to its typed payload");
+    const kb::library::AudioClipRef emptyClipRef{};
+    kb::tests::Require(!emptyClipRef.IsLoaded(), "Engine21kbLibrary AudioClipRef default-constructs to an unloaded handle");
+
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_asset_ref_tests";
     std::error_code removeError;
     std::filesystem::remove_all(testRoot, removeError);

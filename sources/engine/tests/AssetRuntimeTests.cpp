@@ -3,6 +3,7 @@
 
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/assets/AssetImportService.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -189,6 +190,69 @@ void RunAssetManagerLoadOpaqueTest() {
     kb::tests::Require(!manager.IsLoaded(textAssetId), "Asset must report unloaded after Unload following a LoadOpaque");
     kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be able to reload an asset after Unload");
     kb::tests::Require(manager.IsLoaded(textAssetId), "Reload through LoadOpaque after Unload must repopulate the cache");
+}
+
+// LIB-157: kb::assets::AssetKind — the single source of truth mapping each
+// typed-reference kind to its concrete AssetMetadata::type string(s). Pure
+// value-type test, no scene needed. Proves ToString/TryParseAssetKind round
+// trip for every kind, AssetMatchesKind accepts the right type and rejects a
+// foreign one, the Audio kind's dual acceptance (native AudioClip AND
+// imported-media ImportedAsset+category), TryClassifyAssetKind's unambiguous
+// reverse classification, and honest rejection of an unrecognised name / an
+// unclassifiable asset type.
+void RunAssetKindClassificationTest() {
+    // ToString <-> TryParseAssetKind round trip for every kind, in order.
+    const kb::assets::AssetKind kinds[] = {
+        kb::assets::AssetKind::Mesh, kb::assets::AssetKind::Material, kb::assets::AssetKind::Texture,
+        kb::assets::AssetKind::Audio, kb::assets::AssetKind::Prefab, kb::assets::AssetKind::Scene,
+        kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction, kb::assets::AssetKind::InputMap,
+    };
+    static_assert(std::size(kinds) == kb::assets::kAssetKindCount, "AssetKind test must cover every kind");
+    for (const kb::assets::AssetKind kind : kinds) {
+        const std::string_view name = kb::assets::ToString(kind);
+        kb::tests::Require(!name.empty(), "AssetKind::ToString must return a non-empty friendly name for every kind");
+        kb::assets::AssetKind parsed{};
+        kb::tests::Require(kb::assets::TryParseAssetKind(name, parsed) && parsed == kind, "AssetKind ToString/TryParseAssetKind must round trip for every kind");
+    }
+    kb::assets::AssetKind unusedKind{};
+    kb::tests::Require(!kb::assets::TryParseAssetKind("NotAKind", unusedKind), "TryParseAssetKind must reject an unrecognised kind name");
+    kb::tests::Require(!kb::assets::TryParseAssetKind("mesh", unusedKind), "TryParseAssetKind must be case-sensitive (reject a mis-cased kind name)");
+
+    // Each kind accepts exactly its own concrete type string(s).
+    const auto matches = [](std::string_view type, kb::assets::AssetKind kind, std::string importCategory = {}) {
+        return kb::assets::AssetMatchesKind(kb::assets::AssetMetadata{ .type = std::string{ type }, .importCategory = std::move(importCategory) }, kind);
+    };
+    kb::tests::Require(matches("RenderMesh", kb::assets::AssetKind::Mesh), "AssetMatchesKind must accept RenderMesh as Mesh");
+    kb::tests::Require(matches("RenderMaterial", kb::assets::AssetKind::Material) && matches("RenderMaterialInstance", kb::assets::AssetKind::Material),
+        "AssetMatchesKind must accept both RenderMaterial and RenderMaterialInstance as Material");
+    kb::tests::Require(!matches("RenderMaterialType", kb::assets::AssetKind::Material) && !matches("RenderMaterialGraph", kb::assets::AssetKind::Material),
+        "AssetMatchesKind must NOT treat authoring-only material sub-types as the runtime Material kind");
+    kb::tests::Require(matches("RenderTexture", kb::assets::AssetKind::Texture), "AssetMatchesKind must accept RenderTexture as Texture");
+    kb::tests::Require(matches("AudioClip", kb::assets::AssetKind::Audio), "AssetMatchesKind must accept AudioClip as Audio");
+    kb::tests::Require(matches("ImportedAsset", kb::assets::AssetKind::Audio, "Audio"), "AssetMatchesKind must accept an imported-media asset with importCategory Audio as Audio");
+    kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Audio, "Texture"), "AssetMatchesKind must NOT accept a non-audio ImportedAsset as Audio");
+    kb::tests::Require(matches("ScenePrefab", kb::assets::AssetKind::Prefab), "AssetMatchesKind must accept ScenePrefab as Prefab");
+    kb::tests::Require(matches("Scene", kb::assets::AssetKind::Scene), "AssetMatchesKind must accept Scene as Scene");
+    kb::tests::Require(matches("VisualGraph", kb::assets::AssetKind::Graph), "AssetMatchesKind must accept VisualGraph as Graph");
+    kb::tests::Require(matches("InputAction", kb::assets::AssetKind::InputAction), "AssetMatchesKind must accept InputAction as InputAction");
+    kb::tests::Require(matches("InputMappingContext", kb::assets::AssetKind::InputMap), "AssetMatchesKind must accept InputMappingContext as InputMap");
+
+    // Cross-kind rejection: a mesh is not a texture, a scene is not a prefab.
+    kb::tests::Require(!matches("RenderMesh", kb::assets::AssetKind::Texture), "AssetMatchesKind must reject RenderMesh as Texture");
+    kb::tests::Require(!matches("Scene", kb::assets::AssetKind::Prefab) && !matches("ScenePrefab", kb::assets::AssetKind::Scene),
+        "AssetMatchesKind must keep the distinct Scene and ScenePrefab types in their own kinds");
+
+    // Reverse classification is unambiguous and honest for unknowns.
+    const auto classify = [](std::string_view type, kb::assets::AssetKind& out, std::string importCategory = {}) {
+        return kb::assets::TryClassifyAssetKind(kb::assets::AssetMetadata{ .type = std::string{ type }, .importCategory = std::move(importCategory) }, out);
+    };
+    kb::assets::AssetKind classified{};
+    kb::tests::Require(classify("RenderMaterialInstance", classified) && classified == kb::assets::AssetKind::Material, "TryClassifyAssetKind must classify RenderMaterialInstance as Material");
+    kb::tests::Require(classify("VisualGraph", classified) && classified == kb::assets::AssetKind::Graph, "TryClassifyAssetKind must classify VisualGraph as Graph");
+    kb::tests::Require(classify("ImportedAsset", classified, "Audio") && classified == kb::assets::AssetKind::Audio, "TryClassifyAssetKind must classify an audio ImportedAsset as Audio");
+    kb::tests::Require(!classify("LuaScript", classified), "TryClassifyAssetKind must return false for a type that is none of the typed-reference kinds (LuaScript)");
+    kb::tests::Require(!classify("NativeBehaviour", classified), "TryClassifyAssetKind must return false for a NativeBehaviour asset");
+    kb::tests::Require(!classify("ImportedAsset", classified, "Texture"), "TryClassifyAssetKind must return false for a non-audio ImportedAsset (not one of the typed kinds)");
 }
 
 void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
@@ -503,6 +567,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerLoadOpaqueTest();
+    RunAssetKindClassificationTest();
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();

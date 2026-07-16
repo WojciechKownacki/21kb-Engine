@@ -10093,23 +10093,35 @@ void RunScriptAssetsApiTest() {
     const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
     const std::filesystem::path assetsRoot = projectRoot / "Assets";
     WriteTextFile(assetsRoot / "Logic" / "AssetsApiSubject.lua", "function Tick(self, dt)\nend\n");
+    // A second fixture of a genuinely typed kind (VisualGraph -> "Graph"),
+    // so the typed FindTyped/KindOf coverage below has a real registered
+    // asset to classify (the .lua fixture is a LuaScript, which is
+    // deliberately NONE of the typed-reference kinds).
+    WriteTextFile(assetsRoot / "Logic" / "AssetsApiGraph.kbgraph", "kbgraph 1\nname AssetsApiGraph\nnode 1 Event Tick\npin 1 Output then Void\n");
 
     kb::scene::Scene scene;
     kb::tests::Require(scene.Assets().MountProject(projectRoot), "Assets API test project mount failed");
-    kb::tests::Require(scene.Assets().Discover() == 1U, "Assets API test discovery did not find the Lua fixture asset");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Assets API test discovery did not find the Lua and VisualGraph fixture assets");
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/AssetsApiSubject.lua");
     kb::tests::Require(metadata != nullptr, "Assets API test fixture asset could not be resolved");
     const kb::assets::AssetId assetId = metadata->id;
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/AssetsApiGraph.kbgraph");
+    kb::tests::Require(graphMetadata != nullptr && graphMetadata->type == "VisualGraph", "Assets API graph fixture asset was not classified as VisualGraph");
+    const kb::assets::AssetId graphId = graphMetadata->id;
 
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script assets API host did not initialize");
     kb::tests::Require(host.Functions().FindSignature("Assets.Find") != nullptr, "Assets.Find was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.FindTyped") != nullptr, "Assets.FindTyped was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.KindOf") != nullptr, "Assets.KindOf was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.IsLoaded") != nullptr, "Assets.IsLoaded was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.Load") != nullptr, "Assets.Load was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.LoadAsync") != nullptr, "Assets.LoadAsync was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.Unload") != nullptr, "Assets.Unload was not registered");
     kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.Load") != nullptr,
         "Script assets API did not register VisualGraph runtime binding for Assets.Load");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.FindTyped") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.FindTyped");
 
     const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
 
@@ -10179,6 +10191,52 @@ void RunScriptAssetsApiTest() {
     const kb::script::ScriptFunctionCallResult findById = host.Functions().Call("Assets.Find", idArgs, context);
     kb::tests::Require(findById.Succeeded() && findById.Output("found")->AsBool() && findById.Output("asset")->AsUInt64() == assetId.value,
         "Assets.Find must resolve a numeric-id-string reference identically to a virtual path");
+
+    // LIB-157: typed references — Assets.FindTyped / Assets.KindOf against
+    // the real VisualGraph fixture ("Graph" kind).
+    const std::vector<kb::script::ScriptFunctionArgument> graphArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/AssetsApiGraph.kbgraph" } } },
+    };
+    // Correct kind: resolves and returns the id.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedGraphArgs = graphArgs;
+    findTypedGraphArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Graph" } } });
+    const kb::script::ScriptFunctionCallResult findTypedMatch = host.Functions().Call("Assets.FindTyped", findTypedGraphArgs, context);
+    kb::tests::Require(findTypedMatch.Succeeded() && findTypedMatch.Output("found")->AsBool() && findTypedMatch.Output("asset")->AsUInt64() == graphId.value,
+        "Assets.FindTyped must resolve a real asset of the requested kind (VisualGraph as Graph) to its id");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(graphId), "Assets.FindTyped must be a pure lookup — it must NOT force-load the asset");
+
+    // Wrong kind for a resolvable asset: a legitimate found=false, NOT an error.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedWrongArgs = graphArgs;
+    findTypedWrongArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Mesh" } } });
+    const kb::script::ScriptFunctionCallResult findTypedMismatch = host.Functions().Call("Assets.FindTyped", findTypedWrongArgs, context);
+    kb::tests::Require(findTypedMismatch.Succeeded() && !findTypedMismatch.Output("found")->AsBool() && findTypedMismatch.Output("asset")->AsUInt64() == 0U,
+        "Assets.FindTyped must report found=false (not error) for a resolvable asset of a different kind");
+
+    // Unresolvable reference under a valid kind: found=false, not error.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedUnknownRefArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/Nope.kbgraph" } } },
+        kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Graph" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findTypedUnknownRef = host.Functions().Call("Assets.FindTyped", findTypedUnknownRefArgs, context);
+    kb::tests::Require(findTypedUnknownRef.Succeeded() && !findTypedUnknownRef.Output("found")->AsBool(), "Assets.FindTyped must report found=false for an unresolvable reference under a valid kind");
+
+    // Unknown kind string is a malformed request: honest error, not found=false.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedBadKindArgs = graphArgs;
+    findTypedBadKindArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Widget" } } });
+    const kb::script::ScriptFunctionCallResult findTypedBadKind = host.Functions().Call("Assets.FindTyped", findTypedBadKindArgs, context);
+    kb::tests::Require(!findTypedBadKind.Succeeded(), "Assets.FindTyped must honestly error on an unknown kind name, not silently report found=false");
+
+    // KindOf: classifies the graph, honest not-found for an unclassifiable
+    // asset (the LuaScript fixture is none of the typed kinds) and for an
+    // unresolvable reference.
+    const kb::script::ScriptFunctionCallResult kindOfGraph = host.Functions().Call("Assets.KindOf", graphArgs, context);
+    kb::tests::Require(kindOfGraph.Succeeded() && kindOfGraph.Output("found")->AsBool() && kindOfGraph.Output("kind")->AsString() == "Graph",
+        "Assets.KindOf must classify a VisualGraph asset as the Graph kind");
+    const kb::script::ScriptFunctionCallResult kindOfLua = host.Functions().Call("Assets.KindOf", pathArgs, context);
+    kb::tests::Require(kindOfLua.Succeeded() && !kindOfLua.Output("found")->AsBool() && kindOfLua.Output("kind")->AsString().empty(),
+        "Assets.KindOf must honestly report not-found for an asset that is none of the typed-reference kinds (a LuaScript)");
+    const kb::script::ScriptFunctionCallResult kindOfUnknown = host.Functions().Call("Assets.KindOf", unknownArgs, context);
+    kb::tests::Require(kindOfUnknown.Succeeded() && !kindOfUnknown.Output("found")->AsBool(), "Assets.KindOf must report not-found for an unresolvable reference");
 
     const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
     kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");

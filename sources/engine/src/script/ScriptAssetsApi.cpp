@@ -1,6 +1,7 @@
 #include "engine/script/ScriptAssetsApi.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
@@ -72,8 +73,8 @@ ScriptFunctionCallResult NoScene() {
 // Registry().FindByPath (virtual path) — it has no code path that reads
 // AssetMetadata::physicalPath or calls AssetManager's private
 // ResolvePhysicalPath, so a physical OS path can never resolve here (see
-// RunScriptAssetsApiTest's RunScriptAssetsFindRejectsPhysicalPathTest-style
-// coverage for the negative proof).
+// RunScriptAssetsApiTest's physical-path rejection assertions for the
+// negative proof).
 ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -84,6 +85,64 @@ ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::spa
         .outputs = {
             ScriptFunctionArgument{ "found", ScriptValue{ id.IsValid() } },
             ScriptFunctionArgument{ "asset", ScriptValue{ id.value, ScriptValueType::Hash } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-157: a TYPED reference resolve — succeeds only when the reference
+// resolves AND the resolved asset is of the requested kind. `kind` is a
+// friendly AssetKind name ("Mesh", "Material", "Texture", "Audio",
+// "Prefab", "Scene", "Graph", "InputAction", "InputMap"). An unknown kind
+// string is a malformed request (a caller typo), so it is an honest error,
+// NOT a silent found=false — otherwise a misspelled kind would masquerade
+// as "asset not of that kind." A resolvable reference of the wrong kind, by
+// contrast, is a legitimate answer: found=false. Kind resolution is a pure
+// AssetMetadata::type tag check (AssetKind), so this works uniformly for
+// every kind including the kb_render-owned mesh/material/texture, with zero
+// kb_render dependency.
+ScriptFunctionCallResult FindTyped(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const ScriptValue* kindValue = FindArg(arguments, "kind");
+    const std::string kindName = kindValue == nullptr ? std::string{} : kindValue->AsString();
+    kb::assets::AssetKind kind{};
+    if (!kb::assets::TryParseAssetKind(kindName, kind)) {
+        return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { "unknown asset kind: " + kindName } };
+    }
+
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    const kb::assets::AssetMetadata* metadata = id.IsValid() ? context.scene->Assets().Manager().Registry().Find(id) : nullptr;
+    const bool found = metadata != nullptr && kb::assets::AssetMatchesKind(*metadata, kind);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "asset", ScriptValue{ found ? id.value : std::uint64_t{ 0U }, ScriptValueType::Hash } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-157: the reverse of FindTyped — classifies a resolvable reference into
+// its single AssetKind. found=false (with kind="") for an unresolvable
+// reference OR a resolvable asset that is none of the recognised kinds (a
+// LuaScript, NativeBehaviour, non-audio ImportedAsset, ...) — an honest "I
+// don't have a typed name for this," never a fabricated guess.
+ScriptFunctionCallResult KindOf(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    const kb::assets::AssetMetadata* metadata = id.IsValid() ? context.scene->Assets().Manager().Registry().Find(id) : nullptr;
+    kb::assets::AssetKind kind{};
+    const bool classified = metadata != nullptr && kb::assets::TryClassifyAssetKind(*metadata, kind);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ classified } },
+            ScriptFunctionArgument{ "kind", ScriptValue{ classified ? std::string{ kb::assets::ToString(kind) } : std::string{} } },
         },
         .errors = {},
     };
@@ -210,6 +269,14 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Assets.Find",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
               { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "asset", ScriptValueType::Hash, true } }, &Find)
+        && ok;
+    ok = RegisterFunction(host, "Assets.FindTyped",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true }, ScriptFunctionPin{ "kind", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "asset", ScriptValueType::Hash, true } }, &FindTyped)
+        && ok;
+    ok = RegisterFunction(host, "Assets.KindOf",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "kind", ScriptValueType::String, true } }, &KindOf)
         && ok;
     ok = RegisterFunction(host, "Assets.IsLoaded",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
