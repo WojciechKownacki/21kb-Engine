@@ -146,19 +146,25 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
     static_cast<void>(transform);
 }
 
-// LIB-139: a runtime MaterialInstance handle wins over the authored
-// materialAssetId. Resolved here (once per sync, kb::scene-side) rather than
-// inside kb::render's resource resolution, so kb::render never needs to know
-// runtime instances exist at all - by the time MeshRenderProxyDesc is built,
-// materialAssetId is either the real parent asset id or 0, exactly the same
-// shape RuntimeMaterialResourceEnsurer already handles for an
-// authored-but-unresolvable materialAssetId (honest no-material, no crash,
-// no silent fallback to the stale/released instance's old parent).
+// LIB-139/LIB-140: a runtime MaterialInstance handle wins over the authored
+// materialAssetId. LIB-140 changed what "wins" means here: the RAW instance
+// handle is now passed through into MeshRenderProxyDesc::materialAssetId
+// unresolved (rather than being resolved to its parent asset id at sync
+// time), so RuntimeMaterialResourceEnsurer can recognize it
+// (scene.MaterialInstances().Exists(...)) and resolve parent + live
+// parameter overrides together as one unit - if this function resolved to
+// the parent asset id here instead, a SetParameterScalar/SetParameterBool
+// call made after this sync would have no way to invalidate the renderer's
+// already-cached-by-parent-asset-id material, since the cache key would be
+// indistinguishable from a plain (non-instance) material reference.
+// Released/nonexistent handles still honestly resolve to 0 (no material),
+// exactly the same shape RuntimeMaterialResourceEnsurer already handles for
+// an authored-but-unresolvable materialAssetId.
 [[nodiscard]] std::uint64_t ResolveMaterialAssetId(const kb::scene::Scene& scene, const kb::scene::MeshRendererComponent& renderer) noexcept {
     if (renderer.materialInstanceHandle == 0U) {
         return renderer.materialAssetId;
     }
-    return scene.MaterialInstances().Parent(renderer.materialInstanceHandle);
+    return scene.MaterialInstances().Exists(renderer.materialInstanceHandle) ? renderer.materialInstanceHandle : 0U;
 }
 
 void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
