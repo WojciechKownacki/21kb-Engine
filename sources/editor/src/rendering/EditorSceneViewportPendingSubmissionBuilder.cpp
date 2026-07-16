@@ -103,6 +103,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
                 .viewportIndex = session.viewportIndex,
             },
             .msaaSamples = session.sceneTarget.MsaaSamples(),
+            .colorFormat = session.sceneTarget.ColorSelection().format,
         },
         .postProcess = present.settings.postProcessEnabled ? session.postProcessTargets.Binding() : render::RenderPostProcessTargetBinding{},
         .finalComposite = render::RenderFinalCompositeTargetBinding{

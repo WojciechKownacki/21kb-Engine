@@ -783,6 +783,109 @@ int LuaRendererHasFrame(lua_State* state) {
     return 1;
 }
 
+// LIB-145: Renderer.WorldToScreen(x, y, z) -> {valid, onScreen, screenX, screenY, depth} -
+// mirrors LuaPhysicsGetVelocity's every-output-as-table-field shape.
+int LuaRendererWorldToScreen(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.WorldToScreen", arguments);
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-145: Renderer.ScreenPointToRay(screenX, screenY) -> {valid, originX/Y/Z,
+// directionX/Y/Z} - the outputs feed Physics.Raycast's pins directly.
+int LuaRendererScreenPointToRay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenPointToRay", arguments);
+    lua_createtable(state, 0, 7);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaRendererScreenToWorld(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("screenX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 1)) }),
+        Arg("screenY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("distance", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.ScreenToWorld", arguments);
+    lua_createtable(state, 0, 4);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-145: Renderer.CaptureScreen(path) -> capture id (nil+error when the path is empty or
+// another capture is still pending) - mirrors LuaParticlesCreate's
+// single-value-or-nil+error shape.
+int LuaRendererCaptureScreen(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::size_t length = 0;
+    const char* path = luaL_tolstring(state, 1, &length);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("path", ScriptValue{ std::string{ path != nullptr ? path : "", path != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (path != nullptr) {
+        lua_pop(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.CaptureScreen", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "screen capture request failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("capture").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaRendererCaptureStatus(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "unknown");
+        return 1;
+    }
+    const auto capture = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("capture", ScriptValue{ capture, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Renderer.CaptureStatus", arguments);
+    const std::string status = result.Output("status").value_or(ScriptValue{ std::string{ "unknown" } }).AsString();
+    lua_pushlstring(state, status.data(), status.size());
+    return 1;
+}
+
 int LuaMeshRendererSetMaterial(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
@@ -1934,11 +2037,16 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "LiveCount", &LuaParticlesLiveCount, context);
     lua_setfield(state, environmentIndex, "Particles");
 
-    lua_createtable(state, 0, 4);
+    lua_createtable(state, 0, 9);
     SetClosure(state, "IsVisible", &LuaRendererIsVisible, context);
     SetClosure(state, "GetBounds", &LuaRendererGetBounds, context);
     SetClosure(state, "TestFrustum", &LuaRendererTestFrustum, context);
     SetClosure(state, "HasFrame", &LuaRendererHasFrame, context);
+    SetClosure(state, "WorldToScreen", &LuaRendererWorldToScreen, context);
+    SetClosure(state, "ScreenPointToRay", &LuaRendererScreenPointToRay, context);
+    SetClosure(state, "ScreenToWorld", &LuaRendererScreenToWorld, context);
+    SetClosure(state, "CaptureScreen", &LuaRendererCaptureScreen, context);
+    SetClosure(state, "CaptureStatus", &LuaRendererCaptureStatus, context);
     lua_setfield(state, environmentIndex, "Renderer");
 
     lua_createtable(state, 0, 10);

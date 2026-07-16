@@ -38,10 +38,15 @@ public:
     // meshAssetId to its mesh resource for local bounds; a proxy whose mesh is not (yet)
     // resolvable keeps invalid bounds and is treated as never-culled, exactly like
     // MeshPipelineVisibility::IsInsideFrustum's own degenerate-bounds rule.
+    // LIB-145: `viewportWidth`/`viewportHeight` are the submit's pixel extent - together
+    // with the camera's view/projection matrices (copied into the frame verbatim) they are
+    // the inputs for SceneRenderFeedback's CPU screen/world conversions.
     static void BuildFrame(
         const RenderScene& renderScene,
         const SceneRenderCamera* camera,
         std::uint32_t viewportId,
+        std::uint32_t viewportWidth,
+        std::uint32_t viewportHeight,
         const RenderResourceRegistry* resources,
         const SceneRenderResourceMap* resourceMap,
         kb::scene::SceneRenderVisibilityFrame& outFrame);

@@ -237,6 +237,8 @@ add_library(kb_renderer STATIC
     src/scene/SceneParticleRenderSynchronizer.cpp
     src/scene/SceneRenderVisibilityPublisher.cpp
     src/scene/SceneRenderVisibilityPublisher.hpp
+    src/renderer/RendererScreenCapture.cpp
+    src/renderer/RendererScreenCapture.hpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
     src/scene/SceneRenderWorldTransformReader.cpp
