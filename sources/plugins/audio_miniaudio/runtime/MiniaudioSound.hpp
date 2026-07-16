@@ -56,6 +56,9 @@ public:
     void SetLooping(bool loop) noexcept;
     // LIB-149: per-tick position update for owner-attached voices.
     void SetPosition(const kb::scene::Vec3& position) noexcept;
+    // LIB-152: the playback position on the AUDIO clock (pcm frames / engine sample
+    // rate), in seconds; negative when uninitialized.
+    [[nodiscard]] float PlaybackSeconds() const noexcept;
 
 private:
     ma_sound sound_{};

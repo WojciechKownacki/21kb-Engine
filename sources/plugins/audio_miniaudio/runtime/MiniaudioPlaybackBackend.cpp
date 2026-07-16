@@ -46,6 +46,9 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
     // LIB-149: owner-attached voices follow their owner's transform and die with it -
     // BEFORE the finished sweep, so an owner-released voice never lingers a frame.
     voicePool_.SyncAttachedVoices(context.GetScene(), occlusionSampler, listenerPosition);
+    // LIB-152: fire crossed markers BEFORE the finished sweep, so markers at/near the end
+    // of a clip still queue their event on the tick the voice completes.
+    voicePool_.DispatchMarkers(context.GetScene());
     voicePool_.RemoveFinishedVoices();
 }
 
@@ -115,6 +118,16 @@ bool MiniaudioPlaybackBackend::SetVoiceLoop(kb::scene::Scene& scene, std::uint64
 bool MiniaudioPlaybackBackend::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
     static_cast<void>(scene);
     return voicePool_.IsVoicePlaying(voiceId);
+}
+
+float MiniaudioPlaybackBackend::VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    static_cast<void>(scene);
+    return voicePool_.VoicePlaybackSeconds(voiceId);
+}
+
+bool MiniaudioPlaybackBackend::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    static_cast<void>(scene);
+    return voicePool_.AddVoiceMarker(voiceId, marker, positionSeconds, target);
 }
 
 } // namespace kb::audio_miniaudio

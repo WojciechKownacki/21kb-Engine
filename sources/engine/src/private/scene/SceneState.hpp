@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
@@ -386,6 +387,10 @@ public:
     // LIB-151: scene-global audio occlusion configuration (disabled by default - zero
     // raycast cost until a game opts in).
     AudioOcclusionSettings audioOcclusionSettings;
+    // LIB-152: fired voice markers awaiting script dispatch (mirror of
+    // pendingCollisionEvents - queued by the audio backend each tick, drained into
+    // ENTITY-LOCAL "OnAudioMarker" events by ScriptRuntimeSceneSystem).
+    std::vector<kb::audio::PendingAudioMarkerEvent> pendingAudioMarkerEvents;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors

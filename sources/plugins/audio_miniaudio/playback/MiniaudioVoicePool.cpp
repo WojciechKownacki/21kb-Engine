@@ -175,6 +175,49 @@ bool MiniaudioVoicePool::IsVoicePlaying(std::uint64_t voiceId) noexcept {
     return voice != nullptr && voice->sound != nullptr && !voice->paused && voice->sound->IsPlaying();
 }
 
+float MiniaudioVoicePool::VoicePlaybackSeconds(std::uint64_t voiceId) noexcept {
+    VoiceRecord* voice = FindVoice(voiceId);
+    return voice == nullptr || voice->sound == nullptr ? -1.0F : voice->sound->PlaybackSeconds();
+}
+
+bool MiniaudioVoicePool::AddVoiceMarker(std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    VoiceRecord* voice = FindVoice(voiceId);
+    if (voice == nullptr || voice->sound == nullptr || marker.empty()) {
+        return false;
+    }
+    voice->markers.push_back(VoiceMarker{
+        .name = std::string{ marker },
+        .positionSeconds = positionSeconds < 0.0F ? 0.0F : positionSeconds,
+        .target = target,
+        .fired = false,
+    });
+    return true;
+}
+
+void MiniaudioVoicePool::DispatchMarkers(kb::scene::Scene& scene) {
+    for (VoiceRecord& voice : voices_) {
+        if (voice.markers.empty() || voice.sound == nullptr || voice.paused) {
+            continue;
+        }
+        const float position = voice.sound->PlaybackSeconds();
+        if (position < 0.0F) {
+            continue;
+        }
+        for (VoiceMarker& marker : voice.markers) {
+            if (marker.fired || position < marker.positionSeconds) {
+                continue;
+            }
+            marker.fired = true;
+            kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
+                                                                  .target = marker.target,
+                                                                  .voiceId = voice.voiceId,
+                                                                  .marker = marker.name,
+                                                                  .positionSeconds = position,
+                                                              });
+        }
+    }
+}
+
 MiniaudioVoicePool::VoiceRecord* MiniaudioVoicePool::FindVoice(std::uint64_t voiceId) noexcept {
     if (voiceId == 0U) {
         return nullptr;

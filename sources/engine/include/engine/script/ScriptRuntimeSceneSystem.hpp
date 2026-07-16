@@ -107,6 +107,9 @@ private:
     // drain-and-dispatch shape as DispatchFiredTimers/DispatchCompletedTasks
     // above.
     void DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-152: fired audio voice markers -> ENTITY-LOCAL "OnAudioMarker" events, the same
+    // drain-and-dispatch shape as the collision events above.
+    void DispatchPendingAudioMarkerEvents(kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);
