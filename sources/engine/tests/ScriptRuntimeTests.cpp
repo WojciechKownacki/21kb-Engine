@@ -106,9 +106,23 @@ public:
         ++stopAllCount;
     }
 
+    // LIB-148: minimal honest per-voice contract for this probe - any voice id below
+    // nextVoiceId was handed out by PlayOneShot and counts as live.
+    [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool PauseVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
+
+private:
+    [[nodiscard]] bool IsLive(std::uint64_t voiceId) const noexcept { return voiceId != 0U && voiceId < nextVoiceId; }
 };
 
 // LIB-124: mirrors ProbeAudioPlaybackBackend above - a real, deterministic
@@ -3669,6 +3683,151 @@ end
         "Lua Audio.ActiveSnapshot did not return the active snapshot");
     kb::tests::Require(host.SharedState().Get("luaGhostRejected").value_or(kb::script::ScriptValue{ false }).AsBool(),
         "Lua Audio.SetSnapshot must surface nil+error for an undeclared snapshot name");
+}
+
+// LIB-148: per-voice playback control - the AudioPlayback facade contract without a
+// backend (everything honestly false), the full per-voice flow through a fake backend
+// (no plugin required), registration of all eight functions on Native+VisualGraph, and
+// the real Lua wrappers.
+void RunScriptAudioVoiceControlApiTest() {
+    // A minimal recording backend - one live voice id, every operation notes its call.
+    struct FakeAudioBackend final : kb::audio::IAudioPlaybackBackend {
+        std::uint64_t liveVoice = 7U;
+        float lastSeekSeconds = -1.0F;
+        float lastVolume = -1.0F;
+        float lastPitch = -1.0F;
+        bool lastLoop = false;
+        bool paused = false;
+
+        [[nodiscard]] kb::audio::AudioPlayResult PlayOneShot(kb::scene::Scene&, const kb::audio::AudioPlayDesc& desc) override {
+            lastVolume = desc.volume;
+            return kb::audio::AudioPlayResult{ .started = true, .voiceId = liveVoice, .error = {} };
+        }
+        void StopAll(kb::scene::Scene&) noexcept override {}
+        [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            liveVoice = 0U;
+            return true;
+        }
+        [[nodiscard]] bool PauseVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            paused = voiceId == liveVoice ? true : paused;
+            return voiceId == liveVoice;
+        }
+        [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            paused = voiceId == liveVoice ? false : paused;
+            return voiceId == liveVoice;
+        }
+        [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float positionSeconds) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastSeekSeconds = positionSeconds;
+            return true;
+        }
+        [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float volume) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastVolume = volume;
+            return true;
+        }
+        [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float pitch) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastPitch = pitch;
+            return true;
+        }
+        [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool loop) noexcept override {
+            if (voiceId != liveVoice) {
+                return false;
+            }
+            lastLoop = loop;
+            return true;
+        }
+        [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            return voiceId == liveVoice && !paused;
+        }
+    };
+
+    kb::scene::Scene scene;
+    // Without a backend every facade call is honestly false.
+    kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, 7U) && !kb::audio::AudioPlayback::PauseVoice(scene, 7U)
+            && !kb::audio::AudioPlayback::SeekVoice(scene, 7U, 1.0F) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, 7U),
+        "AudioPlayback per-voice facade must be honestly false without a registered backend");
+
+    FakeAudioBackend backend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script audio voice control API host did not initialize");
+    for (const char* name : { "Audio.Stop", "Audio.Pause", "Audio.Resume", "Audio.Seek", "Audio.SetVolume", "Audio.SetPitch", "Audio.SetLoop", "Audio.IsPlaying" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio voice control API did not register a LIB-148 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.Stop") != nullptr,
+        "Script audio voice control API did not register VisualGraph runtime binding for Audio.Stop");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callVoice = [&host, &context](const char* function, std::initializer_list<kb::script::ScriptFunctionArgument> extra) {
+        std::vector<kb::script::ScriptFunctionArgument> arguments{ kb::script::ScriptFunctionArgument{ .name = "voice", .value = kb::script::ScriptValue{ 7 } } };
+        arguments.insert(arguments.end(), extra.begin(), extra.end());
+        return host.Functions().Call(function, std::span<const kb::script::ScriptFunctionArgument>{ arguments }, context);
+    };
+
+    kb::tests::Require(callVoice("Audio.Pause", {}).Output("paused").value_or(kb::script::ScriptValue{ false }).AsBool() && backend.paused,
+        "Audio.Pause did not reach the backend");
+    kb::tests::Require(!callVoice("Audio.IsPlaying", {}).Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Audio.IsPlaying must report false for a paused voice");
+    kb::tests::Require(callVoice("Audio.Resume", {}).Output("resumed").value_or(kb::script::ScriptValue{ false }).AsBool() && !backend.paused,
+        "Audio.Resume did not reach the backend");
+    kb::tests::Require(callVoice("Audio.Seek", { kb::script::ScriptFunctionArgument{ .name = "positionSeconds", .value = kb::script::ScriptValue{ 2.5F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastSeekSeconds, 2.5F),
+        "Audio.Seek did not carry its position to the backend");
+    kb::tests::Require(callVoice("Audio.SetVolume", { kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ 0.4F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastVolume, 0.4F),
+        "Audio.SetVolume did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.SetPitch", { kb::script::ScriptFunctionArgument{ .name = "pitch", .value = kb::script::ScriptValue{ 1.2F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastPitch, 1.2F),
+        "Audio.SetPitch did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.SetLoop", { kb::script::ScriptFunctionArgument{ .name = "loop", .value = kb::script::ScriptValue{ true } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastLoop,
+        "Audio.SetLoop did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.Stop", {}).Output("stopped").value_or(kb::script::ScriptValue{ false }).AsBool(), "Audio.Stop did not reach the backend");
+    kb::tests::Require(!callVoice("Audio.IsPlaying", {}).Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && !callVoice("Audio.Pause", {}).Output("paused").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Every operation on a stopped voice must be honestly false, never a resurrection");
+
+    // Lua wrapper layer - reset the fake voice and drive the full cycle through Lua.
+    backend.liveVoice = 7U;
+    backend.paused = false;
+    const kb::assets::AssetId luaAsset{ 9702U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Voice Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaPaused", Audio.Pause(7))
+    SetShared("luaResumed", Audio.Resume(7))
+    SetShared("luaSeeked", Audio.Seek(7, 1.5))
+    SetShared("luaVolume", Audio.SetVolume(7, 0.6))
+    SetShared("luaPlaying", Audio.IsPlaying(7))
+    SetShared("luaStopped", Audio.Stop(7))
+    SetShared("luaDeadStop", Audio.Stop(7))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio voice control Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script audio voice control Lua wrapper execution failed");
+    for (const char* key : { "luaPaused", "luaResumed", "luaSeeked", "luaVolume", "luaPlaying", "luaStopped" }) {
+        kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua per-voice wrapper did not report success");
+    }
+    kb::tests::Require(!host.SharedState().Get("luaDeadStop").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Lua Audio.Stop on an already-stopped voice must be honestly false");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
 }
 
 // LIB-144: the native contract of the scene-held, renderer-published visibility feedback
@@ -11209,6 +11368,7 @@ void RunScriptRuntimeTests() {
     RunScriptPostProcessApiTest();
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
+    RunScriptAudioVoiceControlApiTest();
     RunSceneRenderFeedbackTest();
     RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
