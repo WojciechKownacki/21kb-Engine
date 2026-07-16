@@ -13,6 +13,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
+#include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
@@ -224,6 +225,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
+    particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
     ApplyRuntimeSceneResourceReserve();
 
     scenePostProcessRenderer_ = std::make_unique<ScenePostProcessRenderer>();
@@ -297,6 +299,7 @@ void Renderer::Shutdown() {
     defaultSceneGBuffer_.Shutdown();
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
+    particleRenderSynchronizer_.reset();
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
@@ -589,6 +592,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
     }
+    if (particleRenderSynchronizer_ == nullptr) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing particleRenderSynchronizer");
+        return false;
+    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
@@ -638,6 +645,15 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    // LIB-143: injects one real MeshRenderProxyDesc per live particle (billboard quad,
+    // camera-facing) into renderScene, BEFORE EnsureSceneResources below so those new
+    // proxies' mesh/material get resolved this same frame - deliberately AFTER the ECS
+    // mesh/camera/light sync above (so FindPrimaryCameraProxy sees this frame's resolved
+    // camera) and independent of desc.synchronizeScene (particles are not ECS entities, so
+    // the partial-sync dirty-entity-list path above never covers them).
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
+    particleRenderSynchronizer_->Sync(scene, renderScene, desc.target.viewport.id.value);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
     SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;

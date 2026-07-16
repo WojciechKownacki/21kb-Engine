@@ -155,6 +155,10 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabOverrides.hpp
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/SceneMaterialInstances.hpp
+    include/engine/scene/ParticleEffectAsset.hpp
+    include/engine/scene/ParticleEffectAssetIO.hpp
+    include/engine/scene/ParticleEffectAssetLoader.hpp
+    include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTasks.hpp
@@ -201,6 +205,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptMaterialInstanceApi.hpp
     include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptMeshRendererApi.hpp
+    include/engine/script/ScriptParticleSystemApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptLifecycle.hpp
@@ -418,6 +423,9 @@ add_library(kb_engine STATIC
     src/scene/SceneMeshRendererIterationService.cpp
     src/scene/ScenePhysicsBodyIterationService.cpp
     src/scene/SceneMaterialInstanceService.cpp
+    src/scene/ParticleEffectAssetIO.cpp
+    src/scene/ParticleEffectAssetLoader.cpp
+    src/scene/SceneParticleSystemService.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
@@ -530,6 +538,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneHierarchyAccess.cpp
     src/scene/modules/SceneLoadedContent.cpp
     src/scene/modules/SceneMaterialInstances.cpp
+    src/scene/modules/SceneParticleSystems.cpp
     src/scene/modules/ScenePrefabConnectionModule.cpp
     src/scene/modules/ScenePrefabInstantiationModule.cpp
     src/scene/modules/ScenePrefabOverrideModule.cpp
@@ -687,6 +696,7 @@ add_library(kb_engine STATIC
     src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
     src/script/ScriptMeshRendererApi.cpp
+    src/script/ScriptParticleSystemApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptLifecycle.cpp
@@ -796,6 +806,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneIterationService.hpp
     src/private/scene/SceneLoadedContentService.hpp
     src/private/scene/SceneMaterialInstanceService.hpp
+    src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTaskService.hpp

@@ -462,6 +462,194 @@ int LuaMaterialInstanceClearParameter(lua_State* state) {
     return 1;
 }
 
+// LIB-143: Particles.Create(effect, {entity=...}) -> instance handle (an integer, nil+error
+// on an unresolvable/wrong-type effect, unresolvable material reference, dead/missing owner
+// entity, or a full instance table) - mirrors LuaMaterialInstanceCreate's exact
+// resolve-then-single-value-or-nil+error shape, plus the optional-entity-table convention
+// every MeshRenderer wrapper already uses (entity defaults to self when omitted).
+int LuaParticlesCreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* effect = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "effect",
+            .value = ScriptValue{ std::string{ effect != nullptr ? effect : "", effect != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (effect != nullptr) {
+        lua_pop(state, 1);
+    }
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "particle system create failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("instance").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaParticlesRelease(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Release", arguments);
+    lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesExists(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Exists", arguments);
+    lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesPlay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Play", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesStop(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Stop", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesIsPlaying(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.IsPlaying", arguments);
+    lua_pushboolean(state, result.Output("playing").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesSetSeed(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto seed = static_cast<std::uint64_t>(luaL_checkinteger(state, 2));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("seed", ScriptValue{ seed, ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.SetSeed", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-143: Particles.SetParameterScalar(instance, name, value) -> applied (boolean).
+int LuaParticlesSetParameterScalar(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const auto value = static_cast<float>(luaL_checknumber(state, 3));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+        Arg("value", ScriptValue{ value }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.SetParameterScalar", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesClearParameter(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const char* name = luaL_checkstring(state, 2);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ name } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.ClearParameter", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-143: Particles.Emit(instance, count) -> emitted (boolean) - the ticket's "event" verb,
+// an immediate on-demand burst independent of Play/Stop state.
+int LuaParticlesEmit(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const auto count = static_cast<int>(luaL_checkinteger(state, 2));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }),
+        Arg("count", ScriptValue{ count }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.Emit", arguments);
+    lua_pushboolean(state, result.Output("emitted").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaParticlesLiveCount(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Particles.LiveCount", arguments);
+    lua_pushinteger(state, result.Output("count").value_or(ScriptValue{ 0 }).AsInt());
+    return 1;
+}
+
 // LIB-142: PostProcess.SetProfile(profile) -> assigned (boolean, nil+error on an
 // unresolvable/wrong-type profile asset) - mirrors LuaMeshRendererAssign's exact
 // resolve-then-single-value-or-nil+error shape.
@@ -1652,6 +1840,20 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "ClearProfile", &LuaPostProcessClearProfile, context);
     SetClosure(state, "ActiveProfile", &LuaPostProcessActiveProfile, context);
     lua_setfield(state, environmentIndex, "PostProcess");
+
+    lua_createtable(state, 0, 11);
+    SetClosure(state, "Create", &LuaParticlesCreate, context);
+    SetClosure(state, "Release", &LuaParticlesRelease, context);
+    SetClosure(state, "Exists", &LuaParticlesExists, context);
+    SetClosure(state, "Play", &LuaParticlesPlay, context);
+    SetClosure(state, "Stop", &LuaParticlesStop, context);
+    SetClosure(state, "IsPlaying", &LuaParticlesIsPlaying, context);
+    SetClosure(state, "SetSeed", &LuaParticlesSetSeed, context);
+    SetClosure(state, "SetParameterScalar", &LuaParticlesSetParameterScalar, context);
+    SetClosure(state, "ClearParameter", &LuaParticlesClearParameter, context);
+    SetClosure(state, "Emit", &LuaParticlesEmit, context);
+    SetClosure(state, "LiveCount", &LuaParticlesLiveCount, context);
+    lua_setfield(state, environmentIndex, "Particles");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);

@@ -81,6 +81,14 @@ private:
     // with the number of FixedTick steps this frame actually produced,
     // the one piece of state that loop previously never surfaced anywhere.
     void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
+    // LIB-143: advances every live Particles.Create instance in the scene
+    // (kb::scene::SceneParticleSystems::Advance) - spawn/integrate/kill, same
+    // scale/pause-aware deltaSeconds as DispatchFiredTimers above. Unlike Timer/Task,
+    // particle simulation dispatches no ScriptEvent of its own (LIB-143's "event" verb is
+    // Particles.Emit, an inbound trigger, not an outbound notification - see
+    // ScriptParticleSystemApi.hpp's doc comment), so this is a plain advance call, not a
+    // drain-and-dispatch loop.
+    void AdvanceParticleSystems(kb::scene::Scene& scene, float deltaSeconds);
     // LIB-105: delivers every kb::script::ScriptEventBus::EmitDeferred call
     // queued since the last frame — the deferred half of the pub/sub bus's
     // sync/deferred pair. Unlike DispatchFiredTimers/DispatchCompletedTasks

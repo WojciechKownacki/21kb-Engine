@@ -41,6 +41,8 @@ class SceneLoadedContent;
 class SceneLoadedContentQueries;
 class SceneMaterialInstanceQueries;
 class SceneMaterialInstances;
+class SceneParticleSystemQueries;
+class SceneParticleSystems;
 class ScenePrefabs;
 class SceneRuntime;
 class SceneRuntimeQueries;
@@ -98,6 +100,8 @@ public:
     [[nodiscard]] SceneTasks Tasks() noexcept;
     [[nodiscard]] SceneMaterialInstances MaterialInstances() noexcept;
     [[nodiscard]] SceneMaterialInstanceQueries MaterialInstances() const noexcept;
+    [[nodiscard]] SceneParticleSystems Particles() noexcept;
+    [[nodiscard]] SceneParticleSystemQueries Particles() const noexcept;
     void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;

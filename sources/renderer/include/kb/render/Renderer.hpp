@@ -40,6 +40,7 @@ class BgfxContext;
 class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
+class SceneParticleRenderSynchronizer;
 class SceneRenderer;
 
 } // namespace kb::render
@@ -250,6 +251,7 @@ private:
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
     std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
+    std::unique_ptr<SceneParticleRenderSynchronizer> particleRenderSynchronizer_;
     // Lazily created worker pool that parallelizes the columnar render-sync (H6).
     std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;
