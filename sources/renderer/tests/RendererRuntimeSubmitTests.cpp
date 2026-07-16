@@ -13,6 +13,7 @@
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
@@ -25,6 +26,7 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -1443,6 +1445,149 @@ void RunRendererAppliesMaterialInstanceParameterOverrideTest() {
     Require(afterStableResubmit.materialReloadCount == 0U,
         "MAT-140: resubmitting with no further parameter change must be a cache hit, not another reload");
     Require(afterStableResubmit.materialErrorCount == 0U, "MAT-140: a stable resubmit must not report a material error");
+    renderer.EndFrame();
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-142: proves PostProcessProfileAssetLoader::SaveProfile/LoadProfile round-trips
+// ScenePostProcessSettings through the real on-disk text format - representative fields
+// across the flat top-level struct, the nested outputTransform, and the doubly-nested
+// autoExposure, plus a non-default value for every enum.
+void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_post_process_profile_round_trip.kbppfx";
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+
+    ScenePostProcessSettings settings{};
+    settings.bloomEnabled = false;
+    settings.bloomStrength = 0.42F;
+    settings.bloomThreshold = 1.8F;
+    settings.bloomSoftKnee = 0.3F;
+    settings.bloomRadiusPixels = 2.5F;
+    settings.temporalAntiAliasingEnabled = false;
+    settings.temporalJitterEnabled = false;
+    settings.temporalHistoryBlend = 0.5F;
+    settings.fxaaEnabled = true;
+    settings.tonemapEnabled = false;
+    settings.autoExposureMetering = ScenePostProcessSettings::AutoExposureMeteringMode::Manual;
+    settings.outputTransform.exposureStops = 1.25F;
+    settings.outputTransform.gamma = 2.4F;
+    settings.outputTransform.tonemap = FullscreenTextureTonemapOperator::AgxApprox;
+    settings.outputTransform.colorGradingLutStrength = 0.75F;
+    settings.outputTransform.autoExposure.enabled = false;
+    settings.outputTransform.autoExposure.meteredAverageLuminance = 0.3F;
+    settings.outputTransform.autoExposure.middleGray = 0.22F;
+    settings.outputTransform.autoExposure.minExposureStops = -4.0F;
+    settings.outputTransform.autoExposure.maxExposureStops = 6.0F;
+    settings.outputTransform.autoExposure.biasStops = 0.5F;
+    settings.outputTransform.autoExposure.temporalAdaptationEnabled = false;
+    settings.outputTransform.autoExposure.brightAdaptationRate = 3.0F;
+    settings.outputTransform.autoExposure.darkAdaptationRate = 1.0F;
+
+    Require(PostProcessProfileAssetLoader::SaveProfile(path, settings), "PostProcess profile asset save failed");
+    const std::optional<ScenePostProcessSettings> loaded = PostProcessProfileAssetLoader::LoadProfile(path);
+    Require(loaded.has_value(), "PostProcess profile asset did not load");
+    Require(!loaded->bloomEnabled && NearlyEqual(loaded->bloomStrength, 0.42F) && NearlyEqual(loaded->bloomThreshold, 1.8F) &&
+            NearlyEqual(loaded->bloomSoftKnee, 0.3F) && NearlyEqual(loaded->bloomRadiusPixels, 2.5F),
+        "PostProcess profile asset round trip lost bloom fields");
+    Require(!loaded->temporalAntiAliasingEnabled && !loaded->temporalJitterEnabled && NearlyEqual(loaded->temporalHistoryBlend, 0.5F) && loaded->fxaaEnabled,
+        "PostProcess profile asset round trip lost anti-aliasing fields");
+    Require(!loaded->tonemapEnabled && loaded->autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::Manual,
+        "PostProcess profile asset round trip lost tonemapEnabled/autoExposureMetering");
+    Require(NearlyEqual(loaded->outputTransform.exposureStops, 1.25F) && NearlyEqual(loaded->outputTransform.gamma, 2.4F) &&
+            loaded->outputTransform.tonemap == FullscreenTextureTonemapOperator::AgxApprox && NearlyEqual(loaded->outputTransform.colorGradingLutStrength, 0.75F),
+        "PostProcess profile asset round trip lost outputTransform fields");
+    Require(!loaded->outputTransform.autoExposure.enabled && NearlyEqual(loaded->outputTransform.autoExposure.meteredAverageLuminance, 0.3F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.middleGray, 0.22F) && NearlyEqual(loaded->outputTransform.autoExposure.minExposureStops, -4.0F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.maxExposureStops, 6.0F) && NearlyEqual(loaded->outputTransform.autoExposure.biasStops, 0.5F) &&
+            !loaded->outputTransform.autoExposure.temporalAdaptationEnabled && NearlyEqual(loaded->outputTransform.autoExposure.brightAdaptationRate, 3.0F) &&
+            NearlyEqual(loaded->outputTransform.autoExposure.darkAdaptationRate, 1.0F),
+        "PostProcess profile asset round trip lost outputTransform.autoExposure fields");
+
+    const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
+        std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
+    Require(!missing.has_value(), "PostProcess profile asset load must honestly fail for a nonexistent file, not return defaults");
+
+    std::filesystem::remove(path, removeError);
+}
+
+// LIB-142: end-to-end through Renderer::SubmitScene - proves a scene's asset-based active
+// PostProcessProfile actually drives the resolved post-process settings when the caller
+// supplies no explicit per-submit override, and that an explicit per-submit override still
+// wins over the scene's profile (the override is purely additive, not a new precedence rule
+// - see Renderer.cpp's ResolveScenePostProcessProfile doc comment).
+void RunRendererAppliesScenePostProcessProfileTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_post_process_profile";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Post process profile renderer test could not create temp root");
+
+    ScenePostProcessSettings profileSettings{};
+    profileSettings.bloomEnabled = true;
+    profileSettings.bloomStrength = 0.77F;
+    profileSettings.fxaaEnabled = true;
+    profileSettings.tonemapEnabled = false;
+    Require(PostProcessProfileAssetLoader::SaveProfile(root / "Profile.kbppfx", profileSettings), "Post process profile renderer test could not save profile asset");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()), "Post process profile renderer test could not register loader");
+    Require(manager.Mounts().Mount("Game", root), "Post process profile renderer test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "Post process profile renderer test did not discover the profile asset");
+    const kb::assets::AssetMetadata* profileMetadata = manager.Registry().FindByPath("/Game/Profile.kbppfx");
+    Require(profileMetadata != nullptr, "Post process profile renderer test did not find profile metadata");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, profileMetadata->id.value);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Post process profile renderer test renderer did not initialize");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "Post process profile renderer test renderer did not submit first frame");
+    const std::optional<ScenePostProcessSettings> withProfile = renderer.LastResolvedPostProcessSettings();
+    Require(withProfile.has_value() && NearlyEqual(withProfile->bloomStrength, 0.77F) && withProfile->fxaaEnabled && !withProfile->tonemapEnabled,
+        "Renderer did not apply the scene's active PostProcessProfile when no explicit submit override was supplied");
+    renderer.EndFrame();
+
+    RenderSceneSubmitDesc overriddenDesc = desc;
+    overriddenDesc.postProcessSettings = ScenePostProcessSettings{
+        .bloomEnabled = true,
+        .bloomStrength = 0.11F,
+        .fxaaEnabled = false,
+        .tonemapEnabled = true,
+    };
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin second frame");
+    Require(renderer.SubmitScene(scene, overriddenDesc), "Post process profile renderer test renderer did not submit second frame");
+    const std::optional<ScenePostProcessSettings> withExplicitOverride = renderer.LastResolvedPostProcessSettings();
+    Require(withExplicitOverride.has_value() && NearlyEqual(withExplicitOverride->bloomStrength, 0.11F) && !withExplicitOverride->fxaaEnabled && withExplicitOverride->tonemapEnabled,
+        "An explicit per-submit postProcessSettings override must still win over the scene's active PostProcessProfile");
+    renderer.EndFrame();
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 0U);
+    Require(renderer.BeginFrame(), "Post process profile renderer test renderer did not begin third frame");
+    Require(renderer.SubmitScene(scene, desc), "Post process profile renderer test renderer did not submit third frame");
+    Require(!renderer.LastResolvedPostProcessSettings().has_value(),
+        "With neither an explicit submit override nor an active scene profile, the renderer must honestly resolve to no override, not stale state from a previous frame");
     renderer.EndFrame();
 
     renderer.Shutdown();
@@ -4091,6 +4236,8 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialInstanceDynamicParameterOverrideTest();
     RunRuntimeMaterialResolverResolvesInstanceParameterOverridesTest();
     RunRendererAppliesMaterialInstanceParameterOverrideTest();
+    RunPostProcessProfileAssetSaveLoadRoundTripTest();
+    RunRendererAppliesScenePostProcessProfileTest();
     RunRuntimeMaterialInstanceStaticBaseOverrideChainTest();
     RunRendererBindsGraphMaterialGpuProgramTest();
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)

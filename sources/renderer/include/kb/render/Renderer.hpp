@@ -196,6 +196,14 @@ public:
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] std::span<const std::string> LastAaPipelineTraceLines() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
+    // LIB-142: the fully-resolved post-process settings (the caller's own per-submit desc
+    // override if it supplied one, otherwise the scene's own asset-based active
+    // PostProcessProfile if resolvable, otherwise nullopt) from the most recent
+    // SubmitScene(s) call - a diagnostic/test accessor mirroring LastSceneDiagnostics' own
+    // shape. Computed unconditionally (unlike the GPU-facing PostProcessChain evaluation,
+    // which only runs when RenderSceneSubmitDesc::finalComposite.enabled is set), so it stays
+    // observable even for a minimal offscreen-only submission.
+    [[nodiscard]] const std::optional<ScenePostProcessSettings>& LastResolvedPostProcessSettings() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
@@ -262,6 +270,7 @@ private:
     std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
     std::vector<std::string> lastAaPipelineTraceLines_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
+    std::optional<ScenePostProcessSettings> lastResolvedPostProcessSettings_{};
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;

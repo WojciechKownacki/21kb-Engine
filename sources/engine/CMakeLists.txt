@@ -126,6 +126,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneInputComponents.hpp
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneLightingAccess.hpp
+    include/engine/scene/ScenePostProcessAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneCharacterControllerComponents.hpp
@@ -200,6 +201,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptMaterialInstanceApi.hpp
     include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptMeshRendererApi.hpp
+    include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
@@ -685,6 +687,7 @@ add_library(kb_engine STATIC
     src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
     src/script/ScriptMeshRendererApi.cpp
+    src/script/ScriptPostProcessApi.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
