@@ -26,6 +26,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
@@ -2943,6 +2944,124 @@ end
     kb::tests::Require(host.SharedState().Get("luaAppliedScalar").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterScalar did not report applied=true");
     kb::tests::Require(host.SharedState().Get("luaAppliedBool").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterBool did not report applied=true");
     kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper ClearParameter did not report cleared=true");
+}
+
+// LIB-142: kb::scene::ScenePostProcessAccess - proves the scene-global active-profile toggle
+// (default 0/none, set/get round trip, independent per Scene instance).
+void RunScenePostProcessAccessTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "ScenePostProcessAccess::ActiveProfile must default to 0 (no profile assigned)");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 4242U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 4242U, "ScenePostProcessAccess::SetActiveProfile did not persist the assigned profile asset id");
+
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 0U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "ScenePostProcessAccess::SetActiveProfile(0) did not clear the assigned profile");
+
+    kb::scene::Scene otherScene;
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 111U);
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(otherScene) == 0U, "ScenePostProcessAccess state must not leak between distinct Scene instances");
+}
+
+// LIB-142: script-facing PostProcess.SetProfile/ClearProfile/ActiveProfile - proves the
+// EXCLUSIVELY-asset-based convention: SetProfile resolves+type-checks against the
+// AssetRegistry exactly like MeshRenderer.SetMaterial (honest fail for a real asset of the
+// wrong type), a successful call actually mutates kb::scene::ScenePostProcessAccess's own
+// table (not just returns success), and the real Lua wrapper layer (a separate, hand-written
+// C function per this session's own LIB-137 finding) exercises the same functions correctly.
+void RunScriptPostProcessApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script post process API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.SetProfile") != nullptr, "Script post process API did not register PostProcess.SetProfile");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.ClearProfile") != nullptr, "Script post process API did not register PostProcess.ClearProfile");
+    kb::tests::Require(host.Functions().FindSignature("PostProcess.ActiveProfile") != nullptr, "Script post process API did not register PostProcess.ActiveProfile");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.PostProcess.SetProfile") != nullptr,
+        "Script post process API did not register VisualGraph runtime binding for PostProcess.SetProfile");
+
+    const kb::assets::AssetId profileAssetId{ 9401U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = profileAssetId,
+                           .type = "PostProcessProfile",
+                           .name = "TestProfile",
+                           .virtualPath = "/Game/PostProcess/TestProfile.kbppfx",
+                           .physicalPath = "TestProfile.kbppfx",
+                           .contentHash = 1U,
+                       }),
+        "Script post process API test profile asset registration failed");
+    const kb::assets::AssetId meshAssetId{ 9402U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/Meshes/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script post process API test wrong-type asset registration failed");
+
+    // Wrong-type asset (a real RenderMesh, not a PostProcessProfile) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeSet = host.Functions().Call(
+        "PostProcess.SetProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "profile", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/WrongTypeAsset.21kbmesh" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeSet.Succeeded(), "PostProcess.SetProfile must reject a real asset of the wrong type (RenderMesh, not PostProcessProfile)");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "A rejected SetProfile call must not mutate the scene's active profile");
+
+    const kb::script::ScriptFunctionCallResult set = host.Functions().Call(
+        "PostProcess.SetProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "profile", .value = kb::script::ScriptValue{ kb::assets::ToString(profileAssetId) } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(set.Succeeded() && set.Output("assigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "PostProcess.SetProfile (id string) failed for a valid PostProcessProfile asset");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == profileAssetId.value, "PostProcess.SetProfile did not actually store the resolved profile asset id in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult active = host.Functions().Call(
+        "PostProcess.ActiveProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{},
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(active.Succeeded() && active.Output("profile").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(profileAssetId),
+        "PostProcess.ActiveProfile must return the resolved active profile asset id");
+
+    const kb::script::ScriptFunctionCallResult clear = host.Functions().Call(
+        "PostProcess.ClearProfile",
+        std::span<const kb::script::ScriptFunctionArgument>{},
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clear.Succeeded() && clear.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "PostProcess.ClearProfile must report cleared=true");
+    kb::tests::Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U, "PostProcess.ClearProfile did not actually reset the scene's active profile to 0");
+
+    // Lua wrapper layer.
+    const kb::assets::AssetId luaAsset{ 9403U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Post Process Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local assigned = PostProcess.SetProfile("/Game/PostProcess/TestProfile.kbppfx")
+    local active = PostProcess.ActiveProfile()
+    local cleared = PostProcess.ClearProfile()
+    local activeAfterClear = PostProcess.ActiveProfile()
+    SetShared("luaAssigned", assigned)
+    SetShared("luaActive", active)
+    SetShared("luaCleared", cleared)
+    SetShared("luaActiveAfterClear", activeAfterClear)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script post process API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script post process API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper SetProfile did not report assigned=true");
+    kb::tests::Require(host.SharedState().Get("luaActive").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(profileAssetId),
+        "Script post process API Lua wrapper ActiveProfile did not return the assigned profile asset id");
+    kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper ClearProfile did not report cleared=true");
+    kb::tests::Require(host.SharedState().Get("luaActiveAfterClear").value_or(kb::script::ScriptValue{ std::string{ "not empty" } }).AsString().empty(),
+        "Script post process API Lua wrapper ActiveProfile must return empty after ClearProfile");
 }
 
 void RunScriptWorldTimePhysicsApiTest() {
@@ -10120,6 +10239,8 @@ void RunScriptRuntimeTests() {
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();
+    RunScenePostProcessAccessTest();
+    RunScriptPostProcessApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();

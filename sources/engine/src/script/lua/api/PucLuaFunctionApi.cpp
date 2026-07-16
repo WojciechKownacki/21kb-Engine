@@ -462,6 +462,60 @@ int LuaMaterialInstanceClearParameter(lua_State* state) {
     return 1;
 }
 
+// LIB-142: PostProcess.SetProfile(profile) -> assigned (boolean, nil+error on an
+// unresolvable/wrong-type profile asset) - mirrors LuaMeshRendererAssign's exact
+// resolve-then-single-value-or-nil+error shape.
+int LuaPostProcessSetProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* profile = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "profile",
+            .value = ScriptValue{ std::string{ profile != nullptr ? profile : "", profile != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (profile != nullptr) {
+        lua_pop(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.SetProfile", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "post process profile assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPostProcessClearProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.ClearProfile", {});
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaPostProcessActiveProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("PostProcess.ActiveProfile", {});
+    const std::string profile = result.Output("profile").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, profile.data(), profile.size());
+    return 1;
+}
+
 int LuaMeshRendererSetMaterial(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
@@ -1592,6 +1646,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetParameterBool", &LuaMaterialInstanceSetParameterBool, context);
     SetClosure(state, "ClearParameter", &LuaMaterialInstanceClearParameter, context);
     lua_setfield(state, environmentIndex, "MaterialInstance");
+
+    lua_createtable(state, 0, 3);
+    SetClosure(state, "SetProfile", &LuaPostProcessSetProfile, context);
+    SetClosure(state, "ClearProfile", &LuaPostProcessClearProfile, context);
+    SetClosure(state, "ActiveProfile", &LuaPostProcessActiveProfile, context);
+    lua_setfield(state, environmentIndex, "PostProcess");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);

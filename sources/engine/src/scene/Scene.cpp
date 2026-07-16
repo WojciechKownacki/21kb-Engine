@@ -13,6 +13,7 @@
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -198,6 +199,14 @@ void SceneLightingAccess::SetBasicLightingEnabled(Scene& scene, bool enabled) no
 
 bool SceneLightingAccess::BasicLightingEnabled(const Scene& scene) noexcept {
     return SceneAccess::State(scene).basicLightingEnabled;
+}
+
+void ScenePostProcessAccess::SetActiveProfile(Scene& scene, std::uint64_t profileAssetId) noexcept {
+    SceneAccess::State(scene).postProcessProfileAssetId = profileAssetId;
+}
+
+std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).postProcessProfileAssetId;
 }
 
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {

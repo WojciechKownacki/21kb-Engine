@@ -362,6 +362,12 @@ public:
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
+    // LIB-142: scene-global active PostProcessProfile asset id (0 = none) - the ONLY
+    // asset-based, serializable post-process parameter set a scene can be assigned, mirroring
+    // basicLightingEnabled's own scene-global-toggle shape rather than a per-entity component
+    // (a spatial, per-camera/per-volume post-process system is explicitly out of scope for
+    // this ticket - see ScenePostProcessAccess.hpp's own doc comment).
+    std::uint64_t postProcessProfileAssetId = 0U;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors
