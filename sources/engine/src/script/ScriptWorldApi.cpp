@@ -101,6 +101,27 @@ void ApplyRotationArgs(kb::scene::TransformComponent& transform, std::span<const
     }
 }
 
+// LIB-160: the scale half of a full spawn pose (position/rotation above),
+// same per-component-optional idiom, defaulting to whatever is already in
+// transform.localScale ({1,1,1} for a fresh TransformComponent).
+void ApplyScaleArgs(kb::scene::TransformComponent& transform, std::span<const ScriptFunctionArgument> arguments) noexcept {
+    if (HasArg(arguments, "scaleX")) {
+        transform.localScale.x = FloatArg(arguments, "scaleX", transform.localScale.x);
+    }
+    if (HasArg(arguments, "scaleY")) {
+        transform.localScale.y = FloatArg(arguments, "scaleY", transform.localScale.y);
+    }
+    if (HasArg(arguments, "scaleZ")) {
+        transform.localScale.z = FloatArg(arguments, "scaleZ", transform.localScale.z);
+    }
+}
+
+[[nodiscard]] bool HasAnyTransformArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
+    return HasArg(arguments, "x") || HasArg(arguments, "y") || HasArg(arguments, "z") || HasArg(arguments, "rotX") ||
+        HasArg(arguments, "rotY") || HasArg(arguments, "rotZ") || HasArg(arguments, "rotW") || HasArg(arguments, "scaleX") ||
+        HasArg(arguments, "scaleY") || HasArg(arguments, "scaleZ");
+}
+
 ScriptFunctionCallResult EntityResult(std::string_view pin, kb::scene::SceneEntity entity) {
     return ScriptFunctionCallResult{
         .executed = true,
@@ -660,11 +681,36 @@ ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& cont
     }
     const kb::scene::ScenePrefabInstance instance = context.scene->Prefabs().Instantiate(*prefab.Get());
     const kb::scene::SceneEntity root = instance.Empty() ? kb::scene::SceneEntity{} : instance.ObjectAt(0).Entity();
-    if (root.IsValid() && (HasArg(arguments, "x") || HasArg(arguments, "y") || HasArg(arguments, "z"))) {
+    // LIB-160: full spawn transform (position + rotation + scale) applied to
+    // the root, matching World.Spawn's established post-instantiate pattern
+    // (extended here with scale). Any subset of pins may be supplied.
+    if (root.IsValid() && HasAnyTransformArg(arguments)) {
         kb::scene::TransformComponent transform = context.scene->Transforms().Get(root);
         ApplyPositionArgs(transform, arguments);
+        ApplyRotationArgs(transform, arguments);
+        ApplyScaleArgs(transform, arguments);
         context.scene->Transforms().Set(root, transform);
     }
+    // LIB-160: parent the instantiated root under a given entity, mirroring
+    // World.Spawn's SetParent + SynchronizeTransforms pattern (the native
+    // ScenePrefabInstantiationSettings::parent capability, reached the same
+    // proven way World.Spawn already does rather than a separate settings
+    // path). A rejected/invalid parent is silently ignored, exactly as
+    // World.Spawn's own parent path (no separate failure signal).
+    if (root.IsValid()) {
+        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
+            static_cast<void>(context.scene->Hierarchy().SetParent(root, parent));
+            context.scene->Runtime().SynchronizeTransforms();
+        }
+    }
+    // LIB-160: completion callback — queue an entity-local "OnPrefabInstantiated"
+    // event to the CALLER (the script that requested the spawn), carrying the
+    // root and object count. Drained next frame by ScriptRuntimeSceneSystem.
+    // A synchronous instantiate has no async result to await; this is the
+    // decoupled push channel (mirror TaskCompleted), not a fabricated async
+    // completion. No-op when the caller is not a live entity.
+    context.scene->Prefabs().QueueInstantiatedEvent(context.caller, root, instance.ObjectCount());
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -779,9 +825,17 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "World.InstantiatePrefab",
         {
             ScriptFunctionPin{ "prefab", ScriptValueType::String, true },
+            ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
             ScriptFunctionPin{ "x", ScriptValueType::Float, false },
             ScriptFunctionPin{ "y", ScriptValueType::Float, false },
             ScriptFunctionPin{ "z", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotZ", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "rotW", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "scaleX", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "scaleY", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "scaleZ", ScriptValueType::Float, false },
         },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
         &InstantiatePrefab) && ok;
