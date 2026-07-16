@@ -9,6 +9,7 @@
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
+#include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneApi.hpp"
 #include "engine/script/ScriptTaskApi.hpp"
@@ -163,6 +164,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Particles",
             .ownerRuntime = "kb::scene::SceneParticleSystems",
             .Register = &kb::script::ScriptParticleSystemApi::Register,
+        },
+        // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame - reads the CPU-side
+        // per-entity visibility/bounds feedback frame (kb::scene::SceneRenderFeedback) the
+        // renderer publishes into the scene at every SubmitScene, computed with the exact
+        // same frustum/bounds math the mesh pipeline culls with - one-frame latency, zero
+        // GPU occlusion queries/readbacks/fences (see ScriptRendererApi.hpp's doc comment).
+        LibraryModuleDesc{
+            .name = "Renderer",
+            .ownerRuntime = "kb::scene::SceneRenderFeedback",
+            .Register = &kb::script::ScriptRendererApi::Register,
         },
     };
     return kCatalog;

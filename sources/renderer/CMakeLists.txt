@@ -235,6 +235,8 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
     src/scene/SceneParticleRenderSynchronizer.cpp
+    src/scene/SceneRenderVisibilityPublisher.cpp
+    src/scene/SceneRenderVisibilityPublisher.hpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
     src/scene/SceneRenderWorldTransformReader.cpp
