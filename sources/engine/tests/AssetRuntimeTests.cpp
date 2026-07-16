@@ -131,6 +131,66 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
+// LIB-155: AssetManager::LoadOpaque — the type-erased force-load the
+// generic script-facing Assets.Load surface needs, because kb_engine cannot
+// name a compile-time payload T for asset kinds whose C++ type lives in
+// another module (kb_render's RenderMesh/Material/Texture). Proves it
+// reaches the exact same cache as Load<T> (LoadedCount/IsLoaded agree) and
+// fails honestly (LastError set, no crash) for every non-happy path: an
+// invalid id, an unregistered id, and a registered id whose type has no
+// loader.
+void RunAssetManagerLoadOpaqueTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "OpaqueProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Opaque.txt", "opaque load payload");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset discovery did not find the text asset");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Opaque.txt");
+    kb::tests::Require(metadata != nullptr, "Discovered opaque-load asset could not be resolved by virtual path");
+    const kb::assets::AssetId textAssetId = metadata->id;
+
+    kb::tests::Require(!manager.LoadOpaque(kb::assets::AssetId{}), "LoadOpaque must reject an invalid asset id");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error for an invalid asset id");
+
+    const kb::assets::AssetId unknownId{ textAssetId.value + 999999U };
+    kb::tests::Require(!manager.LoadOpaque(unknownId), "LoadOpaque must reject an id with no registered metadata");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error for an unregistered id");
+
+    const kb::assets::AssetId noLoaderId{ textAssetId.value + 1U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = noLoaderId,
+                           .type = "GhostType",
+                           .name = "GhostAsset",
+                           .virtualPath = "/Game/Text/Ghost.ghost",
+                           .physicalPath = "Ghost.ghost",
+                           .contentHash = 1U,
+                       }),
+        "Registration of the no-loader fixture asset failed");
+    kb::tests::Require(!manager.LoadOpaque(noLoaderId), "LoadOpaque must reject an asset type with no registered loader");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error when no loader is registered for the asset type");
+
+    kb::tests::Require(!manager.IsLoaded(textAssetId), "Opaque-load asset must not be loaded before LoadOpaque is called");
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must succeed for a registered id with a matching loader");
+    kb::tests::Require(manager.IsLoaded(textAssetId), "LoadOpaque must populate the SAME cache Load<T>/IsLoaded observe");
+    kb::tests::Require(manager.LoadedCount() == 1, "LoadOpaque must add exactly one cache entry");
+
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be idempotent for an already-cached asset");
+    kb::tests::Require(manager.LoadedCount() == 1, "A second LoadOpaque on an already-cached asset must not duplicate the cache entry");
+
+    const kb::assets::AssetHandle<std::string> viaTypedLoad = manager.Load<std::string>(textAssetId);
+    kb::tests::Require(viaTypedLoad.IsLoaded() && *viaTypedLoad.Get() == "opaque load payload", "LoadOpaque's cache entry must be reachable through the existing typed Load<T> path");
+
+    kb::tests::Require(manager.Unload(textAssetId), "Unload must remove the cache entry LoadOpaque populated");
+    kb::tests::Require(!manager.IsLoaded(textAssetId), "Asset must report unloaded after Unload following a LoadOpaque");
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be able to reload an asset after Unload");
+    kb::tests::Require(manager.IsLoaded(textAssetId), "Reload through LoadOpaque after Unload must repopulate the cache");
+}
+
 void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
     ResetTestRoot();
 
@@ -442,6 +502,7 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
+    RunAssetManagerLoadOpaqueTest();
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
