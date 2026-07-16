@@ -276,6 +276,7 @@ ScriptFunctionCallResult AudioSetMixer(const ScriptFunctionCallContext& context,
         // mirroring PostProcess.ClearProfile's semantics without a second function.
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(*context.scene, 0U);
         kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, {});
+        kb::scene::SceneAudioMixerAccess::ResetRuntimeMixerState(*context.scene);
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
@@ -289,8 +290,10 @@ ScriptFunctionCallResult AudioSetMixer(const ScriptFunctionCallContext& context,
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(*context.scene, mixerAssetId.value);
     // A different mixer's snapshot names are unrelated - reset the active snapshot to the
-    // authored volumes instead of silently carrying a stale name across mixers.
+    // authored volumes instead of silently carrying a stale name across mixers; LIB-150's
+    // runtime overrides and any running transition are dropped for the same reason.
     kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, {});
+    kb::scene::SceneAudioMixerAccess::ResetRuntimeMixerState(*context.scene);
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
@@ -340,6 +343,84 @@ ScriptFunctionCallResult AudioSetSnapshot(const ScriptFunctionCallContext& conte
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+// LIB-150: shared validation for bus/snapshot-addressed mixer operations - the mixer
+// asset lives engine-side, so names ARE validated against the real asset (honest error,
+// never a silently-ignored no-op). Returns the loaded mixer or an error result.
+[[nodiscard]] kb::assets::AssetHandle<kb::audio::AudioMixerAsset> LoadActiveMixer(kb::scene::Scene& scene, std::string& outError) {
+    const std::uint64_t mixerAssetId = kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+    if (mixerAssetId == 0U) {
+        outError = "audio mixer operation requires an active audio mixer";
+        return {};
+    }
+    kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+        scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(kb::assets::AssetId{ mixerAssetId });
+    if (!mixer.IsLoaded()) {
+        outError = "active audio mixer asset could not be loaded";
+    }
+    return mixer;
+}
+
+ScriptFunctionCallResult AudioSetBusVolume(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* busArgument = FindArg(arguments, "bus");
+    const std::string bus = busArgument == nullptr ? std::string{} : busArgument->AsString();
+    std::string loadError;
+    const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer = LoadActiveMixer(*context.scene, loadError);
+    if (!mixer.IsLoaded()) {
+        return Error(std::move(loadError));
+    }
+    if (mixer->FindBus(bus) == nullptr) {
+        return Error("audio bus name is not declared by the active mixer");
+    }
+
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(*context.scene, bus, FloatArg(arguments, "volume", 1.0F));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioClearBusVolume(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* busArgument = FindArg(arguments, "bus");
+    const std::string bus = busArgument == nullptr ? std::string{} : busArgument->AsString();
+    // Idempotent-false for a bus with no override - mirrors MaterialInstance.ClearParameter.
+    const bool cleared = kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(*context.scene, bus);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ cleared } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioTransitionToSnapshot(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* snapshotArgument = FindArg(arguments, "snapshot");
+    const std::string snapshot = snapshotArgument == nullptr ? std::string{} : snapshotArgument->AsString();
+    std::string loadError;
+    const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer = LoadActiveMixer(*context.scene, loadError);
+    if (!mixer.IsLoaded()) {
+        return Error(std::move(loadError));
+    }
+    if (!snapshot.empty() && mixer->FindSnapshot(snapshot) == nullptr) {
+        return Error("audio snapshot name is not declared by the active mixer");
+    }
+
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(*context.scene, snapshot, FloatArg(arguments, "durationSeconds", 0.0F));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "started", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -464,7 +545,48 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "snapshot", ScriptValueType::String, true },
     };
     activeSnapshot.callback = &AudioActiveSnapshot;
-    return host.RegisterFunction(std::move(activeSnapshot));
+    if (!host.RegisterFunction(std::move(activeSnapshot))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setBusVolume;
+    setBusVolume.signature.name = "Audio.SetBusVolume";
+    setBusVolume.signature.inputs = {
+        ScriptFunctionPin{ "bus", ScriptValueType::String, true },
+        ScriptFunctionPin{ "volume", ScriptValueType::Float, true },
+    };
+    setBusVolume.signature.outputs = {
+        ScriptFunctionPin{ "applied", ScriptValueType::Bool, true },
+    };
+    setBusVolume.callback = &AudioSetBusVolume;
+    if (!host.RegisterFunction(std::move(setBusVolume))) {
+        return false;
+    }
+
+    ScriptFunctionDesc clearBusVolume;
+    clearBusVolume.signature.name = "Audio.ClearBusVolume";
+    clearBusVolume.signature.inputs = {
+        ScriptFunctionPin{ "bus", ScriptValueType::String, true },
+    };
+    clearBusVolume.signature.outputs = {
+        ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true },
+    };
+    clearBusVolume.callback = &AudioClearBusVolume;
+    if (!host.RegisterFunction(std::move(clearBusVolume))) {
+        return false;
+    }
+
+    ScriptFunctionDesc transitionToSnapshot;
+    transitionToSnapshot.signature.name = "Audio.TransitionToSnapshot";
+    transitionToSnapshot.signature.inputs = {
+        ScriptFunctionPin{ "snapshot", ScriptValueType::String, false },
+        ScriptFunctionPin{ "durationSeconds", ScriptValueType::Float, true },
+    };
+    transitionToSnapshot.signature.outputs = {
+        ScriptFunctionPin{ "started", ScriptValueType::Bool, true },
+    };
+    transitionToSnapshot.callback = &AudioTransitionToSnapshot;
+    return host.RegisterFunction(std::move(transitionToSnapshot));
 }
 
 } // namespace kb::script

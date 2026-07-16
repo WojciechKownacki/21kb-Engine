@@ -11,6 +11,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneMode.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -377,6 +378,10 @@ public:
     // SceneAudioMixerAccess.hpp's own doc comment.
     std::uint64_t audioMixerAssetId = 0U;
     std::string audioMixerSnapshotName;
+    // LIB-150: runtime per-bus volume overrides (strongest layer) + the active snapshot
+    // transition (advanced with scene delta time by the audio backend each tick).
+    std::vector<AudioMixerBusVolumeOverride> audioMixerBusVolumeOverrides;
+    AudioMixerSnapshotTransition audioMixerSnapshotTransition;
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // payload, queued by whichever physics plugin is loaded via
     // PhysicsBackend::QueueCollisionEvent - mirrors

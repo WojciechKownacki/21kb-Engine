@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 115> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 118> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -50,6 +50,9 @@ constexpr std::array<LuaBindingSpec, 115> kLuaBindings{ {
     { "Audio", "SetPitch", "Audio.SetPitch", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Audio", "SetLoop", "Audio.SetLoop", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Audio", "IsPlaying", "Audio.IsPlaying", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Audio", "SetBusVolume", "Audio.SetBusVolume", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "Audio", "ClearBusVolume", "Audio.ClearBusVolume", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Audio", "TransitionToSnapshot", "Audio.TransitionToSnapshot", ScriptApiCatalogLuaReturnKind::SingleOutput, "started" },
     { "MeshRenderer", "SetMesh", "MeshRenderer.SetMesh", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterial", "MeshRenderer.SetMaterial", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterialSlot", "MeshRenderer.SetMaterialSlot", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
