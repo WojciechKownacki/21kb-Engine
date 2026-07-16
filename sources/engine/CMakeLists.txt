@@ -160,6 +160,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ParticleEffectAssetLoader.hpp
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
+    include/engine/scene/SceneRenderFeedback.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
@@ -208,6 +209,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptParticleSystemApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
+    include/engine/script/ScriptRendererApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
@@ -540,6 +542,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneMaterialInstances.cpp
     src/scene/modules/SceneParticleSystems.cpp
     src/scene/modules/ScenePrefabConnectionModule.cpp
+    src/scene/modules/SceneRenderFeedback.cpp
     src/scene/modules/ScenePrefabInstantiationModule.cpp
     src/scene/modules/ScenePrefabOverrideModule.cpp
     src/scene/modules/ScenePrefabs.cpp
@@ -699,6 +702,7 @@ add_library(kb_engine STATIC
     src/script/ScriptParticleSystemApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptPhysicsApi.cpp
+    src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp
