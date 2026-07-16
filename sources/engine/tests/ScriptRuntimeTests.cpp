@@ -10074,18 +10074,20 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
     kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
 }
 
-// LIB-155: Assets.IsLoaded/Load/LoadAsync/Unload — the generic, type-erased
-// script surface over AssetManager::LoadOpaque/Unload/IsLoaded. Proves
-// registration (Native+VisualGraph parity via host.Functions().Call +
-// VisualGraphRuntimeBindings, mirroring RunScriptTaskApiTest/
-// RunScriptMaterialInstanceApiTest's established no-Lua-sugar-module
-// pattern — see EngineLibraryModule.cpp's Assets entry doc comment for why
-// no PucLuaFunctionApi wrapper is added), reference resolution by BOTH
-// numeric id and virtual path, honest false for an unresolved reference on
-// every function (never an error), and LoadAsync's real Task-based
-// completion end-to-end — Completed for a loadable asset, genuinely Failed
-// (not silently swallowed) for one whose type has no registered loader —
-// through a real scene.Tasks().Advance.
+// LIB-155/156: Assets.Find/IsLoaded/Load/LoadAsync/Unload — the generic,
+// type-erased script surface over AssetManager::LoadOpaque/Unload/IsLoaded
+// plus a pure metadata lookup (Find). Proves registration (Native+VisualGraph
+// parity via host.Functions().Call + VisualGraphRuntimeBindings, mirroring
+// RunScriptTaskApiTest/RunScriptMaterialInstanceApiTest's established
+// no-Lua-sugar-module pattern — see EngineLibraryModule.cpp's Assets entry
+// doc comment for why no PucLuaFunctionApi wrapper is added), reference
+// resolution by BOTH numeric id and virtual path, honest false for an
+// unresolved reference on every function (never an error), that a physical
+// OS path string NEVER resolves through Assets.Find (LIB-156's own
+// requirement), and LoadAsync's real Task-based completion end-to-end —
+// Completed for a loadable asset, genuinely Failed (not silently swallowed)
+// for one whose type has no registered loader — through a real
+// scene.Tasks().Advance.
 void RunScriptAssetsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
@@ -10101,6 +10103,7 @@ void RunScriptAssetsApiTest() {
 
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script assets API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Find") != nullptr, "Assets.Find was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.IsLoaded") != nullptr, "Assets.IsLoaded was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.Load") != nullptr, "Assets.Load was not registered");
     kb::tests::Require(host.Functions().FindSignature("Assets.LoadAsync") != nullptr, "Assets.LoadAsync was not registered");
@@ -10123,6 +10126,27 @@ void RunScriptAssetsApiTest() {
     const kb::script::ScriptFunctionCallResult unknownLoadAsync = host.Functions().Call("Assets.LoadAsync", unknownArgs, context);
     kb::tests::Require(unknownLoadAsync.Succeeded() && !unknownLoadAsync.Output("started")->AsBool() && unknownLoadAsync.Output("task")->AsUInt64() == 0U,
         "Assets.LoadAsync must honestly report failure for an unresolved reference without creating a task");
+    const kb::script::ScriptFunctionCallResult unknownFind = host.Functions().Call("Assets.Find", unknownArgs, context);
+    kb::tests::Require(unknownFind.Succeeded() && !unknownFind.Output("found")->AsBool() && unknownFind.Output("asset")->AsUInt64() == 0U, "Assets.Find must honestly report not-found for an unresolved reference, not error");
+
+    // LIB-156: Assets.Find must NEVER resolve a physical OS path — its
+    // resolution surface is exclusively stable id / virtual project path
+    // (ResolveReference never reads AssetMetadata::physicalPath). A string
+    // that looks like a real Windows filesystem path — including the
+    // fixture asset's OWN real physicalPath on disk — must report
+    // not-found, proving there is no fallback path from physical path to
+    // asset id anywhere in this resolution surface.
+    const std::vector<kb::script::ScriptFunctionArgument> physicalPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ (assetsRoot / "Logic" / "AssetsApiSubject.lua").string() } },
+    };
+    const kb::script::ScriptFunctionCallResult physicalPathFind = host.Functions().Call("Assets.Find", physicalPathArgs, context);
+    kb::tests::Require(physicalPathFind.Succeeded() && !physicalPathFind.Output("found")->AsBool() && physicalPathFind.Output("asset")->AsUInt64() == 0U,
+        "Assets.Find must reject a real physical OS path for a registered asset — resolution is by stable id/virtual path only, never physicalPath");
+    const std::vector<kb::script::ScriptFunctionArgument> arbitraryOsPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "C:\\Windows\\System32\\drivers\\etc\\hosts" } } },
+    };
+    const kb::script::ScriptFunctionCallResult arbitraryOsPathFind = host.Functions().Call("Assets.Find", arbitraryOsPathArgs, context);
+    kb::tests::Require(arbitraryOsPathFind.Succeeded() && !arbitraryOsPathFind.Output("found")->AsBool(), "Assets.Find must reject an arbitrary absolute OS path, not attempt to resolve it");
 
     // Resolve by virtual path.
     const std::vector<kb::script::ScriptFunctionArgument> pathArgs{
@@ -10130,6 +10154,13 @@ void RunScriptAssetsApiTest() {
     };
     const kb::script::ScriptFunctionCallResult beforeLoad = host.Functions().Call("Assets.IsLoaded", pathArgs, context);
     kb::tests::Require(beforeLoad.Succeeded() && !beforeLoad.Output("loaded")->AsBool(), "Assets.IsLoaded must report false before the asset has been loaded");
+
+    // Assets.Find is a PURE lookup — resolving must not load the asset (no
+    // cache side effect), distinguishing it from Assets.Load.
+    const kb::script::ScriptFunctionCallResult findByPath = host.Functions().Call("Assets.Find", pathArgs, context);
+    kb::tests::Require(findByPath.Succeeded() && findByPath.Output("found")->AsBool() && findByPath.Output("asset")->AsUInt64() == assetId.value,
+        "Assets.Find (virtual path) must resolve a real registered asset to its own stable id");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Find must be a pure lookup — it must NOT force-load the asset into AssetManager's cache");
 
     const kb::script::ScriptFunctionCallResult load = host.Functions().Call("Assets.Load", pathArgs, context);
     kb::tests::Require(load.Succeeded() && load.Output("success")->AsBool(), "Assets.Load (virtual path) must succeed for a real, loader-backed asset");
@@ -10145,6 +10176,9 @@ void RunScriptAssetsApiTest() {
     };
     const kb::script::ScriptFunctionCallResult idIsLoaded = host.Functions().Call("Assets.IsLoaded", idArgs, context);
     kb::tests::Require(idIsLoaded.Succeeded() && idIsLoaded.Output("loaded")->AsBool(), "Assets.IsLoaded must resolve a numeric-id-string reference identically to a virtual path");
+    const kb::script::ScriptFunctionCallResult findById = host.Functions().Call("Assets.Find", idArgs, context);
+    kb::tests::Require(findById.Succeeded() && findById.Output("found")->AsBool() && findById.Output("asset")->AsUInt64() == assetId.value,
+        "Assets.Find must resolve a numeric-id-string reference identically to a virtual path");
 
     const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
     kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");

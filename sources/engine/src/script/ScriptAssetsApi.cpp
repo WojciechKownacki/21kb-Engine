@@ -40,14 +40,20 @@ ScriptFunctionCallResult NoScene() {
 
 // Generic reference resolution — deliberately WITHOUT a per-kind type check
 // (unlike ScriptMeshRendererApi::ResolveAssetId/ScriptAudioApi::
-// ResolveClipAssetId, which reject the wrong asset kind): Assets.Load/
-// IsLoaded/Unload/LoadAsync manage lifecycle/ownership generically across
-// every registered asset kind, the same way AssetManager::Load<T> and
-// Unload/IsLoaded already do natively. Per-kind type SAFETY for specific
-// gameplay slots (mesh, material, texture, ...) is LIB-157's typed-reference
-// layer, layered on top of the component setters that already do their own
-// isExpectedType check (MeshRenderer.SetMesh, Audio.Play, ...) — not
-// duplicated here.
+// ResolveClipAssetId, which reject the wrong asset kind): Assets.Find/Load/
+// IsLoaded/Unload/LoadAsync manage lookup/lifecycle/ownership generically
+// across every registered asset kind, the same way AssetManager::Load<T>
+// and Unload/IsLoaded already do natively. Per-kind type SAFETY for
+// specific gameplay slots (mesh, material, texture, ...) is LIB-157's
+// typed-reference layer, layered on top of the component setters that
+// already do their own isExpectedType check (MeshRenderer.SetMesh,
+// Audio.Play, ...) — not duplicated here. LIB-156: this is ALSO the entire
+// resolution surface for "stable id or logical/virtual project path, never
+// a physical OS path" — only TryParseAssetId+Registry().Find (numeric id)
+// or Registry().FindByPath (virtual path) are ever consulted; neither
+// touches AssetMetadata::physicalPath or AssetManager's private
+// ResolvePhysicalPath, so a physical path string can never resolve through
+// any Assets.* function.
 [[nodiscard]] kb::assets::AssetId ResolveReference(kb::scene::Scene& scene, std::string_view reference) {
     kb::assets::AssetId id{};
     if (kb::assets::TryParseAssetId(reference, id) && id.IsValid()) {
@@ -56,6 +62,31 @@ ScriptFunctionCallResult NoScene() {
 
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath(std::filesystem::path{ reference });
     return metadata == nullptr ? kb::assets::AssetId{} : metadata->id;
+}
+
+// LIB-156: a pure metadata lookup, deliberately separate from Assets.Load —
+// Find never forces the loader to run or touches AssetManager's cache, it
+// only answers "does this stable id/virtual path resolve to a registered
+// asset." ResolveReference (above) is the ENTIRE resolution surface: it
+// only ever calls TryParseAssetId+Registry().Find (numeric id) or
+// Registry().FindByPath (virtual path) — it has no code path that reads
+// AssetMetadata::physicalPath or calls AssetManager's private
+// ResolvePhysicalPath, so a physical OS path can never resolve here (see
+// RunScriptAssetsApiTest's RunScriptAssetsFindRejectsPhysicalPathTest-style
+// coverage for the negative proof).
+ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ id.IsValid() } },
+            ScriptFunctionArgument{ "asset", ScriptValue{ id.value, ScriptValueType::Hash } },
+        },
+        .errors = {},
+    };
 }
 
 ScriptFunctionCallResult IsLoaded(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -176,6 +207,10 @@ bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<Scr
 
 bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
+    ok = RegisterFunction(host, "Assets.Find",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "asset", ScriptValueType::Hash, true } }, &Find)
+        && ok;
     ok = RegisterFunction(host, "Assets.IsLoaded",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
               { ScriptFunctionPin{ "loaded", ScriptValueType::Bool, true } }, &IsLoaded)
