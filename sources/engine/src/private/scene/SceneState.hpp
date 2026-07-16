@@ -13,6 +13,7 @@
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
@@ -427,6 +428,16 @@ public:
     };
     std::vector<ParticleSystemInstanceRecord> particleSystems;
     std::uint64_t nextParticleSystemInstanceId = 1U;
+    // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
+    // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
+    // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish
+    // (through the same const_cast-during-submit convention EnsureSceneResources already
+    // uses for asset loading), read by scripts the next frame. renderVisibilityPublishCount
+    // is monotonic; 0 means "no frame was ever published" and every query honestly returns
+    // its empty result - see SceneRenderFeedback.hpp's own doc comment for the full
+    // latency/last-submit-wins contract.
+    SceneRenderVisibilityFrame renderVisibilityFrame{};
+    std::uint64_t renderVisibilityPublishCount = 0U;
 };
 
 } // namespace kb::scene

@@ -17,6 +17,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
+#include "scene/SceneRenderVisibilityPublisher.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
@@ -838,6 +839,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // LIB-144: publish the CPU-side per-entity visibility/bounds feedback frame
+    // (Renderer.IsVisible/GetBounds/TestFrustum's backing data) into the scene, computed
+    // unconditionally (mirrors lastResolvedPostProcessSettings_ above - observable even for
+    // a minimal offscreen submission) with the pre-jitter camera this submit actually
+    // renders with. The const_cast follows the exact same convention EnsureSceneResources
+    // already established a few lines up: a scene's runtime-derived caches are mutable
+    // during its own submit. Mesh resources were ensured above, so bounds resolve this same
+    // frame; when the same scene is submitted to several viewports, the last submit in the
+    // frame's deterministic plan order wins (see SceneRenderFeedback.hpp's contract).
+    SceneRenderVisibilityPublisher::BuildFrame(
+        renderScene,
+        overlayCamera,
+        desc.target.viewport.id.value,
+        &sceneRenderer_->Resources(),
+        &sceneRenderer_->ResourceMap(),
+        sceneRenderVisibilityScratch_);
+    kb::scene::SceneRenderFeedback::Publish(const_cast<kb::scene::Scene&>(scene), sceneRenderVisibilityScratch_);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
     // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly
