@@ -117,6 +117,10 @@ public:
     [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] float VoicePlaybackSeconds(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId) ? 0.0F : -1.0F; }
+    [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float, kb::scene::SceneEntity) override {
+        return IsLive(voiceId) && !marker.empty();
+    }
 
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
@@ -3892,6 +3896,21 @@ void RunScriptAudioVoiceControlApiTest() {
         [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
             return voiceId == liveVoice && !paused;
         }
+        [[nodiscard]] float VoicePlaybackSeconds(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            return voiceId == liveVoice ? 1.25F : -1.0F;
+        }
+        [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) override {
+            if (voiceId != liveVoice || marker.empty()) {
+                return false;
+            }
+            lastMarker = std::string{ marker };
+            lastMarkerSeconds = positionSeconds;
+            lastMarkerTarget = target;
+            return true;
+        }
+        std::string lastMarker;
+        float lastMarkerSeconds = -1.0F;
+        kb::scene::SceneEntity lastMarkerTarget{};
     };
 
     kb::scene::Scene scene;
@@ -3957,8 +3976,18 @@ function Tick(self, dt)
     SetShared("luaSeeked", Audio.Seek(7, 1.5))
     SetShared("luaVolume", Audio.SetVolume(7, 0.6))
     SetShared("luaPlaying", Audio.IsPlaying(7))
+    local position = Audio.GetPosition(7)
+    SetShared("luaPositionValid", position.valid)
+    SetShared("luaPositionSeconds", position.seconds)
+    SetShared("luaMarkerAdded", Audio.AddMarker(7, "beat", 0.5))
     SetShared("luaStopped", Audio.Stop(7))
     SetShared("luaDeadStop", Audio.Stop(7))
+end
+
+function OnAudioMarker(self, event)
+    SetShared("luaMarkerName", event.args.marker)
+    SetShared("luaMarkerVoice", event.args.voice)
+    SetShared("luaMarkerPosition", event.args.positionSeconds)
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Script audio voice control Lua wrapper script did not load");
@@ -3969,6 +3998,53 @@ end
     }
     kb::tests::Require(!host.SharedState().Get("luaDeadStop").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Lua Audio.Stop on an already-stopped voice must be honestly false");
+
+    // LIB-152: position + markers through the Lua wrappers (values recorded by the fake).
+    kb::tests::Require(host.SharedState().Get("luaPositionValid").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(host.SharedState().Get("luaPositionSeconds").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat(), 1.25F),
+        "Lua Audio.GetPosition did not return the audio-clock position");
+    kb::tests::Require(host.SharedState().Get("luaMarkerAdded").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastMarker == "beat" && kb::tests::NearlyEqual(backend.lastMarkerSeconds, 0.5F)
+            && backend.lastMarkerTarget == luaObject.Entity(),
+        "Lua Audio.AddMarker did not carry the marker (with the calling entity as target) to the backend");
+
+    // LIB-152: native contracts - dead-voice position is honestly invalid, an empty
+    // marker name errors, the queue drains once.
+    kb::tests::Require(kb::audio::AudioPlayback::VoicePlaybackSeconds(scene, 999U) < 0.0F,
+        "A dead voice's playback position must be negative, never a fake 0.0");
+    const kb::script::ScriptFunctionCallContext markerContext{ .scene = &scene, .caller = luaObject.Entity() };
+    kb::tests::Require(!host.Functions().Call(
+                            "Audio.AddMarker",
+                            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                                kb::script::ScriptFunctionArgument{ .name = "voice", .value = kb::script::ScriptValue{ 7 } },
+                                kb::script::ScriptFunctionArgument{ .name = "marker", .value = kb::script::ScriptValue{ std::string{} } },
+                                kb::script::ScriptFunctionArgument{ .name = "positionSeconds", .value = kb::script::ScriptValue{ 0.0F } },
+                            } },
+                            markerContext)
+                            .Succeeded(),
+        "Audio.AddMarker must honestly error for an empty marker name");
+
+    // LIB-152: the full backend->queue->dispatch path - a queued marker event reaches the
+    // registering entity's Lua OnAudioMarker via the scene's own frame loop, entity-local
+    // (InstallSceneSystem + a warm-up Update, the exact setup the collision-event
+    // dispatch test uses).
+    kb::tests::Require(host.InstallSceneSystem(), "Audio marker dispatch test scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
+                                                          .target = luaObject.Entity(),
+                                                          .voiceId = 7U,
+                                                          .marker = "beat",
+                                                          .positionSeconds = 0.75F,
+                                                      });
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(host.SharedState().Get("luaMarkerName").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "beat",
+        "OnAudioMarker did not deliver the marker name to the registering entity's script");
+    kb::tests::Require(host.SharedState().Get("luaMarkerVoice").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 7,
+        "OnAudioMarker did not deliver the voice handle");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaMarkerPosition").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat(), 0.75F),
+        "OnAudioMarker did not deliver the audio-clock fire position");
+    kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
+        "The marker event queue must be fully drained by dispatch");
     kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
 }
 

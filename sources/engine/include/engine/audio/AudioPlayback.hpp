@@ -1,10 +1,13 @@
 #pragma once
 
 #include "engine/audio/AudioSettings.hpp"
+#include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace kb::scene {
 
@@ -76,6 +79,27 @@ public:
     [[nodiscard]] virtual bool SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept = 0;
     [[nodiscard]] virtual bool SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept = 0;
     [[nodiscard]] virtual bool IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
+    // LIB-152: the voice's playback position on the AUDIO clock (pcm frames / sample
+    // rate), in seconds. Negative for a dead voice - "gone" is distinguishable from
+    // "at 0.0" honestly.
+    [[nodiscard]] virtual float VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
+    // LIB-152: registers a named marker on a live voice; when playback crosses
+    // `positionSeconds`, the backend queues an "OnAudioMarker" event for `target`
+    // (AudioPlayback::QueueMarkerEvent) fired by the script runtime the same frame's
+    // event dispatch. False for a dead voice or an empty name.
+    [[nodiscard]] virtual bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) = 0;
+};
+
+// LIB-152: one fired voice marker awaiting script dispatch. `target` is the entity whose
+// scripts receive the ENTITY-LOCAL "OnAudioMarker" event (the caller that registered the
+// marker - the script that asked is the script that gets told). `positionSeconds` is the
+// voice's AUDIO-CLOCK playback position at fire time (pcm frames / sample rate) - never
+// the wall clock, so gameplay synchronization stays exact under frame hitches.
+struct PendingAudioMarkerEvent {
+    kb::scene::SceneEntity target{};
+    std::uint64_t voiceId = 0U;
+    std::string marker;
+    float positionSeconds = 0.0F;
 };
 
 class AudioPlayback final {
@@ -97,6 +121,14 @@ public:
     [[nodiscard]] static bool SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept;
     [[nodiscard]] static bool SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept;
     [[nodiscard]] static bool IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;
+    // LIB-152: see IAudioPlaybackBackend's contracts above; -1 / false without a backend.
+    [[nodiscard]] static float VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;
+    [[nodiscard]] static bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
+    // LIB-152: the backend->script event channel (mirror of PhysicsBackend's collision
+    // queue): the audio backend queues fired markers here each tick, and
+    // ScriptRuntimeSceneSystem drains them into ENTITY-LOCAL "OnAudioMarker" events.
+    static void QueueMarkerEvent(kb::scene::Scene& scene, PendingAudioMarkerEvent event);
+    [[nodiscard]] static std::vector<PendingAudioMarkerEvent> DrainPendingMarkerEvents(kb::scene::Scene& scene);
 };
 
 } // namespace kb::audio

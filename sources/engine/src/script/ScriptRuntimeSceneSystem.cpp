@@ -1,6 +1,7 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -94,6 +95,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
     AdvanceParticleSystems(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
+    DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -234,6 +236,21 @@ void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& 
         event.arguments.push_back(ScriptEventArgument{ .name = "normalX", .value = ScriptValue{ pending.normal.x } });
         event.arguments.push_back(ScriptEventArgument{ .name = "normalY", .value = ScriptValue{ pending.normal.y } });
         event.arguments.push_back(ScriptEventArgument{ .name = "normalZ", .value = ScriptValue{ pending.normal.z } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingAudioMarkerEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-152: ENTITY-LOCAL, exactly like the collision events above - the target is the
+    // entity whose script registered the marker (Audio.AddMarker's caller), and the
+    // position argument is the voice's AUDIO-clock position at fire time.
+    for (const kb::audio::PendingAudioMarkerEvent& pending : kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene)) {
+        ScriptEvent event;
+        event.name = "OnAudioMarker";
+        event.target = pending.target;
+        event.arguments.push_back(ScriptEventArgument{ .name = "voice", .value = ScriptValue{ static_cast<int>(pending.voiceId) } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "marker", .value = ScriptValue{ pending.marker } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "positionSeconds", .value = ScriptValue{ pending.positionSeconds } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }

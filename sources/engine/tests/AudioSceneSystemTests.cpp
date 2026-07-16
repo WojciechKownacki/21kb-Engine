@@ -279,6 +279,16 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             attachedDesc.ownerEntityId = ownerObject.Entity().Id();
             const kb::audio::AudioPlayResult attachedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, attachedDesc);
             kb::tests::Require(attachedPlayed.Succeeded(), "Owner-attached one-shot did not start");
+            // LIB-152: audio-clock position + markers on the REAL plugin - a marker at
+            // 0.0 fires on the first tick's DispatchMarkers (the queued event is drained
+            // by the same Update's script dispatch; no behaviours here, so it is honestly
+            // dropped - the delivery path itself is proven in ScriptRuntimeTests).
+            kb::tests::Require(kb::audio::AudioPlayback::VoicePlaybackSeconds(scene, attachedPlayed.voiceId) >= 0.0F,
+                "A live voice must report a non-negative audio-clock position");
+            kb::tests::Require(kb::audio::AudioPlayback::AddVoiceMarker(scene, attachedPlayed.voiceId, "start", 0.0F, ownerObject.Entity()),
+                "AddVoiceMarker failed for a live voice on the real plugin");
+            kb::tests::Require(!kb::audio::AudioPlayback::AddVoiceMarker(scene, 999999U, "ghost", 0.0F, ownerObject.Entity()),
+                "AddVoiceMarker must be honestly false for a dead voice");
             [[maybe_unused]] const bool tickedAttached = scene.Runtime().Update(1.0F / 60.0F);
             kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId),
                 "An attached looping voice must survive ticks while its owner lives");

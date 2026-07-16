@@ -37,6 +37,8 @@ public:
     [[nodiscard]] bool SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept override;
     [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept override;
     [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept override;
+    [[nodiscard]] float VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept override;
+    [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) override;
 
 private:
     MiniaudioEngine engine_;

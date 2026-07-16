@@ -93,6 +93,18 @@ void MiniaudioSound::SetPosition(const kb::scene::Vec3& position) noexcept {
     }
 }
 
+float MiniaudioSound::PlaybackSeconds() const noexcept {
+    if (!initialized_) {
+        return -1.0F;
+    }
+    const ma_engine* engine = ma_sound_get_engine(const_cast<ma_sound*>(&sound_));
+    const ma_uint32 sampleRate = engine == nullptr ? 0U : ma_engine_get_sample_rate(const_cast<ma_engine*>(engine));
+    if (sampleRate == 0U) {
+        return -1.0F;
+    }
+    return static_cast<float>(static_cast<double>(ma_sound_get_time_in_pcm_frames(&sound_)) / sampleRate);
+}
+
 ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group) {
     Reset();
     const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);

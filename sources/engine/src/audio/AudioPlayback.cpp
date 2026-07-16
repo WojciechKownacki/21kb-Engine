@@ -4,6 +4,8 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
+#include <utility>
+
 namespace kb::audio {
 namespace {
 
@@ -81,6 +83,24 @@ bool AudioPlayback::SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId,
 bool AudioPlayback::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->IsVoicePlaying(scene, voiceId);
+}
+
+float AudioPlayback::VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? -1.0F : backend->VoicePlaybackSeconds(scene, voiceId);
+}
+
+bool AudioPlayback::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->AddVoiceMarker(scene, voiceId, marker, positionSeconds, target);
+}
+
+void AudioPlayback::QueueMarkerEvent(kb::scene::Scene& scene, PendingAudioMarkerEvent event) {
+    kb::scene::SceneAccess::State(scene).pendingAudioMarkerEvents.push_back(std::move(event));
+}
+
+std::vector<PendingAudioMarkerEvent> AudioPlayback::DrainPendingMarkerEvents(kb::scene::Scene& scene) {
+    return std::exchange(kb::scene::SceneAccess::State(scene).pendingAudioMarkerEvents, {});
 }
 
 } // namespace kb::audio

@@ -249,6 +249,49 @@ ScriptFunctionCallResult AudioIsPlaying(const ScriptFunctionCallContext& context
     });
 }
 
+// LIB-152: audio-clock playback position - `valid=false` (seconds 0) for a dead voice,
+// so "gone" never masquerades as "at the start".
+ScriptFunctionCallResult AudioGetPosition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const float seconds = kb::audio::AudioPlayback::VoicePlaybackSeconds(*context.scene, VoiceArg(arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "valid", ScriptValue{ seconds >= 0.0F } },
+            ScriptFunctionArgument{ "seconds", ScriptValue{ seconds < 0.0F ? 0.0F : seconds } },
+        },
+        .errors = {},
+    };
+}
+
+// LIB-152: registers a named marker on a live voice; the CALLING entity receives the
+// ENTITY-LOCAL "OnAudioMarker" event when playback crosses the position - the script
+// that asked is the script that gets told (gameplay sync on the audio clock, never the
+// wall clock).
+ScriptFunctionCallResult AudioAddMarker(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* markerArgument = FindArg(arguments, "marker");
+    const std::string marker = markerArgument == nullptr ? std::string{} : markerArgument->AsString();
+    if (marker.empty()) {
+        return Error("audio marker requires a non-empty name");
+    }
+    const bool added = kb::audio::AudioPlayback::AddVoiceMarker(
+        *context.scene,
+        VoiceArg(arguments),
+        marker,
+        FloatArg(arguments, "positionSeconds", 0.0F),
+        context.caller);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "added", ScriptValue{ added } } },
+        .errors = {},
+    };
+}
+
 // LIB-147: mirrors ScriptPostProcessApi's ResolveAssetId exactly (each script API file
 // keeps its own small copy of this helper - established convention).
 [[nodiscard]] kb::assets::AssetId ResolveMixerAssetId(kb::scene::Scene& scene, std::string_view reference) {
@@ -656,7 +699,36 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "enabled", ScriptValueType::Bool, true },
     };
     occlusionEnabled.callback = &AudioOcclusionEnabled;
-    return host.RegisterFunction(std::move(occlusionEnabled));
+    if (!host.RegisterFunction(std::move(occlusionEnabled))) {
+        return false;
+    }
+
+    ScriptFunctionDesc getPosition;
+    getPosition.signature.name = "Audio.GetPosition";
+    getPosition.signature.inputs = {
+        ScriptFunctionPin{ "voice", ScriptValueType::Int, true },
+    };
+    getPosition.signature.outputs = {
+        ScriptFunctionPin{ "valid", ScriptValueType::Bool, true },
+        ScriptFunctionPin{ "seconds", ScriptValueType::Float, true },
+    };
+    getPosition.callback = &AudioGetPosition;
+    if (!host.RegisterFunction(std::move(getPosition))) {
+        return false;
+    }
+
+    ScriptFunctionDesc addMarker;
+    addMarker.signature.name = "Audio.AddMarker";
+    addMarker.signature.inputs = {
+        ScriptFunctionPin{ "voice", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "marker", ScriptValueType::String, true },
+        ScriptFunctionPin{ "positionSeconds", ScriptValueType::Float, true },
+    };
+    addMarker.signature.outputs = {
+        ScriptFunctionPin{ "added", ScriptValueType::Bool, true },
+    };
+    addMarker.callback = &AudioAddMarker;
+    return host.RegisterFunction(std::move(addMarker));
 }
 
 } // namespace kb::script
