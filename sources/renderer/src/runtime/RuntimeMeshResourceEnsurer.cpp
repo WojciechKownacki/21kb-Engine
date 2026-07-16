@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -37,6 +38,61 @@ void EmitUnresolvedMaterialTexturePathDiagnostic(
     });
 }
 
+// LIB-143: the built-in particle billboard quad is never registered as a real
+// kb::assets::AssetRegistry entry (unlike every other mesh this ensurer resolves) - it is
+// content-immutable (never authored, never hot-reloaded), and AssetRegistry::assets_ is a
+// std::vector<AssetMetadata>: any later kb::assets::AssetRegistry::Upsert/RegisterAsset call
+// (elsewhere, for unrelated content) can reallocate that vector and invalidate every raw
+// AssetMetadata* a caller obtained earlier (AssetRegistry::Find/FindByPath return pointers
+// into that vector's storage, not independently heap-allocated objects like IAssetLoader's
+// own unique_ptr-owned entries). Registering the built-in quad from within this ensurer -
+// which SubmitScene calls on every frame's first render of a scene - would risk invalidating
+// exactly that kind of pointer for any other code (test or production) that resolved an
+// unrelated asset earlier in the same call chain. Resolving it here, entirely bypassing
+// AssetRegistry/AssetManager::Load, removes that risk at the source rather than reducing its
+// likelihood.
+constexpr std::uint64_t kBuiltInParticleQuadMeshContentHash = 0x8371'C0DE'0001ULL;
+
+[[nodiscard]] bool EnsureBuiltInParticleQuadMesh(
+    const RuntimeRenderResourceEnsureContext& context,
+    RuntimeMeshResourceMap& meshes,
+    std::uint64_t meshAssetId,
+    const RuntimeAssetKey& runtimeKey) {
+    if (meshAssetId != BuiltInParticleQuadMeshAssetId().value) {
+        return false;
+    }
+
+    const auto cacheIt = meshes.find(runtimeKey);
+    if (cacheIt != meshes.end() && cacheIt->second.contentHash == kBuiltInParticleQuadMeshContentHash &&
+        context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+        RuntimeMeshResource& cached = cacheIt->second;
+        cached.lastReferencedFrame = context.currentFrame;
+        context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
+        return true;
+    }
+
+    if (cacheIt != meshes.end()) {
+        context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+        context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+        meshes.erase(cacheIt);
+    }
+
+    const RenderMeshAssetData quad = BuildBuiltInParticleQuadMesh();
+    const RenderMeshHandle handle = context.sceneRenderer.Resources().RegisterMesh(quad.desc);
+    if (!handle.IsValid()) {
+        context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+        return true;
+    }
+
+    meshes[runtimeKey] = RuntimeMeshResource{
+        .handle = handle,
+        .contentHash = kBuiltInParticleQuadMeshContentHash,
+        .lastReferencedFrame = context.currentFrame,
+    };
+    context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
+    return true;
+}
+
 } // namespace
 
 void RuntimeMeshResourceEnsurer::Ensure(
@@ -56,6 +112,10 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .assetId = meshAssetId,
         };
         context.frameReferences.MarkMesh(runtimeKey);
+
+        if (EnsureBuiltInParticleQuadMesh(context, meshes, meshAssetId, runtimeKey)) {
+            continue;
+        }
 
         const kb::assets::AssetId assetId{ meshAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
