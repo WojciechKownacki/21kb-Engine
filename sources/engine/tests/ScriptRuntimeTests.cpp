@@ -4049,6 +4049,114 @@ end
     kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
 }
 
+// LIB-154: engine-side lifecycle contracts under audio asset unload and a runtime scene
+// change - the always-run headless coverage. The real MiniaudioVoicePool file/stream paths
+// (a live streaming voice surviving unload/delete, the per-clip/global one-shot pool caps,
+// entity-source teardown) live entirely in the plugin and are exercised on the real
+// backend by the plugin-gated RunMiniaudioPluginUpdatesSceneSourcesTest (opt-in via
+// KB_AUDIO_MINIAUDIO_PLUGIN_PATH, exactly like every other section-12 plugin path).
+void RunAudioAssetUnloadAndSceneChangeLifecycleTest() {
+    // (1) Asset unload vs delete - the exact AssetManager registry signal the audio clip
+    // resolver (MiniaudioClipResolver::Resolve -> Registry().Find) consumes: Unload drops
+    // ONLY the runtime payload cache, so the metadata stays and a new/live play still
+    // resolves; DeleteAsset removes the metadata, so the next resolve returns empty and a
+    // NEW PlayOneShot honestly refuses ("audio clip file could not be resolved"). An
+    // already-streaming voice is unaffected by either (it holds its own file handle - the
+    // plugin test proves that on the real backend).
+    {
+        ResetTestRoot();
+        const std::filesystem::path clipPath = TestRoot() / "Audio" / "Unloadable.wav";
+        WriteTextFile(clipPath, "RIFF-not-a-real-wav-only-the-registry-entry-and-file-presence-matter-here");
+
+        kb::scene::Scene scene;
+        const kb::assets::AssetId clipId{ 415401U };
+        kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                               .id = clipId,
+                               .type = "AudioClip",
+                               .name = "Unloadable",
+                               .virtualPath = "/Game/Audio/Unloadable.wav",
+                               .physicalPath = clipPath.string(),
+                               .contentHash = 1U,
+                           }),
+            "LIB-154 clip asset registration failed");
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) != nullptr,
+            "A registered clip must be resolvable before any unload");
+        static_cast<void>(scene.Assets().Manager().Unload(clipId));
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) != nullptr,
+            "AssetManager::Unload must keep the registry metadata - the resolver would still resolve, so a live/new play survives an unload");
+        kb::tests::Require(scene.Assets().Manager().DeleteAsset(clipId), "LIB-154 clip DeleteAsset failed");
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) == nullptr,
+            "AssetManager::DeleteAsset must remove the registry metadata - the next resolve returns empty, so a new PlayOneShot honestly refuses");
+    }
+
+    // (2) A runtime scene change (SceneDocumentService::LoadIntoScene, the additive=false
+    // path a scripted Scene.Load takes) destroys the scene's root entities but does NOT
+    // tear down audio: the backend stays registered and the facade keeps routing. A marker
+    // event still queued for an entity the reload destroyed is drained safely on the next
+    // tick - never delivered to the dead entity, never a crash - and the queue is left
+    // empty. (The positive delivery path is proven in RunScriptAudioVoiceControlApiTest.)
+    {
+        kb::scene::Scene scene;
+        ProbeAudioPlaybackBackend backend;
+        kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene), "The audio backend must register before the scene change");
+
+        const kb::assets::AssetId behaviourAsset{ 415402U };
+        const kb::scene::SceneObject listenerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Doomed Marker Listener" });
+        scene.Components().Behaviours().Set(listenerObject.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = behaviourAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-154 scene-change host did not initialize");
+        const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(behaviourAsset, R"(
+function OnAudioMarker(self, event)
+    SetShared("markerDeliveredAfterSceneChange", true)
+end
+)");
+        kb::tests::Require(loaded.succeeded, "LIB-154 scene-change Lua script did not load");
+        kb::tests::Require(host.InstallSceneSystem(), "LIB-154 scene-change scene system install failed");
+        static_cast<void>(scene.Runtime().Update(0.016F));
+        kb::tests::Require(!scene.Hierarchy().RootEntities().empty(), "LIB-154 scene-change setup must have a live root entity");
+
+        // The non-additive scene change: clears every root entity, reusing the same Scene.
+        kb::scene::SceneDocument nextScene;
+        nextScene.guid = "scene:lib154-next";
+        nextScene.name = "Next";
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, nextScene), "LIB-154 non-additive scene change did not load");
+        kb::tests::Require(scene.Hierarchy().RootEntities().empty(), "A non-additive scene change must destroy every root entity");
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene),
+            "A runtime scene change must NOT unregister the audio backend (only scene teardown / editor play-mode does)");
+
+        // A marker still queued for the now-destroyed entity is drained without delivery or
+        // a crash on the next tick.
+        kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
+                                                              .target = listenerObject.Entity(),
+                                                              .voiceId = 1U,
+                                                              .marker = "beat",
+                                                              .positionSeconds = 0.5F,
+                                                          });
+        static_cast<void>(scene.Runtime().Update(0.016F));
+        kb::tests::Require(!host.SharedState().Get("markerDeliveredAfterSceneChange").value_or(kb::script::ScriptValue{ false }).AsBool(),
+            "A marker queued for an entity a scene change destroyed must NOT be delivered");
+        kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
+            "The marker queue must be fully drained by dispatch even when its target was destroyed by a scene change");
+
+        // The facade keeps routing after the scene change, and StopAll - the host's tool for
+        // stopping lingering one-shots across a scene change - still reaches the backend.
+        kb::tests::Require(kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{ .clipAssetId = 415401U }).Succeeded(),
+            "The audio facade must keep routing PlayOneShot after a scene change");
+        const int stopAllBefore = backend.stopAllCount;
+        kb::audio::AudioPlayback::StopAll(scene);
+        kb::tests::Require(backend.stopAllCount == stopAllBefore + 1,
+            "AudioPlayback::StopAll must still reach the backend after a scene change (the explicit tool to stop carried-over one-shots)");
+
+        kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+    }
+}
+
 // LIB-153: haptics per device through capability - honest unsupported without a backend,
 // full capability/actuator flow through a fake backend, registration on all three
 // frontends, real Lua wrappers.
@@ -11704,6 +11812,7 @@ void RunScriptRuntimeTests() {
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
     RunScriptAudioVoiceControlApiTest();
+    RunAudioAssetUnloadAndSceneChangeLifecycleTest();
     RunScriptInputHapticsApiTest();
     RunSceneRenderFeedbackTest();
     RunScriptRendererApiTest();
