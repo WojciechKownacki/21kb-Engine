@@ -3,6 +3,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptMeshRendererApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
@@ -126,6 +127,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "MeshRenderer",
             .ownerRuntime = "kb::scene::SceneMeshRendererComponents",
             .Register = &kb::script::ScriptMeshRendererApi::Register,
+        },
+        // LIB-139: MaterialInstance.Create/Release/Exists/Parent - a scene-owned,
+        // explicit-lifetime handle table (kb::scene::SceneMaterialInstances), NOT a GPU
+        // resource itself (see ScriptMaterialInstanceApi.hpp's doc comment) - resolved into
+        // a real material asset id at ECS-sync time (EcsRenderSceneSynchronizer::SyncMesh),
+        // exactly like a plain materialAssetId always was.
+        LibraryModuleDesc{
+            .name = "MaterialInstance",
+            .ownerRuntime = "kb::scene::SceneMaterialInstances",
+            .Register = &kb::script::ScriptMaterialInstanceApi::Register,
         },
     };
     return kCatalog;
