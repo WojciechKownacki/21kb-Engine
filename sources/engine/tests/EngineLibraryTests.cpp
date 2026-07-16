@@ -1418,6 +1418,24 @@ void RunAssetRefTest() {
     const kb::library::AudioClipRef emptyClipRef{};
     kb::tests::Require(!emptyClipRef.IsLoaded(), "Engine21kbLibrary AudioClipRef default-constructs to an unloaded handle");
 
+    // LIB-158: WeakAssetRef<T> is the non-owning companion — it aliases
+    // kb::assets::WeakAssetHandle<T>, observes a payload without extending
+    // its lifetime, and Lock()s back to a strong AssetRef while alive.
+    static_assert(std::is_same_v<kb::library::WeakAssetRef<kb::audio::AudioClipAsset>, kb::assets::WeakAssetHandle<kb::audio::AudioClipAsset>>,
+        "kb::library::WeakAssetRef<T> must alias kb::assets::WeakAssetHandle<T>, not duplicate it");
+    {
+        kb::library::AudioClipRef strong{ clipId, std::make_shared<const kb::audio::AudioClipAsset>(kb::audio::AudioClipAsset{ .path = "/Game/Audio/Weak.wav" }) };
+        const kb::library::WeakAssetRef<kb::audio::AudioClipAsset> weakRef{ strong };
+        kb::tests::Require(!weakRef.Expired() && weakRef.Id() == clipId, "A WeakAssetRef built from a live AssetRef must not be expired and must carry its id");
+        const kb::library::AudioClipRef relocked = weakRef.Lock();
+        kb::tests::Require(relocked.IsLoaded() && relocked->path == std::filesystem::path{ "/Game/Audio/Weak.wav" }, "Locking a live WeakAssetRef must yield the strong payload");
+        strong = kb::library::AudioClipRef{};
+        // `relocked` still holds it — not yet expired.
+        kb::tests::Require(!weakRef.Expired(), "A WeakAssetRef must stay live while ANY strong holder (the relocked handle) remains");
+    }
+    const kb::library::WeakAssetRef<kb::audio::AudioClipAsset> expiredWeak{ kb::library::AudioClipRef{ clipId, std::make_shared<const kb::audio::AudioClipAsset>() } };
+    kb::tests::Require(expiredWeak.Expired() && !expiredWeak.Lock().IsLoaded(), "A WeakAssetRef whose only strong holder was a temporary must be expired, and Lock() must yield an empty handle");
+
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_asset_ref_tests";
     std::error_code removeError;
     std::filesystem::remove_all(testRoot, removeError);

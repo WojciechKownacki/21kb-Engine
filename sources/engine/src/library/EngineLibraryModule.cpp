@@ -180,14 +180,15 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneRenderFeedback",
             .Register = &kb::script::ScriptRendererApi::Register,
         },
-        // LIB-155/156/157: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
-        // LoadAsync/Unload — a generic, type-erased script surface over the
+        // LIB-155/156/157/158: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
+        // LoadAsync/Unload/RefCount/SetUnloadPolicy/UnloadPolicy/
+        // PruneUnreferenced — a generic, type-erased script surface over the
         // SAME kb::assets::AssetManager cache Load<T>/Unload/IsLoaded
-        // already drive natively. The returned `asset` Hash is a bare
-        // cache-membership token, NOT yet refcounted like a native
-        // AssetHandle<T>'s Shared ownership (see ScriptAssetsApi.cpp's
-        // Load() doc comment) — real per-holder refcount/weak-reference
-        // policy is LIB-158's separately-scoped job. Find/resolution is
+        // already drive natively. The returned `asset` Hash is a
+        // cache-membership token; per-holder reference counting, weak
+        // references (native WeakAssetRef<T>) and the Retain vs
+        // ReleaseWhenUnreferenced unload policy are the LIB-158 cache
+        // contract (see kb::assets::AssetUnloadPolicy). Find/resolution is
         // exclusively by stable id or virtual/logical project path — never
         // a physical OS path (see ScriptAssetsApi.cpp's ResolveReference
         // doc comment). FindTyped/KindOf are typed references (LIB-157):

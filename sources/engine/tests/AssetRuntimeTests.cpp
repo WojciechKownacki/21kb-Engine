@@ -200,6 +200,82 @@ void RunAssetManagerLoadOpaqueTest() {
 // imported-media ImportedAsset+category), TryClassifyAssetKind's unambiguous
 // reverse classification, and honest rejection of an unrecognised name / an
 // unclassifiable asset type.
+// LIB-158: the runtime cache reference-count, weak-reference and unload
+// policy contract. Uses the same TextAssetLoader fixture as the LoadOpaque
+// test. Proves: the default Retain policy keeps a payload resident with no
+// live handle (pre-LIB-158 behaviour unchanged); ReferenceCount tracks live
+// AssetHandle holders; a WeakAssetHandle observes without extending
+// lifetime; ReleaseWhenUnreferenced frees the payload the moment the last
+// handle drops (IsLoaded then false, a reload succeeds); PruneUnreferenced
+// sweeps the dead entry; and LoadedCount stays honest across all of it.
+void RunAssetCacheReferenceAndPolicyTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "CacheProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Cached.txt", "cache policy payload");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset discovery did not find the text asset");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Cached.txt");
+    kb::tests::Require(metadata != nullptr, "Cache policy fixture asset could not be resolved");
+    const kb::assets::AssetId id = metadata->id;
+
+    // Default policy is Retain: a fresh Load caches the payload; even after
+    // the returned handle is dropped, the cache keeps it resident (the
+    // pre-LIB-158 behaviour) and the external ReferenceCount is 0.
+    kb::tests::Require(manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::Retain, "An uncached asset must report the default Retain policy");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "ReferenceCount of an uncached asset must be 0");
+    {
+        const kb::assets::AssetHandle<std::string> handle = manager.Load<std::string>(id);
+        kb::tests::Require(handle.IsLoaded(), "Retain Load must succeed");
+        kb::tests::Require(manager.ReferenceCount(id) == 1, "One live AssetHandle must give an external ReferenceCount of 1 (the cache's own Retain reference is not counted)");
+        const kb::assets::AssetHandle<std::string> second = manager.Load<std::string>(id);
+        kb::tests::Require(manager.ReferenceCount(id) == 2, "A second live handle must raise the external ReferenceCount to 2");
+    }
+    kb::tests::Require(manager.IsLoaded(id) && manager.ReferenceCount(id) == 0, "Under Retain, the payload must stay cached after every external handle drops, with ReferenceCount back to 0");
+    kb::tests::Require(manager.LoadedCount() == 1, "LoadedCount must report the single retained asset");
+
+    // A weak handle observes without extending lifetime.
+    const kb::assets::WeakAssetHandle<std::string> weak = manager.WeakHandle<std::string>(id);
+    kb::tests::Require(!weak.Expired() && weak.Id() == id, "WeakHandle of a cached asset must be live and carry the asset id");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "A WeakAssetHandle must NOT contribute to the strong ReferenceCount");
+    {
+        const kb::assets::AssetHandle<std::string> locked = weak.Lock();
+        kb::tests::Require(locked.IsLoaded() && *locked.Get() == "cache policy payload", "Locking a live WeakAssetHandle must yield the payload");
+        kb::tests::Require(manager.ReferenceCount(id) == 1, "A locked weak handle is a strong holder and must count toward ReferenceCount");
+    }
+
+    // Switch to ReleaseWhenUnreferenced. With no live handle right now, the
+    // payload frees immediately and the entry is pruned.
+    kb::tests::Require(manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced), "SetUnloadPolicy must succeed for a cached asset");
+    kb::tests::Require(!manager.IsLoaded(id), "Switching to ReleaseWhenUnreferenced with no live handle must free the payload immediately");
+    kb::tests::Require(weak.Expired(), "The observing WeakAssetHandle must expire once the released payload is freed");
+    kb::tests::Require(manager.LoadedCount() == 0, "LoadedCount must drop to 0 after the released payload is freed");
+    kb::tests::Require(!manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::Retain), "SetUnloadPolicy must fail (false) for an asset that is no longer cached");
+
+    // Reload it, THEN move to release policy while a handle is alive: the
+    // payload survives exactly as long as that handle.
+    {
+        const kb::assets::AssetHandle<std::string> held = manager.Load<std::string>(id);
+        kb::tests::Require(held.IsLoaded(), "Reload after release must succeed");
+        kb::tests::Require(manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced), "SetUnloadPolicy(Release) with a live handle must succeed");
+        kb::tests::Require(manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced, "UnloadPolicy must report the newly set policy");
+        kb::tests::Require(manager.IsLoaded(id) && manager.ReferenceCount(id) == 1, "Under Release with one live handle, the asset stays loaded with ReferenceCount 1");
+    }
+    // The handle is gone — the payload is released, but the (now dead) map
+    // entry lingers until a prune.
+    kb::tests::Require(!manager.IsLoaded(id), "Under Release, dropping the last handle must free the payload");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "ReferenceCount of a released asset must be 0");
+    kb::tests::Require(manager.PruneUnreferenced() == 1, "PruneUnreferenced must remove exactly the one dead cache entry");
+    kb::tests::Require(manager.PruneUnreferenced() == 0, "A second PruneUnreferenced must find nothing to remove");
+
+    // A reload after release restores the default Retain policy (the entry
+    // was pruned, so it is a brand-new Load).
+    const kb::assets::AssetHandle<std::string> reloaded = manager.Load<std::string>(id);
+    kb::tests::Require(reloaded.IsLoaded() && manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::Retain, "A reload after the entry was pruned must start fresh under the default Retain policy");
+}
+
 void RunAssetKindClassificationTest() {
     // ToString <-> TryParseAssetKind round trip for every kind, in order.
     const kb::assets::AssetKind kinds[] = {
@@ -567,6 +643,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerLoadOpaqueTest();
+    RunAssetCacheReferenceAndPolicyTest();
     RunAssetKindClassificationTest();
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();

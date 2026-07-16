@@ -22,6 +22,16 @@ namespace kb::library {
 template <typename T>
 using AssetRef = kb::assets::AssetHandle<T>;
 
+// LIB-158: a non-owning reference to a runtime asset — the weak companion to
+// AssetRef<T>. Holds no strong reference, so it never keeps a payload
+// resident; Lock() upgrades to a live AssetRef<T> while the asset is still
+// held (by the cache under Retain, or by another AssetRef), and yields an
+// empty handle once every strong holder has dropped (the observing side of
+// kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced). Exactly
+// kb::assets::WeakAssetHandle<T> — no second model, named for the contract.
+template <typename T>
+using WeakAssetRef = kb::assets::WeakAssetHandle<T>;
+
 // A reference to a scene *asset* on disk — a serialized
 // kb::scene::SceneDocument, loadable through kb::assets::AssetManager (the
 // "Scene" loader kb::scene::Scene registers by default) — never to be
