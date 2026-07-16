@@ -332,6 +332,42 @@ ScriptFunctionCallResult PruneUnreferenced(const ScriptFunctionCallContext& cont
     };
 }
 
+// LIB-159: validate an asset and its whole declared dependency closure
+// WITHOUT loading anything, returning a readable diagnostic string a tool or
+// script can surface directly. An unresolvable reference is a legitimate
+// validation answer (compatible=false with a "could not be resolved"
+// diagnostic), NOT a call error — the whole point of Validate is to report
+// problems, so it never itself fails on a bad reference.
+ScriptFunctionCallResult Validate(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::string reference = ReferenceArg(arguments);
+    const kb::assets::AssetId id = ResolveReference(*context.scene, reference);
+    if (!id.IsValid()) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{ "compatible", ScriptValue{ false } },
+                ScriptFunctionArgument{ "issueCount", ScriptValue{ 1 } },
+                ScriptFunctionArgument{ "diagnostics", ScriptValue{ "Reference \"" + reference + "\" could not be resolved to a registered asset" } },
+            },
+            .errors = {},
+        };
+    }
+
+    const kb::assets::AssetCompatibilityReport report = context.scene->Assets().Manager().ValidateCompatibility(id);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "compatible", ScriptValue{ report.compatible } },
+            ScriptFunctionArgument{ "issueCount", ScriptValue{ static_cast<int>(report.diagnostics.size()) } },
+            ScriptFunctionArgument{ "diagnostics", ScriptValue{ report.FormatDiagnostics() } },
+        },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -388,6 +424,10 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Assets.PruneUnreferenced",
               {},
               { ScriptFunctionPin{ "removed", ScriptValueType::Int, true } }, &PruneUnreferenced)
+        && ok;
+    ok = RegisterFunction(host, "Assets.Validate",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "compatible", ScriptValueType::Bool, true }, ScriptFunctionPin{ "issueCount", ScriptValueType::Int, true }, ScriptFunctionPin{ "diagnostics", ScriptValueType::String, true } }, &Validate)
         && ok;
     return ok;
 }
