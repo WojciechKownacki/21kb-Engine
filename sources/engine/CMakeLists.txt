@@ -153,6 +153,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabNode.hpp
     include/engine/scene/ScenePrefabOverrides.hpp
     include/engine/scene/ScenePrefabPrivateScene.hpp
+    include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTasks.hpp
@@ -196,6 +197,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptMaterialInstanceApi.hpp
     include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptMeshRendererApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
@@ -413,6 +415,7 @@ add_library(kb_engine STATIC
     src/scene/SceneLoadedContentService.cpp
     src/scene/SceneMeshRendererIterationService.cpp
     src/scene/ScenePhysicsBodyIterationService.cpp
+    src/scene/SceneMaterialInstanceService.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
@@ -524,6 +527,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneEntityQueries.cpp
     src/scene/modules/SceneHierarchyAccess.cpp
     src/scene/modules/SceneLoadedContent.cpp
+    src/scene/modules/SceneMaterialInstances.cpp
     src/scene/modules/ScenePrefabConnectionModule.cpp
     src/scene/modules/ScenePrefabInstantiationModule.cpp
     src/scene/modules/ScenePrefabOverrideModule.cpp
@@ -678,6 +682,7 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
     src/script/ScriptMeshRendererApi.cpp
     src/script/ScriptPhysicsApi.cpp
@@ -787,6 +792,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneHistoryService.hpp
     src/private/scene/SceneIterationService.hpp
     src/private/scene/SceneLoadedContentService.hpp
+    src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTaskService.hpp

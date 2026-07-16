@@ -286,6 +286,124 @@ int LuaMeshRendererClearMaterialSlot(lua_State* state) {
     return 1;
 }
 
+// LIB-139: MeshRenderer.SetMaterialInstance(instance, {entity=...}) - a leading integer
+// instance handle (see LuaMaterialInstanceCreate below) plus the same optional-options-table
+// shape every other MeshRenderer wrapper already uses.
+int LuaMeshRendererSetMaterialInstance(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.SetMaterialInstance", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material instance assignment failed");
+    }
+    lua_pushboolean(state, result.Output("assigned").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMeshRendererClearMaterialInstance(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MeshRenderer.ClearMaterialInstance", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "mesh renderer material instance clear failed");
+    }
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-139: MaterialInstance.Create(material) -> instance handle (an integer, nil+error on
+// an unresolvable/wrong-type parent or a full instance table) - mirrors LuaAudioPlay's
+// resolve-then-single-value-or-nil+error shape exactly.
+int LuaMaterialInstanceCreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::size_t length = 0;
+    const char* material = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        ScriptFunctionArgument{
+            .name = "material",
+            .value = ScriptValue{ std::string{ material != nullptr ? material : "", material != nullptr ? length : std::size_t{ 0 } } },
+        },
+    };
+    if (material != nullptr) {
+        lua_pop(state, 1);
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "material instance create failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("instance").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaMaterialInstanceRelease(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Release", arguments);
+    lua_pushboolean(state, result.Output("released").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMaterialInstanceExists(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Exists", arguments);
+    lua_pushboolean(state, result.Output("exists").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaMaterialInstanceParent(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const auto instance = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("instance", ScriptValue{ instance, ScriptValueType::Hash }) };
+    const ScriptFunctionCallResult result = context->CallFunction("MaterialInstance.Parent", arguments);
+    const std::string material = result.Output("material").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, material.data(), material.size());
+    return 1;
+}
+
 int LuaMeshRendererSetMaterial(lua_State* state) {
     return LuaMeshRendererAssign(state, "MeshRenderer.SetMaterial", "material");
 }
@@ -1397,13 +1515,22 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_setfield(state, -2, "Play");
     lua_setfield(state, environmentIndex, "Audio");
 
-    lua_createtable(state, 0, 5);
+    lua_createtable(state, 0, 7);
     SetClosure(state, "SetMesh", &LuaMeshRendererSetMesh, context);
     SetClosure(state, "SetMaterial", &LuaMeshRendererSetMaterial, context);
     SetClosure(state, "SetMaterialSlot", &LuaMeshRendererSetMaterialSlot, context);
     SetClosure(state, "GetMaterialSlot", &LuaMeshRendererGetMaterialSlot, context);
     SetClosure(state, "ClearMaterialSlot", &LuaMeshRendererClearMaterialSlot, context);
+    SetClosure(state, "SetMaterialInstance", &LuaMeshRendererSetMaterialInstance, context);
+    SetClosure(state, "ClearMaterialInstance", &LuaMeshRendererClearMaterialInstance, context);
     lua_setfield(state, environmentIndex, "MeshRenderer");
+
+    lua_createtable(state, 0, 4);
+    SetClosure(state, "Create", &LuaMaterialInstanceCreate, context);
+    SetClosure(state, "Release", &LuaMaterialInstanceRelease, context);
+    SetClosure(state, "Exists", &LuaMaterialInstanceExists, context);
+    SetClosure(state, "Parent", &LuaMaterialInstanceParent, context);
+    lua_setfield(state, environmentIndex, "MaterialInstance");
 
     lua_createtable(state, 0, 10);
     SetClosure(state, "FindByName", &LuaWorldFindByName, context);

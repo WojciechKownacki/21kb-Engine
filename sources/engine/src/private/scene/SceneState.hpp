@@ -189,6 +189,21 @@ public:
     };
     std::vector<TaskRecord> tasks;
     std::uint64_t nextTaskId = 1U;
+    // LIB-139: one live runtime MaterialInstance created through
+    // kb::scene::SceneMaterialInstances::Create - a scene-side indirection
+    // recording only which parent material asset it stands in for (LIB-140's
+    // scope adds per-parameter overrides on top of this record; LIB-139
+    // deliberately does not carry any parameter data yet). `id` is monotonic
+    // and never reused within a scene's lifetime, mirroring TimerRecord::id's
+    // own convention exactly (see SceneTimerService.cpp's rationale) - a
+    // stale id can never collide with a live one, so no generation counter
+    // is needed for "explicit lifetime" (Release'd once, gone forever).
+    struct MaterialInstanceRecord {
+        std::uint64_t id = 0U;
+        std::uint64_t parentMaterialAssetId = 0U;
+    };
+    std::vector<MaterialInstanceRecord> materialInstances;
+    std::uint64_t nextMaterialInstanceId = 1U;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;

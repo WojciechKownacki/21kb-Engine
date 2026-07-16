@@ -7,6 +7,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
@@ -254,6 +255,70 @@ ScriptFunctionCallResult MeshRendererSetMaterial(const ScriptFunctionCallContext
     };
 }
 
+// LIB-139: assigns a LIVE runtime MaterialInstance (kb::scene::
+// SceneMaterialInstances::Create's handle - see ScriptMaterialInstanceApi.cpp),
+// not an asset reference - there is no path/id string to resolve here, the
+// handle is validated directly against the scene's own instance table.
+// Overrides materialAssetId/materialSlotAssetIds for rendering purposes (see
+// EcsRenderSceneSynchronizer::SyncMesh's resolution order) without touching
+// either field's own stored value - ClearMaterialInstance reverts to
+// whichever asset-based assignment was already there.
+ScriptFunctionCallResult MeshRendererSetMaterialInstance(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("mesh renderer api requires an active scene");
+    }
+    const kb::scene::SceneEntity entity = TargetEntity(context, arguments);
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("mesh renderer target entity is not alive");
+    }
+
+    const ScriptValue* instanceArgument = FindArg(arguments, "instance");
+    const std::uint64_t instanceHandle = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
+    if (instanceHandle == 0U || !context.scene->MaterialInstances().Exists(instanceHandle)) {
+        return Error("material instance handle does not name a live instance");
+    }
+
+    kb::scene::SceneMeshRendererComponents renderers = context.scene->Components().MeshRenderers();
+    kb::scene::MeshRendererComponent* existing = renderers.TryGet(entity);
+    if (existing != nullptr) {
+        existing->materialInstanceHandle = instanceHandle;
+        renderers.MarkModified(entity);
+    } else {
+        kb::scene::MeshRendererComponent component{};
+        component.materialInstanceHandle = instanceHandle;
+        renderers.Set(entity, component);
+    }
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult MeshRendererClearMaterialInstance(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("mesh renderer api requires an active scene");
+    }
+    const kb::scene::SceneEntity entity = TargetEntity(context, arguments);
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        return Error("mesh renderer target entity is not alive");
+    }
+
+    kb::scene::MeshRendererComponent* existing = context.scene->Components().MeshRenderers().TryGet(entity);
+    if (existing == nullptr) {
+        return Error("mesh renderer component does not exist on this entity");
+    }
+    existing->materialInstanceHandle = 0U;
+    context.scene->Components().MeshRenderers().MarkModified(entity);
+
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
 } // namespace
 
 bool ScriptMeshRendererApi::Register(ScriptRuntimeHost& host) {
@@ -325,7 +390,34 @@ bool ScriptMeshRendererApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true },
     };
     clearMaterialSlot.callback = &MeshRendererClearMaterialSlot;
-    return host.RegisterFunction(std::move(clearMaterialSlot));
+    if (!host.RegisterFunction(std::move(clearMaterialSlot))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setMaterialInstance;
+    setMaterialInstance.signature.name = "MeshRenderer.SetMaterialInstance";
+    setMaterialInstance.signature.inputs = {
+        ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+    };
+    setMaterialInstance.signature.outputs = {
+        ScriptFunctionPin{ "assigned", ScriptValueType::Bool, true },
+    };
+    setMaterialInstance.callback = &MeshRendererSetMaterialInstance;
+    if (!host.RegisterFunction(std::move(setMaterialInstance))) {
+        return false;
+    }
+
+    ScriptFunctionDesc clearMaterialInstance;
+    clearMaterialInstance.signature.name = "MeshRenderer.ClearMaterialInstance";
+    clearMaterialInstance.signature.inputs = {
+        ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
+    };
+    clearMaterialInstance.signature.outputs = {
+        ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true },
+    };
+    clearMaterialInstance.callback = &MeshRendererClearMaterialInstance;
+    return host.RegisterFunction(std::move(clearMaterialInstance));
 }
 
 } // namespace kb::script

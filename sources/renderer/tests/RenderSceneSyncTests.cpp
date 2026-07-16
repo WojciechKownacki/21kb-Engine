@@ -8,6 +8,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -186,6 +187,35 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
     Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
+// LIB-139: proves EcsRenderSceneSynchronizer::SyncMesh actually resolves a live
+// materialInstanceHandle to its parent material asset id (winning over the authored
+// materialAssetId), and honestly falls back to "no material" (0) once the instance is
+// Release()d - not a crash, not silently keeping the stale parent.
+void RunEcsSyncResolvesMaterialInstanceHandleTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Instanced Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = 5U,
+        .materialAssetId = 42U,
+    });
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(777U);
+    Require(instance != 0U, "RenderScene sync test setup failed to create a material instance");
+    scene.Components().MeshRenderers().TryGet(mesh)->materialInstanceHandle = instance;
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* liveProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(liveProxy != nullptr && liveProxy->desc.materialAssetId == 777U,
+        "EcsRenderSceneSynchronizer did not resolve a live materialInstanceHandle to its parent material asset id (must win over the authored materialAssetId)");
+
+    Require(scene.MaterialInstances().Release(instance), "RenderScene sync test setup failed to release the material instance");
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* afterReleaseProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(afterReleaseProxy != nullptr && afterReleaseProxy->desc.materialAssetId == 0U,
+        "EcsRenderSceneSynchronizer must honestly resolve a released materialInstanceHandle to 0 (no material), not silently keep the stale parent or fall back to materialAssetId");
 }
 
 void RunRenderSceneSyncsLightPipelineFieldsTest() {
@@ -1996,6 +2026,7 @@ void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
+    RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();

@@ -24,6 +24,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2557,6 +2558,217 @@ end
         "Script mesh renderer material slot API Lua wrapper GetMaterialSlot did not return the resolved material asset id");
     const kb::scene::MeshRendererComponent* luaRenderer = scene.Components().MeshRenderers().TryGet(luaObject.Entity());
     kb::tests::Require(luaRenderer != nullptr && luaRenderer->materialSlotAssetIds[3] == slot0MaterialId.value, "Script mesh renderer material slot API Lua wrapper did not actually assign the material slot");
+}
+
+// LIB-139: kb::scene::SceneMaterialInstances' native contract, independent of the script
+// layer - explicit lifetime (Create/Release/Exists/Parent), monotonic never-reused ids
+// (mirrors SceneTimers' TimerHandle convention exactly), and the "limit wariantów" hard cap
+// the ticket names explicitly.
+void RunSceneMaterialInstancesLifecycleAndLimitTest() {
+    kb::scene::Scene scene;
+
+    kb::tests::Require(scene.MaterialInstances().Create(0U) == 0U, "SceneMaterialInstances::Create must reject a zero parent material asset id");
+
+    const std::uint64_t first = scene.MaterialInstances().Create(111U);
+    kb::tests::Require(first != 0U, "SceneMaterialInstances::Create must return a non-zero handle for a real parent asset id");
+    kb::tests::Require(scene.MaterialInstances().Exists(first), "SceneMaterialInstances::Exists must report true for a just-created instance");
+    kb::tests::Require(scene.MaterialInstances().Parent(first) == 111U, "SceneMaterialInstances::Parent must return the exact parent asset id passed to Create");
+
+    const std::uint64_t second = scene.MaterialInstances().Create(222U);
+    kb::tests::Require(second != 0U && second != first, "SceneMaterialInstances::Create must return a distinct handle for a second instance");
+
+    kb::tests::Require(scene.MaterialInstances().Release(first), "SceneMaterialInstances::Release must report true for a live instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(first), "SceneMaterialInstances::Exists must report false immediately after Release");
+    kb::tests::Require(scene.MaterialInstances().Parent(first) == 0U, "SceneMaterialInstances::Parent must return 0 for a released instance");
+    kb::tests::Require(!scene.MaterialInstances().Release(first), "SceneMaterialInstances::Release must be idempotent-false for an already-released instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(0U), "SceneMaterialInstances::Exists must report false for handle 0 (never a valid id)");
+
+    // The released `first` id must never be handed out again (monotonic, same convention as
+    // SceneTimers::TimerHandle) - a stale id can never collide with a live one.
+    const std::uint64_t third = scene.MaterialInstances().Create(333U);
+    kb::tests::Require(third != first && third != second, "SceneMaterialInstances::Create must never reuse a released id");
+    kb::tests::Require(scene.MaterialInstances().Exists(second), "Releasing one instance must not disturb an unrelated live instance");
+
+    // LIB-139's "limit wariantów" - exhaust the cap and prove the NEXT Create honestly fails
+    // (returns 0), not silently evicting an older instance or growing past the documented
+    // limit.
+    std::vector<std::uint64_t> filled{ second, third };
+    std::uint64_t lastCreated = 0U;
+    for (std::size_t i = 0; i < 600U; ++i) {
+        lastCreated = scene.MaterialInstances().Create(1000U + static_cast<std::uint64_t>(i));
+        if (lastCreated == 0U) {
+            break;
+        }
+        filled.push_back(lastCreated);
+    }
+    kb::tests::Require(lastCreated == 0U, "SceneMaterialInstances::Create must honestly fail once the scene's live-instance cap is reached, not grow unbounded");
+    const std::uint64_t afterCapCreate = scene.MaterialInstances().Create(9999U);
+    kb::tests::Require(afterCapCreate == 0U, "SceneMaterialInstances::Create must keep failing while the scene remains at capacity");
+
+    kb::tests::Require(scene.MaterialInstances().Release(second), "SceneMaterialInstances::Release must succeed for an instance created before the cap was hit");
+    const std::uint64_t afterRelease = scene.MaterialInstances().Create(8888U);
+    kb::tests::Require(afterRelease != 0U, "SceneMaterialInstances::Create must succeed again once capacity is freed by a Release");
+}
+
+// LIB-139: script-facing MaterialInstance.Create/Release/Exists/Parent (LIB-140 will add
+// per-parameter overrides on top - this ticket only proves the object/lifetime/cap
+// contract), and MeshRenderer.SetMaterialInstance/ClearMaterialInstance's interaction with
+// the fields LIB-137/138 already exposed.
+void RunScriptMaterialInstanceApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script material instance API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Create") != nullptr, "Script material instance API did not register MaterialInstance.Create");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Release") != nullptr, "Script material instance API did not register MaterialInstance.Release");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Exists") != nullptr, "Script material instance API did not register MaterialInstance.Exists");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.Parent") != nullptr, "Script material instance API did not register MaterialInstance.Parent");
+    kb::tests::Require(host.Functions().FindSignature("MeshRenderer.SetMaterialInstance") != nullptr, "Script material instance API did not register MeshRenderer.SetMaterialInstance");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MaterialInstance.Create") != nullptr,
+        "Script material instance API did not register VisualGraph runtime binding for MaterialInstance.Create");
+
+    const kb::assets::AssetId parentMaterialId{ 9301U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = parentMaterialId,
+                           .type = "RenderMaterial",
+                           .name = "InstanceParent",
+                           .virtualPath = "/Game/Materials/InstanceParent.kbmat",
+                           .physicalPath = "InstanceParent.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance API test parent material registration failed");
+    const kb::assets::AssetId meshId{ 9302U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshId,
+                           .type = "RenderMesh",
+                           .name = "InstanceMesh",
+                           .virtualPath = "/Game/Meshes/InstanceMesh.21kbmesh",
+                           .physicalPath = "InstanceMesh.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance API test mesh registration failed");
+
+    // Wrong-type parent (a real RenderMesh, not a material) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeCreate = host.Functions().Call(
+        "MaterialInstance.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ std::string{ "/Game/Meshes/InstanceMesh.21kbmesh" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeCreate.Succeeded(), "MaterialInstance.Create must reject a real asset of the wrong type (RenderMesh, not a material)");
+
+    const kb::script::ScriptFunctionCallResult create = host.Functions().Call(
+        "MaterialInstance.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "material", .value = kb::script::ScriptValue{ kb::assets::ToString(parentMaterialId) } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(create.Succeeded(), "MaterialInstance.Create (id string) failed for a valid parent material");
+    const std::uint64_t instance = create.Output("instance").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(instance != 0U, "MaterialInstance.Create must return a non-zero instance handle on success");
+
+    const kb::script::ScriptFunctionCallResult exists = host.Functions().Call(
+        "MaterialInstance.Exists",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(exists.Succeeded() && exists.Output("exists").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.Exists must report true for a just-created instance");
+
+    const kb::script::ScriptFunctionCallResult parent = host.Functions().Call(
+        "MaterialInstance.Parent",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(parent.Succeeded() && parent.Output("material").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(parentMaterialId),
+        "MaterialInstance.Parent must return the resolved parent material asset id");
+
+    // Assign the live instance to a MeshRenderer - this is the payoff: a script can hold a
+    // "private" material reference distinct from any shared asset.
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Material Instance Subject" });
+    const kb::script::ScriptFunctionCallResult setInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setInstance.Succeeded(), "MeshRenderer.SetMaterialInstance failed for a live instance handle");
+    const kb::scene::MeshRendererComponent* afterSetInstance = scene.Components().MeshRenderers().TryGet(subject.Entity());
+    kb::tests::Require(afterSetInstance != nullptr && afterSetInstance->materialInstanceHandle == instance, "MeshRenderer.SetMaterialInstance did not store the instance handle on the component");
+
+    // A stale (never-created) or released handle must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult setStaleInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance + 999999U, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!setStaleInstance.Succeeded(), "MeshRenderer.SetMaterialInstance must reject a handle that names no live instance");
+    kb::tests::Require(scene.Components().MeshRenderers().TryGet(subject.Entity())->materialInstanceHandle == instance, "A rejected SetMaterialInstance call must not disturb the existing live assignment");
+
+    const kb::script::ScriptFunctionCallResult clearInstance = host.Functions().Call(
+        "MeshRenderer.ClearMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearInstance.Succeeded(), "MeshRenderer.ClearMaterialInstance failed");
+    kb::tests::Require(scene.Components().MeshRenderers().TryGet(subject.Entity())->materialInstanceHandle == 0U, "MeshRenderer.ClearMaterialInstance did not reset materialInstanceHandle to 0");
+
+    const kb::script::ScriptFunctionCallResult release = host.Functions().Call(
+        "MaterialInstance.Release",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(release.Succeeded() && release.Output("released").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.Release must report true for a live instance");
+    kb::tests::Require(!scene.MaterialInstances().Exists(instance), "MaterialInstance.Release must actually release the instance in the scene's own table");
+
+    // Assigning an ALREADY-released instance must fail too, not silently succeed with a
+    // dangling reference.
+    const kb::script::ScriptFunctionCallResult setReleasedInstance = host.Functions().Call(
+        "MeshRenderer.SetMaterialInstance",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!setReleasedInstance.Succeeded(), "MeshRenderer.SetMaterialInstance must reject an already-released instance handle");
+
+    // Lua wrapper, exercising Create -> SetMaterialInstance -> Release across the C wrapper
+    // layer this session's own LIB-137 finding requires (host.RegisterFunction alone is not
+    // enough for Lua).
+    const kb::assets::AssetId luaAsset{ 9303U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Material Instance Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance, err = MaterialInstance.Create("/Game/Materials/InstanceParent.kbmat")
+    local assigned = MeshRenderer.SetMaterialInstance(instance, { entity = self.entity })
+    local existsBefore = MaterialInstance.Exists(instance)
+    local released = MaterialInstance.Release(instance)
+    local existsAfter = MaterialInstance.Exists(instance)
+    SetShared("luaInstanceCreated", instance ~= nil and instance ~= 0)
+    SetShared("luaInstanceAssigned", assigned)
+    SetShared("luaInstanceExistedBefore", existsBefore)
+    SetShared("luaInstanceReleased", released)
+    SetShared("luaInstanceExistedAfter", existsAfter)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script material instance API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script material instance API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaInstanceCreated").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper Create did not return a real instance handle");
+    kb::tests::Require(host.SharedState().Get("luaInstanceAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper SetMaterialInstance did not report success");
+    kb::tests::Require(host.SharedState().Get("luaInstanceExistedBefore").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper instance did not exist before Release");
+    kb::tests::Require(host.SharedState().Get("luaInstanceReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper Release did not report success");
+    kb::tests::Require(!host.SharedState().Get("luaInstanceExistedAfter").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script material instance API Lua wrapper instance must not exist after Release");
 }
 
 void RunScriptWorldTimePhysicsApiTest() {
@@ -9724,6 +9936,8 @@ void RunScriptRuntimeTests() {
     RunScriptAudioApiTest();
     RunScriptMeshRendererApiTest();
     RunScriptMeshRendererMaterialSlotApiTest();
+    RunSceneMaterialInstancesLifecycleAndLimitTest();
+    RunScriptMaterialInstanceApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();
