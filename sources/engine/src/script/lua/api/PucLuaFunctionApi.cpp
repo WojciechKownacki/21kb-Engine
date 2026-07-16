@@ -218,6 +218,40 @@ int LuaAudioSetSnapshot(lua_State* state) {
     return 1;
 }
 
+[[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value);
+
+// LIB-148: the eight per-voice wrappers share one shape - voice handle at index 1, the
+// operation value (when any) at index 2, one boolean back (honest false for a dead voice).
+int LuaAudioVoiceCall(lua_State* state, const char* function, const char* resultPin, const char* valuePin, bool valueIsBool) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+    };
+    if (valuePin != nullptr) {
+        if (valueIsBool) {
+            arguments.push_back(Arg(valuePin, ScriptValue{ lua_toboolean(state, 2) != 0 }));
+        } else {
+            arguments.push_back(Arg(valuePin, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+        }
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    lua_pushboolean(state, result.Output(resultPin).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioStop(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Stop", "stopped", nullptr, false); }
+int LuaAudioPause(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Pause", "paused", nullptr, false); }
+int LuaAudioResume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Resume", "resumed", nullptr, false); }
+int LuaAudioSeek(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Seek", "applied", "positionSeconds", false); }
+int LuaAudioSetVolume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetVolume", "applied", "volume", false); }
+int LuaAudioSetPitch(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetPitch", "applied", "pitch", false); }
+int LuaAudioSetLoop(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetLoop", "applied", "loop", true); }
+int LuaAudioIsPlaying(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.IsPlaying", "playing", nullptr, false); }
+
 int LuaAudioActiveSnapshot(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2076,7 +2110,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 5);
+    lua_createtable(state, 0, 13);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
@@ -2084,6 +2118,14 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "ActiveMixer", &LuaAudioActiveMixer, context);
     SetClosure(state, "SetSnapshot", &LuaAudioSetSnapshot, context);
     SetClosure(state, "ActiveSnapshot", &LuaAudioActiveSnapshot, context);
+    SetClosure(state, "Stop", &LuaAudioStop, context);
+    SetClosure(state, "Pause", &LuaAudioPause, context);
+    SetClosure(state, "Resume", &LuaAudioResume, context);
+    SetClosure(state, "Seek", &LuaAudioSeek, context);
+    SetClosure(state, "SetVolume", &LuaAudioSetVolume, context);
+    SetClosure(state, "SetPitch", &LuaAudioSetPitch, context);
+    SetClosure(state, "SetLoop", &LuaAudioSetLoop, context);
+    SetClosure(state, "IsPlaying", &LuaAudioIsPlaying, context);
     lua_setfield(state, environmentIndex, "Audio");
 
     lua_createtable(state, 0, 7);
