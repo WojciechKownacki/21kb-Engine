@@ -25,7 +25,10 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2561,6 +2564,214 @@ end
     kb::tests::Require(luaRenderer != nullptr && luaRenderer->materialSlotAssetIds[3] == slot0MaterialId.value, "Script mesh renderer material slot API Lua wrapper did not actually assign the material slot");
 }
 
+// LIB-143: kb::scene::ParticleEffectAssetIO's own real on-disk Save()/Load() round trip -
+// every scalar field, the material reference string, and (the part
+// RunSceneParticleSystemsLifecycleTest's own single-keyframe/single-stop effect does not
+// exercise) a multi-keyframe Curve and multi-stop Gradient with distinct Easing modes per
+// segment, plus honest failure for a missing file.
+void RunParticleEffectAssetIORoundTripTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_particle_effect_asset_io_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root, resetError);
+    kb::tests::Require(!resetError, "LIB-143 particle effect asset IO test root could not be prepared");
+
+    kb::scene::ParticleEffectAsset asset{};
+    asset.materialReference = "/Game/Materials/Spark.kbmat";
+    asset.looping = false;
+    asset.durationSeconds = 2.5F;
+    asset.maxParticles = 512U;
+    asset.emissionRatePerSecond = 42.0F;
+    asset.startSpeedMin = 1.5F;
+    asset.startSpeedMax = 3.5F;
+    asset.startLifetimeMin = 0.75F;
+    asset.startLifetimeMax = 1.25F;
+    asset.direction = kb::math::Vec3{ 0.0F, 0.5F, 0.5F };
+    asset.spreadDegrees = 22.5F;
+    asset.gravityScale = 0.3F;
+    asset.sizeOverLifetime.keyframes = {
+        kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.1F, .easing = kb::math::Easing::OutQuad },
+        kb::math::CurveKeyframe{ .time = 0.5F, .value = 1.0F, .easing = kb::math::Easing::InOutSine },
+        kb::math::CurveKeyframe{ .time = 1.0F, .value = 0.0F, .easing = kb::math::Easing::Linear },
+    };
+    asset.colorOverLifetime.stops = {
+        kb::math::GradientStop{ .time = 0.0F, .color = kb::math::Color{ 1.0F, 0.9F, 0.4F, 1.0F } },
+        kb::math::GradientStop{ .time = 1.0F, .color = kb::math::Color{ 0.6F, 0.1F, 0.0F, 0.0F } },
+    };
+
+    const std::filesystem::path assetPath = root / "Spark.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(assetPath, asset), "LIB-143 particle effect asset must write to disk");
+
+    const std::optional<kb::scene::ParticleEffectAsset> reread = kb::scene::ParticleEffectAssetIO::Load(assetPath);
+    kb::tests::Require(reread.has_value(), "LIB-143 particle effect asset must read back what it just wrote to disk");
+    kb::tests::Require(reread->materialReference == asset.materialReference, "LIB-143 particle effect asset materialReference must round-trip");
+    kb::tests::Require(reread->looping == asset.looping, "LIB-143 particle effect asset looping must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->durationSeconds, asset.durationSeconds), "LIB-143 particle effect asset durationSeconds must round-trip");
+    kb::tests::Require(reread->maxParticles == asset.maxParticles, "LIB-143 particle effect asset maxParticles must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->emissionRatePerSecond, asset.emissionRatePerSecond), "LIB-143 particle effect asset emissionRatePerSecond must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->startSpeedMin, asset.startSpeedMin) && kb::tests::NearlyEqual(reread->startSpeedMax, asset.startSpeedMax),
+        "LIB-143 particle effect asset startSpeedMin/Max must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->startLifetimeMin, asset.startLifetimeMin) && kb::tests::NearlyEqual(reread->startLifetimeMax, asset.startLifetimeMax),
+        "LIB-143 particle effect asset startLifetimeMin/Max must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->direction.x, asset.direction.x) && kb::tests::NearlyEqual(reread->direction.y, asset.direction.y) && kb::tests::NearlyEqual(reread->direction.z, asset.direction.z),
+        "LIB-143 particle effect asset direction must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->spreadDegrees, asset.spreadDegrees), "LIB-143 particle effect asset spreadDegrees must round-trip");
+    kb::tests::Require(kb::tests::NearlyEqual(reread->gravityScale, asset.gravityScale), "LIB-143 particle effect asset gravityScale must round-trip");
+
+    kb::tests::Require(reread->sizeOverLifetime.keyframes.size() == asset.sizeOverLifetime.keyframes.size(), "LIB-143 particle effect asset sizeOverLifetime keyframe count must round-trip");
+    for (std::size_t i = 0; i < asset.sizeOverLifetime.keyframes.size(); ++i) {
+        kb::tests::Require(kb::tests::NearlyEqual(reread->sizeOverLifetime.keyframes[i].time, asset.sizeOverLifetime.keyframes[i].time) &&
+                kb::tests::NearlyEqual(reread->sizeOverLifetime.keyframes[i].value, asset.sizeOverLifetime.keyframes[i].value) &&
+                reread->sizeOverLifetime.keyframes[i].easing == asset.sizeOverLifetime.keyframes[i].easing,
+            "LIB-143 particle effect asset sizeOverLifetime keyframe fields (including per-segment Easing) must round-trip exactly");
+    }
+    kb::tests::Require(reread->colorOverLifetime.stops.size() == asset.colorOverLifetime.stops.size(), "LIB-143 particle effect asset colorOverLifetime stop count must round-trip");
+    for (std::size_t i = 0; i < asset.colorOverLifetime.stops.size(); ++i) {
+        kb::tests::Require(kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].time, asset.colorOverLifetime.stops[i].time) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.r, asset.colorOverLifetime.stops[i].color.r) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.g, asset.colorOverLifetime.stops[i].color.g) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.b, asset.colorOverLifetime.stops[i].color.b) &&
+                kb::tests::NearlyEqual(reread->colorOverLifetime.stops[i].color.a, asset.colorOverLifetime.stops[i].color.a),
+            "LIB-143 particle effect asset colorOverLifetime stop fields must round-trip exactly");
+    }
+
+    const std::optional<kb::scene::ParticleEffectAsset> missing = kb::scene::ParticleEffectAssetIO::Load(root / "DoesNotExist.kbvfx");
+    kb::tests::Require(!missing.has_value(), "LIB-143 particle effect asset Load must honestly fail for a missing file");
+
+    // A freshly default-constructed asset (author left the size curve empty) must still load
+    // to a visible constant size (Curve::Evaluate's own contract returns 0 for zero
+    // keyframes) - ParticleEffectAssetIO::Load fills a default keyframe, see its own comment.
+    kb::scene::ParticleEffectAsset minimal{};
+    minimal.materialReference = "/Game/Materials/Minimal.kbmat";
+    const std::filesystem::path minimalPath = root / "Minimal.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(minimalPath, minimal), "LIB-143 minimal particle effect asset must write to disk");
+    const std::optional<kb::scene::ParticleEffectAsset> rereadMinimal = kb::scene::ParticleEffectAssetIO::Load(minimalPath);
+    kb::tests::Require(rereadMinimal.has_value() && rereadMinimal->sizeOverLifetime.keyframes.size() == 1U && kb::tests::NearlyEqual(rereadMinimal->sizeOverLifetime.keyframes.front().value, 1.0F),
+        "LIB-143 particle effect asset with no authored size curve must default to a constant, visible size");
+}
+
+// LIB-143: kb::scene::SceneParticleSystems' own native contract - explicit lifetime
+// (Create/Release/Exists), Play/Stop/IsPlaying, SetSeed, SetParameterScalar/ClearParameter
+// against the fixed recognized field set, Emit's silent-clamp-to-capacity contract, real
+// spawn/kill via Advance(), owner-death auto-release (mirrors SceneTimerService::OwnerGone),
+// and the live-instance cap - mirrors RunSceneMaterialInstancesLifecycleAndLimitTest's shape.
+void RunSceneParticleSystemsLifecycleTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_particle_systems_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
+    kb::tests::Require(!resetError, "LIB-143 particle systems test project root could not be prepared");
+
+    kb::scene::ParticleEffectAsset effect{};
+    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 424242U });
+    effect.looping = true;
+    effect.emissionRatePerSecond = 1000.0F;
+    effect.startSpeedMin = 1.0F;
+    effect.startSpeedMax = 1.0F;
+    effect.startLifetimeMin = 0.05F;
+    effect.startLifetimeMax = 0.05F;
+    effect.spreadDegrees = 0.0F;
+    effect.gravityScale = 0.0F;
+    effect.maxParticles = 8U;
+    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "Test.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "LIB-143 particle effect asset must write to disk");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(root), "LIB-143 particle systems test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "LIB-143 particle systems test did not discover exactly the effect asset");
+    const kb::assets::AssetMetadata* effectMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Fx/Test.kbvfx");
+    kb::tests::Require(effectMetadata != nullptr && effectMetadata->type == kb::scene::kParticleEffectAssetType,
+        "LIB-143 particle systems test discovered wrong effect metadata");
+    const std::uint64_t effectAssetId = effectMetadata->id.value;
+
+    // Registered AFTER Discover() (not before): DiscoverMountedAssets sweeps away any
+    // registered entry whose virtualPath falls under a mounted prefix but has no
+    // corresponding real file on disk - a synthetic, file-less asset like this one must be
+    // registered only after the one discovery pass this test needs has already run.
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = kb::assets::AssetId{ 424242U },
+                           .type = "RenderMaterial",
+                           .name = "FakeParticleMaterial",
+                           .virtualPath = "/Game/FakeParticleMaterial.kbmat",
+                           .physicalPath = "FakeParticleMaterial.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "LIB-143 particle systems test fake material registration failed");
+
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "ParticleOwner",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F } },
+    });
+    kb::tests::Require(owner.IsValid(), "LIB-143 particle systems test owner entity creation failed");
+    scene.Runtime().SynchronizeTransforms();
+
+    kb::tests::Require(scene.Particles().Create(0U, owner) == 0U, "SceneParticleSystems::Create must reject a zero effect asset id");
+    kb::tests::Require(scene.Particles().Create(effectAssetId, kb::scene::SceneEntity{}) == 0U, "SceneParticleSystems::Create must reject an invalid owner entity");
+
+    const std::uint64_t instance = scene.Particles().Create(effectAssetId, owner);
+    kb::tests::Require(instance != 0U, "SceneParticleSystems::Create must return a non-zero handle for a valid effect+owner");
+    kb::tests::Require(scene.Particles().Exists(instance), "SceneParticleSystems::Exists must report true for a just-created instance");
+    kb::tests::Require(scene.Particles().EffectAsset(instance) == effectAssetId, "SceneParticleSystems::EffectAsset must return the exact effect asset id passed to Create");
+    kb::tests::Require(scene.Particles().ResolvedMaterialAsset(instance) == 424242U, "SceneParticleSystems::ResolvedMaterialAsset must resolve the effect's authored material reference");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "SceneParticleSystems::Create must not auto-play - Play() is a separate, explicit verb");
+
+    kb::tests::Require(scene.Particles().Play(instance), "SceneParticleSystems::Play must report true for a live instance");
+    kb::tests::Require(scene.Particles().IsPlaying(instance), "SceneParticleSystems::IsPlaying must report true after Play");
+
+    scene.Particles().Advance(0.01F);
+    scene.Particles().Advance(0.01F);
+    const std::uint32_t liveAfterPlay = scene.Particles().LiveParticleCount(instance);
+    kb::tests::Require(liveAfterPlay > 0U && liveAfterPlay <= 8U, "SceneParticleSystems::Advance must spawn particles while playing, honoring maxParticles");
+
+    const std::span<const kb::scene::ParticleState> particles = scene.Particles().Particles(instance);
+    kb::tests::Require(particles.size() == liveAfterPlay, "SceneParticleSystems::Particles must expose exactly the live particle array");
+    kb::tests::Require(std::abs(particles.front().position.x - 5.0F) < 2.0F, "SceneParticleSystems particles must spawn near the owner's world position");
+
+    kb::tests::Require(scene.Particles().Stop(instance), "SceneParticleSystems::Stop must report true for a live instance");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "SceneParticleSystems::IsPlaying must report false after Stop");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == liveAfterPlay, "SceneParticleSystems::Stop must not clear already-live particles, only halt new emission");
+
+    // Every particle's lifetime is 0.05s - advancing well past that kills them all, even
+    // though the instance is stopped (integration/kill is unconditional, only spawning is
+    // gated by `playing`).
+    scene.Particles().Advance(0.2F);
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 0U, "SceneParticleSystems::Advance must kill particles past their lifetime even while stopped");
+
+    kb::tests::Require(scene.Particles().Emit(instance, 3U), "SceneParticleSystems::Emit must report true for a live instance");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 3U, "SceneParticleSystems::Emit must spawn exactly the requested count when under capacity");
+    kb::tests::Require(scene.Particles().Emit(instance, 100U), "SceneParticleSystems::Emit must report true even when the request exceeds remaining capacity");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 8U, "SceneParticleSystems::Emit must silently clamp to maxParticles rather than failing");
+    kb::tests::Require(!scene.Particles().Emit(0U, 1U), "SceneParticleSystems::Emit must honestly fail for a handle naming no live instance");
+
+    kb::tests::Require(scene.Particles().SetSeed(instance, 12345U), "SceneParticleSystems::SetSeed must report true for a live instance");
+    kb::tests::Require(scene.Particles().SetParameterScalar(instance, "emissionRatePerSecond", 5.0F), "SceneParticleSystems::SetParameterScalar must accept a recognized field name");
+    kb::tests::Require(!scene.Particles().SetParameterScalar(instance, "notARealField", 1.0F), "SceneParticleSystems::SetParameterScalar must honestly reject an unrecognized field name");
+    kb::tests::Require(scene.Particles().ClearParameter(instance, "emissionRatePerSecond"), "SceneParticleSystems::ClearParameter must report true for a set override");
+    kb::tests::Require(!scene.Particles().ClearParameter(instance, "emissionRatePerSecond"), "SceneParticleSystems::ClearParameter must be idempotent-false for an already-cleared override");
+
+    // Owner death auto-releases the instance - mirrors SceneTimerService::OwnerGone's exact
+    // convention, checked on the next Advance() call.
+    scene.Entities().Destroy(owner);
+    scene.Particles().Advance(0.01F);
+    kb::tests::Require(!scene.Particles().Exists(instance), "SceneParticleSystems must auto-release an instance whose owner has been destroyed");
+    kb::tests::Require(!scene.Particles().Release(instance), "SceneParticleSystems::Release must be idempotent-false for an already-auto-released instance");
+
+    // LIB-143's own "limit" analog to LIB-139's variant cap - exhaust it and prove the next
+    // Create honestly fails rather than growing unbounded.
+    std::vector<std::uint64_t> filled;
+    std::uint64_t lastCreated = 0U;
+    for (std::size_t i = 0; i < 300U; ++i) {
+        const kb::scene::SceneEntity capOwner = scene.Entities().CreateEntity();
+        lastCreated = scene.Particles().Create(effectAssetId, capOwner);
+        if (lastCreated == 0U) {
+            break;
+        }
+        filled.push_back(lastCreated);
+    }
+    kb::tests::Require(lastCreated == 0U, "SceneParticleSystems::Create must honestly fail once the scene's live-instance cap is reached");
+    kb::tests::Require(filled.size() == 256U, "SceneParticleSystems live-instance cap must be exactly 256");
+}
+
 // LIB-139: kb::scene::SceneMaterialInstances' native contract, independent of the script
 // layer - explicit lifetime (Create/Release/Exists/Parent), monotonic never-reused ids
 // (mirrors SceneTimers' TimerHandle convention exactly), and the "limit wariantów" hard cap
@@ -2770,6 +2981,214 @@ end
     kb::tests::Require(host.SharedState().Get("luaInstanceExistedBefore").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper instance did not exist before Release");
     kb::tests::Require(host.SharedState().Get("luaInstanceReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance API Lua wrapper Release did not report success");
     kb::tests::Require(!host.SharedState().Get("luaInstanceExistedAfter").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script material instance API Lua wrapper instance must not exist after Release");
+}
+
+// LIB-143: script-facing Particles.Create/Release/Exists/Play/Stop/IsPlaying/SetSeed/
+// SetParameterScalar/ClearParameter/Emit/LiveCount - the object/lifetime/simulation contract
+// itself is proven natively by RunSceneParticleSystemsLifecycleTest; this test proves the
+// SCRIPT LAYER's own resolve-by-path-or-hex+type-check on Create, the
+// optional-entity-defaults-to-caller convention (mirrors MeshRenderer.SetMesh), and the Lua
+// wrapper chain (LIB-137 lesson: host.RegisterFunction alone does not wire up Lua).
+void RunScriptParticleSystemApiTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_engine_script_particle_api_lib143";
+    std::error_code resetError;
+    std::filesystem::remove_all(root, resetError);
+    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
+    kb::tests::Require(!resetError, "Script particle API test project root could not be prepared");
+
+    kb::scene::ParticleEffectAsset effect{};
+    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 434343U });
+    effect.looping = true;
+    effect.emissionRatePerSecond = 1000.0F;
+    effect.startSpeedMin = 1.0F;
+    effect.startSpeedMax = 1.0F;
+    effect.startLifetimeMin = 5.0F;
+    effect.startLifetimeMax = 5.0F;
+    effect.maxParticles = 16U;
+    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "ScriptTest.kbvfx";
+    kb::tests::Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "Script particle API test effect asset must write to disk");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script particle API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Create") != nullptr, "Script particle API did not register Particles.Create");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Release") != nullptr, "Script particle API did not register Particles.Release");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Exists") != nullptr, "Script particle API did not register Particles.Exists");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Play") != nullptr, "Script particle API did not register Particles.Play");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Stop") != nullptr, "Script particle API did not register Particles.Stop");
+    kb::tests::Require(host.Functions().FindSignature("Particles.IsPlaying") != nullptr, "Script particle API did not register Particles.IsPlaying");
+    kb::tests::Require(host.Functions().FindSignature("Particles.SetSeed") != nullptr, "Script particle API did not register Particles.SetSeed");
+    kb::tests::Require(host.Functions().FindSignature("Particles.SetParameterScalar") != nullptr, "Script particle API did not register Particles.SetParameterScalar");
+    kb::tests::Require(host.Functions().FindSignature("Particles.ClearParameter") != nullptr, "Script particle API did not register Particles.ClearParameter");
+    kb::tests::Require(host.Functions().FindSignature("Particles.Emit") != nullptr, "Script particle API did not register Particles.Emit");
+    kb::tests::Require(host.Functions().FindSignature("Particles.LiveCount") != nullptr, "Script particle API did not register Particles.LiveCount");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Particles.Create") != nullptr,
+        "Script particle API did not register VisualGraph runtime binding for Particles.Create");
+
+    kb::tests::Require(scene.Assets().MountProject(root), "Script particle API test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Script particle API test did not discover exactly the effect asset");
+
+    // Registered AFTER Discover() (not before): DiscoverMountedAssets sweeps away any
+    // registered entry whose virtualPath falls under a mounted prefix but has no
+    // corresponding real file on disk - synthetic, file-less assets like these two must be
+    // registered only after the one discovery pass this test needs has already run.
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = kb::assets::AssetId{ 434343U },
+                           .type = "RenderMaterial",
+                           .name = "FakeScriptParticleMaterial",
+                           .virtualPath = "/Game/FakeScriptParticleMaterial.kbmat",
+                           .physicalPath = "FakeScriptParticleMaterial.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script particle API test fake material registration failed");
+    const kb::assets::AssetId wrongTypeAssetId{ 434344U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = wrongTypeAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script particle API test wrong-type asset registration failed");
+
+    const kb::scene::SceneObject subject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Particle Subject" });
+
+    // Wrong-type effect (a real RenderMesh, not a ParticleEffect) must be honestly rejected.
+    const kb::script::ScriptFunctionCallResult wrongTypeCreate = host.Functions().Call(
+        "Particles.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "effect", .value = kb::script::ScriptValue{ std::string{ "/Game/WrongTypeAsset.21kbmesh" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!wrongTypeCreate.Succeeded(), "Particles.Create must reject a real asset of the wrong type (RenderMesh, not a ParticleEffect)");
+
+    const kb::script::ScriptFunctionCallResult create = host.Functions().Call(
+        "Particles.Create",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "effect", .value = kb::script::ScriptValue{ std::string{ "/Game/Fx/ScriptTest.kbvfx" } } },
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ subject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(create.Succeeded(), "Particles.Create (path) failed for a valid effect+entity");
+    const std::uint64_t instance = create.Output("instance").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(instance != 0U, "Particles.Create must return a non-zero instance handle on success");
+    kb::tests::Require(scene.Particles().Exists(instance), "Particles.Create must actually create the instance in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult play = host.Functions().Call(
+        "Particles.Play",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(play.Succeeded() && play.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Play must report true for a live instance");
+    kb::tests::Require(scene.Particles().IsPlaying(instance), "Particles.Play must actually set the instance's playing state");
+
+    const kb::script::ScriptFunctionCallResult emit = host.Functions().Call(
+        "Particles.Emit",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "count", .value = kb::script::ScriptValue{ 4 } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(emit.Succeeded() && emit.Output("emitted").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Emit must report true for a live instance");
+    kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 4U, "Particles.Emit did not actually spawn the requested count");
+
+    const kb::script::ScriptFunctionCallResult liveCount = host.Functions().Call(
+        "Particles.LiveCount",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(liveCount.Succeeded() && liveCount.Output("count").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 4, "Particles.LiveCount must report the real live particle count");
+
+    const kb::script::ScriptFunctionCallResult stop = host.Functions().Call(
+        "Particles.Stop",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(stop.Succeeded() && stop.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Stop must report true for a live instance");
+    kb::tests::Require(!scene.Particles().IsPlaying(instance), "Particles.Stop must actually clear the instance's playing state");
+
+    const kb::script::ScriptFunctionCallResult setSeed = host.Functions().Call(
+        "Particles.SetSeed",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "seed", .value = kb::script::ScriptValue{ std::uint64_t{ 777U }, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setSeed.Succeeded() && setSeed.Output("set").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.SetSeed must report true for a live instance");
+
+    const kb::script::ScriptFunctionCallResult setParam = host.Functions().Call(
+        "Particles.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "gravityScale" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 2.0F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setParam.Succeeded() && setParam.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.SetParameterScalar must report true for a recognized field name");
+
+    const kb::script::ScriptFunctionCallResult clearParam = host.Functions().Call(
+        "Particles.ClearParameter",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "gravityScale" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clearParam.Succeeded() && clearParam.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.ClearParameter must report true for a set override");
+
+    const kb::script::ScriptFunctionCallResult release = host.Functions().Call(
+        "Particles.Release",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(release.Succeeded() && release.Output("released").value_or(kb::script::ScriptValue{ false }).AsBool(), "Particles.Release must report true for a live instance");
+    kb::tests::Require(!scene.Particles().Exists(instance), "Particles.Release must actually release the instance in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult existsAfterRelease = host.Functions().Call(
+        "Particles.Exists",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(existsAfterRelease.Succeeded() && !existsAfterRelease.Output("exists").value_or(kb::script::ScriptValue{ true }).AsBool(), "Particles.Exists must report false after Release");
+
+    // Lua wrapper, exercising Create (entity defaults to self.entity) -> Play -> Emit ->
+    // LiveCount -> Release across the C wrapper layer (LIB-137 lesson: host.RegisterFunction
+    // alone does not wire up Lua).
+    const kb::assets::AssetId luaAsset{ 9401U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Particle Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance = Particles.Create("/Game/Fx/ScriptTest.kbvfx", { entity = self.entity })
+    local played = Particles.Play(instance)
+    local emitted = Particles.Emit(instance, 2)
+    local count = Particles.LiveCount(instance)
+    local released = Particles.Release(instance)
+    SetShared("luaParticlesCreated", instance ~= nil and instance ~= 0)
+    SetShared("luaParticlesPlayed", played)
+    SetShared("luaParticlesEmitted", emitted)
+    SetShared("luaParticlesCount", count)
+    SetShared("luaParticlesReleased", released)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script particle API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult luaTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(luaTick.Succeeded(), "Script particle API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaParticlesCreated").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Create did not return a real instance handle");
+    kb::tests::Require(host.SharedState().Get("luaParticlesPlayed").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Play did not report success");
+    kb::tests::Require(host.SharedState().Get("luaParticlesEmitted").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Emit did not report success");
+    kb::tests::Require(host.SharedState().Get("luaParticlesCount").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 2, "Script particle API Lua wrapper LiveCount did not report the real count");
+    kb::tests::Require(host.SharedState().Get("luaParticlesReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Release did not report success");
 }
 
 // LIB-140: SceneMaterialInstances::SetParameterScalar/SetParameterBool/Parameters/
@@ -10236,6 +10655,9 @@ void RunScriptRuntimeTests() {
     RunScriptMeshRendererApiTest();
     RunScriptMeshRendererMaterialSlotApiTest();
     RunSceneMaterialInstancesLifecycleAndLimitTest();
+    RunParticleEffectAssetIORoundTripTest();
+    RunSceneParticleSystemsLifecycleTest();
+    RunScriptParticleSystemApiTest();
     RunScriptMaterialInstanceApiTest();
     RunSceneMaterialInstancesParameterOverridesTest();
     RunScriptMaterialInstanceParameterApiTest();
