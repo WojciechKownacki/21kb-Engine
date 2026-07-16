@@ -43,4 +43,44 @@ void AudioPlayback::StopAll(kb::scene::Scene& scene) noexcept {
     }
 }
 
+bool AudioPlayback::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->StopVoice(scene, voiceId);
+}
+
+bool AudioPlayback::PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->PauseVoice(scene, voiceId);
+}
+
+bool AudioPlayback::ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->ResumeVoice(scene, voiceId);
+}
+
+bool AudioPlayback::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SeekVoice(scene, voiceId, positionSeconds);
+}
+
+bool AudioPlayback::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetVoiceVolume(scene, voiceId, volume);
+}
+
+bool AudioPlayback::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetVoicePitch(scene, voiceId, pitch);
+}
+
+bool AudioPlayback::SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetVoiceLoop(scene, voiceId, loop);
+}
+
+bool AudioPlayback::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->IsVoicePlaying(scene, voiceId);
+}
+
 } // namespace kb::audio

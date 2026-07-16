@@ -201,6 +201,25 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             routedPlayed.Succeeded() || routedPlayed.error == "miniaudio playback device is not available",
             "Bus-routed one-shot did not start or report a controlled no-device error");
 
+        // LIB-148: per-voice control against the REAL plugin (only when a device exists -
+        // the honest no-device error above already covered the headless case).
+        if (routedPlayed.Succeeded()) {
+            const std::uint64_t voice = routedPlayed.voiceId;
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, voice), "A started one-shot voice must report playing");
+            kb::tests::Require(kb::audio::AudioPlayback::PauseVoice(scene, voice), "PauseVoice failed for a live voice");
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, voice), "A paused voice must not report playing");
+            [[maybe_unused]] const bool ticked = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(kb::audio::AudioPlayback::ResumeVoice(scene, voice), "ResumeVoice failed for a paused voice (it must survive the frame tick, never be reclaimed)");
+            kb::tests::Require(kb::audio::AudioPlayback::SeekVoice(scene, voice, 0.01F), "SeekVoice failed for a live voice");
+            kb::tests::Require(kb::audio::AudioPlayback::SetVoiceVolume(scene, voice, 0.0F) && kb::audio::AudioPlayback::SetVoicePitch(scene, voice, 1.1F)
+                    && kb::audio::AudioPlayback::SetVoiceLoop(scene, voice, true),
+                "Per-voice volume/pitch/loop setters failed for a live voice");
+            kb::tests::Require(kb::audio::AudioPlayback::StopVoice(scene, voice), "StopVoice failed for a live voice");
+            kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, voice) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, voice)
+                    && !kb::audio::AudioPlayback::PauseVoice(scene, voice),
+                "Every operation on a stopped voice must be honestly false");
+        }
+
         // Topology teardown mid-play: clearing the mixer must rebuild routing to the
         // implicit master on the next tick without crashing or dangling groups.
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
