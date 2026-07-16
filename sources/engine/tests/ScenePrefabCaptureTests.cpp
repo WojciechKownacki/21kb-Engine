@@ -198,23 +198,28 @@ void RunPrefabAssetRoundTripTest() {
                 .tickGroup = kb::scene::BehaviourTickGroup::Physics,
                 .executionOrder = -12,
             },
-            .audioSource = kb::scene::AudioSourceComponent{
-                .clipAssetId = 505,
-                .volume = 0.35F,
-                .pitch = 1.25F,
-                .loop = true,
-                .spatial = false,
-                .autoplay = true,
-                .enabled = false,
-                .mute = true,
-                .pan = -0.25F,
-                .spatialBlend = 0.5F,
-                .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
-                .minDistance = 2.0F,
-                .maxDistance = 80.0F,
-                .rolloff = 0.75F,
-                .dopplerFactor = 0.4F,
-            },
+            .audioSource = [] {
+                kb::scene::AudioSourceComponent audioSourceFixture{
+                    .clipAssetId = 505,
+                    .volume = 0.35F,
+                    .pitch = 1.25F,
+                    .loop = true,
+                    .spatial = false,
+                    .autoplay = true,
+                    .enabled = false,
+                    .mute = true,
+                    .pan = -0.25F,
+                    .spatialBlend = 0.5F,
+                    .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
+                    .minDistance = 2.0F,
+                    .maxDistance = 80.0F,
+                    .rolloff = 0.75F,
+                    .dopplerFactor = 0.4F,
+                };
+                // LIB-147: exercises the prefab TEXT writer/parser outputBus round-trip.
+                kb::scene::SetAudioSourceOutputBus(audioSourceFixture, "Ambience");
+                return audioSourceFixture;
+            }(),
             .audioListener = kb::scene::AudioListenerComponent{
                 .primary = false,
                 .enabled = false,
@@ -262,7 +267,7 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->contactShadowLength, 0.3F) && kb::tests::NearlyEqual(light->volumetricScattering, 0.2F), "Loaded prefab light production controls were not preserved");
     kb::tests::Require(light != nullptr && !light->castsShadow, "Loaded prefab light shadow flag was not preserved");
     kb::tests::Require(behaviour != nullptr && behaviour->behaviourAssetId == 404 && behaviour->backend == kb::scene::BehaviourBackend::Lua && !behaviour->enabled && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Physics && behaviour->executionOrder == -12, "Loaded prefab behaviour was not preserved");
-    kb::tests::Require(audioSource != nullptr && audioSource->clipAssetId == 505 && kb::tests::NearlyEqual(audioSource->volume, 0.35F) && kb::tests::NearlyEqual(audioSource->pitch, 1.25F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(audioSource->maxDistance, 80.0F), "Loaded prefab audio source was not preserved");
+    kb::tests::Require(audioSource != nullptr && audioSource->clipAssetId == 505 && kb::tests::NearlyEqual(audioSource->volume, 0.35F) && kb::tests::NearlyEqual(audioSource->pitch, 1.25F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(audioSource->maxDistance, 80.0F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Ambience", "Loaded prefab audio source was not preserved");
     kb::tests::Require(audioListener != nullptr && !audioListener->primary && !audioListener->enabled, "Loaded prefab audio listener was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);

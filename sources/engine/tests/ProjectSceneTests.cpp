@@ -190,7 +190,7 @@ void RunSceneDocumentRoundTripTest() {
         .height = 2.5F,
         .trigger = true,
     });
-    source.Components().AudioSources().Set(child, kb::scene::AudioSourceComponent{
+    kb::scene::AudioSourceComponent roundTripAudioSource{
         .clipAssetId = 90,
         .volume = 0.25F,
         .pitch = 1.5F,
@@ -206,7 +206,9 @@ void RunSceneDocumentRoundTripTest() {
         .maxDistance = 80.0F,
         .rolloff = 0.5F,
         .dopplerFactor = 0.25F,
-    });
+    };
+    kb::scene::SetAudioSourceOutputBus(roundTripAudioSource, "Music");
+    source.Components().AudioSources().Set(child, roundTripAudioSource);
     source.Components().AudioListeners().Set(secondRoot, kb::scene::AudioListenerComponent{
         .primary = true,
         .enabled = false,
@@ -269,7 +271,7 @@ void RunSceneDocumentRoundTripTest() {
         "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
     Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
-    Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F), "Scene document audio source did not roundtrip");
+    Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Music", "Scene document audio source did not roundtrip");
     Require(audioListener != nullptr && audioListener->primary && !audioListener->enabled, "Scene document audio listener did not roundtrip");
     Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
 }

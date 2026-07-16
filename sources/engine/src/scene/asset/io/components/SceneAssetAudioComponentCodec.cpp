@@ -38,6 +38,17 @@ bool SceneAssetAudioComponentCodec::ReadSource(SceneAssetBinaryIO::ByteReader& i
     output.enabled = enabled;
     output.mute = mute;
     output.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(attenuationModel);
+    if (fileVersion < 3U) {
+        return true;
+    }
+
+    // v3 (LIB-147): the mixer-routing bus token (empty = implicit master, the value every
+    // pre-v3 source implicitly had).
+    std::string outputBus;
+    if (!input.ReadString(outputBus, AudioSourceComponent::MaxOutputBusBytes)) {
+        return false;
+    }
+    SetAudioSourceOutputBus(output, outputBus);
     return true;
 }
 
@@ -57,6 +68,7 @@ void SceneAssetAudioComponentCodec::WriteSource(std::vector<std::uint8_t>& outpu
     SceneAssetBinaryIO::WriteFloat(output, audioSource.maxDistance);
     SceneAssetBinaryIO::WriteFloat(output, audioSource.rolloff);
     SceneAssetBinaryIO::WriteFloat(output, audioSource.dopplerFactor);
+    SceneAssetBinaryIO::WriteString(output, AudioSourceOutputBus(audioSource));
 }
 
 bool SceneAssetAudioComponentCodec::ReadListener(SceneAssetBinaryIO::ByteReader& input, AudioListenerComponent& output) {

@@ -35,7 +35,9 @@ public:
     MiniaudioSound(MiniaudioSound&&) = delete;
     MiniaudioSound& operator=(MiniaudioSound&&) = delete;
 
-    [[nodiscard]] ma_result InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial);
+    // LIB-147: `group` attaches the sound to a mixer bus (nullptr = the engine's own
+    // endpoint, the implicit master - the pre-mixer behavior).
+    [[nodiscard]] ma_result InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group = nullptr);
     void Reset() noexcept;
 
     void Apply(const MiniaudioSoundSettings& settings) noexcept;

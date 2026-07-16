@@ -29,6 +29,9 @@
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -3482,6 +3485,190 @@ end
     kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script post process API Lua wrapper ClearProfile did not report cleared=true");
     kb::tests::Require(host.SharedState().Get("luaActiveAfterClear").value_or(kb::script::ScriptValue{ std::string{ "not empty" } }).AsString().empty(),
         "Script post process API Lua wrapper ActiveProfile must return empty after ClearProfile");
+}
+
+// LIB-147: the authored AudioMixer asset - text IO round-trip, structural validation
+// (broken routing graphs must never load), and the scene-global active-mixer/snapshot
+// selection (SceneAudioMixerAccess, mirror of ScenePostProcessAccess).
+void RunAudioMixerAssetIOAndAccessTest() {
+    ResetTestRoot();
+    const std::filesystem::path mixerPath = TestRoot() / "MainMixer.kbmixer";
+
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {
+        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 1.0F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 0.6F, .mute = true },
+    };
+    mixer.snapshots = {
+        kb::audio::AudioMixerSnapshot{
+            .name = "Combat",
+            .busVolumes = {
+                kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Music", .volume = 0.25F },
+                kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Weapons", .volume = 1.0F },
+            },
+        },
+        kb::audio::AudioMixerSnapshot{ .name = "Calm", .busVolumes = {} },
+    };
+    kb::tests::Require(kb::audio::ValidateAudioMixerAsset(mixer).empty(), "A well-formed audio mixer must validate cleanly");
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Audio mixer asset save failed");
+
+    const std::optional<kb::audio::AudioMixerAsset> loaded = kb::audio::AudioMixerAssetIO::Load(mixerPath);
+    kb::tests::Require(loaded.has_value(), "Audio mixer asset load failed");
+    kb::tests::Require(loaded->buses.size() == 3U && loaded->snapshots.size() == 2U, "Audio mixer asset did not round-trip its record counts");
+    const kb::audio::AudioMixerBus* weapons = loaded->FindBus("Weapons");
+    kb::tests::Require(weapons != nullptr && weapons->parentBus == "Sfx" && kb::tests::NearlyEqual(weapons->volume, 0.6F) && weapons->mute,
+        "Audio mixer bus fields did not round-trip");
+    kb::tests::Require(loaded->FindBus("Music") != nullptr && loaded->FindBus("Music")->parentBus.empty(), "Audio mixer implicit-master parent did not round-trip");
+    const kb::audio::AudioMixerSnapshot* combat = loaded->FindSnapshot("Combat");
+    kb::tests::Require(combat != nullptr && combat->busVolumes.size() == 2U && combat->busVolumes[0].bus == "Music" && kb::tests::NearlyEqual(combat->busVolumes[0].volume, 0.25F),
+        "Audio mixer snapshot overrides did not round-trip");
+    kb::tests::Require(loaded->FindSnapshot("Calm") != nullptr && loaded->FindSnapshot("Calm")->busVolumes.empty(), "Audio mixer empty snapshot did not round-trip");
+    kb::tests::Require(loaded->FindBus("Nope") == nullptr && loaded->FindSnapshot("Nope") == nullptr, "Audio mixer lookups must miss honestly");
+
+    // Structural validation - each broken graph is rejected with a non-empty reason, and
+    // Save refuses to write it (a broken mixer must never reach disk or the backend).
+    kb::audio::AudioMixerAsset duplicate = mixer;
+    duplicate.buses.push_back(kb::audio::AudioMixerBus{ .name = "Music" });
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(duplicate).empty(), "A duplicate bus name must fail validation");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Save(mixerPath, duplicate), "Save must refuse a mixer with a duplicate bus name");
+    kb::audio::AudioMixerAsset unknownParent = mixer;
+    unknownParent.buses[0].parentBus = "Ghost";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(unknownParent).empty(), "An unknown parent bus must fail validation");
+    kb::audio::AudioMixerAsset cycle = mixer;
+    cycle.buses[1].parentBus = "Weapons"; // Sfx -> Weapons -> Sfx
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(cycle).empty(), "A parent-routing cycle must fail validation");
+    kb::audio::AudioMixerAsset unknownSnapshotBus = mixer;
+    unknownSnapshotBus.snapshots[0].busVolumes[0].bus = "Ghost";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(unknownSnapshotBus).empty(), "A snapshot override for an unknown bus must fail validation");
+    kb::audio::AudioMixerAsset badName = mixer;
+    badName.buses[0].name = "two words";
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(badName).empty(), "A whitespace bus name must fail validation (single-token text format)");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "missing.kbmixer").has_value(), "Loading a missing mixer file must fail honestly");
+
+    // SceneAudioMixerAccess - defaults, round-trip, per-scene isolation.
+    kb::scene::Scene scene;
+    kb::scene::Scene otherScene;
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "A fresh scene must have no active mixer and no active snapshot");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 777U);
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Combat");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 777U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat",
+        "SceneAudioMixerAccess set/get did not round-trip");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(otherScene) == 0U, "SceneAudioMixerAccess must be isolated per scene");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, {});
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "SceneAudioMixerAccess must clear back to the defaults");
+}
+
+// LIB-147: Audio.SetMixer/ActiveMixer/SetSnapshot/ActiveSnapshot's script layer -
+// registration on all three frontends, honest errors (wrong asset type, snapshot without
+// a mixer, snapshot name the mixer does not declare), real mutation of the scene's
+// selection, and the real Lua wrappers.
+void RunScriptAudioMixerApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path mixerPath = TestRoot() / "ScriptMixer.kbmixer";
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = { kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false } };
+    mixer.snapshots = { kb::audio::AudioMixerSnapshot{ .name = "Calm", .busVolumes = { kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Music", .volume = 0.1F } } } };
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Script audio mixer fixture save failed");
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script audio mixer API host did not initialize");
+    for (const char* name : { "Audio.SetMixer", "Audio.ActiveMixer", "Audio.SetSnapshot", "Audio.ActiveSnapshot" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio mixer API did not register a LIB-147 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.SetMixer") != nullptr,
+        "Script audio mixer API did not register VisualGraph runtime binding for Audio.SetMixer");
+
+    const kb::assets::AssetId mixerAssetId{ 9601U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = mixerAssetId,
+                           .type = kb::audio::kAudioMixerAssetType,
+                           .name = "ScriptMixer",
+                           .virtualPath = "/Game/Audio/ScriptMixer.kbmixer",
+                           .physicalPath = mixerPath.string(),
+                           .contentHash = 1U,
+                       }),
+        "Script audio mixer API test mixer asset registration failed");
+    const kb::assets::AssetId meshAssetId{ 9602U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = meshAssetId,
+                           .type = "RenderMesh",
+                           .name = "WrongTypeAsset",
+                           .virtualPath = "/Game/Meshes/WrongTypeAsset.21kbmesh",
+                           .physicalPath = "WrongTypeAsset.21kbmesh",
+                           .contentHash = 1U,
+                       }),
+        "Script audio mixer API test wrong-type asset registration failed");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callString = [&host, &context](const char* function, const char* pin, const std::string& value) {
+        return host.Functions().Call(
+            function,
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = pin, .value = kb::script::ScriptValue{ value } },
+            } },
+            context);
+    };
+
+    kb::tests::Require(!callString("Audio.SetMixer", "mixer", "/Game/Meshes/WrongTypeAsset.21kbmesh").Succeeded(),
+        "Audio.SetMixer must reject a real asset of the wrong type");
+    kb::tests::Require(!callString("Audio.SetSnapshot", "snapshot", "Calm").Succeeded(),
+        "Audio.SetSnapshot must honestly error while no mixer is active");
+
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "/Game/Audio/ScriptMixer.kbmixer").Succeeded(),
+        "Audio.SetMixer failed for a valid AudioMixer asset");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == mixerAssetId.value,
+        "Audio.SetMixer did not store the resolved mixer asset id in the scene's own state");
+    const kb::script::ScriptFunctionCallResult activeMixer = host.Functions().Call("Audio.ActiveMixer", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(activeMixer.Succeeded() && activeMixer.Output("mixer").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(mixerAssetId),
+        "Audio.ActiveMixer must return the assigned mixer asset id");
+
+    kb::tests::Require(!callString("Audio.SetSnapshot", "snapshot", "Ghost").Succeeded(),
+        "Audio.SetSnapshot must reject a snapshot name the active mixer does not declare");
+    kb::tests::Require(callString("Audio.SetSnapshot", "snapshot", "Calm").Succeeded(), "Audio.SetSnapshot failed for a declared snapshot");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm", "Audio.SetSnapshot did not store the active snapshot name");
+    const kb::script::ScriptFunctionCallResult activeSnapshot = host.Functions().Call("Audio.ActiveSnapshot", std::span<const kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(activeSnapshot.Succeeded() && activeSnapshot.Output("snapshot").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "Calm",
+        "Audio.ActiveSnapshot must return the active snapshot name");
+    kb::tests::Require(callString("Audio.SetSnapshot", "snapshot", "").Succeeded() && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "An empty Audio.SetSnapshot must reset to the authored volumes");
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded()
+            && kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
+        "An empty Audio.SetMixer must clear the mixer selection back to the implicit master");
+
+    // Lua wrapper layer - the full cycle through the C wrappers.
+    const kb::assets::AssetId luaAsset{ 9603U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Mixer Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    SetShared("luaAssigned", Audio.SetMixer("/Game/Audio/ScriptMixer.kbmixer"))
+    SetShared("luaMixer", Audio.ActiveMixer())
+    SetShared("luaApplied", Audio.SetSnapshot("Calm"))
+    SetShared("luaSnapshot", Audio.ActiveSnapshot())
+    local ok, err = Audio.SetSnapshot("Ghost")
+    SetShared("luaGhostRejected", ok == nil and err ~= nil)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio mixer API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script audio mixer API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAssigned").value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua Audio.SetMixer did not report assigned=true");
+    kb::tests::Require(host.SharedState().Get("luaMixer").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == kb::assets::ToString(mixerAssetId),
+        "Lua Audio.ActiveMixer did not return the assigned mixer id");
+    kb::tests::Require(host.SharedState().Get("luaApplied").value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua Audio.SetSnapshot did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaSnapshot").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "Calm",
+        "Lua Audio.ActiveSnapshot did not return the active snapshot");
+    kb::tests::Require(host.SharedState().Get("luaGhostRejected").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Lua Audio.SetSnapshot must surface nil+error for an undeclared snapshot name");
 }
 
 // LIB-144: the native contract of the scene-held, renderer-published visibility feedback
@@ -11020,6 +11207,8 @@ void RunScriptRuntimeTests() {
     RunScriptMaterialInstanceParameterApiTest();
     RunScenePostProcessAccessTest();
     RunScriptPostProcessApiTest();
+    RunAudioMixerAssetIOAndAccessTest();
+    RunScriptAudioMixerApiTest();
     RunSceneRenderFeedbackTest();
     RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();

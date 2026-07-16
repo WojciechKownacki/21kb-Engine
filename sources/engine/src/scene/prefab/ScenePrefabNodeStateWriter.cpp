@@ -86,7 +86,8 @@ namespace {
     return lhs.clipAssetId == rhs.clipAssetId && lhs.volume == rhs.volume && lhs.pitch == rhs.pitch && lhs.loop == rhs.loop && lhs.spatial == rhs.spatial
         && lhs.autoplay == rhs.autoplay && lhs.enabled == rhs.enabled && lhs.mute == rhs.mute && lhs.pan == rhs.pan && lhs.spatialBlend == rhs.spatialBlend
         && lhs.attenuationModel == rhs.attenuationModel && lhs.minDistance == rhs.minDistance && lhs.maxDistance == rhs.maxDistance && lhs.rolloff == rhs.rolloff
-        && lhs.dopplerFactor == rhs.dopplerFactor;
+        && lhs.dopplerFactor == rhs.dopplerFactor
+        && AudioSourceOutputBus(lhs) == AudioSourceOutputBus(rhs);
 }
 
 [[nodiscard]] bool Equals(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {

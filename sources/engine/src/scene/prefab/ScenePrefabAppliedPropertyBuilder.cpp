@@ -490,6 +490,10 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(audioSource->dopplerFactor);
             return true;
         }
+        if (propertyPath == "audioSource.outputBus") {
+            property.value = std::string{ AudioSourceOutputBus(*audioSource) };
+            return true;
+        }
     }
     if (StartsWith(propertyPath, "audioListener")) {
         const AudioListenerComponent* audioListener = components.AudioListeners().TryGet(entity);

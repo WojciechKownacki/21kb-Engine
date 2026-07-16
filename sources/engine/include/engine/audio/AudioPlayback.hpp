@@ -16,6 +16,10 @@ namespace kb::audio {
 
 struct AudioPlayDesc {
     std::uint64_t clipAssetId = 0U;
+    // LIB-147: names an AudioMixerBus of the scene's active AudioMixer asset
+    // (SceneAudioMixerAccess); empty or unknown routes to the implicit master output -
+    // the same honest fallback AudioSourceComponent::outputBus documents.
+    std::string outputBus;
     float volume = 1.0F;
     float pitch = 1.0F;
     bool mute = false;

@@ -3,15 +3,17 @@
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 
 #include <cstdio>
+#include <string_view>
 
 namespace kb::editor {
 
 void InspectorAudioSourceTextBuilder::Append(std::string& text, const kb::scene::AudioSourceComponent& audioSource) const {
+    const std::string_view outputBus = kb::scene::AudioSourceOutputBus(audioSource);
     char component[512]{};
     std::snprintf(
         component,
         sizeof(component),
-        "\n\nAudio Source\nClip: %llu\nVolume: %.2f\nPitch: %.2f\nLoop: %s\nAutoplay: %s\nEnabled: %s\nSpatial: %s\nAttenuation: %s\nRange: %.2f - %.2f",
+        "\n\nAudio Source\nClip: %llu\nVolume: %.2f\nPitch: %.2f\nLoop: %s\nAutoplay: %s\nEnabled: %s\nSpatial: %s\nAttenuation: %s\nRange: %.2f - %.2f\nOutput Bus: %.*s",
         static_cast<unsigned long long>(audioSource.clipAssetId),
         audioSource.volume,
         audioSource.pitch,
@@ -21,7 +23,9 @@ void InspectorAudioSourceTextBuilder::Append(std::string& text, const kb::scene:
         audioSource.spatial ? "true" : "false",
         InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel),
         audioSource.minDistance,
-        audioSource.maxDistance);
+        audioSource.maxDistance,
+        outputBus.empty() ? 8 : static_cast<int>(outputBus.size()),
+        outputBus.empty() ? "(master)" : outputBus.data());
     text += component;
 }
 

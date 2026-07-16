@@ -36,8 +36,12 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 103> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 107> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
+    { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
+    { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Audio", "SetSnapshot", "Audio.SetSnapshot", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "Audio", "ActiveSnapshot", "Audio.ActiveSnapshot", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "MeshRenderer", "SetMesh", "MeshRenderer.SetMesh", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterial", "MeshRenderer.SetMaterial", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterialSlot", "MeshRenderer.SetMaterialSlot", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },

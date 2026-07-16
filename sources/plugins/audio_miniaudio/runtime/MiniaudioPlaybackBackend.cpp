@@ -18,13 +18,22 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
     }
 
     listenerSynchronizer_.Sync(engine_.Native(), context);
-    sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, engine_.IsPlaybackAvailable());
+    // LIB-147: bus groups sync FIRST (sources route into them below). A topology rebuild
+    // invalidates every ma_sound_group, so entity sounds must recreate (their signatures
+    // carry the bus generation) and one-shot voices must stop - both BEFORE any of them
+    // would touch a destroyed group.
+    if (busRegistry_.Sync(engine_.Native(), context.GetScene(), engine_.IsPlaybackAvailable())) {
+        sourceRegistry_.StopAll();
+        voicePool_.StopAll();
+    }
+    sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, busRegistry_, engine_.IsPlaybackAvailable());
     voicePool_.RemoveFinishedVoices();
 }
 
 void MiniaudioPlaybackBackend::Shutdown() noexcept {
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
+    busRegistry_.StopAll();
     engine_.Shutdown();
 }
 
@@ -39,7 +48,7 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scen
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip id is invalid" };
     }
 
-    return voicePool_.PlayOneShot(engine_.Native(), scene, desc, clipResolver_);
+    return voicePool_.PlayOneShot(engine_.Native(), scene, desc, clipResolver_, busRegistry_.FindGroup(desc.outputBus));
 }
 
 void MiniaudioPlaybackBackend::StopAll(kb::scene::Scene& scene) noexcept {

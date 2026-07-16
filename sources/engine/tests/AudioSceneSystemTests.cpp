@@ -1,12 +1,15 @@
 #include "SceneSystemTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -145,6 +148,66 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         kb::tests::Require(
             played.Succeeded() || played.error == "miniaudio playback device is not available",
             "Audio playback backend did not start a one-shot voice or report a controlled no-device error");
+
+        // LIB-147: the mixer bus path against the REAL plugin - authored .kbmixer asset,
+        // active mixer + snapshot, an entity source routed to a child bus, a one-shot
+        // routed by outputBus, then the mixer cleared mid-play (bus topology teardown).
+        // Exercises the full ma_sound_group lifecycle; audibility itself cannot be
+        // asserted headlessly, honest no-device runs already skip via playbackAvailable.
+        const std::filesystem::path mixerPath = TestRoot() / "External" / "Main.kbmixer";
+        kb::audio::AudioMixerAsset mixerAsset;
+        mixerAsset.buses = {
+            kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 0.5F, .mute = false },
+            kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 1.0F, .mute = false },
+        };
+        mixerAsset.snapshots = {
+            kb::audio::AudioMixerSnapshot{ .name = "Quiet", .busVolumes = { kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Sfx", .volume = 0.0F } } },
+        };
+        kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixerAsset), "Audio scene system test mixer save failed");
+        const kb::assets::AssetId mixerAssetId{ 9701U };
+        kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                               .id = mixerAssetId,
+                               .type = kb::audio::kAudioMixerAssetType,
+                               .name = "MainMixer",
+                               .virtualPath = "/Game/Audio/Main.kbmixer",
+                               .physicalPath = mixerPath.string(),
+                               .contentHash = 1U,
+                           }),
+            "Audio scene system test mixer asset registration failed");
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerAssetId.value);
+        kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet");
+
+        kb::scene::AudioSourceComponent routedSource{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .autoplay = true,
+        };
+        kb::scene::SetAudioSourceOutputBus(routedSource, "Weapons");
+        scene.Components().AudioSources().Set(source.Entity(), routedSource);
+        for (int i = 0; i < 3; ++i) {
+            [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+        }
+        kb::audio::AudioPlayDesc routedOneShot{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = false,
+            .spatial = false,
+        };
+        routedOneShot.outputBus = "Weapons";
+        const kb::audio::AudioPlayResult routedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, routedOneShot);
+        kb::tests::Require(
+            routedPlayed.Succeeded() || routedPlayed.error == "miniaudio playback device is not available",
+            "Bus-routed one-shot did not start or report a controlled no-device error");
+
+        // Topology teardown mid-play: clearing the mixer must rebuild routing to the
+        // implicit master on the next tick without crashing or dangling groups.
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+        for (int i = 0; i < 3; ++i) {
+            [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+        }
+
         kb::audio::AudioPlayback::StopAll(scene);
     }
 }

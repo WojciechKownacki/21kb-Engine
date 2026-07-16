@@ -88,7 +88,8 @@ template <typename T>
         && lhs.minDistance == rhs.minDistance
         && lhs.maxDistance == rhs.maxDistance
         && lhs.rolloff == rhs.rolloff
-        && lhs.dopplerFactor == rhs.dopplerFactor;
+        && lhs.dopplerFactor == rhs.dopplerFactor
+        && AudioSourceOutputBus(lhs) == AudioSourceOutputBus(rhs);
 }
 
 [[nodiscard]] bool Equal(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {
@@ -275,6 +276,7 @@ void AppendAudioSource(SceneComponents components, SceneEntity entity, const std
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.maxDistance", ScenePrefabOverrideValueFormatter::ToString(actual->maxDistance), ScenePrefabOverrideFlag::AudioSource);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.rolloff", ScenePrefabOverrideValueFormatter::ToString(actual->rolloff), ScenePrefabOverrideFlag::AudioSource);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.dopplerFactor", ScenePrefabOverrideValueFormatter::ToString(actual->dopplerFactor), ScenePrefabOverrideFlag::AudioSource);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.outputBus", std::string{ AudioSourceOutputBus(*actual) }, ScenePrefabOverrideFlag::AudioSource);
         return;
     }
     if (actual->clipAssetId != expected->clipAssetId) {
@@ -321,6 +323,9 @@ void AppendAudioSource(SceneComponents components, SceneEntity entity, const std
     }
     if (actual->dopplerFactor != expected->dopplerFactor) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.dopplerFactor", ScenePrefabOverrideValueFormatter::ToString(actual->dopplerFactor), ScenePrefabOverrideFlag::AudioSource);
+    }
+    if (AudioSourceOutputBus(*actual) != AudioSourceOutputBus(*expected)) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioSource.outputBus", std::string{ AudioSourceOutputBus(*actual) }, ScenePrefabOverrideFlag::AudioSource);
     }
 }
 
