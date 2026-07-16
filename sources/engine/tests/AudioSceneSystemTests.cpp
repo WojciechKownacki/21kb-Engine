@@ -24,6 +24,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -297,6 +298,128 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId)
                     && !kb::audio::AudioPlayback::StopVoice(scene, attachedPlayed.voiceId),
                 "An attached looping voice must be fully released with its owner - no leaked source record");
+        }
+
+        // LIB-154: pooled one-shots, asset unload/delete DURING playback, and a scene-change
+        // entity teardown - the REAL backend paths (device-present branch; the no-device
+        // case is covered by the controlled-error checks above).
+        if (routedPlayed.Succeeded()) {
+            // Pooled one-shots: the per-clip cap (kMaxOneShotVoicesPerClip) is a silent
+            // clamp - every request past it still starts (the newest wins its slot), never
+            // a crash or a leaked source.
+            std::uint64_t lastPooled = 0U;
+            for (int i = 0; i < 12; ++i) {
+                const kb::audio::AudioPlayResult pooled = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                    .clipAssetId = importedClip.id.value,
+                    .volume = 0.0F,
+                    .loop = true,
+                    .spatial = false,
+                });
+                kb::tests::Require(pooled.Succeeded(), "Every pooled one-shot past the per-clip cap must still start (silent clamp)");
+                lastPooled = pooled.voiceId;
+            }
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, lastPooled),
+                "The newest pooled one-shot must own a live slot after the per-clip clamp");
+
+            // Asset UNLOAD during playback keeps the registry metadata: the live streaming
+            // voice is untouched (it holds its own file handle) and a NEW play still resolves.
+            static_cast<void>(scene.Assets().Manager().Unload(importedClip.id));
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, lastPooled),
+                "A live streaming one-shot must survive an asset Unload");
+            const kb::audio::AudioPlayResult afterUnload = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                .clipAssetId = importedClip.id.value, .volume = 0.0F, .loop = false, .spatial = false });
+            kb::tests::Require(afterUnload.Succeeded(), "Unload keeps registry metadata, so a new play still resolves");
+
+            // Asset DELETE removes the registry metadata: the live streaming voices survive
+            // (their handles are already open on the temp cache), but a NEW play now fails
+            // to resolve, and the entity sources referencing the clip are cleanly dropped on
+            // the next Sync (no crash, no dangling ma_sound).
+            kb::tests::Require(scene.Assets().Manager().DeleteAsset(importedClip.id), "Imported clip DeleteAsset failed");
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, lastPooled),
+                "A live streaming one-shot must survive an asset DeleteAsset");
+            const kb::audio::AudioPlayResult afterDelete = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                .clipAssetId = importedClip.id.value, .volume = 0.0F, .loop = false, .spatial = false });
+            kb::tests::Require(!afterDelete.Succeeded() && afterDelete.error == "audio clip file could not be resolved",
+                "A new play of a deleted clip must honestly fail to resolve");
+
+            kb::audio::AudioPlayback::StopAll(scene);
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, lastPooled),
+                "StopAll must release every pooled voice with no leaked source");
+
+            // Global one-shot pool cap: fill kMaxOneShotVoices with high-priority voices
+            // across distinct clips, then a lower-priority request for a fresh clip is
+            // honestly REFUSED (never steals a higher-priority voice), while a
+            // higher-priority request EVICTS the lowest and starts. Distinct clips share
+            // the same on-disk file (its own wav, untouched by the DeleteAsset above) -
+            // separate asset ids, separate per-clip buckets.
+            const std::filesystem::path poolClipPath = TestRoot() / "External" / "Pool.wav";
+            WriteSilentWav(poolClipPath);
+            constexpr int kFillClips = 8;   // 8 clips x 8 per-clip = 64 = kMaxOneShotVoices
+            constexpr int kPerClip = 8;
+            for (int c = 0; c < kFillClips; ++c) {
+                const kb::assets::AssetId fillClip{ 9800U + static_cast<std::uint64_t>(c) };
+                kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                                       .id = fillClip,
+                                       .type = "AudioClip",
+                                       .name = "PoolFill",
+                                       .virtualPath = std::string{ "/Game/Audio/PoolFill" } + std::to_string(c) + ".wav",
+                                       .physicalPath = poolClipPath.string(),
+                                       .contentHash = 1U,
+                                   }),
+                    "Pool-fill clip registration failed");
+                for (int i = 0; i < kPerClip; ++i) {
+                    const kb::audio::AudioPlayResult filled = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                        .clipAssetId = fillClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 200U });
+                    kb::tests::Require(filled.Succeeded(), "Filling the one-shot pool with high-priority voices must succeed up to capacity");
+                }
+            }
+            // A fresh clip at low priority: its per-clip bucket is empty, so nothing is
+            // evicted within the clip, and the full pool of higher-priority voices refuses it.
+            const kb::assets::AssetId lowPriorityClip{ 9808U };
+            kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                                   .id = lowPriorityClip,
+                                   .type = "AudioClip",
+                                   .name = "PoolLow",
+                                   .virtualPath = "/Game/Audio/PoolLow.wav",
+                                   .physicalPath = poolClipPath.string(),
+                                   .contentHash = 1U,
+                               }),
+                "Low-priority pool clip registration failed");
+            const kb::audio::AudioPlayResult refusedLow = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                .clipAssetId = lowPriorityClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 50U });
+            kb::tests::Require(!refusedLow.Succeeded() && refusedLow.error == "audio one-shot pool is full of higher-priority voices",
+                "A full pool of higher-priority voices must honestly refuse a lower-priority one-shot, never steal");
+            // A higher-priority request evicts the lowest and starts.
+            const kb::assets::AssetId highPriorityClip{ 9809U };
+            kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                                   .id = highPriorityClip,
+                                   .type = "AudioClip",
+                                   .name = "PoolHigh",
+                                   .virtualPath = "/Game/Audio/PoolHigh.wav",
+                                   .physicalPath = poolClipPath.string(),
+                                   .contentHash = 1U,
+                               }),
+                "High-priority pool clip registration failed");
+            const kb::audio::AudioPlayResult admittedHigh = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                .clipAssetId = highPriorityClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 255U });
+            kb::tests::Require(admittedHigh.Succeeded(), "A higher-priority one-shot must evict the lowest and start when the pool is full");
+
+            kb::audio::AudioPlayback::StopAll(scene);
+
+            // Scene change: destroying every audio entity (the ClearSceneRoots half of a
+            // non-additive Scene.Load) drops their sources on the next Sync without
+            // stranding the backend - a fresh one-shot still plays afterward.
+            scene.Entities().Destroy(source.Entity());
+            scene.Entities().Destroy(occludedSourceObject.Entity());
+            for (int i = 0; i < 3; ++i) {
+                static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            }
+            const kb::audio::AudioPlayResult afterSceneChange = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                .clipAssetId = highPriorityClip.value, .volume = 0.0F, .loop = false, .spatial = false });
+            kb::tests::Require(afterSceneChange.Succeeded(), "The backend must remain usable after a scene-change entity teardown");
+            kb::audio::AudioPlayback::StopAll(scene);
         }
 
         // Topology teardown mid-play: clearing the mixer must rebuild routing to the
