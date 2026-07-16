@@ -2771,6 +2771,180 @@ end
     kb::tests::Require(!host.SharedState().Get("luaInstanceExistedAfter").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script material instance API Lua wrapper instance must not exist after Release");
 }
 
+// LIB-140: SceneMaterialInstances::SetParameterScalar/SetParameterBool/Parameters/
+// ClearParameter storage - proves the upsert-by-name (last-write-wins), Scalar-vs-Bool value
+// separation, false-for-a-nonexistent-instance/empty-name behavior, and that a released
+// instance's overrides are gone with it (not resurrectable via a future Create reusing... the
+// id is never reused anyway, see SceneMaterialInstances.hpp's own doc comment).
+void RunSceneMaterialInstancesParameterOverridesTest() {
+    kb::scene::Scene scene;
+
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(0U, "roughness", 0.5F), "SetParameterScalar must reject handle 0 (never a valid instance)");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterBool(999999U, "enabled", true), "SetParameterBool must reject a handle naming no live instance");
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(999999U, "roughness"), "ClearParameter must reject a handle naming no live instance");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(111U);
+    kb::tests::Require(instance != 0U, "Scene material instance parameter test setup failed to create an instance");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).empty(), "A freshly created instance must start with no parameter overrides");
+
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "", 0.5F), "SetParameterScalar must reject an empty parameter name");
+
+    kb::tests::Require(scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.25F), "SetParameterScalar must succeed for a live instance");
+    kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "useEmissive", true), "SetParameterBool must succeed for a live instance");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Parameters must report both overrides after two distinct SetParameter calls");
+        const auto findByName = [&](std::string_view name) -> const kb::scene::MaterialParameterOverride* {
+            for (const kb::scene::MaterialParameterOverride& override_ : parameters) {
+                if (override_.name == name) {
+                    return &override_;
+                }
+            }
+            return nullptr;
+        };
+        const kb::scene::MaterialParameterOverride* roughness = findByName("roughness");
+        const kb::scene::MaterialParameterOverride* useEmissive = findByName("useEmissive");
+        kb::tests::Require(roughness != nullptr && roughness->type == kb::scene::MaterialParameterType::Scalar && roughness->scalarValue == 0.25F,
+            "Parameters must preserve the exact Scalar override that was set");
+        kb::tests::Require(useEmissive != nullptr && useEmissive->type == kb::scene::MaterialParameterType::Bool && useEmissive->boolValue,
+            "Parameters must preserve the exact Bool override that was set");
+    }
+
+    // Upsert-by-name: setting "roughness" again must overwrite in place, not append a duplicate.
+    kb::tests::Require(scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.75F), "SetParameterScalar must succeed when overwriting an existing override");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Overwriting an existing override by name must not append a duplicate entry");
+        bool foundUpdated = false;
+        for (const kb::scene::MaterialParameterOverride& override_ : parameters) {
+            if (override_.name == "roughness") {
+                kb::tests::Require(override_.scalarValue == 0.75F, "Overwriting an existing Scalar override must replace its value (last-write-wins)");
+                foundUpdated = true;
+            }
+        }
+        kb::tests::Require(foundUpdated, "Overwritten override must still be present under the same name");
+    }
+
+    // A name can also change type across calls (SetParameterBool on a name previously set via
+    // SetParameterScalar) - still last-write-wins, no leftover stale numeric value.
+    kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "roughness", false), "SetParameterBool must be able to retype an existing Scalar override's name");
+    {
+        const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
+        kb::tests::Require(parameters.size() == 2U, "Retyping an override by name must still not append a duplicate entry");
+    }
+
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(instance, "neverSet"), "ClearParameter must be idempotent-false for a name with no override set");
+    kb::tests::Require(scene.MaterialInstances().ClearParameter(instance, "useEmissive"), "ClearParameter must succeed for a name with a live override");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 1U, "ClearParameter must remove exactly the named override and no other");
+    kb::tests::Require(!scene.MaterialInstances().ClearParameter(instance, "useEmissive"), "ClearParameter must be idempotent-false the second time for the same name");
+
+    kb::tests::Require(scene.MaterialInstances().Release(instance), "Scene material instance parameter test setup failed to release the instance");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).empty(), "Parameters must report empty for a released (no-longer-live) instance handle");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "roughness", 1.0F), "SetParameterScalar must reject a released instance handle");
+}
+
+// LIB-140: script-facing MaterialInstance.SetParameterScalar/SetParameterBool/ClearParameter -
+// proves the native ScriptFunctionRegistry path stores overrides through to
+// kb::scene::SceneMaterialInstances, and that the Lua wrapper layer (a separate, hand-written
+// C function per this session's own LIB-137 finding - host.RegisterFunction alone never
+// reaches Lua) exercises the same functions correctly.
+void RunScriptMaterialInstanceParameterApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script material instance parameter API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.SetParameterScalar") != nullptr, "Script material instance API did not register MaterialInstance.SetParameterScalar");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.SetParameterBool") != nullptr, "Script material instance API did not register MaterialInstance.SetParameterBool");
+    kb::tests::Require(host.Functions().FindSignature("MaterialInstance.ClearParameter") != nullptr, "Script material instance API did not register MaterialInstance.ClearParameter");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.MaterialInstance.SetParameterScalar") != nullptr,
+        "Script material instance API did not register VisualGraph runtime binding for MaterialInstance.SetParameterScalar");
+
+    const std::uint64_t instance = scene.MaterialInstances().Create(444U);
+    kb::tests::Require(instance != 0U, "Script material instance parameter API test setup failed to create an instance");
+
+    const kb::script::ScriptFunctionCallResult setScalar = host.Functions().Call(
+        "MaterialInstance.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "roughness" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.4F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setScalar.Succeeded() && setScalar.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.SetParameterScalar must report applied=true for a live instance");
+
+    const kb::script::ScriptFunctionCallResult setBool = host.Functions().Call(
+        "MaterialInstance.SetParameterBool",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "useEmissive" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ true } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setBool.Succeeded() && setBool.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.SetParameterBool must report applied=true for a live instance");
+
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 2U, "MaterialInstance.SetParameterScalar/SetParameterBool must actually store overrides in the scene's own table");
+
+    const kb::script::ScriptFunctionCallResult setScalarOnDeadInstance = host.Functions().Call(
+        "MaterialInstance.SetParameterScalar",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance + 999999U, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "roughness" } } },
+            kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.1F } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(setScalarOnDeadInstance.Succeeded() && !setScalarOnDeadInstance.Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "MaterialInstance.SetParameterScalar must report applied=false for a handle naming no live instance, not throw or crash");
+
+    const kb::script::ScriptFunctionCallResult clear = host.Functions().Call(
+        "MaterialInstance.ClearParameter",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "instance", .value = kb::script::ScriptValue{ instance, kb::script::ScriptValueType::Hash } },
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "useEmissive" } } },
+        } },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(clear.Succeeded() && clear.Output("cleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "MaterialInstance.ClearParameter must report cleared=true for a name with a live override");
+    kb::tests::Require(scene.MaterialInstances().Parameters(instance).size() == 1U, "MaterialInstance.ClearParameter must actually remove the override from the scene's own table");
+
+    // Lua wrapper layer - needs a REAL registered asset (unlike the direct
+    // scene.MaterialInstances().Create(444U) above, which bypasses asset resolution
+    // entirely) since the script-facing MaterialInstance.Create resolves its "material"
+    // argument against the scene's AssetRegistry, same as MaterialInstance.Create's own doc
+    // comment describes.
+    const kb::assets::AssetId luaParentMaterialId{ 9311U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = luaParentMaterialId,
+                           .type = "RenderMaterial",
+                           .name = "LuaParamParent",
+                           .virtualPath = "/Game/Materials/LuaParamParent.kbmat",
+                           .physicalPath = "LuaParamParent.kbmat",
+                           .contentHash = 1U,
+                       }),
+        "Script material instance parameter API Lua wrapper test parent material registration failed");
+    const kb::assets::AssetId luaAsset{ 9310U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Material Instance Parameter Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local instance, err = MaterialInstance.Create("/Game/Materials/LuaParamParent.kbmat")
+    local appliedScalar = MaterialInstance.SetParameterScalar(instance, "roughness", 0.6)
+    local appliedBool = MaterialInstance.SetParameterBool(instance, "useEmissive", true)
+    local cleared = MaterialInstance.ClearParameter(instance, "useEmissive")
+    SetShared("luaAppliedScalar", appliedScalar)
+    SetShared("luaAppliedBool", appliedBool)
+    SetShared("luaCleared", cleared)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script material instance parameter API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script material instance parameter API Lua wrapper execution failed");
+    kb::tests::Require(host.SharedState().Get("luaAppliedScalar").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterScalar did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaAppliedBool").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper SetParameterBool did not report applied=true");
+    kb::tests::Require(host.SharedState().Get("luaCleared").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script material instance parameter API Lua wrapper ClearParameter did not report cleared=true");
+}
+
 void RunScriptWorldTimePhysicsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "WorldApiProject";
@@ -9938,6 +10112,8 @@ void RunScriptRuntimeTests() {
     RunScriptMeshRendererMaterialSlotApiTest();
     RunSceneMaterialInstancesLifecycleAndLimitTest();
     RunScriptMaterialInstanceApiTest();
+    RunSceneMaterialInstancesParameterOverridesTest();
+    RunScriptMaterialInstanceParameterApiTest();
     RunScriptWorldTimePhysicsApiTest();
     RunScriptPhysicsForceVelocitySleepApiTest();
     RunScriptPhysicsCharacterApiTest();
