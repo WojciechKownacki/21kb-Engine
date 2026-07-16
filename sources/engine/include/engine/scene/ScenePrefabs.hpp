@@ -27,6 +27,15 @@ enum class ScenePrefabAssetType {
     Missing,
 };
 
+// LIB-160: one queued prefab-instantiation completion notification, drained
+// by kb::script::ScriptRuntimeSceneSystem into an entity-local
+// "OnPrefabInstantiated" event on `caller` carrying `root` and `count`.
+struct ScenePrefabInstantiatedEventRecord {
+    SceneEntity caller;
+    SceneEntity root;
+    std::int32_t count = 0;
+};
+
 enum class ScenePrefabInstanceStatus {
     NotInstance,
     Connected,
@@ -107,6 +116,15 @@ public:
     [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(ScenePrefabHandle handle, std::size_t count);
     [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] ScenePrefabInstantiationStats LastInstantiationStats() const noexcept;
+
+    // LIB-160: queue a prefab-instantiation completion notification for
+    // `caller` (a no-op if `caller` is invalid — the completion callback is
+    // for the entity script that requested the spawn). Drained once per frame
+    // by ScriptRuntimeSceneSystem into an "OnPrefabInstantiated" event.
+    void QueueInstantiatedEvent(SceneEntity caller, SceneEntity root, std::size_t count);
+    // Returns and clears the queued prefab-instantiation completion
+    // notifications (mirrors SceneLoadedContent::DrainPendingLifecycleEvents).
+    [[nodiscard]] std::vector<ScenePrefabInstantiatedEventRecord> DrainPendingInstantiatedEvents();
     [[nodiscard]] bool Save(ScenePrefabHandle handle, const std::filesystem::path& path) const;
     [[nodiscard]] ScenePrefabHandle Load(const std::filesystem::path& path);
     [[nodiscard]] bool Unload(ScenePrefabHandle handle) noexcept;

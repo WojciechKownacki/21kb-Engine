@@ -6845,6 +6845,125 @@ void RunWorldInstantiatePrefabOwnershipTest() {
         "World.Destroy on the prefab instance's root must cascade to destroy its child too — the caller that owns the returned handle owns the WHOLE instantiated hierarchy, not just the root");
 }
 
+// LIB-160: World.InstantiatePrefab's new parent, full-transform (position +
+// rotation + scale) and completion-callback dimensions. Part A drives the
+// direct-call surface (parent + pose applied to the instantiated root). Part
+// B proves the completion callback end-to-end: the binding queues an
+// "OnPrefabInstantiated" event to the CALLER, which a real
+// ScriptRuntimeSceneSystem frame dispatches to the caller's behaviour with
+// the root and count — and an instantiation with no caller queues nothing.
+void RunWorldInstantiatePrefabParentTransformCallbackTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "PrefabSpawnProject";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "SpawnPrefab.kbprefab";
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Root" });
+        static_cast<void>(prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = prefabRoot }));
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "SpawnPrefab");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Prefab spawn test fixture was not saved");
+    }
+
+    // ---- Part A: parent + full transform on the direct call. ----
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab spawn test project mount failed (A)");
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab spawn test prefab was not discovered (A)");
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "Prefab spawn test host setup failed (A)");
+        const kb::scene::SceneObject spawnParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SpawnParent" });
+
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+            kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ spawnParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 3.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 4.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "rotY", .value = kb::script::ScriptValue{ 0.70710678F } },
+            kb::script::ScriptFunctionArgument{ .name = "rotW", .value = kb::script::ScriptValue{ 0.70710678F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleX", .value = kb::script::ScriptValue{ 2.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleY", .value = kb::script::ScriptValue{ 2.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleZ", .value = kb::script::ScriptValue{ 2.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+        kb::tests::Require(result.Succeeded() && result.Output("count")->AsInt() == 2, "World.InstantiatePrefab (A) must instantiate the root and child");
+        const kb::scene::SceneEntity root{ result.Output("entity")->AsUInt64() };
+        kb::tests::Require(root.IsValid() && scene.Entities().IsAlive(root), "World.InstantiatePrefab (A) must return a live root");
+
+        const kb::scene::TransformComponent transform = scene.Transforms().Get(root);
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localPosition.x, 3.0F) && kb::tests::NearlyEqual(transform.localPosition.y, 4.0F) && kb::tests::NearlyEqual(transform.localPosition.z, 5.0F),
+            "World.InstantiatePrefab must apply the spawn position to the root");
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localRotation.y, 0.70710678F) && kb::tests::NearlyEqual(transform.localRotation.w, 0.70710678F) &&
+                kb::tests::NearlyEqual(transform.localRotation.x, 0.0F) && kb::tests::NearlyEqual(transform.localRotation.z, 0.0F),
+            "World.InstantiatePrefab must apply exactly the supplied rotation components (y/w) and leave the unsupplied ones (x/z) at their authored identity value");
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localScale.x, 2.0F) && kb::tests::NearlyEqual(transform.localScale.y, 2.0F) && kb::tests::NearlyEqual(transform.localScale.z, 2.0F),
+            "World.InstantiatePrefab must apply the spawn scale to the root");
+
+        const std::vector<kb::scene::SceneEntity> parentChildren = scene.Hierarchy().ChildEntities(spawnParent.Entity());
+        kb::tests::Require(std::find(parentChildren.begin(), parentChildren.end(), root) != parentChildren.end(),
+            "World.InstantiatePrefab must parent the instantiated root under the given parent entity");
+    }
+
+    // ---- Part B: completion callback end-to-end through a real frame. ----
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab spawn test project mount failed (B)");
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab spawn test prefab was not discovered (B)");
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "Prefab spawn test host setup failed (B)");
+
+        constexpr kb::assets::AssetId kCallerAsset{ 1601U };
+        const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SpawnCaller" });
+        scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kCallerAsset.value,
+            .backend = kb::scene::BehaviourBackend::Native,
+            .enabled = true,
+        });
+
+        kb::script::ScriptRuntime runtime;
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        std::size_t callbackCount = 0U;
+        std::uint64_t callbackRoot = 0U;
+        int callbackObjectCount = 0;
+        kb::tests::Require(nativeBackend->RegisterEvent(kCallerAsset, "OnPrefabInstantiated", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                                ++callbackCount;
+                                for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                                    if (argument.name == "root") {
+                                        callbackRoot = argument.value.AsUInt64();
+                                    } else if (argument.name == "count") {
+                                        callbackObjectCount = argument.value.AsInt();
+                                    }
+                                }
+                            }),
+            "OnPrefabInstantiated listener registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Prefab callback native backend registration failed");
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+        kb::tests::Require(result.Succeeded(), "World.InstantiatePrefab (B) must succeed");
+        const std::uint64_t root = result.Output("entity")->AsUInt64();
+
+        // The completion event must NOT have fired synchronously within the call.
+        kb::tests::Require(callbackCount == 0U, "OnPrefabInstantiated must not fire synchronously inside the instantiate call — only on the next dispatched frame");
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "OnPrefabInstantiated must fire exactly once, on the caller, after the instantiate is drained by a frame");
+        kb::tests::Require(callbackRoot == root && callbackObjectCount == 2, "OnPrefabInstantiated must carry the instantiated root entity and object count");
+
+        // A second drain with nothing queued must not re-fire.
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "OnPrefabInstantiated must not re-fire once its queued completion has been drained");
+
+        // An instantiation with NO caller queues no completion callback.
+        const kb::script::ScriptFunctionCallResult noCallerResult = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+        kb::tests::Require(noCallerResult.Succeeded(), "World.InstantiatePrefab with no caller must still succeed");
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "An instantiation with no caller must queue no completion callback");
+    }
+}
+
 // LIB-071: Scene.Load/Unload/SetActive/GetActive/Find/LoadProgress — proves
 // additive loading genuinely preserves prior content (not merely
 // non-destructive in name), selective Unload only removes its own record's
@@ -12165,6 +12284,7 @@ void RunScriptRuntimeTests() {
     RunWorldSetPropertyTest();
     RunWorldSetPropertyPhysicsComponentsTest();
     RunWorldInstantiatePrefabOwnershipTest();
+    RunWorldInstantiatePrefabParentTransformCallbackTest();
     RunSceneLoadedContentApiTest();
     RunWorldPersistentStateTest();
     RunScenePersistentEntitySurvivesLoadTest();
