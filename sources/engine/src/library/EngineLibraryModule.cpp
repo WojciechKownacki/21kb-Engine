@@ -180,9 +180,9 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::scene::SceneRenderFeedback",
             .Register = &kb::script::ScriptRendererApi::Register,
         },
-        // LIB-155/156/157/158: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
+        // LIB-155..159: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
         // LoadAsync/Unload/RefCount/SetUnloadPolicy/UnloadPolicy/
-        // PruneUnreferenced — a generic, type-erased script surface over the
+        // PruneUnreferenced/Validate — a generic, type-erased script surface over the
         // SAME kb::assets::AssetManager cache Load<T>/Unload/IsLoaded
         // already drive natively. The returned `asset` Hash is a
         // cache-membership token; per-holder reference counting, weak

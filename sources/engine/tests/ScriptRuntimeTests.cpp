@@ -10285,6 +10285,40 @@ void RunScriptAssetsApiTest() {
     const kb::script::ScriptFunctionCallResult pruned = host.Functions().Call("Assets.PruneUnreferenced", std::vector<kb::script::ScriptFunctionArgument>{}, context);
     kb::tests::Require(pruned.Succeeded() && pruned.Output("removed")->AsInt() >= 1, "Assets.PruneUnreferenced must remove the dead graph cache entry");
 
+    // LIB-159: Assets.Validate — compatibility / missing-dependency
+    // diagnostics through the script surface.
+    kb::tests::Require(host.Functions().FindSignature("Assets.Validate") != nullptr, "Assets.Validate was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.Validate") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.Validate");
+    // The graph fixture has no dependencies and a registered loader -> compatible.
+    const kb::script::ScriptFunctionCallResult validateGraph = host.Functions().Call("Assets.Validate", graphArgs, context);
+    kb::tests::Require(validateGraph.Succeeded() && validateGraph.Output("compatible")->AsBool() && validateGraph.Output("issueCount")->AsInt() == 0 && validateGraph.Output("diagnostics")->AsString().empty(),
+        "Assets.Validate must report a dependency-free, loadable asset as compatible with no diagnostics");
+
+    // A synthetic asset with a genuinely missing dependency -> incompatible,
+    // with a readable diagnostic naming the missing dependency.
+    const kb::assets::AssetId brokenId{ 0x5159B10CU };
+    const kb::assets::AssetId brokenMissingDep{ 0x5159DEADU };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = brokenId, .type = "VisualGraph", .name = "BrokenValidate",
+                           .virtualPath = "/Game/Logic/BrokenValidate.kbgraph", .physicalPath = "BrokenValidate.kbgraph", .contentHash = 1U,
+                           .dependencies = { brokenMissingDep },
+                       }),
+        "LIB-159 script test could not register the broken-dependency fixture");
+    const std::vector<kb::script::ScriptFunctionArgument> brokenArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(brokenId) } },
+    };
+    const kb::script::ScriptFunctionCallResult validateBroken = host.Functions().Call("Assets.Validate", brokenArgs, context);
+    kb::tests::Require(validateBroken.Succeeded() && !validateBroken.Output("compatible")->AsBool() && validateBroken.Output("issueCount")->AsInt() == 1,
+        "Assets.Validate must report an asset with a missing dependency as incompatible with one issue");
+    kb::tests::Require(validateBroken.Output("diagnostics")->AsString().find(kb::assets::ToString(brokenMissingDep)) != std::string::npos,
+        "Assets.Validate's readable diagnostics must name the missing dependency id");
+
+    // An unresolvable reference is a legitimate validation answer, not a call error.
+    const kb::script::ScriptFunctionCallResult validateUnknown = host.Functions().Call("Assets.Validate", unknownArgs, context);
+    kb::tests::Require(validateUnknown.Succeeded() && !validateUnknown.Output("compatible")->AsBool() && !validateUnknown.Output("diagnostics")->AsString().empty(),
+        "Assets.Validate must report an unresolvable reference as incompatible with a diagnostic, not fail the call");
+
     const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
     kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");
     kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Unload must remove the asset from AssetManager's cache");

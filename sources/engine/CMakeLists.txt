@@ -6,6 +6,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
     include/engine/audio/AudioSettings.hpp
+    include/engine/assets/AssetCompatibility.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetKind.hpp
@@ -313,6 +314,7 @@ add_library(kb_engine STATIC
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
     src/assets/AssetKind.cpp
+    src/assets/AssetCompatibility.cpp
     src/assets/AssetDiscoveryService.cpp
     src/assets/AssetFileOperations.cpp
     src/assets/AssetFileSystem.cpp
