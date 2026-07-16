@@ -1,6 +1,7 @@
 #include "engine/scene/Scene.hpp"
 
 #include "engine/audio/AudioClipAssetLoader.hpp"
+#include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/input/InputActionAsset.hpp"
@@ -13,6 +14,7 @@
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
@@ -71,6 +73,7 @@ Scene::Scene(
     const bool registeredInputActionLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputActionAssetLoader>());
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
     const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
+    const bool registeredAudioMixerLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioMixerAssetLoader>());
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
@@ -82,6 +85,7 @@ Scene::Scene(
     static_cast<void>(registeredInputActionLoader);
     static_cast<void>(registeredInputContextLoader);
     static_cast<void>(registeredAudioClipLoader);
+    static_cast<void>(registeredAudioMixerLoader);
     static_cast<void>(registeredImportedAssetLoader);
     static_cast<void>(registeredPhysicsLayersLoader);
     static_cast<void>(registeredParticleEffectLoader);
@@ -210,6 +214,22 @@ void ScenePostProcessAccess::SetActiveProfile(Scene& scene, std::uint64_t profil
 
 std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept {
     return SceneAccess::State(scene).postProcessProfileAssetId;
+}
+
+void SceneAudioMixerAccess::SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept {
+    SceneAccess::State(scene).audioMixerAssetId = mixerAssetId;
+}
+
+std::uint64_t SceneAudioMixerAccess::ActiveMixer(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerAssetId;
+}
+
+void SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
+    SceneAccess::State(scene).audioMixerSnapshotName.assign(snapshotName);
+}
+
+const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerSnapshotName;
 }
 
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {

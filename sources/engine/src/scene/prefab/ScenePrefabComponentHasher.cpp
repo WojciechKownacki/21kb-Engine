@@ -107,6 +107,7 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->maxDistance);
         ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->rolloff);
         ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->dopplerFactor);
+        ScenePrefabHashBuilder::MixString(hash, AudioSourceOutputBus(*components.audioSource));
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.audioListener.has_value() ? 1U : 0U);
