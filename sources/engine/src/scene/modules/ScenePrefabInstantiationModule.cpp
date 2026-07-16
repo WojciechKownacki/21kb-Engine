@@ -58,4 +58,30 @@ ScenePrefabInstantiationStats ScenePrefabs::LastInstantiationStats() const noexc
     return SceneAccess::State(scene_).lastPrefabInstantiationStats;
 }
 
+void ScenePrefabs::QueueInstantiatedEvent(SceneEntity caller, SceneEntity root, std::size_t count) {
+    if (!caller.IsValid()) {
+        return;
+    }
+    SceneAccess::State(scene_).pendingPrefabInstantiatedEvents.push_back(SceneState::PendingPrefabInstantiatedEvent{
+        .caller = caller,
+        .root = root,
+        .count = static_cast<std::int32_t>(count),
+    });
+}
+
+std::vector<ScenePrefabInstantiatedEventRecord> ScenePrefabs::DrainPendingInstantiatedEvents() {
+    SceneState& state = SceneAccess::State(scene_);
+    std::vector<ScenePrefabInstantiatedEventRecord> drained;
+    drained.reserve(state.pendingPrefabInstantiatedEvents.size());
+    for (const SceneState::PendingPrefabInstantiatedEvent& pending : state.pendingPrefabInstantiatedEvents) {
+        drained.push_back(ScenePrefabInstantiatedEventRecord{
+            .caller = pending.caller,
+            .root = pending.root,
+            .count = pending.count,
+        });
+    }
+    state.pendingPrefabInstantiatedEvents.clear();
+    return drained;
+}
+
 } // namespace kb::scene

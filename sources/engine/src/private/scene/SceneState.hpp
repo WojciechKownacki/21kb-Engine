@@ -407,6 +407,21 @@ public:
     // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
     // own doc comment on PendingCollisionEvent for the full contract).
     std::vector<PendingCollisionEvent> pendingCollisionEvents;
+    // LIB-160: prefab-instantiation completion notifications. World.
+    // InstantiatePrefab queues one per instantiation whose caller is a live
+    // entity; ScriptRuntimeSceneSystem drains them each frame into an
+    // ENTITY-LOCAL "OnPrefabInstantiated" event targeting the CALLER (the
+    // script that requested the spawn) carrying the instantiated root and
+    // object count — the same "the operation you started completed, here's
+    // the result" shape TaskCompleted/TimerFired use (a synchronous
+    // instantiate has no async completion to wait for, so this is the
+    // decoupled push channel, not a fabricated async result).
+    struct PendingPrefabInstantiatedEvent {
+        SceneEntity caller;
+        SceneEntity root;
+        std::int32_t count = 0;
+    };
+    std::vector<PendingPrefabInstantiatedEvent> pendingPrefabInstantiatedEvents;
     // LIB-129: the last layers configuration applied via
     // PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers - kept here
     // (backend-independent) so name -> bit resolution (PhysicsBackend::
