@@ -1664,6 +1664,130 @@ void RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest() {
     kb::tests::Require(scene.Entities().Name(localOverrideVariant.ObjectAt(childNode)) == "Base Refresh Variant Override Child", "Locally overridden variant instance lost non-local variant data");
 }
 
+// LIB-161: the canonical three-layer override precedence, asserted DIRECTLY
+// on the SAME property (existing tests only layered DIFFERENT properties per
+// layer). Base < variant < instance: a variant override wins over the base
+// value, a live instance override wins over the variant value, and reverting
+// the instance layer collapses back to the variant value — with the base
+// prefab never mutated by any of it.
+void RunPrefabThreeLayerOverridePrecedenceTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Base Name" });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("PrecedenceBase", std::move(prefab));
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "PrecedenceVariant", baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "name", .value = "Variant Name", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+        });
+    kb::tests::Require(variantHandle.IsValid(), "Three-layer precedence setup did not register variant");
+
+    // Layer 2 beats layer 1: a variant instance shows the variant value.
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Variant Name", "Variant override must win over the base value");
+
+    // Layer 3 beats layer 2: a live instance override wins.
+    scene.Entities().SetName(instance.ObjectAt(rootNode), "Instance Name");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Instance Name", "A live instance override must win over the variant value");
+
+    // Reverting the instance layer collapses back to the variant value (NOT
+    // the base value) — proving the middle layer is what an instance resolves
+    // against.
+    kb::tests::Require(scene.Prefabs().RevertOverride(instance.Handle(), rootNode, "name"), "Reverting the instance name override must succeed");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Variant Name", "Reverting the instance layer must restore the variant value, not the base value");
+
+    // The base prefab was never mutated by any layer above it.
+    kb::tests::Require(scene.Prefabs().Get(baseHandle).TryGetNode(rootNode)->name == "Base Name", "No override at the variant or instance layer may mutate the authored base prefab");
+    // A fresh BASE instance still shows the base value (unaffected by the variant/instance activity).
+    const kb::scene::ScenePrefabInstance baseInstance = scene.Prefabs().Instantiate(baseHandle);
+    kb::tests::Require(scene.Entities().Name(baseInstance.ObjectAt(rootNode)) == "Base Name", "A base-prefab instance must be unaffected by variant/instance overrides");
+}
+
+// LIB-161: within a single override layer, precedence is last-write-wins
+// keyed on (nodeId|nodeIndex, propertyPath). RegisterVariant now canonicalizes
+// its list (ScenePrefabVariantOverrideList::Normalize), so a duplicate key
+// resolves to the last value AND — critically — leaves no stale duplicate for
+// a later instance-apply's single-property Upsert to be silently overridden
+// by on the next re-materialization.
+void RunPrefabVariantOverrideListLastWriteWinsTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Dup Base" });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("DupBase", std::move(prefab));
+    // Two overrides for the SAME (node, propertyPath) in one list — the last must win.
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "DupVariant", baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "name", .value = "First", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "name", .value = "Second", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+        });
+    kb::tests::Require(variantHandle.IsValid(), "Duplicate-override variant registration failed");
+    kb::tests::Require(scene.Prefabs().Get(variantHandle).TryGetNode(rootNode)->name == "Second", "A duplicate override key in one list must resolve last-write-wins");
+
+    // The stale-duplicate guard: apply a NEW value from a variant instance.
+    // If RegisterVariant had left the duplicate in the stored list, the
+    // instance-apply Upsert would replace only the first entry and the stale
+    // second ("Second") would win on re-materialization. With canonicalization
+    // the applied value must win.
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(variantHandle);
+    scene.Entities().SetName(instance.ObjectAt(rootNode), "Applied");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "name"), "Applying the variant instance name override must succeed");
+    kb::tests::Require(scene.Prefabs().Get(variantHandle).TryGetNode(rootNode)->name == "Applied",
+        "A variant instance-apply must win over any prior duplicate — no stale duplicate may survive canonicalization to override the freshly applied value");
+    const kb::scene::ScenePrefabInstance freshInstance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(freshInstance.ObjectAt(rootNode)) == "Applied", "A fresh instance of the updated variant must show the applied value");
+}
+
+// LIB-161: a variant whose base is itself a variant. The override chain
+// flattens base-first, so a deeper (more-derived) variant inherits a
+// shallower variant's overrides for properties it does not itself override,
+// and wins for properties it does.
+void RunPrefabVariantOfVariantPrecedenceTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "T Name",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+    });
+    const kb::scene::ScenePrefabHandle templateHandle = scene.Prefabs().Register("ChainTemplate", std::move(prefab));
+    // V1 overrides only the name.
+    const kb::scene::ScenePrefabHandle v1Handle = scene.Prefabs().RegisterVariant(
+        "ChainVariant1", templateHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "name", .value = "V1 Name", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+        });
+    kb::tests::Require(v1Handle.IsValid(), "Variant-of-variant setup did not register the first variant");
+    // V2's base is V1; V2 overrides only the transform.
+    const kb::scene::ScenePrefabHandle v2Handle = scene.Prefabs().RegisterVariant(
+        "ChainVariant2", v1Handle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "transform.localPosition", .value = "9 0 0", .flag = kb::scene::ScenePrefabOverrideFlag::Transform },
+        });
+    kb::tests::Require(v2Handle.IsValid(), "A variant whose base is itself a variant must register successfully");
+
+    const kb::scene::ScenePrefabInstance v2Instance = scene.Prefabs().Instantiate(v2Handle);
+    // Name flows through from V1 (V2 does not override it); transform is V2's.
+    kb::tests::Require(scene.Entities().Name(v2Instance.ObjectAt(rootNode)) == "V1 Name", "A deeper variant must inherit a shallower variant's override for a property it does not itself override");
+    const kb::scene::TransformComponent v2Transform = scene.Transforms().Get(v2Instance.ObjectAt(rootNode));
+    kb::tests::Require(kb::tests::NearlyEqual(v2Transform.localPosition.x, 9.0F), "A deeper variant must apply its own override on top of the inherited chain");
+    // The base template and V1 are untouched.
+    kb::tests::Require(scene.Prefabs().Get(templateHandle).TryGetNode(rootNode)->name == "T Name" && scene.Prefabs().Get(v1Handle).TryGetNode(rootNode)->name == "V1 Name",
+        "A variant-of-a-variant must not mutate its base template or its base variant");
+
+    // A sibling deeper variant that DOES override the name wins over V1's name.
+    const kb::scene::ScenePrefabHandle v2bHandle = scene.Prefabs().RegisterVariant(
+        "ChainVariant2b", v1Handle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = rootNode, .propertyPath = "name", .value = "V2b Name", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+        });
+    kb::tests::Require(v2bHandle.IsValid(), "The sibling deeper variant must register");
+    const kb::scene::ScenePrefabInstance v2bInstance = scene.Prefabs().Instantiate(v2bHandle);
+    kb::tests::Require(scene.Entities().Name(v2bInstance.ObjectAt(rootNode)) == "V2b Name", "A deeper variant's own override must win over the shallower variant's value for the same property");
+}
+
 void RunPrefabConnectionMetadataAndUnpackTest() {
     kb::scene::Scene scene;
 
@@ -2686,6 +2810,9 @@ void RunScenePrefabInstantiationTests() {
     run("RunPrefabVariantInstantiationTest", RunPrefabVariantInstantiationTest);
     run("RunPrefabVariantApplyUpdatesVariantOnlyTest", RunPrefabVariantApplyUpdatesVariantOnlyTest);
     run("RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest", RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest);
+    run("RunPrefabThreeLayerOverridePrecedenceTest", RunPrefabThreeLayerOverridePrecedenceTest);
+    run("RunPrefabVariantOverrideListLastWriteWinsTest", RunPrefabVariantOverrideListLastWriteWinsTest);
+    run("RunPrefabVariantOfVariantPrecedenceTest", RunPrefabVariantOfVariantPrecedenceTest);
     run("RunPrefabConnectionMetadataAndUnpackTest", RunPrefabConnectionMetadataAndUnpackTest);
     run("RunPrefabStaleHandleProtectionTest", RunPrefabStaleHandleProtectionTest);
     run("RunPrefabMissingSourceUnloadUnpackReconnectTest", RunPrefabMissingSourceUnloadUnpackReconnectTest);
