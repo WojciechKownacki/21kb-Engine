@@ -1,0 +1,247 @@
+#include "engine/audio/AudioMixerAssetIO.hpp"
+
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+
+#include <charconv>
+#include <cmath>
+#include <cstdint>
+#include <span>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace kb::audio {
+namespace {
+
+[[nodiscard]] std::string_view Trim(std::string_view text) noexcept {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r')) {
+        text.remove_prefix(1U);
+    }
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r')) {
+        text.remove_suffix(1U);
+    }
+    return text;
+}
+
+[[nodiscard]] std::string_view StripComment(std::string_view line) noexcept {
+    const std::size_t comment = line.find('#');
+    return comment == std::string_view::npos ? line : line.substr(0U, comment);
+}
+
+[[nodiscard]] bool ParseFloatToken(std::string_view text, float& output) noexcept {
+    text = Trim(text);
+    float parsed = 0.0F;
+    const std::from_chars_result result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !std::isfinite(parsed)) {
+        return false;
+    }
+    output = parsed;
+    return true;
+}
+
+[[nodiscard]] bool ParseBoolToken(std::string_view text, bool& output) noexcept {
+    text = Trim(text);
+    if (text == "true" || text == "1") {
+        output = true;
+        return true;
+    }
+    if (text == "false" || text == "0") {
+        output = false;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::vector<std::string_view> Tokenize(std::string_view content) {
+    std::vector<std::string_view> tokens;
+    std::size_t index = 0U;
+    while (index < content.size()) {
+        while (index < content.size() && (content[index] == ' ' || content[index] == '\t')) {
+            ++index;
+        }
+        const std::size_t start = index;
+        while (index < content.size() && content[index] != ' ' && content[index] != '\t') {
+            ++index;
+        }
+        if (index > start) {
+            tokens.push_back(content.substr(start, index - start));
+        }
+    }
+    return tokens;
+}
+
+// "-" is the explicit "no parent" (implicit master) marker so every record keeps a fixed
+// token count - an empty field would be indistinguishable from a missing one.
+[[nodiscard]] std::string ParentFromToken(std::string_view token) {
+    return token == "-" ? std::string{} : std::string{ token };
+}
+
+[[nodiscard]] std::string_view ParentToToken(const std::string& parent) noexcept {
+    return parent.empty() ? std::string_view{ "-" } : std::string_view{ parent };
+}
+
+[[nodiscard]] bool ApplyRecord(std::string_view keyword, std::string_view rest, AudioMixerAsset& asset) {
+    if (keyword == "bus") {
+        const std::vector<std::string_view> tokens = Tokenize(rest);
+        if (tokens.size() != 4U) {
+            return false;
+        }
+        AudioMixerBus bus{};
+        bus.name = std::string{ tokens[0] };
+        bus.parentBus = ParentFromToken(tokens[1]);
+        return ParseFloatToken(tokens[2], bus.volume) && ParseBoolToken(tokens[3], bus.mute)
+            ? (asset.buses.push_back(std::move(bus)), true)
+            : false;
+    }
+    if (keyword == "snapshot") {
+        const std::vector<std::string_view> tokens = Tokenize(rest);
+        if (tokens.size() != 1U) {
+            return false;
+        }
+        asset.snapshots.push_back(AudioMixerSnapshot{ .name = std::string{ tokens[0] }, .busVolumes = {} });
+        return true;
+    }
+    if (keyword == "snapshotVolume") {
+        const std::vector<std::string_view> tokens = Tokenize(rest);
+        if (tokens.size() != 3U) {
+            return false;
+        }
+        for (AudioMixerSnapshot& snapshot : asset.snapshots) {
+            if (snapshot.name == tokens[0]) {
+                AudioMixerSnapshotBusVolume value{};
+                value.bus = std::string{ tokens[1] };
+                if (!ParseFloatToken(tokens[2], value.volume)) {
+                    return false;
+                }
+                snapshot.busVolumes.push_back(std::move(value));
+                return true;
+            }
+        }
+        // A snapshotVolume line must follow its own snapshot's declaration - referencing an
+        // undeclared snapshot is a structural error, not an ignorable unknown keyword.
+        return false;
+    }
+    return true; // unknown keyword - forward compatible, ignored rather than a hard parse failure.
+}
+
+[[nodiscard]] std::optional<AudioMixerAsset> ParseAsset(std::string_view text) {
+    AudioMixerAsset asset{};
+    std::istringstream input{ std::string{ text } };
+    std::string line;
+    while (std::getline(input, line)) {
+        const std::string_view content = Trim(StripComment(line));
+        if (content.empty()) {
+            continue;
+        }
+        const std::size_t separator = content.find(' ');
+        const std::string_view keyword = separator == std::string_view::npos ? content : content.substr(0U, separator);
+        const std::string_view rest = separator == std::string_view::npos ? std::string_view{} : Trim(content.substr(separator + 1U));
+        if (!ApplyRecord(keyword, rest, asset)) {
+            return std::nullopt;
+        }
+    }
+    if (!ValidateAudioMixerAsset(asset).empty()) {
+        return std::nullopt;
+    }
+    return asset;
+}
+
+void WriteAsset(std::ostream& output, const AudioMixerAsset& asset) {
+    for (const AudioMixerBus& bus : asset.buses) {
+        output << "bus " << bus.name << ' ' << ParentToToken(bus.parentBus) << ' ' << bus.volume << ' ' << (bus.mute ? 1 : 0) << '\n';
+    }
+    for (const AudioMixerSnapshot& snapshot : asset.snapshots) {
+        output << "snapshot " << snapshot.name << '\n';
+        for (const AudioMixerSnapshotBusVolume& value : snapshot.busVolumes) {
+            output << "snapshotVolume " << snapshot.name << ' ' << value.bus << ' ' << value.volume << '\n';
+        }
+    }
+}
+
+[[nodiscard]] bool IsSingleToken(const std::string& name) noexcept {
+    if (name.empty() || name == "-") {
+        return false;
+    }
+    for (const char character : name) {
+        if (character == ' ' || character == '\t' || character == '\r' || character == '\n' || character == '#') {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+std::string ValidateAudioMixerAsset(const AudioMixerAsset& asset) {
+    std::unordered_map<std::string_view, const AudioMixerBus*> busesByName;
+    busesByName.reserve(asset.buses.size());
+    for (const AudioMixerBus& bus : asset.buses) {
+        if (!IsSingleToken(bus.name)) {
+            return "audio mixer bus name must be a non-empty, whitespace-free token (and not '-')";
+        }
+        if (!busesByName.emplace(bus.name, &bus).second) {
+            return "audio mixer bus name '" + bus.name + "' is declared more than once";
+        }
+    }
+    for (const AudioMixerBus& bus : asset.buses) {
+        if (!bus.parentBus.empty() && busesByName.find(bus.parentBus) == busesByName.end()) {
+            return "audio mixer bus '" + bus.name + "' routes to unknown parent bus '" + bus.parentBus + "'";
+        }
+    }
+    // Cycle check: walk each bus's parent chain; a valid chain reaches the implicit master
+    // (empty parent) in at most buses.size() steps.
+    for (const AudioMixerBus& bus : asset.buses) {
+        const AudioMixerBus* current = &bus;
+        for (std::size_t step = 0U; step <= asset.buses.size(); ++step) {
+            if (current->parentBus.empty()) {
+                current = nullptr;
+                break;
+            }
+            current = busesByName.find(current->parentBus)->second;
+        }
+        if (current != nullptr) {
+            return "audio mixer bus '" + bus.name + "' is part of a parent-routing cycle";
+        }
+    }
+    std::unordered_set<std::string_view> snapshotNames;
+    snapshotNames.reserve(asset.snapshots.size());
+    for (const AudioMixerSnapshot& snapshot : asset.snapshots) {
+        if (!IsSingleToken(snapshot.name)) {
+            return "audio mixer snapshot name must be a non-empty, whitespace-free token (and not '-')";
+        }
+        if (!snapshotNames.insert(snapshot.name).second) {
+            return "audio mixer snapshot name '" + snapshot.name + "' is declared more than once";
+        }
+        for (const AudioMixerSnapshotBusVolume& value : snapshot.busVolumes) {
+            if (busesByName.find(value.bus) == busesByName.end()) {
+                return "audio mixer snapshot '" + snapshot.name + "' overrides unknown bus '" + value.bus + "'";
+            }
+        }
+    }
+    return {};
+}
+
+std::optional<AudioMixerAsset> AudioMixerAssetIO::Load(const std::filesystem::path& path) {
+    const std::vector<std::uint8_t> bytes = kb::scene::SceneAssetBinaryIO::ReadAllBytes(path);
+    if (bytes.empty()) {
+        return std::nullopt;
+    }
+    return ParseAsset(std::string_view{ reinterpret_cast<const char*>(bytes.data()), bytes.size() });
+}
+
+bool AudioMixerAssetIO::Save(const std::filesystem::path& path, const AudioMixerAsset& asset) {
+    if (!ValidateAudioMixerAsset(asset).empty()) {
+        return false;
+    }
+    std::ostringstream output;
+    WriteAsset(output, asset);
+    const std::string text = output.str();
+    return kb::scene::SceneAssetBinaryIO::WriteBytesAtomically(
+        path,
+        std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(text.data()), text.size() });
+}
+
+} // namespace kb::audio

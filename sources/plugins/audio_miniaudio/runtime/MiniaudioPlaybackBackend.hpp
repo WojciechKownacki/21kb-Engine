@@ -4,6 +4,7 @@
 #include "engine/audio/AudioPlayback.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
 #include "runtime/MiniaudioEngine.hpp"
+#include "scene/MiniaudioBusRegistry.hpp"
 #include "scene/MiniaudioListenerSynchronizer.hpp"
 #include "scene/MiniaudioSourceRegistry.hpp"
 
@@ -30,6 +31,7 @@ private:
     MiniaudioEngine engine_;
     MiniaudioClipResolver clipResolver_;
     MiniaudioListenerSynchronizer listenerSynchronizer_;
+    MiniaudioBusRegistry busRegistry_;
     MiniaudioSourceRegistry sourceRegistry_;
     MiniaudioVoicePool voicePool_;
 };

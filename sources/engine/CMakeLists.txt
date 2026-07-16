@@ -1,6 +1,9 @@
 add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
+    include/engine/audio/AudioMixerAsset.hpp
+    include/engine/audio/AudioMixerAssetIO.hpp
+    include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
     include/engine/audio/AudioSettings.hpp
     include/engine/assets/AssetHandle.hpp
@@ -160,6 +163,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ParticleEffectAssetLoader.hpp
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
+    include/engine/scene/SceneAudioMixerAccess.hpp
     include/engine/scene/SceneRenderFeedback.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneTasks.hpp
@@ -300,6 +304,8 @@ add_library(kb_engine STATIC
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
     src/audio/AudioClipAssetLoader.cpp
+    src/audio/AudioMixerAssetIO.cpp
+    src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
     src/assets/AssetDiscoveryService.cpp
