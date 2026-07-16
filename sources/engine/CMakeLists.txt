@@ -163,6 +163,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ParticleEffectAssetLoader.hpp
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
+    include/engine/input/InputHaptics.hpp
     include/engine/scene/SceneAudioMixerAccess.hpp
     include/engine/scene/SceneAudioOcclusionAccess.hpp
     include/engine/scene/SceneRenderFeedback.hpp
@@ -1092,6 +1093,7 @@ add_library(kb_engine STATIC
     src/input/InputRecording.cpp
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
+    src/input/InputHaptics.cpp
     src/input/InputSubsystem.cpp
     src/input/InputMappingContextStack.cpp
     src/input/InputMappingEvaluator.cpp
