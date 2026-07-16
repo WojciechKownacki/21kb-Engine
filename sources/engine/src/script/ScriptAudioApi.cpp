@@ -127,6 +127,20 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         return Error("audio clip asset could not be resolved");
     }
 
+    // LIB-149: attach=true binds the one-shot to the target entity (the explicit `entity`
+    // argument, or the calling entity) - position follows the owner every audio tick and
+    // the voice is auto-released with its owner. A dead/invalid target is an honest error
+    // (an attached voice MUST have a live owner; an unattached play never needed one).
+    const bool attach = BoolArg(arguments, "attach", false);
+    std::uint64_t ownerEntityId = 0U;
+    if (attach) {
+        const kb::scene::SceneEntity owner = ParentEntity(context, arguments);
+        if (!owner.IsValid() || !context.scene->Entities().IsAlive(owner)) {
+            return Error("attached audio playback requires a live owner entity");
+        }
+        ownerEntityId = owner.Id();
+    }
+
     // LIB-147: optional mixer-bus routing (empty/unknown = implicit master, see
     // AudioPlayDesc::outputBus).
     const ScriptValue* outputBusArgument = FindArg(arguments, "outputBus");
@@ -148,6 +162,7 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         .position = PlaybackPosition(context, arguments),
         // LIB-148: voice-stealing priority, clamped to the desc's 0-255 range.
         .priority = static_cast<std::uint8_t>(std::clamp(IntArg(arguments, "priority", 128), 0, 255)),
+        .ownerEntityId = ownerEntityId,
     };
     const kb::audio::AudioPlayResult played = kb::audio::AudioPlayback::PlayOneShot(*context.scene, playDesc);
     if (!played.Succeeded()) {
@@ -362,6 +377,7 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "dopplerFactor", ScriptValueType::Float, false },
         ScriptFunctionPin{ "outputBus", ScriptValueType::String, false },
         ScriptFunctionPin{ "priority", ScriptValueType::Int, false },
+        ScriptFunctionPin{ "attach", ScriptValueType::Bool, false },
         ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
     };
     desc.signature.outputs = {

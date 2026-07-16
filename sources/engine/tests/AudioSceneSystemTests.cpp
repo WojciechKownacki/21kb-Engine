@@ -220,6 +220,29 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
                 "Every operation on a stopped voice must be honestly false");
         }
 
+        // LIB-149: an owner-attached looping voice must die with its owner - never leak
+        // its source (only when a device exists; the no-device path was covered above).
+        if (routedPlayed.Succeeded()) {
+            const kb::scene::SceneObject ownerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Voice Owner" });
+            kb::audio::AudioPlayDesc attachedDesc{
+                .clipAssetId = importedClip.id.value,
+                .volume = 0.0F,
+                .loop = true,
+                .spatial = true,
+            };
+            attachedDesc.ownerEntityId = ownerObject.Entity().Id();
+            const kb::audio::AudioPlayResult attachedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, attachedDesc);
+            kb::tests::Require(attachedPlayed.Succeeded(), "Owner-attached one-shot did not start");
+            [[maybe_unused]] const bool tickedAttached = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId),
+                "An attached looping voice must survive ticks while its owner lives");
+            scene.Entities().Destroy(ownerObject.Entity());
+            [[maybe_unused]] const bool tickedAfterDestroy = scene.Runtime().Update(1.0F / 60.0F);
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, attachedPlayed.voiceId)
+                    && !kb::audio::AudioPlayback::StopVoice(scene, attachedPlayed.voiceId),
+                "An attached looping voice must be fully released with its owner - no leaked source record");
+        }
+
         // Topology teardown mid-play: clearing the mixer must rebuild routing to the
         // implicit master on the next tick without crashing or dangling groups.
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
