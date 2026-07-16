@@ -8,7 +8,10 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "assets/AssetRuntimeLoadService.hpp"
 
+#include <string>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace kb::assets {
 
@@ -303,6 +306,78 @@ std::size_t AssetManager::PruneUnreferenced() noexcept {
 
 bool AssetManager::HasLoaderForType(std::string_view type) const noexcept {
     return LoaderForType(type) != nullptr;
+}
+
+namespace {
+
+[[nodiscard]] std::string DescribeAsset(const AssetMetadata& metadata) {
+    const std::string virtualPath = NormalizeAssetPath(metadata.virtualPath);
+    return (virtualPath.empty() ? ToString(metadata.id) : virtualPath) + " (" + ToString(metadata.id) + ")";
+}
+
+} // namespace
+
+AssetCompatibilityReport AssetManager::ValidateCompatibility(AssetId id) const {
+    AssetCompatibilityReport report;
+
+    const AssetMetadata* root = registry_.Find(id);
+    if (root == nullptr) {
+        report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+            .issue = AssetCompatibilityIssue::MissingDependency,
+            .asset = id,
+            .dependency = id,
+            .message = "Asset " + ToString(id) + " is not registered",
+        });
+        report.compatible = false;
+        return report;
+    }
+
+    std::unordered_set<std::uint64_t> visited;
+    std::vector<AssetId> pending{ id };
+    while (!pending.empty()) {
+        const AssetId current = pending.back();
+        pending.pop_back();
+        if (!visited.insert(current.value).second) {
+            continue;
+        }
+
+        const AssetMetadata* metadata = registry_.Find(current);
+        if (metadata == nullptr) {
+            // Only ids we already confirmed registered are pushed, so this
+            // path is unreachable in practice; guard defensively.
+            continue;
+        }
+
+        if (LoaderForType(metadata->type) == nullptr) {
+            report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+                .issue = AssetCompatibilityIssue::IncompatibleType,
+                .asset = current,
+                .dependency = {},
+                .message = "Asset " + DescribeAsset(*metadata) + " has type \"" + metadata->type + "\" which has no registered loader in this runtime",
+            });
+        }
+
+        for (const AssetId dependency : metadata->dependencies) {
+            const AssetMetadata* dependencyMetadata = registry_.Find(dependency);
+            if (dependencyMetadata == nullptr) {
+                report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+                    .issue = AssetCompatibilityIssue::MissingDependency,
+                    .asset = current,
+                    .dependency = dependency,
+                    .message = "Asset " + DescribeAsset(*metadata) + " depends on " + ToString(dependency) + " which is not registered",
+                });
+                continue;
+            }
+            pending.push_back(dependency);
+        }
+    }
+
+    report.compatible = report.diagnostics.empty();
+    return report;
+}
+
+bool AssetManager::IsCompatible(AssetId id) const {
+    return ValidateCompatibility(id).compatible;
 }
 
 std::string AssetManager::LastError() const {

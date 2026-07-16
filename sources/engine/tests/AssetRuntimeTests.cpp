@@ -276,6 +276,110 @@ void RunAssetCacheReferenceAndPolicyTest() {
     kb::tests::Require(reloaded.IsLoaded() && manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::Retain, "A reload after the entry was pruned must start fresh under the default Retain policy");
 }
 
+// LIB-159: AssetManager::ValidateCompatibility — registry-level dependency
+// and loadability validation with readable diagnostics, no disk I/O and no
+// payload loading. Uses RegisterAsset with explicit dependency lists (the
+// same field AssetDiscoveryService populates via DiscoverDependencies).
+void RunAssetCompatibilityValidationTest() {
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+
+    const kb::assets::AssetId leafId{ 7001U };
+    const kb::assets::AssetId midId{ 7002U };
+    const kb::assets::AssetId rootId{ 7003U };
+    const kb::assets::AssetId missingId{ 7999U };
+
+    // leaf: a plain, loadable Text asset with no dependencies.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = leafId, .type = "Text", .name = "Leaf",
+                           .virtualPath = "/Game/Text/Leaf.txt", .physicalPath = "Leaf.txt", .contentHash = 1U,
+                       }),
+        "Compatibility test leaf registration failed");
+
+    // An asset that is registered and loadable and depends only on leaf -> compatible.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 1U,
+                           .dependencies = { leafId },
+                       }),
+        "Compatibility test mid registration failed");
+    const kb::assets::AssetCompatibilityReport midReport = manager.ValidateCompatibility(midId);
+    kb::tests::Require(midReport.compatible && midReport.diagnostics.empty() && manager.IsCompatible(midId), "An asset whose dependency is registered and loadable must validate as compatible");
+    kb::tests::Require(midReport.FormatDiagnostics().empty(), "A compatible report must format to an empty diagnostic string");
+
+    // Missing dependency: mid also depends on a never-registered asset.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 2U,
+                           .dependencies = { leafId, missingId },
+                       }),
+        "Compatibility test mid-with-missing-dep registration failed");
+    const kb::assets::AssetCompatibilityReport missingReport = manager.ValidateCompatibility(midId);
+    kb::tests::Require(!missingReport.compatible && missingReport.diagnostics.size() == 1U, "An asset with one missing dependency must report exactly one diagnostic");
+    kb::tests::Require(missingReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::MissingDependency && missingReport.diagnostics[0].dependency == missingId,
+        "The missing-dependency diagnostic must name the unregistered dependency id");
+    kb::tests::Require(missingReport.FormatDiagnostics().find(kb::assets::ToString(missingId)) != std::string::npos && missingReport.FormatDiagnostics().find("/Game/Text/Mid.txt") != std::string::npos,
+        "The readable missing-dependency diagnostic must name both the depending asset and the missing dependency");
+
+    // Incompatible type: an asset whose type has no registered loader.
+    const kb::assets::AssetId ghostId{ 7500U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = ghostId, .type = "GhostType", .name = "Ghost",
+                           .virtualPath = "/Game/Ghost.ghost", .physicalPath = "Ghost.ghost", .contentHash = 1U,
+                       }),
+        "Compatibility test ghost registration failed");
+    const kb::assets::AssetCompatibilityReport ghostReport = manager.ValidateCompatibility(ghostId);
+    kb::tests::Require(!ghostReport.compatible && ghostReport.diagnostics.size() == 1U && ghostReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::IncompatibleType,
+        "An asset whose type has no registered loader must report an IncompatibleType diagnostic");
+    kb::tests::Require(ghostReport.FormatDiagnostics().find("GhostType") != std::string::npos, "The IncompatibleType diagnostic must name the unloadable type");
+
+    // Root not registered at all -> a single MissingDependency naming itself.
+    const kb::assets::AssetCompatibilityReport unregisteredReport = manager.ValidateCompatibility(kb::assets::AssetId{ 6000U });
+    kb::tests::Require(!unregisteredReport.compatible && unregisteredReport.diagnostics.size() == 1U && unregisteredReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::MissingDependency,
+        "Validating an unregistered asset must report a single MissingDependency for the asset itself");
+
+    // Transitive missing dependency: root -> mid(clean) -> leaf, but give leaf
+    // a missing dependency several levels below the validated root.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = leafId, .type = "Text", .name = "Leaf",
+                           .virtualPath = "/Game/Text/Leaf.txt", .physicalPath = "Leaf.txt", .contentHash = 2U,
+                           .dependencies = { missingId },
+                       }),
+        "Compatibility test transitive-missing leaf update failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 3U,
+                           .dependencies = { leafId },
+                       }),
+        "Compatibility test transitive-missing mid update failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = rootId, .type = "Text", .name = "Root",
+                           .virtualPath = "/Game/Text/Root.txt", .physicalPath = "Root.txt", .contentHash = 1U,
+                           .dependencies = { midId },
+                       }),
+        "Compatibility test root registration failed");
+    const kb::assets::AssetCompatibilityReport transitiveReport = manager.ValidateCompatibility(rootId);
+    kb::tests::Require(!transitiveReport.compatible && transitiveReport.diagnostics.size() == 1U && transitiveReport.diagnostics[0].dependency == missingId,
+        "ValidateCompatibility must catch a missing dependency several levels deep in the dependency closure");
+
+    // Cycle safety: two assets that depend on each other must not loop, and
+    // (both registered + loadable) must validate as compatible.
+    const kb::assets::AssetId cycleA{ 7100U };
+    const kb::assets::AssetId cycleB{ 7101U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = cycleA, .type = "Text", .name = "CycleA",
+                           .virtualPath = "/Game/Text/CycleA.txt", .physicalPath = "CycleA.txt", .contentHash = 1U, .dependencies = { cycleB },
+                       }),
+        "Compatibility test cycle A registration failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = cycleB, .type = "Text", .name = "CycleB",
+                           .virtualPath = "/Game/Text/CycleB.txt", .physicalPath = "CycleB.txt", .contentHash = 1U, .dependencies = { cycleA },
+                       }),
+        "Compatibility test cycle B registration failed");
+    const kb::assets::AssetCompatibilityReport cycleReport = manager.ValidateCompatibility(cycleA);
+    kb::tests::Require(cycleReport.compatible, "A dependency cycle of otherwise-loadable assets must validate as compatible without looping forever");
+}
+
 void RunAssetKindClassificationTest() {
     // ToString <-> TryParseAssetKind round trip for every kind, in order.
     const kb::assets::AssetKind kinds[] = {
@@ -644,6 +748,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetCacheReferenceAndPolicyTest();
+    RunAssetCompatibilityValidationTest();
     RunAssetKindClassificationTest();
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
