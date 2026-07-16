@@ -2132,6 +2132,202 @@ void RunRendererPublishesSceneVisibilityFeedbackTest() {
     std::filesystem::remove_all(root, error);
 }
 
+// LIB-146: shared harness bits for the render-resource lifecycle tests below - a scene
+// with one mesh entity backed by a real on-disk triangle.obj under its own asset root.
+struct LifecycleSceneFixture {
+    kb::scene::Scene scene;
+    std::uint64_t meshAssetId = 0;
+    kb::scene::SceneEntity entity{};
+};
+
+void PrepareLifecycleScene(LifecycleSceneFixture& fixture, const std::filesystem::path& root) {
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "LIB-146 lifecycle test could not create asset root");
+    WriteTriangleObj(root / "triangle.obj");
+    kb::assets::AssetManager& manager = fixture.scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "LIB-146 lifecycle test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "LIB-146 lifecycle test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "LIB-146 lifecycle test did not discover the mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "LIB-146 lifecycle test discovered wrong mesh metadata");
+    fixture.meshAssetId = meshMetadata->id.value;
+    fixture.entity = fixture.scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Lifecycle Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    fixture.scene.Components().MeshRenderers().Set(fixture.entity, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshAssetId });
+}
+
+[[nodiscard]] RenderSceneSubmitDesc LifecycleSubmitDesc(std::uint32_t viewportId) {
+    return RenderSceneSubmitDesc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ viewportId },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+}
+
+void SubmitLifecycleFrame(Renderer& renderer, const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const char* failure) {
+    Require(renderer.BeginFrame(), failure);
+    Require(renderer.SubmitScene(scene, desc), failure);
+    renderer.EndFrame();
+}
+
+// LIB-146 (scene unload): Renderer::ReleaseScene must destroy exactly the released
+// scene's runtime GPU resources ({sceneId, assetId}-keyed isolation - a second live scene
+// keeps its own), the released scene must remain fully re-submittable (release is a clean
+// unload, not poisoning), and ReleaseAllScenes must drop everything.
+void RunRendererReleaseSceneDropsRuntimeResourcesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_release_scene";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture first;
+    LifecycleSceneFixture second;
+    PrepareLifecycleScene(first, root / "a");
+    PrepareLifecycleScene(second, root / "b");
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 release test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not submit the first scene");
+    SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not submit the second scene");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 2U, "Two submitted scenes must cache one mesh resource each");
+
+    renderer.ReleaseScene(first.scene);
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "ReleaseScene must destroy exactly the released scene's cached resources");
+    SubmitLifecycleFrame(renderer, second.scene, desc, "LIB-146 release test did not resubmit the surviving scene");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "Releasing one scene must not break another scene's rendering");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U, "The surviving scene's cache entry must be reused, not rebuilt");
+
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not resubmit the released scene");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "A released scene must be cleanly re-submittable");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 2U, "Resubmitting a released scene must re-ensure its resources");
+
+    renderer.ReleaseAllScenes();
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U && renderer.RuntimeResourceStats().cachedMaterialCount == 0U && renderer.RuntimeResourceStats().cachedTextureCount == 0U,
+        "ReleaseAllScenes must drop every cached runtime resource");
+    SubmitLifecycleFrame(renderer, first.scene, desc, "LIB-146 release test did not resubmit after ReleaseAllScenes");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "ReleaseAllScenes must leave the renderer fully usable");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-146 (entity destroy + retention eviction): destroying the last entity referencing a
+// mesh removes its render proxy immediately, but the GPU resource stays cached BY DESIGN
+// for kRuntimeAssetRetentionFrames (120) - and PruneUnused then actually evicts it. A new
+// entity using the same asset after eviction re-ensures the resource from scratch.
+void RunRendererPrunesUnreferencedResourcesAfterRetentionTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_retention_prune";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 retention test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit the initial frame");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "LIB-146 retention test initial submit did not cache the mesh resource");
+
+    fixture.scene.Entities().Destroy(fixture.entity);
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit after entity destroy");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount == 0U, "A destroyed entity's proxy must stop rendering on the next full sync");
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "An unreferenced resource must stay cached inside the retention window (destroying the entity is not an immediate GPU destroy)");
+
+    // Age the resource past the retention window; PruneUnused runs at the end of every
+    // SubmitScenes, keyed to the completed-frame counter.
+    for (std::uint32_t frame = 0U; frame < Renderer::kRuntimeAssetRetentionFrames + 8U; ++frame) {
+        SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit an aging frame");
+    }
+    Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U,
+        "PruneUnused must actually evict a resource once nothing referenced it for kRuntimeAssetRetentionFrames");
+
+    const kb::scene::SceneEntity revived = fixture.scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Revived Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    fixture.scene.Components().MeshRenderers().Set(revived, kb::scene::MeshRendererComponent{ .meshAssetId = fixture.meshAssetId });
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 retention test did not submit the revived entity");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "A pruned asset must be cleanly re-ensured when a new entity references it again");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// LIB-146 (asset reload): a mesh asset whose on-disk content (and therefore contentHash)
+// changed must be rebuilt into a NEW GPU handle on the next submit, with the old handle
+// honestly unresolvable - the mesh sibling of the long-standing material/texture reload
+// tests (RunRendererReloadsChangedRuntimeMaterialAssetTest).
+void RunRendererReloadsChangedRuntimeMeshAssetTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_mesh_reload";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "LIB-146 mesh reload test renderer did not initialize");
+    const RenderSceneSubmitDesc desc = LifecycleSubmitDesc(1U);
+
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 mesh reload test did not submit the initial frame");
+    const RenderMeshHandle firstHandle = renderer.SceneResourceMap()->ResolveMesh(fixture.meshAssetId);
+    Require(firstHandle.IsValid() && renderer.SceneResources()->FindMesh(firstHandle) != nullptr,
+        "LIB-146 mesh reload test initial submit did not bind a live mesh handle");
+
+    // Rewrite the mesh with different geometry -> new contentHash on rediscovery.
+    {
+        std::ofstream output{ root / "triangle.obj", std::ios::trunc };
+        output
+            << "v -0.3 -0.3 0.0\n"
+            << "v 0.3 -0.3 0.0\n"
+            << "v 0.0 0.3 0.1\n"
+            << "vt 0 0\n"
+            << "vt 1 0\n"
+            << "vt 0.5 1\n"
+            << "vn 0 0 1\n"
+            << "f 1/1/1 2/2/1 3/3/1\n";
+    }
+    Require(fixture.scene.Assets().Manager().DiscoverMountedAssets() >= 1U, "LIB-146 mesh reload test rediscovery failed");
+    SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 mesh reload test did not submit the reload frame");
+
+    const RenderMeshHandle secondHandle = renderer.SceneResourceMap()->ResolveMesh(fixture.meshAssetId);
+    Require(secondHandle.IsValid() && secondHandle.value != firstHandle.value,
+        "A changed mesh contentHash must rebuild the GPU mesh into a new handle on the next submit");
+    Require(renderer.SceneResources()->FindMesh(firstHandle) == nullptr,
+        "The replaced mesh's old handle must be honestly unresolvable after the reload");
+    Require(renderer.SceneResources()->FindMesh(secondHandle) != nullptr && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+        "The reloaded mesh must be live and cached exactly once");
+    Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "The reloaded mesh must keep rendering");
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
@@ -4370,6 +4566,9 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererPublishesSceneVisibilityFeedbackTest();
+    RunRendererReleaseSceneDropsRuntimeResourcesTest();
+    RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
+    RunRendererReloadsChangedRuntimeMeshAssetTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();
