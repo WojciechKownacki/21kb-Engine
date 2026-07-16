@@ -198,6 +198,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptAudioApi.hpp
     include/engine/script/ScriptAsset.hpp
     include/engine/script/ScriptAssetLoader.hpp
+    include/engine/script/ScriptAssetsApi.hpp
     include/engine/script/ScriptBackend.hpp
     include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptBehaviourBindingService.hpp
@@ -697,6 +698,7 @@ add_library(kb_engine STATIC
     src/script/ScriptApiDeclarationParser.cpp
     src/script/ScriptAudioApi.cpp
     src/script/ScriptAssetLoader.cpp
+    src/script/ScriptAssetsApi.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
     src/script/ScriptEventBus.cpp

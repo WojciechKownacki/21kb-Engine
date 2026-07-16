@@ -1,6 +1,7 @@
 #include "engine/library/EngineLibraryModule.hpp"
 
 #include "engine/library/EngineLibraryModuleValidation.hpp"
+#include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
@@ -178,6 +179,21 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Renderer",
             .ownerRuntime = "kb::scene::SceneRenderFeedback",
             .Register = &kb::script::ScriptRendererApi::Register,
+        },
+        // LIB-155: Assets.IsLoaded/Load/LoadAsync/Unload — a generic,
+        // type-erased script surface over the SAME kb::assets::AssetManager
+        // cache Load<T>/Unload/IsLoaded already drive natively (ownership
+        // model unchanged: AssetHandle<T>'s existing Shared semantics, see
+        // EngineLibraryOwnership.hpp). LoadAsync is an honestly-synchronous
+        // Task facade (completes on its first poll, exactly the shape
+        // SceneTasks.hpp's own LIB-098 doc comment anticipated for asset
+        // load) — see ScriptAssetsApi.cpp's doc comments for the full
+        // reasoning. No Lua sugar table (mirrors Task/Timer/Scene/Math,
+        // which also rely on the generic CallFunction escape hatch).
+        LibraryModuleDesc{
+            .name = "Assets",
+            .ownerRuntime = "kb::assets::AssetManager",
+            .Register = &kb::script::ScriptAssetsApi::Register,
         },
     };
     return kCatalog;
