@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 
 namespace kb::audio_miniaudio {
 namespace {
@@ -87,22 +88,42 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
         rebuilt = true;
     }
 
-    // Volumes re-apply every tick: authored value, overridden by the active snapshot when
-    // it names this bus (an unknown snapshot name resolves to nullptr and applies
-    // nothing), silenced entirely by mute. Cheap - a mixer has a handful of buses.
-    const kb::audio::AudioMixerSnapshot* snapshot = mixer->FindSnapshot(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene));
+    // Volumes re-apply every tick, resolved in layers: authored value -> active snapshot
+    // (or, mid-transition, a deterministic lerp between the FROM and TO snapshot states,
+    // driven by scene delta time) -> LIB-150 runtime per-bus override (strongest) -> mute
+    // silences everything. Cheap - a mixer has a handful of buses.
+    const kb::audio::AudioMixerSnapshot* fromSnapshot = mixer->FindSnapshot(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene));
+    const kb::scene::AudioMixerSnapshotTransition& transition = kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene);
+    const kb::audio::AudioMixerSnapshot* toSnapshot = transition.IsActive() ? mixer->FindSnapshot(transition.toSnapshot) : nullptr;
+    const std::span<const kb::scene::AudioMixerBusVolumeOverride> overrides = kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene);
+    const auto snapshotVolume = [](const kb::audio::AudioMixerSnapshot* snapshot, const std::string& busName, float authored) noexcept {
+        if (snapshot != nullptr) {
+            for (const kb::audio::AudioMixerSnapshotBusVolume& value : snapshot->busVolumes) {
+                if (value.bus == busName) {
+                    return ValidVolumeOr(value.volume, authored);
+                }
+            }
+        }
+        return authored;
+    };
     for (BusRecord& record : buses_) {
         const kb::audio::AudioMixerBus* bus = mixer->FindBus(record.name);
         if (bus == nullptr || record.group == nullptr) {
             continue;
         }
-        float volume = ValidVolumeOr(bus->volume, 1.0F);
-        if (snapshot != nullptr) {
-            for (const kb::audio::AudioMixerSnapshotBusVolume& value : snapshot->busVolumes) {
-                if (value.bus == record.name) {
-                    volume = ValidVolumeOr(value.volume, volume);
-                    break;
-                }
+        const float authored = ValidVolumeOr(bus->volume, 1.0F);
+        float volume = snapshotVolume(fromSnapshot, record.name, authored);
+        if (transition.IsActive()) {
+            // An empty/unknown transition target resolves to the authored volumes - the
+            // same honest fallback an unknown active snapshot already has.
+            const float target = snapshotVolume(toSnapshot, record.name, authored);
+            const float progress = transition.Progress();
+            volume = volume + ((target - volume) * progress);
+        }
+        for (const kb::scene::AudioMixerBusVolumeOverride& override_ : overrides) {
+            if (override_.bus == record.name) {
+                volume = ValidVolumeOr(override_.volume, volume);
+                break;
             }
         }
         ma_sound_group_set_volume(record.group.get(), bus->mute ? 0.0F : volume);

@@ -3597,6 +3597,43 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, {});
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
         "SceneAudioMixerAccess must clear back to the defaults");
+
+    // LIB-150: runtime bus volume overrides - upsert-by-name, remove-by-name.
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.5F);
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.25F);
+    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Sfx", 0.75F);
+    const std::span<const kb::scene::AudioMixerBusVolumeOverride> overrides = kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene);
+    kb::tests::Require(overrides.size() == 2U && overrides[0].bus == "Music" && kb::tests::NearlyEqual(overrides[0].volume, 0.25F),
+        "Bus volume overrides must upsert by name, not duplicate");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing a set bus override must report true");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing an unset bus override must be idempotent-false");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U, "Clearing must remove exactly the named override");
+
+    // LIB-150: snapshot transition - deterministic scene-delta advance, FROM state stays
+    // active until completion, retarget completes the previous transition first.
+    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm",
+        "A running transition must keep the FROM snapshot active");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 0.25F)
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).Progress(), 0.25F),
+        "A partial advance must report progress without completing");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 0.75F)
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Completing a transition must promote the TO snapshot and clear the transition");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Calm", 2.0F);
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm"
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot.empty(),
+        "Retargeting mid-transition must complete the previous transition instantly first");
+    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "A non-positive duration must apply the snapshot immediately");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(scene, 1.0F),
+        "Advancing with no running transition must be a false no-op");
 }
 
 // LIB-147: Audio.SetMixer/ActiveMixer/SetSnapshot/ActiveSnapshot's script layer -
@@ -3706,6 +3743,46 @@ end
         "Lua Audio.ActiveSnapshot did not return the active snapshot");
     kb::tests::Require(host.SharedState().Get("luaGhostRejected").value_or(kb::script::ScriptValue{ false }).AsBool(),
         "Lua Audio.SetSnapshot must surface nil+error for an undeclared snapshot name");
+
+    // LIB-150: bus volume overrides + snapshot transition through the script layer (the
+    // Lua Tick above left the mixer active with snapshot "Calm").
+    for (const char* name : { "Audio.SetBusVolume", "Audio.ClearBusVolume", "Audio.TransitionToSnapshot" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio mixer API did not register a LIB-150 function");
+    }
+    const auto callBusVolume = [&host, &context](const std::string& bus, float volume) {
+        return host.Functions().Call(
+            "Audio.SetBusVolume",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "bus", .value = kb::script::ScriptValue{ bus } },
+                kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ volume } },
+            } },
+            context);
+    };
+    kb::tests::Require(!callBusVolume("Ghost", 0.5F).Succeeded(), "Audio.SetBusVolume must reject a bus the active mixer does not declare");
+    kb::tests::Require(callBusVolume("Music", 0.5F).Succeeded()
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene)[0].bus == "Music",
+        "Audio.SetBusVolume did not store the runtime override in the scene's own state");
+    kb::tests::Require(callString("Audio.ClearBusVolume", "bus", "Music").Succeeded()
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty(),
+        "Audio.ClearBusVolume did not remove the runtime override");
+    const auto callTransition = [&host, &context](const std::string& snapshot, float duration) {
+        return host.Functions().Call(
+            "Audio.TransitionToSnapshot",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "snapshot", .value = kb::script::ScriptValue{ snapshot } },
+                kb::script::ScriptFunctionArgument{ .name = "durationSeconds", .value = kb::script::ScriptValue{ duration } },
+            } },
+            context);
+    };
+    kb::tests::Require(!callTransition("Ghost", 1.0F).Succeeded(), "Audio.TransitionToSnapshot must reject an undeclared snapshot");
+    kb::tests::Require(callTransition("Calm", 1.0F).Succeeded()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot == "Calm",
+        "Audio.TransitionToSnapshot did not start the scene's transition state");
+    kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded(), "Clearing the mixer after the transition probe failed");
+    kb::tests::Require(!callBusVolume("Music", 0.5F).Succeeded() && !callTransition("Calm", 1.0F).Succeeded(),
+        "Bus volume and transition requests must honestly error without an active mixer");
 }
 
 // LIB-148: per-voice playback control - the AudioPlayback facade contract without a

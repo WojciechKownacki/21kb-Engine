@@ -264,6 +264,78 @@ int LuaAudioActiveSnapshot(lua_State* state) {
     return 1;
 }
 
+// LIB-150: Audio.SetBusVolume(bus, volume) -> applied (nil+error for an undeclared bus or
+// no active mixer) - the same resolve-then-single-value-or-nil+error shape as SetSnapshot.
+int LuaAudioSetBusVolume(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::size_t length = 0;
+    const char* bus = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("bus", ScriptValue{ std::string{ bus != nullptr ? bus : "", bus != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (bus != nullptr) {
+        lua_pop(state, 1);
+    }
+    arguments.push_back(Arg("volume", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetBusVolume", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio bus volume request failed");
+    }
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioClearBusVolume(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::size_t length = 0;
+    const char* bus = luaL_tolstring(state, 1, &length);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("bus", ScriptValue{ std::string{ bus != nullptr ? bus : "", bus != nullptr ? length : std::size_t{ 0 } } }),
+    };
+    if (bus != nullptr) {
+        lua_pop(state, 1);
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ClearBusVolume", arguments);
+    lua_pushboolean(state, result.Output("cleared").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// LIB-150: Audio.TransitionToSnapshot(snapshot, durationSeconds) -> started (nil+error for
+// an undeclared snapshot or no active mixer; nil/"" snapshot = back to authored volumes).
+int LuaAudioTransitionToSnapshot(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        std::size_t length = 0;
+        const char* snapshot = luaL_tolstring(state, 1, &length);
+        arguments.push_back(Arg("snapshot", ScriptValue{ std::string{ snapshot != nullptr ? snapshot : "", snapshot != nullptr ? length : std::size_t{ 0 } } }));
+        if (snapshot != nullptr) {
+            lua_pop(state, 1);
+        }
+    }
+    arguments.push_back(Arg("durationSeconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.TransitionToSnapshot", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio snapshot transition request failed");
+    }
+    lua_pushboolean(state, result.Output("started").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 [[nodiscard]] int PushCallError(lua_State* state, const ScriptFunctionCallResult& result, std::string_view fallback) {
     lua_pushnil(state);
     const std::string error = result.errors.empty() ? std::string{ fallback } : result.errors.front();
@@ -2110,7 +2182,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 13);
+    lua_createtable(state, 0, 16);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
@@ -2126,6 +2198,9 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetPitch", &LuaAudioSetPitch, context);
     SetClosure(state, "SetLoop", &LuaAudioSetLoop, context);
     SetClosure(state, "IsPlaying", &LuaAudioIsPlaying, context);
+    SetClosure(state, "SetBusVolume", &LuaAudioSetBusVolume, context);
+    SetClosure(state, "ClearBusVolume", &LuaAudioClearBusVolume, context);
+    SetClosure(state, "TransitionToSnapshot", &LuaAudioTransitionToSnapshot, context);
     lua_setfield(state, environmentIndex, "Audio");
 
     lua_createtable(state, 0, 7);

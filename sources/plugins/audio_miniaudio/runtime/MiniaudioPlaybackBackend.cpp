@@ -1,5 +1,6 @@
 #include "runtime/MiniaudioPlaybackBackend.hpp"
 
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
 namespace kb::audio_miniaudio {
@@ -18,6 +19,9 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
     }
 
     listenerSynchronizer_.Sync(engine_.Native(), context);
+    // LIB-150: advance the snapshot transition with the scene's own delta time BEFORE the
+    // bus sync consumes it - deterministic, never wall clock.
+    static_cast<void>(kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(context.GetScene(), context.DeltaSeconds()));
     // LIB-147: bus groups sync FIRST (sources route into them below). A topology rebuild
     // invalidates every ma_sound_group, so entity sounds must recreate (their signatures
     // carry the bus generation) and one-shot voices must stop - both BEFORE any of them

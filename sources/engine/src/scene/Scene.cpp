@@ -232,6 +232,75 @@ const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noe
     return SceneAccess::State(scene).audioMixerSnapshotName;
 }
 
+void SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+    SceneState& state = SceneAccess::State(scene);
+    for (AudioMixerBusVolumeOverride& override_ : state.audioMixerBusVolumeOverrides) {
+        if (override_.bus == busName) {
+            override_.volume = volume;
+            return;
+        }
+    }
+    state.audioMixerBusVolumeOverrides.push_back(AudioMixerBusVolumeOverride{ .bus = std::string{ busName }, .volume = volume });
+}
+
+bool SceneAudioMixerAccess::ClearBusVolumeOverride(Scene& scene, std::string_view busName) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    for (auto iterator = state.audioMixerBusVolumeOverrides.begin(); iterator != state.audioMixerBusVolumeOverrides.end(); ++iterator) {
+        if (iterator->bus == busName) {
+            state.audioMixerBusVolumeOverrides.erase(iterator);
+            return true;
+        }
+    }
+    return false;
+}
+
+std::span<const AudioMixerBusVolumeOverride> SceneAudioMixerAccess::BusVolumeOverrides(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerBusVolumeOverrides;
+}
+
+void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    state.audioMixerBusVolumeOverrides.clear();
+    state.audioMixerSnapshotTransition = {};
+}
+
+void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+    SceneState& state = SceneAccess::State(scene);
+    // A running transition completes instantly before retargeting - the new blend always
+    // starts from a well-defined snapshot state, never from an unrepresentable mid-blend.
+    if (state.audioMixerSnapshotTransition.IsActive()) {
+        state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;
+        state.audioMixerSnapshotTransition = {};
+    }
+    if (durationSeconds <= 0.0F) {
+        state.audioMixerSnapshotName.assign(toSnapshot);
+        return;
+    }
+    state.audioMixerSnapshotTransition = AudioMixerSnapshotTransition{
+        .toSnapshot = std::string{ toSnapshot },
+        .elapsedSeconds = 0.0F,
+        .durationSeconds = durationSeconds,
+    };
+}
+
+const AudioMixerSnapshotTransition& SceneAudioMixerAccess::SnapshotTransition(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioMixerSnapshotTransition;
+}
+
+bool SceneAudioMixerAccess::AdvanceSnapshotTransition(Scene& scene, float deltaSeconds) {
+    SceneState& state = SceneAccess::State(scene);
+    if (!state.audioMixerSnapshotTransition.IsActive()) {
+        return false;
+    }
+    state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds < 0.0F ? 0.0F : deltaSeconds;
+    if (state.audioMixerSnapshotTransition.elapsedSeconds < state.audioMixerSnapshotTransition.durationSeconds) {
+        return false;
+    }
+    state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;
+    state.audioMixerSnapshotTransition = {};
+    return true;
+}
+
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {
     return SceneObject{ scene, entity };
 }
