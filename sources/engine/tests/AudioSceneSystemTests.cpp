@@ -176,6 +176,11 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             "Audio scene system test mixer asset registration failed");
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerAssetId.value);
         kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet");
+        // LIB-150: runtime override + a mid-flight snapshot transition exercise the full
+        // volume-resolution stack (authored -> snapshot lerp -> override) on the real
+        // plugin across the ticks below.
+        kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Weapons", 0.2F);
+        kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 0.25F);
 
         kb::scene::AudioSourceComponent routedSource{
             .clipAssetId = importedClip.id.value,
