@@ -38,6 +38,13 @@ struct AudioPlayDesc {
     // itself lower-priority than every live voice is honestly refused instead of
     // stealing. 128 = neutral default (every pre-LIB-148 caller keeps it).
     std::uint8_t priority = 128U;
+    // LIB-149: 0 = free-standing (the pre-LIB-149 behavior: `position` is a one-time
+    // start position). Non-zero attaches the voice to that entity: its position follows
+    // the owner's world transform every audio tick, and the voice is stopped and its
+    // source released the moment the owner is destroyed or deactivated - even a looping
+    // voice can never outlive (leak past) its owner, mirroring SceneTimerService's exact
+    // owner-gone convention.
+    std::uint64_t ownerEntityId = 0U;
 };
 
 struct AudioPlayResult {
