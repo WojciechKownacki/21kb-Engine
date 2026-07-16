@@ -27,4 +27,23 @@ bool ScenePrefabVariantOverrideList::Upsert(std::vector<ScenePrefabPropertyOverr
     return true;
 }
 
+std::vector<ScenePrefabPropertyOverride> ScenePrefabVariantOverrideList::Normalize(std::vector<ScenePrefabPropertyOverride> overrides) {
+    std::vector<ScenePrefabPropertyOverride> canonical;
+    canonical.reserve(overrides.size());
+    for (ScenePrefabPropertyOverride& property : overrides) {
+        // Empty-propertyPath entries are not canonical overrides; skip them
+        // up front so the Upsert below always succeeds (it would otherwise
+        // refuse and leave `folded` unset, dropping the accumulated list).
+        if (property.propertyPath.empty()) {
+            continue;
+        }
+        // Fold each entry in with the same last-write-wins, position-
+        // preserving rule the instance-apply path uses.
+        std::vector<ScenePrefabPropertyOverride> folded;
+        static_cast<void>(ScenePrefabVariantOverrideList::Upsert(std::move(canonical), std::move(property), folded));
+        canonical = std::move(folded);
+    }
+    return canonical;
+}
+
 } // namespace kb::scene

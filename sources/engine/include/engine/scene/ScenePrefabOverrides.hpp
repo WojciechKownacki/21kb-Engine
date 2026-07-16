@@ -8,6 +8,32 @@
 
 namespace kb::scene {
 
+// LIB-161: prefab override model and the canonical ORDER in which overrides
+// resolve. A prefab instance's final value for any property is decided by
+// three layers, weakest to strongest:
+//
+//   1. AUTHORED BASE — the template prefab's node value.
+//   2. VARIANT OVERRIDES — the ScenePrefabPropertyOverride list a variant
+//      bakes onto its base (ScenePrefabVariantMaterializer, applied at
+//      RegisterVariant time). A variant's base may itself be a variant; the
+//      chain flattens base-first so a deeper (more-derived) variant wins over
+//      a shallower one for a conflicting property. The chain is acyclic by
+//      construction: RegisterVariant requires the base to already be
+//      registered, so a variant can never be its own ancestor.
+//   3. INSTANCE-LOCAL — the live divergence of a specific instance from its
+//      resolved prefab (base+variant baked), computed on demand by
+//      ScenePrefabOverrideDetector. This is the strongest layer: what the
+//      running scene shows. ApplyOverride promotes an instance's divergence
+//      into the (variant or template) prefab layer; RevertOverride collapses
+//      the instance layer back onto the resolved prefab value.
+//
+// Within a single layer's override list, precedence is LAST-WRITE-WINS keyed
+// on (nodeId if non-zero, else nodeIndex, propertyPath) — the rule
+// ScenePrefabVariantOverrideList::Upsert enforces incrementally on the
+// instance-apply path and ::Normalize enforces on the whole list at
+// RegisterVariant, so a variant's stored override vector is canonical (no
+// duplicate keys) from the moment it is registered.
+
 enum class ScenePrefabOverrideFlag : std::uint32_t {
     None = 0,
     Name = 1U << 0U,
