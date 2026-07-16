@@ -18,6 +18,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "renderer/RendererScreenCapture.hpp"
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
@@ -227,6 +228,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
+    screenCapture_ = std::make_unique<RendererScreenCapture>();
     ApplyRuntimeSceneResourceReserve();
 
     scenePostProcessRenderer_ = std::make_unique<ScenePostProcessRenderer>();
@@ -301,6 +303,10 @@ void Renderer::Shutdown() {
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
     particleRenderSynchronizer_.reset();
+    if (screenCapture_ != nullptr) {
+        screenCapture_->Shutdown();
+        screenCapture_.reset();
+    }
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
@@ -398,6 +404,7 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
                 .extent = extent,
                 .viewportIndex = 0U,
             },
+            .colorFormat = defaultSceneTarget_.ColorSelection().format,
         },
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
@@ -593,7 +600,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
     }
-    if (particleRenderSynchronizer_ == nullptr) {
+    if (particleRenderSynchronizer_ == nullptr || screenCapture_ == nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing particleRenderSynchronizer");
         return false;
     }
@@ -852,10 +859,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         renderScene,
         overlayCamera,
         desc.target.viewport.id.value,
+        width,
+        height,
         &sceneRenderer_->Resources(),
         &sceneRenderer_->ResourceMap(),
         sceneRenderVisibilityScratch_);
     kb::scene::SceneRenderFeedback::Publish(const_cast<kb::scene::Scene&>(scene), sceneRenderVisibilityScratch_);
+    // LIB-145: drive the scene's async screen-capture channel (finish a ready readback,
+    // start a newly requested one) - same scene-mutable-during-its-own-submit convention
+    // as the feedback publish above.
+    screenCapture_->Process(scene, desc, viewportPlan.viewIds, static_cast<std::uint32_t>(lastCompletedFrame_));
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
     // LIB-142: an explicit per-submit override (desc.postProcessSettings) always wins, exactly

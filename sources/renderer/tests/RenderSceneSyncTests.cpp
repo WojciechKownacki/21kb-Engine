@@ -2282,8 +2282,10 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
 
     // No camera: invalid frustum, all-bits mask - the authored visible flag alone decides.
     kb::scene::SceneRenderVisibilityFrame frame;
-    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, nullptr, nullptr, frame);
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, 64U, 64U, nullptr, nullptr, frame);
     Require(!frame.frustumValid, "LIB-144 publisher must report an invalid frustum when the submit had no camera");
+    Require(!frame.cameraValid, "LIB-145 publisher must report no camera for a camera-less submit");
+    Require(frame.viewportWidth == 64U && frame.viewportHeight == 64U, "LIB-145 publisher must record the submitted viewport extent");
     Require(frame.viewportId == 5U, "LIB-144 publisher must record the submitted viewport id");
     Require(frame.entries.size() == 3U, "LIB-144 publisher must skip synthetic particle proxies");
     Require(frame.entries[0].entityId == 3U && frame.entries[1].entityId == 6U && frame.entries[2].entityId == 9U,
@@ -2298,8 +2300,10 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     camera.view = identity;
     camera.projection = identity;
     camera.cullingMask = 1U;
-    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, nullptr, nullptr, frame);
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 64U, 64U, nullptr, nullptr, frame);
     Require(frame.frustumValid, "LIB-144 publisher must extract a valid frustum from a real camera");
+    Require(frame.cameraValid && frame.view == identity && frame.projection == identity,
+        "LIB-145 publisher must copy the submit camera's view/projection matrices into the frame");
     Require(frame.entries.size() == 3U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
     Require(!frame.entries[1].visible, "LIB-144 publisher must mask-reject a proxy whose layer is outside the camera's cullingMask");
     Require(frame.entries[2].visible, "LIB-144 publisher must keep a mask-passing, visible proxy visible (invalid bounds are never frustum-culled)");

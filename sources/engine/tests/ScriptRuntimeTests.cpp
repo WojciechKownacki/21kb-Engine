@@ -3562,6 +3562,84 @@ void RunSceneRenderFeedbackTest() {
     kb::tests::Require(!kb::scene::SceneRenderFeedback::HasFrame(scene) && kb::scene::SceneRenderFeedback::PublishCount(scene) == 0U,
         "Clear must return the scene to the never-published state");
     kb::tests::Require(!kb::scene::SceneRenderFeedback::IsVisible(scene, hiddenEntity), "Clear must drop every published entry");
+
+    // LIB-145: screen/world conversions. Before any camera-carrying frame: honest invalid.
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{}).valid,
+        "WorldToScreen must be invalid before a camera frame was published");
+    kb::tests::Require(!kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 0.0F, 0.0F).valid,
+        "ScreenPointToRay must be invalid before a camera frame was published");
+
+    // Identity view + identity projection (projection[15]==1 -> orthographic with unit
+    // half-extents), 100x100 viewport: NDC == world x/y directly.
+    kb::scene::SceneRenderVisibilityFrame cameraFrame;
+    cameraFrame.cameraValid = true;
+    cameraFrame.viewportWidth = 100U;
+    cameraFrame.viewportHeight = 100U;
+    cameraFrame.view[0] = cameraFrame.view[5] = cameraFrame.view[10] = cameraFrame.view[15] = 1.0F;
+    cameraFrame.projection[0] = cameraFrame.projection[5] = cameraFrame.projection[10] = cameraFrame.projection[15] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, cameraFrame);
+
+    const kb::scene::SceneRenderScreenPoint centerPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 0.0F, 0.0F, 0.5F });
+    kb::tests::Require(centerPoint.valid && centerPoint.onScreen && std::abs(centerPoint.screenX - 50.0F) < 0.001F && std::abs(centerPoint.screenY - 50.0F) < 0.001F,
+        "WorldToScreen must map the identity-camera origin ray to the viewport center pixel");
+    kb::tests::Require(std::abs(centerPoint.viewDepth - 0.5F) < 0.001F, "WorldToScreen must report the view-space depth");
+    const kb::scene::SceneRenderScreenPoint cornerPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 1.0F, 1.0F, 0.5F });
+    kb::tests::Require(cornerPoint.valid && std::abs(cornerPoint.screenX - 100.0F) < 0.001F && std::abs(cornerPoint.screenY - 0.0F) < 0.001F,
+        "WorldToScreen must map NDC +1/+1 to the top-right viewport corner (top-left pixel origin, +Y down)");
+    const kb::scene::SceneRenderScreenPoint offPoint = kb::scene::SceneRenderFeedback::WorldToScreen(scene, kb::math::Vec3{ 5.0F, 0.0F, 0.5F });
+    kb::tests::Require(offPoint.valid && !offPoint.onScreen, "WorldToScreen must report an out-of-viewport point as off-screen");
+
+    // Orthographic ray: direction is always forward, origin offset laterally.
+    const kb::scene::SceneRenderCameraRay orthoRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 0.0F, 50.0F);
+    kb::tests::Require(orthoRay.valid && std::abs(orthoRay.ray.origin.x - (-1.0F)) < 0.001F && std::abs(orthoRay.ray.origin.y) < 0.001F
+            && std::abs(orthoRay.ray.direction.z - 1.0F) < 0.001F,
+        "ScreenPointToRay must offset an orthographic ray's origin by the projection half-extents and keep its direction forward");
+
+    // Perspective (projection[15]==0, unit x/y scales -> 90-degree square frustum): the
+    // right viewport edge's center row ray points 45 degrees right.
+    kb::scene::SceneRenderVisibilityFrame perspectiveFrame = cameraFrame;
+    perspectiveFrame.projection = {};
+    perspectiveFrame.projection[0] = 1.0F;
+    perspectiveFrame.projection[5] = 1.0F;
+    perspectiveFrame.projection[10] = 1.0F;
+    perspectiveFrame.projection[11] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, perspectiveFrame);
+    const kb::scene::SceneRenderCameraRay perspectiveRay = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 100.0F, 50.0F);
+    const float invSqrt2 = 0.7071F;
+    kb::tests::Require(perspectiveRay.valid && std::abs(perspectiveRay.ray.origin.x) < 0.001F
+            && std::abs(perspectiveRay.ray.direction.x - invSqrt2) < 0.001F && std::abs(perspectiveRay.ray.direction.z - invSqrt2) < 0.001F,
+        "ScreenPointToRay must build the editor-equivalent perspective ray from the camera basis and projection scales");
+    kb::math::Vec3 alongRay{};
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenToWorld(scene, 50.0F, 50.0F, 3.0F, alongRay)
+            && std::abs(alongRay.x) < 0.001F && std::abs(alongRay.y) < 0.001F && std::abs(alongRay.z - 3.0F) < 0.001F,
+        "ScreenToWorld must return the point `distance` units along the center pixel's forward ray");
+
+    // LIB-145: the async screen-capture request/result channel's native contract.
+    kb::tests::Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "") == 0U, "RequestScreenCapture must reject an empty path");
+    const std::uint64_t firstCapture = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_one.png");
+    kb::tests::Require(firstCapture != 0U, "RequestScreenCapture must return a non-zero id for a valid request");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_two.png") == 0U,
+        "RequestScreenCapture must reject a second request while one is pending (single in-flight per scene)");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A requested capture must report Pending");
+    const kb::scene::SceneScreenCaptureRequest peeked = kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene);
+    kb::tests::Require(peeked.id == firstCapture && peeked.path == "capture_one.png", "Peek must expose the pending, un-consumed request");
+    kb::scene::SceneRenderFeedback::ConsumeScreenCaptureRequest(scene, firstCapture);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene).id == 0U, "A consumed request must not be peeked again");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Pending,
+        "A consumed-but-unfinished capture must still report Pending");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, firstCapture, true);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Completed,
+        "A finished capture must report Completed");
+    const std::uint64_t secondCapture = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_two.png");
+    kb::tests::Require(secondCapture == firstCapture + 1U, "Capture ids must be monotonic and never reused");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, secondCapture, false);
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, secondCapture) == kb::scene::SceneScreenCaptureStatus::Failed,
+        "A failed capture must report Failed");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, firstCapture) == kb::scene::SceneScreenCaptureStatus::Unknown,
+        "Only the latest terminal capture result is retained - an older id honestly reports Unknown");
+    kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, 999U) == kb::scene::SceneScreenCaptureStatus::Unknown,
+        "An id that never named a request must report Unknown");
 }
 
 // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame's script layer - registration
@@ -3693,6 +3771,73 @@ end
     kb::tests::Require(host.SharedState().Get("luaBoundsRadius").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 2.5F, "Script renderer API Lua wrapper GetBounds did not return the published radius");
     kb::tests::Require(host.SharedState().Get("luaInside").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not accept an inside sphere");
     kb::tests::Require(!host.SharedState().Get("luaOutside").value_or(kb::script::ScriptValue{ true }).AsBool(), "Script renderer API Lua wrapper TestFrustum did not reject an outside point");
+
+    // LIB-145: conversions + capture registration and behavior through the script layer.
+    for (const char* name : { "Renderer.WorldToScreen", "Renderer.ScreenPointToRay", "Renderer.ScreenToWorld", "Renderer.CaptureScreen", "Renderer.CaptureStatus" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script renderer API did not register a LIB-145 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Renderer.ScreenPointToRay") != nullptr,
+        "Script renderer API did not register VisualGraph runtime binding for Renderer.ScreenPointToRay");
+
+    // Publish an identity camera frame (orthographic unit half-extents, 100x100 pixels).
+    kb::scene::SceneRenderVisibilityFrame cameraFrame;
+    cameraFrame.cameraValid = true;
+    cameraFrame.viewportWidth = 100U;
+    cameraFrame.viewportHeight = 100U;
+    cameraFrame.view[0] = cameraFrame.view[5] = cameraFrame.view[10] = cameraFrame.view[15] = 1.0F;
+    cameraFrame.projection[0] = cameraFrame.projection[5] = cameraFrame.projection[10] = cameraFrame.projection[15] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, cameraFrame);
+
+    const kb::script::ScriptFunctionCallResult worldToScreen = host.Functions().Call(
+        "Renderer.WorldToScreen",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 0.5F } },
+        } },
+        context);
+    kb::tests::Require(worldToScreen.Succeeded()
+            && worldToScreen.Output("onScreen").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && std::abs(worldToScreen.Output("screenX").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - 50.0F) < 0.001F,
+        "Renderer.WorldToScreen must project through the published camera");
+    const kb::script::ScriptFunctionCallResult ray = host.Functions().Call(
+        "Renderer.ScreenPointToRay",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "screenX", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "screenY", .value = kb::script::ScriptValue{ 50.0F } },
+        } },
+        context);
+    kb::tests::Require(ray.Succeeded() && ray.Output("valid").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && std::abs(ray.Output("originX").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - (-1.0F)) < 0.001F
+            && std::abs(ray.Output("directionZ").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() - 1.0F) < 0.001F,
+        "Renderer.ScreenPointToRay must build the published camera's ray");
+
+    const kb::script::ScriptFunctionCallResult emptyPathCapture = host.Functions().Call(
+        "Renderer.CaptureScreen",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ std::string{} } },
+        } },
+        context);
+    kb::tests::Require(!emptyPathCapture.Succeeded(), "Renderer.CaptureScreen must honestly error for an empty path");
+    const std::vector<kb::script::ScriptFunctionArgument> captureArguments{
+        kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ std::string{ "script_capture.png" } } },
+    };
+    const kb::script::ScriptFunctionCallResult capture = host.Functions().Call("Renderer.CaptureScreen", std::span<const kb::script::ScriptFunctionArgument>{ captureArguments }, context);
+    kb::tests::Require(capture.Succeeded(), "Renderer.CaptureScreen must accept a valid request");
+    const std::uint64_t captureId = capture.Output("capture").value_or(kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Hash }).AsUInt64();
+    kb::tests::Require(captureId != 0U, "Renderer.CaptureScreen must return a non-zero capture id");
+    kb::tests::Require(!host.Functions().Call("Renderer.CaptureScreen", std::span<const kb::script::ScriptFunctionArgument>{ captureArguments }, context).Succeeded(),
+        "Renderer.CaptureScreen must honestly error while another capture is pending");
+    const std::vector<kb::script::ScriptFunctionArgument> statusArguments{
+        kb::script::ScriptFunctionArgument{ .name = "capture", .value = kb::script::ScriptValue{ captureId, kb::script::ScriptValueType::Hash } },
+    };
+    const kb::script::ScriptFunctionCallResult pendingStatus = host.Functions().Call("Renderer.CaptureStatus", std::span<const kb::script::ScriptFunctionArgument>{ statusArguments }, context);
+    kb::tests::Require(pendingStatus.Succeeded() && pendingStatus.Output("status").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "pending",
+        "Renderer.CaptureStatus must report pending for an unfinished capture");
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, captureId, true);
+    const kb::script::ScriptFunctionCallResult completedStatus = host.Functions().Call("Renderer.CaptureStatus", std::span<const kb::script::ScriptFunctionArgument>{ statusArguments }, context);
+    kb::tests::Require(completedStatus.Succeeded() && completedStatus.Output("status").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "completed",
+        "Renderer.CaptureStatus must report completed after the renderer finishes the capture");
 }
 
 void RunScriptWorldTimePhysicsApiTest() {

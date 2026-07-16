@@ -42,6 +42,7 @@ class BgfxContext;
 class EcsRenderSceneSynchronizer;
 class RenderScene;
 class RenderSurface;
+class RendererScreenCapture;
 class SceneParticleRenderSynchronizer;
 class SceneRenderer;
 
@@ -279,6 +280,9 @@ private:
     // entries vector with the scene's stored frame, so both sides keep their capacity and
     // the steady state allocates nothing per frame.
     kb::scene::SceneRenderVisibilityFrame sceneRenderVisibilityScratch_{};
+    // LIB-145: the async screen-capture controller (frame-gated blit+readTexture+PNG, see
+    // RendererScreenCapture.hpp).
+    std::unique_ptr<RendererScreenCapture> screenCapture_;
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;
