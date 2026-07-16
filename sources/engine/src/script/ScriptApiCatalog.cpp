@@ -36,7 +36,7 @@ struct LuaBindingSpec {
 // the names and each wrapper's return shape. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 120> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 125> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -55,6 +55,8 @@ constexpr std::array<LuaBindingSpec, 120> kLuaBindings{ {
     { "Audio", "TransitionToSnapshot", "Audio.TransitionToSnapshot", ScriptApiCatalogLuaReturnKind::SingleOutput, "started" },
     { "Audio", "ConfigureOcclusion", "Audio.ConfigureOcclusion", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Audio", "OcclusionEnabled", "Audio.OcclusionEnabled", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Audio", "GetPosition", "Audio.GetPosition", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Audio", "AddMarker", "Audio.AddMarker", ScriptApiCatalogLuaReturnKind::SingleOutput, "added" },
     { "MeshRenderer", "SetMesh", "MeshRenderer.SetMesh", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterial", "MeshRenderer.SetMaterial", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "MeshRenderer", "SetMaterialSlot", "MeshRenderer.SetMaterialSlot", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
@@ -153,6 +155,9 @@ constexpr std::array<LuaBindingSpec, 120> kLuaBindings{ {
     { "Input", "PriorityDebugOverlay", "Input.PriorityDebugOverlay", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "HasFocus", "Input.HasFocus", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "IsGamepadConnected", "Input.IsGamepadConnected", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "HasHaptics", "Input.HasHaptics", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Input", "SetVibration", "Input.SetVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "StopVibration", "Input.StopVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },

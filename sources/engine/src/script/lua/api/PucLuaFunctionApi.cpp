@@ -329,6 +329,53 @@ int LuaAudioConfigureOcclusion(lua_State* state) {
     return 1;
 }
 
+// LIB-152: Audio.GetPosition(voice) -> {valid, seconds} - the audio-clock playback
+// position table (mirror LuaPhysicsGetVelocity's shape).
+int LuaAudioGetPosition(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.GetPosition", arguments);
+    lua_createtable(state, 0, 2);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+// LIB-152: Audio.AddMarker(voice, marker, positionSeconds) -> added (nil+error for an
+// empty marker name).
+int LuaAudioAddMarker(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("voice", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+    };
+    std::size_t length = 0;
+    const char* marker = luaL_tolstring(state, 2, &length);
+    arguments.push_back(Arg("marker", ScriptValue{ std::string{ marker != nullptr ? marker : "", marker != nullptr ? length : std::size_t{ 0 } } }));
+    if (marker != nullptr) {
+        lua_pop(state, 1);
+    }
+    arguments.push_back(Arg("positionSeconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }));
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.AddMarker", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "audio marker request failed");
+    }
+    lua_pushboolean(state, result.Output("added").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaAudioOcclusionEnabled(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2196,6 +2243,52 @@ int LuaInputIsGamepadConnected(lua_State* state) {
     return 1;
 }
 
+// LIB-153: Input.HasHaptics(gamepadIndex) -> {supported, connected, dualMotor,
+// maxGamepads, reason} - the honest capability table.
+int LuaInputHasHaptics(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 1, 0));
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("gamepadIndex", ScriptValue{ gamepadIndex }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.HasHaptics", arguments);
+    lua_createtable(state, 0, 5);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaInputSetVibration(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("gamepadIndex", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("lowFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("highFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.SetVibration", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputStopVibration(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.StopVibration", {});
+    lua_pushboolean(state, result.Output("stopped").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, function, 1);
@@ -2213,7 +2306,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 18);
+    lua_createtable(state, 0, 20);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaAudioPlay, 1);
     lua_setfield(state, -2, "Play");
@@ -2234,6 +2327,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "TransitionToSnapshot", &LuaAudioTransitionToSnapshot, context);
     SetClosure(state, "ConfigureOcclusion", &LuaAudioConfigureOcclusion, context);
     SetClosure(state, "OcclusionEnabled", &LuaAudioOcclusionEnabled, context);
+    SetClosure(state, "GetPosition", &LuaAudioGetPosition, context);
+    SetClosure(state, "AddMarker", &LuaAudioAddMarker, context);
     lua_setfield(state, environmentIndex, "Audio");
 
     lua_createtable(state, 0, 7);
@@ -2362,6 +2457,9 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "PriorityDebugOverlay", &LuaInputPriorityDebugOverlay, context);
     SetClosure(state, "HasFocus", &LuaInputHasFocus, context);
     SetClosure(state, "IsGamepadConnected", &LuaInputIsGamepadConnected, context);
+    SetClosure(state, "HasHaptics", &LuaInputHasHaptics, context);
+    SetClosure(state, "SetVibration", &LuaInputSetVibration, context);
+    SetClosure(state, "StopVibration", &LuaInputStopVibration, context);
     lua_setfield(state, environmentIndex, "Input");
 
     lua_createtable(state, 0, 3);

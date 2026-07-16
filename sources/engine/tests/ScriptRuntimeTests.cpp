@@ -31,6 +31,7 @@
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
@@ -117,6 +118,10 @@ public:
     [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] float VoicePlaybackSeconds(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId) ? 0.0F : -1.0F; }
+    [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float, kb::scene::SceneEntity) override {
+        return IsLive(voiceId) && !marker.empty();
+    }
 
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
@@ -3892,6 +3897,21 @@ void RunScriptAudioVoiceControlApiTest() {
         [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
             return voiceId == liveVoice && !paused;
         }
+        [[nodiscard]] float VoicePlaybackSeconds(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
+            return voiceId == liveVoice ? 1.25F : -1.0F;
+        }
+        [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene&, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) override {
+            if (voiceId != liveVoice || marker.empty()) {
+                return false;
+            }
+            lastMarker = std::string{ marker };
+            lastMarkerSeconds = positionSeconds;
+            lastMarkerTarget = target;
+            return true;
+        }
+        std::string lastMarker;
+        float lastMarkerSeconds = -1.0F;
+        kb::scene::SceneEntity lastMarkerTarget{};
     };
 
     kb::scene::Scene scene;
@@ -3957,8 +3977,18 @@ function Tick(self, dt)
     SetShared("luaSeeked", Audio.Seek(7, 1.5))
     SetShared("luaVolume", Audio.SetVolume(7, 0.6))
     SetShared("luaPlaying", Audio.IsPlaying(7))
+    local position = Audio.GetPosition(7)
+    SetShared("luaPositionValid", position.valid)
+    SetShared("luaPositionSeconds", position.seconds)
+    SetShared("luaMarkerAdded", Audio.AddMarker(7, "beat", 0.5))
     SetShared("luaStopped", Audio.Stop(7))
     SetShared("luaDeadStop", Audio.Stop(7))
+end
+
+function OnAudioMarker(self, event)
+    SetShared("luaMarkerName", event.args.marker)
+    SetShared("luaMarkerVoice", event.args.voice)
+    SetShared("luaMarkerPosition", event.args.positionSeconds)
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Script audio voice control Lua wrapper script did not load");
@@ -3969,7 +3999,278 @@ end
     }
     kb::tests::Require(!host.SharedState().Get("luaDeadStop").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Lua Audio.Stop on an already-stopped voice must be honestly false");
+
+    // LIB-152: position + markers through the Lua wrappers (values recorded by the fake).
+    kb::tests::Require(host.SharedState().Get("luaPositionValid").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(host.SharedState().Get("luaPositionSeconds").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat(), 1.25F),
+        "Lua Audio.GetPosition did not return the audio-clock position");
+    kb::tests::Require(host.SharedState().Get("luaMarkerAdded").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastMarker == "beat" && kb::tests::NearlyEqual(backend.lastMarkerSeconds, 0.5F)
+            && backend.lastMarkerTarget == luaObject.Entity(),
+        "Lua Audio.AddMarker did not carry the marker (with the calling entity as target) to the backend");
+
+    // LIB-152: native contracts - dead-voice position is honestly invalid, an empty
+    // marker name errors, the queue drains once.
+    kb::tests::Require(kb::audio::AudioPlayback::VoicePlaybackSeconds(scene, 999U) < 0.0F,
+        "A dead voice's playback position must be negative, never a fake 0.0");
+    const kb::script::ScriptFunctionCallContext markerContext{ .scene = &scene, .caller = luaObject.Entity() };
+    kb::tests::Require(!host.Functions().Call(
+                            "Audio.AddMarker",
+                            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                                kb::script::ScriptFunctionArgument{ .name = "voice", .value = kb::script::ScriptValue{ 7 } },
+                                kb::script::ScriptFunctionArgument{ .name = "marker", .value = kb::script::ScriptValue{ std::string{} } },
+                                kb::script::ScriptFunctionArgument{ .name = "positionSeconds", .value = kb::script::ScriptValue{ 0.0F } },
+                            } },
+                            markerContext)
+                            .Succeeded(),
+        "Audio.AddMarker must honestly error for an empty marker name");
+
+    // LIB-152: the full backend->queue->dispatch path - a queued marker event reaches the
+    // registering entity's Lua OnAudioMarker via the scene's own frame loop, entity-local
+    // (InstallSceneSystem + a warm-up Update, the exact setup the collision-event
+    // dispatch test uses).
+    kb::tests::Require(host.InstallSceneSystem(), "Audio marker dispatch test scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
+                                                          .target = luaObject.Entity(),
+                                                          .voiceId = 7U,
+                                                          .marker = "beat",
+                                                          .positionSeconds = 0.75F,
+                                                      });
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(host.SharedState().Get("luaMarkerName").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "beat",
+        "OnAudioMarker did not deliver the marker name to the registering entity's script");
+    kb::tests::Require(host.SharedState().Get("luaMarkerVoice").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 7,
+        "OnAudioMarker did not deliver the voice handle");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("luaMarkerPosition").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat(), 0.75F),
+        "OnAudioMarker did not deliver the audio-clock fire position");
+    kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
+        "The marker event queue must be fully drained by dispatch");
     kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+}
+
+// LIB-154: engine-side lifecycle contracts under audio asset unload and a runtime scene
+// change - the always-run headless coverage. The real MiniaudioVoicePool file/stream paths
+// (a live streaming voice surviving unload/delete, the per-clip/global one-shot pool caps,
+// entity-source teardown) live entirely in the plugin and are exercised on the real
+// backend by the plugin-gated RunMiniaudioPluginUpdatesSceneSourcesTest (opt-in via
+// KB_AUDIO_MINIAUDIO_PLUGIN_PATH, exactly like every other section-12 plugin path).
+void RunAudioAssetUnloadAndSceneChangeLifecycleTest() {
+    // (1) Asset unload vs delete - the exact AssetManager registry signal the audio clip
+    // resolver (MiniaudioClipResolver::Resolve -> Registry().Find) consumes: Unload drops
+    // ONLY the runtime payload cache, so the metadata stays and a new/live play still
+    // resolves; DeleteAsset removes the metadata, so the next resolve returns empty and a
+    // NEW PlayOneShot honestly refuses ("audio clip file could not be resolved"). An
+    // already-streaming voice is unaffected by either (it holds its own file handle - the
+    // plugin test proves that on the real backend).
+    {
+        ResetTestRoot();
+        const std::filesystem::path clipPath = TestRoot() / "Audio" / "Unloadable.wav";
+        WriteTextFile(clipPath, "RIFF-not-a-real-wav-only-the-registry-entry-and-file-presence-matter-here");
+
+        kb::scene::Scene scene;
+        const kb::assets::AssetId clipId{ 415401U };
+        kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                               .id = clipId,
+                               .type = "AudioClip",
+                               .name = "Unloadable",
+                               .virtualPath = "/Game/Audio/Unloadable.wav",
+                               .physicalPath = clipPath.string(),
+                               .contentHash = 1U,
+                           }),
+            "LIB-154 clip asset registration failed");
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) != nullptr,
+            "A registered clip must be resolvable before any unload");
+        static_cast<void>(scene.Assets().Manager().Unload(clipId));
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) != nullptr,
+            "AssetManager::Unload must keep the registry metadata - the resolver would still resolve, so a live/new play survives an unload");
+        kb::tests::Require(scene.Assets().Manager().DeleteAsset(clipId), "LIB-154 clip DeleteAsset failed");
+        kb::tests::Require(scene.Assets().Manager().Registry().Find(clipId) == nullptr,
+            "AssetManager::DeleteAsset must remove the registry metadata - the next resolve returns empty, so a new PlayOneShot honestly refuses");
+    }
+
+    // (2) A runtime scene change (SceneDocumentService::LoadIntoScene, the additive=false
+    // path a scripted Scene.Load takes) destroys the scene's root entities but does NOT
+    // tear down audio: the backend stays registered and the facade keeps routing. A marker
+    // event still queued for an entity the reload destroyed is drained safely on the next
+    // tick - never delivered to the dead entity, never a crash - and the queue is left
+    // empty. (The positive delivery path is proven in RunScriptAudioVoiceControlApiTest.)
+    {
+        kb::scene::Scene scene;
+        ProbeAudioPlaybackBackend backend;
+        kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene), "The audio backend must register before the scene change");
+
+        const kb::assets::AssetId behaviourAsset{ 415402U };
+        const kb::scene::SceneObject listenerObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Doomed Marker Listener" });
+        scene.Components().Behaviours().Set(listenerObject.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = behaviourAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "LIB-154 scene-change host did not initialize");
+        const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(behaviourAsset, R"(
+function OnAudioMarker(self, event)
+    SetShared("markerDeliveredAfterSceneChange", true)
+end
+)");
+        kb::tests::Require(loaded.succeeded, "LIB-154 scene-change Lua script did not load");
+        kb::tests::Require(host.InstallSceneSystem(), "LIB-154 scene-change scene system install failed");
+        static_cast<void>(scene.Runtime().Update(0.016F));
+        kb::tests::Require(!scene.Hierarchy().RootEntities().empty(), "LIB-154 scene-change setup must have a live root entity");
+
+        // The non-additive scene change: clears every root entity, reusing the same Scene.
+        kb::scene::SceneDocument nextScene;
+        nextScene.guid = "scene:lib154-next";
+        nextScene.name = "Next";
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, nextScene), "LIB-154 non-additive scene change did not load");
+        kb::tests::Require(scene.Hierarchy().RootEntities().empty(), "A non-additive scene change must destroy every root entity");
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene),
+            "A runtime scene change must NOT unregister the audio backend (only scene teardown / editor play-mode does)");
+
+        // A marker still queued for the now-destroyed entity is drained without delivery or
+        // a crash on the next tick.
+        kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
+                                                              .target = listenerObject.Entity(),
+                                                              .voiceId = 1U,
+                                                              .marker = "beat",
+                                                              .positionSeconds = 0.5F,
+                                                          });
+        static_cast<void>(scene.Runtime().Update(0.016F));
+        kb::tests::Require(!host.SharedState().Get("markerDeliveredAfterSceneChange").value_or(kb::script::ScriptValue{ false }).AsBool(),
+            "A marker queued for an entity a scene change destroyed must NOT be delivered");
+        kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
+            "The marker queue must be fully drained by dispatch even when its target was destroyed by a scene change");
+
+        // The facade keeps routing after the scene change, and StopAll - the host's tool for
+        // stopping lingering one-shots across a scene change - still reaches the backend.
+        kb::tests::Require(kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{ .clipAssetId = 415401U }).Succeeded(),
+            "The audio facade must keep routing PlayOneShot after a scene change");
+        const int stopAllBefore = backend.stopAllCount;
+        kb::audio::AudioPlayback::StopAll(scene);
+        kb::tests::Require(backend.stopAllCount == stopAllBefore + 1,
+            "AudioPlayback::StopAll must still reach the backend after a scene change (the explicit tool to stop carried-over one-shots)");
+
+        kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
+    }
+}
+
+// LIB-153: haptics per device through capability - honest unsupported without a backend,
+// full capability/actuator flow through a fake backend, registration on all three
+// frontends, real Lua wrappers.
+void RunScriptInputHapticsApiTest() {
+    struct FakeHapticsBackend final : kb::input::IInputHapticsBackend {
+        [[nodiscard]] kb::input::InputHapticsCapability Capability(std::uint32_t gamepadIndex) override {
+            if (gamepadIndex >= 2U) {
+                return kb::input::InputHapticsCapability{ .maxGamepads = 2U, .disabledReason = "index out of range" };
+            }
+            return kb::input::InputHapticsCapability{ .supported = true, .connected = gamepadIndex == 0U, .dualMotor = true, .maxGamepads = 2U };
+        }
+        [[nodiscard]] bool SetVibration(std::uint32_t gamepadIndex, float lowFrequency, float highFrequency) override {
+            if (gamepadIndex >= 2U) {
+                return false;
+            }
+            lastIndex = gamepadIndex;
+            lastLow = lowFrequency;
+            lastHigh = highFrequency;
+            return true;
+        }
+        void StopAll() noexcept override { ++stopAllCount; }
+        std::uint32_t lastIndex = 99U;
+        float lastLow = -1.0F;
+        float lastHigh = -1.0F;
+        int stopAllCount = 0;
+    };
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script input haptics API host did not initialize");
+    for (const char* name : { "Input.HasHaptics", "Input.SetVibration", "Input.StopVibration" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script input haptics API did not register a LIB-153 function");
+    }
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Input.SetVibration") != nullptr,
+        "Script input haptics API did not register VisualGraph runtime binding for Input.SetVibration");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto callHasHaptics = [&host, &context](int index) {
+        return host.Functions().Call(
+            "Input.HasHaptics",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ index } },
+            } },
+            context);
+    };
+    const auto callSetVibration = [&host, &context](int index, float low, float high) {
+        return host.Functions().Call(
+            "Input.SetVibration",
+            std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+                kb::script::ScriptFunctionArgument{ .name = "gamepadIndex", .value = kb::script::ScriptValue{ index } },
+                kb::script::ScriptFunctionArgument{ .name = "lowFrequency", .value = kb::script::ScriptValue{ low } },
+                kb::script::ScriptFunctionArgument{ .name = "highFrequency", .value = kb::script::ScriptValue{ high } },
+            } },
+            context);
+    };
+
+    // No backend: honest unsupported with a reason, never a fake success.
+    const kb::script::ScriptFunctionCallResult noBackend = callHasHaptics(0);
+    kb::tests::Require(noBackend.Succeeded() && !noBackend.Output("supported").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && !noBackend.Output("reason").value_or(kb::script::ScriptValue{ std::string{} }).AsString().empty(),
+        "Input.HasHaptics must report unsupported with a reason when no backend is registered");
+    kb::tests::Require(!callSetVibration(0, 1.0F, 1.0F).Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.SetVibration must be honestly false without a backend");
+    kb::tests::Require(!host.Functions().Call("Input.StopVibration", std::span<const kb::script::ScriptFunctionArgument>{}, context)
+                            .Output("stopped").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.StopVibration must be honestly false without a backend");
+
+    FakeHapticsBackend backend;
+    kb::input::InputHaptics::RegisterBackend(scene, backend);
+    const kb::script::ScriptFunctionCallResult supported = callHasHaptics(0);
+    kb::tests::Require(supported.Output("supported").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("connected").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("dualMotor").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && supported.Output("maxGamepads").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 2,
+        "Input.HasHaptics must surface the backend's capability and limits");
+    kb::tests::Require(!callHasHaptics(5).Output("supported").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.HasHaptics must report the platform's slot-range limit honestly");
+    kb::tests::Require(callSetVibration(1, 0.25F, 0.75F).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastIndex == 1U && kb::tests::NearlyEqual(backend.lastLow, 0.25F) && kb::tests::NearlyEqual(backend.lastHigh, 0.75F),
+        "Input.SetVibration did not carry the motor magnitudes to the backend");
+    kb::tests::Require(!callSetVibration(5, 1.0F, 1.0F).Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Input.SetVibration must be honestly false for an out-of-range slot");
+    kb::tests::Require(host.Functions().Call("Input.StopVibration", std::span<const kb::script::ScriptFunctionArgument>{}, context)
+                            .Output("stopped").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.stopAllCount == 1,
+        "Input.StopVibration did not reach the backend");
+
+    // Lua wrapper layer.
+    const kb::assets::AssetId luaAsset{ 9801U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Haptics Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local haptics = Input.HasHaptics(0)
+    SetShared("luaSupported", haptics.supported)
+    SetShared("luaDualMotor", haptics.dualMotor)
+    SetShared("luaApplied", Input.SetVibration(0, 0.5, 1.0))
+    SetShared("luaStopped", Input.StopVibration())
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script input haptics Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script input haptics Lua wrapper execution failed");
+    for (const char* key : { "luaSupported", "luaDualMotor", "luaApplied", "luaStopped" }) {
+        kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua haptics wrapper did not report success");
+    }
+    kb::tests::Require(backend.lastIndex == 0U && kb::tests::NearlyEqual(backend.lastLow, 0.5F) && kb::tests::NearlyEqual(backend.lastHigh, 1.0F) && backend.stopAllCount == 2,
+        "Lua haptics wrappers did not carry values to the backend");
+    kb::input::InputHaptics::UnregisterBackend(scene, backend);
+    kb::tests::Require(!kb::input::InputHaptics::HasBackend(scene), "UnregisterBackend must clear the scene's haptics backend");
 }
 
 // LIB-144: the native contract of the scene-held, renderer-published visibility feedback
@@ -11511,6 +11812,8 @@ void RunScriptRuntimeTests() {
     RunAudioMixerAssetIOAndAccessTest();
     RunScriptAudioMixerApiTest();
     RunScriptAudioVoiceControlApiTest();
+    RunAudioAssetUnloadAndSceneChangeLifecycleTest();
+    RunScriptInputHapticsApiTest();
     RunSceneRenderFeedbackTest();
     RunScriptRendererApiTest();
     RunScriptWorldTimePhysicsApiTest();
