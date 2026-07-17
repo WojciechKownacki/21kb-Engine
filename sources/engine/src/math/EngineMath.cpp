@@ -641,6 +641,23 @@ namespace {
 constexpr std::uint32_t kCurveMagic = 0x4B435256U; // "KCRV"
 constexpr std::uint32_t kGradientMagic = 0x4B475244U; // "KGRD"
 
+// LIB-053: the exact on-disk size of one element, used to reject a
+// data-controlled element count that the remaining payload cannot possibly
+// contain BEFORE reserving for it — a few-byte file declaring count =
+// 0xFFFFFFFF must never force a multi-gigabyte allocation. A CurveKeyframe
+// serializes as time(4) + value(4) + easing(1); a GradientStop as time(4) +
+// rgba(4*4).
+constexpr std::size_t kCurveKeyframeBytes = 9U;
+constexpr std::size_t kGradientStopBytes = 20U;
+
+// True when `bytes[offset..]` is large enough to hold `count` elements of
+// `elementBytes` each. Uses division (not count*elementBytes) so it cannot
+// itself overflow for a hostile count near 2^32.
+[[nodiscard]] bool PayloadHoldsElements(std::span<const std::uint8_t> bytes, std::size_t offset, std::uint32_t count, std::size_t elementBytes) noexcept {
+    const std::size_t remaining = bytes.size() - offset;
+    return count <= remaining / elementBytes;
+}
+
 void AppendUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     std::uint8_t buffer[4];
     std::memcpy(buffer, &value, sizeof(buffer));
@@ -701,6 +718,14 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve) {
     if (!ReadUInt32(bytes, offset, magic) || magic != kCurveMagic || !ReadUInt32(bytes, offset, count)) {
         return false;
     }
+    // LIB-053: reject a count the payload cannot back BEFORE reserving, so a
+    // tiny hostile file cannot force a huge allocation. The per-element
+    // reads in the loop below already catch a truncated payload, but only
+    // after reserve(count) has already tried to allocate for the fabricated
+    // count — this guard is what makes the reserve safe.
+    if (!PayloadHoldsElements(bytes, offset, count, kCurveKeyframeBytes)) {
+        return false;
+    }
     std::vector<CurveKeyframe> keyframes;
     keyframes.reserve(count);
     for (std::uint32_t i = 0U; i < count; ++i) {
@@ -736,6 +761,12 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Gradient& outGradient) {
     std::uint32_t magic = 0U;
     std::uint32_t count = 0U;
     if (!ReadUInt32(bytes, offset, magic) || magic != kGradientMagic || !ReadUInt32(bytes, offset, count)) {
+        return false;
+    }
+    // LIB-053: see the Curve Deserialize above — reject an unbackable count
+    // before reserving so a few-byte hostile file cannot force a huge
+    // allocation.
+    if (!PayloadHoldsElements(bytes, offset, count, kGradientStopBytes)) {
         return false;
     }
     std::vector<GradientStop> stops;

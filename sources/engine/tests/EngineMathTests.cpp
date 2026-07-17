@@ -605,6 +605,38 @@ void RunCurveAndGradientTest() {
     // not just "however many bytes happen to be there".
     Gradient crossParsed;
     kb::tests::Require(!kb::math::Deserialize(curveBytes, crossParsed), "Curve bytes must not be misinterpreted as a valid Gradient");
+
+    // LIB-053 (2026-07-17 audit gap): a few-byte payload that declares a
+    // huge element count must be rejected BEFORE reserve(count) tries to
+    // allocate for it — otherwise a hostile 8-byte file (magic + count =
+    // 0xFFFFFFFF) forces a multi-gigabyte allocation / OOM. Build a valid
+    // header with a fabricated count and NO element bytes and require
+    // Deserialize to fail cleanly rather than allocate.
+    {
+        // Curve: magic (KCRV) + count = 0xFFFFFFFF, no keyframe bytes.
+        std::vector<std::uint8_t> hostileCurve{ curveBytes.begin(), curveBytes.begin() + 4 }; // valid magic
+        hostileCurve.insert(hostileCurve.end(), { 0xFFU, 0xFFU, 0xFFU, 0xFFU }); // count = 4294967295
+        Curve hostileCurveResult;
+        kb::tests::Require(!kb::math::Deserialize(hostileCurve, hostileCurveResult),
+            "Deserialize must reject a Curve whose declared count the payload cannot possibly hold, before reserving for it");
+
+        // A count the payload ALMOST backs (off by one element) must also be
+        // rejected — the guard is a real byte-count check, not just a
+        // huge-number sniff.
+        std::vector<std::uint8_t> oneShortCurve = kb::math::Serialize(curve);
+        // Bump the serialized count by one without adding an element's bytes.
+        oneShortCurve[4] = static_cast<std::uint8_t>(oneShortCurve[4] + 1U);
+        Curve oneShortResult;
+        kb::tests::Require(!kb::math::Deserialize(oneShortCurve, oneShortResult),
+            "Deserialize must reject a Curve whose count is one element more than the payload provides");
+
+        // Gradient: magic (KGRD) + count = 0xFFFFFFFF, no stop bytes.
+        std::vector<std::uint8_t> hostileGradient{ gradientBytes.begin(), gradientBytes.begin() + 4 };
+        hostileGradient.insert(hostileGradient.end(), { 0xFFU, 0xFFU, 0xFFU, 0xFFU });
+        Gradient hostileGradientResult;
+        kb::tests::Require(!kb::math::Deserialize(hostileGradient, hostileGradientResult),
+            "Deserialize must reject a Gradient whose declared count the payload cannot possibly hold, before reserving for it");
+    }
 }
 
 // LIB-054: NaN/infinity/zero-length contract audit — proves the
