@@ -72,6 +72,35 @@ kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 120   # hea
 A change is done only when `validate` reports OK and `run` finishes without script diagnostics.
 )md";
 
+// LIB-013: the minimal PlayerController template AGENTS.md's own worked
+// example already references (`--script /Game/Logic/PlayerController.lua`)
+// but nothing previously wrote to disk — kAgentsTemplate above documented a
+// file that didn't exist. Reads a 2D "Move" input action and translates
+// this entity's Transform by speed*dt; Log/Emit calls exist so a fresh
+// project's first `kb_cli run` has something observable to confirm the
+// wiring (script -> scene -> CLI Play Mode) actually works end to end.
+constexpr std::string_view kPlayerControllerLuaTemplate = R"lua(-- PlayerController.lua - minimal starter movement script.
+-- Reads a 2D "Move" input action (bind it to WASD/left-stick via an
+-- InputMappingContext asset) and moves this entity by speed units/second.
+-- Attach with:
+--   kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node Player --script /Game/Logic/PlayerController.lua
+
+local speed = 2.0
+
+function Ready(self, dt)
+    Log("player ready")
+end
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    local dx = (move.x or 0.0) * speed * dt
+    local dy = (move.y or 0.0) * speed * dt
+    Transform.Translate(self.entity, dx, dy, 0.0)
+    Log("player tick")
+    Emit("PlayerMoved", {})
+end
+)lua";
+
 constexpr std::string_view kLuarcTemplate = R"json({
     "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
     "runtime.version": "Lua 5.4",
@@ -118,18 +147,36 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         return result;
     }
 
+    // LIB-013: PlayerController.lua lives under Assets/Logic/, same as any
+    // other project behaviour script — that directory does not exist yet in
+    // a freshly-scaffolded project (only .kb/api/ is created above).
+    const std::filesystem::path logicRoot = projectRoot / "Assets" / "Logic";
+    std::filesystem::create_directories(logicRoot, errorCode);
+    if (errorCode) {
+        result.error = "could not create directory: " + logicRoot.string();
+        return result;
+    }
+
     struct GeneratedFile {
         std::filesystem::path path;
         std::string content;
         bool overwrite = true;
+        // LIB-013: see ScriptAgentProjectFilesResult::wroteProjectAsset.
+        bool isProjectAsset = false;
     };
 
     const GeneratedFile files[] = {
-        { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true },
-        { apiRoot / "script_api.md", ScriptApiExport::ToMarkdown(catalog), true },
-        { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true },
-        { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false },
-        { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false },
+        { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true, false },
+        { apiRoot / "script_api.md", ScriptApiExport::ToMarkdown(catalog), true, false },
+        { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
+        { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false, false },
+        { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false, false },
+        // Write-once like AGENTS.md/.luarc.json: a game author's edits to
+        // their own PlayerController.lua must never be clobbered by a later
+        // `kb_cli init-agent` re-run (which DOES always regenerate .kb/api/).
+        // isProjectAsset=true: unlike every other generated file here, this
+        // one lands under Assets/ and becomes discoverable project content.
+        { logicRoot / "PlayerController.lua", std::string{ kPlayerControllerLuaTemplate }, false, true },
     };
 
     for (const GeneratedFile& file : files) {
@@ -141,6 +188,7 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
             return result;
         }
         result.writtenFiles.push_back(file.path);
+        result.wroteProjectAsset = result.wroteProjectAsset || file.isProjectAsset;
     }
 
     result.succeeded = true;
