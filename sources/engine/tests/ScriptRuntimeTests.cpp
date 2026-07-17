@@ -7850,6 +7850,39 @@ void RunScriptMathApiTest() {
             rangedInt.Output("streamCounter").has_value() && rangedInt.Output("streamCounter")->AsUInt32() == 1U,
         "Math.RandomRangeInt direct call must return a value in [0,10) and advance streamCounter by exactly one");
 
+    // LIB-051 (2026-07-17 audit gap): the RandomStream API shares LIB-050's
+    // root cause — its streamSeed/streamCounter pins are UInt32, so before
+    // the Int->UInt32 coercion a Lua caller (whose integer literals marshal
+    // as Int) could not call any stream function at all. This proves the
+    // whole stream surface is now reachable from a REAL Lua script, not
+    // just via native hand-built ScriptValues: the script seeds a stream
+    // and draws a value in one CallFunction chain, all through the public
+    // Lua boundary.
+    {
+        kb::scene::Scene streamScene;
+        kb::script::ScriptRuntimeHost streamHost{ streamScene };
+        kb::tests::Require(streamHost.Succeeded(), "LIB-051 Lua RandomStream test host setup failed");
+        constexpr kb::assets::AssetId kStreamLuaAsset{ 700702U };
+        const kb::script::PucLuaLoadResult loaded = streamHost.LuaRuntime().LoadScript(kStreamLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local stream = CallFunction(\"Math.RandomSeed\", { seed = 123 })\n"
+            "    local r = CallFunction(\"Math.RandomNextFloat01\", { streamSeed = stream.streamSeed, streamCounter = stream.streamCounter })\n"
+            "    SetShared(\"streamOk\", r ~= nil and r.value ~= nil and r.value >= 0.0 and r.value <= 1.0 and r.streamCounter == 1)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-051 Lua RandomStream test script did not load");
+        const kb::scene::SceneObject caller = streamScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StreamCaller" });
+        streamScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kStreamLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = streamHost.Runtime().ExecuteLifecycle(streamScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-051 real Lua RandomStream chain must run without a type-mismatch diagnostic");
+        const std::optional<kb::script::ScriptValue> streamOk = streamHost.SharedState().Get("streamOk");
+        kb::tests::Require(streamOk.has_value() && streamOk->AsBool(),
+            "LIB-051 a real Lua script must be able to seed a RandomStream and draw a value in [0,1] with the counter advanced to 1");
+    }
+
     // LIB-052: Easing is exposed as an Int ordinal (no dedicated enum
     // ScriptValueType), with an out-of-range ordinal rejected as a real
     // domain error (same pattern as LIB-047's Asin/Acos) rather than an
