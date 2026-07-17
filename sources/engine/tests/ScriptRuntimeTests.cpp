@@ -10557,6 +10557,26 @@ void RunScriptSaveApiTest() {
     // Reading a missing file is an honest, non-crashing failure with status.
     const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
     kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound", "Save.Read of a missing file must report loaded=false and status FileNotFound");
+
+    // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
+    kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Settings.Write") != nullptr, "Settings.Write was not registered");
+
+    // The same key in each surface is an independent value — the buffers do
+    // not share state.
+    kb::tests::Require(call("Save.SetInt", { keyArg("shared"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 111 } } }).Output("set")->AsBool(), "Save.SetInt must set into the save buffer");
+    kb::tests::Require(call("Settings.SetInt", { keyArg("shared"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 222 } } }).Output("set")->AsBool(), "Settings.SetInt must set into the settings buffer");
+    kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111, "The save buffer must keep its own value for a key the settings buffer also uses");
+    kb::tests::Require(call("Settings.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 222, "The settings buffer must keep its own independent value");
+
+    // A Settings file and a Save file are separated on disk: reading one as the
+    // other reports WrongDomain, never loads the wrong category.
+    const std::filesystem::path settingsPath = TestRoot() / "ScriptSave" / "settings.kbsave";
+    kb::tests::Require(call("Settings.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
+    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
+    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
 }
 
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain

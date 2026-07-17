@@ -112,6 +112,12 @@ public:
     // reads/mutates and serializes to disk.
     [[nodiscard]] kb::save::SaveGame& AmbientSave() noexcept;
     [[nodiscard]] const kb::save::SaveGame& AmbientSave() const noexcept;
+    // LIB-163: a SEPARATE ambient buffer for user settings — distinct from
+    // AmbientSave so game progress and preferences never mix, and serialized
+    // under the UserSettings save domain (a settings file can never be loaded
+    // as a save game or vice versa).
+    [[nodiscard]] kb::save::SaveGame& AmbientSettings() noexcept;
+    [[nodiscard]] const kb::save::SaveGame& AmbientSettings() const noexcept;
     void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
