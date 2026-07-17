@@ -3,6 +3,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
+#include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
@@ -204,6 +205,17 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Assets",
             .ownerRuntime = "kb::assets::AssetManager",
             .Register = &kb::script::ScriptAssetsApi::Register,
+        },
+        // LIB-162: Save.SetInt/SetFloat/SetString/SetBool/GetInt/.../Has/
+        // Remove/Clear/Write/Read — the scalar key/value SaveGame surface
+        // over the scene's ambient save buffer (kb::save::SaveGame), with
+        // Write/Read serializing to disk through kb::save::SaveGameService
+        // (versioned schema, migration on load, atomic write). No Lua sugar
+        // table (mirrors Assets/Task/Timer — generic CallFunction).
+        LibraryModuleDesc{
+            .name = "Save",
+            .ownerRuntime = "kb::save::SaveGameService",
+            .Register = &kb::script::ScriptSaveApi::Register,
         },
     };
     return kCatalog;
