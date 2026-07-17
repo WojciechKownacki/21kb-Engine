@@ -29,9 +29,12 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -39,6 +42,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -252,6 +256,34 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     kb::tests::Require(scriptHost.Succeeded(), "LIB-127 real-Jolt test script host did not initialize");
 
+    // LIB-014/LIB-015: a real native "Log" sink, registered NOW rather than
+    // down near its first use - kb::script::ScriptFunctionRegistry locks
+    // against new registrations after this scriptHost's first lifecycle/
+    // event dispatch (LIB-021), which the faller sub-test below triggers via
+    // scene.Runtime().Update() a few lines down. Without a registered "Log"
+    // function, Lua's Log(...) is a documented no-op (PucLuaFunctionApi.cpp
+    // ::LuaLog), so this is the ONLY way to observe real Log(...) calls a
+    // shipped script makes - mirrors kb_cli run's own RegisterStdoutLog
+    // (CliRunCommand.cpp), just capturing to a vector instead of a stream.
+    std::vector<std::string> capturedLogs;
+    {
+        kb::script::ScriptFunctionDesc logDesc;
+        logDesc.signature.name = "Log";
+        logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+        logDesc.callback = [&capturedLogs](
+                                const kb::script::ScriptFunctionCallContext&,
+                                std::span<const kb::script::ScriptFunctionArgument> functionArguments) {
+            for (const kb::script::ScriptFunctionArgument& argument : functionArguments) {
+                if (argument.name == "message") {
+                    capturedLogs.push_back(argument.value.AsString());
+                    break;
+                }
+            }
+            return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+        };
+        kb::tests::Require(scriptHost.RegisterFunction(std::move(logDesc)), "LIB-014/015 real Log sink registration failed");
+    }
+
     struct FallerEventRecord {
         std::string name;
         kb::scene::SceneEntity other{};
@@ -310,30 +342,15 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(firstIndexOf("OnTriggerEnter") < firstIndexOf("OnTriggerExit"), "OnTriggerEnter must be dispatched before OnTriggerExit for the same trigger, in real physics time order");
     kb::tests::Require(firstIndexOf("OnTriggerExit") < firstIndexOf("OnCollisionEnter"), "The faller must exit the trigger before landing on the floor below it, in real physics time order");
 
-    // LIB-014: the Projectile template's REAL physics-driven proof - reusing
-    // this SAME scene and the SAME scriptHost already attached above (a
-    // second ScriptRuntimeHost on one Scene is untested territory, and
-    // reusing the existing one is also simply correct: it is still the
-    // same live scene). Placed at y=15, x/z far from the floor's +-5
-    // footprint and the trigger/faller rig near x=3, so its straight-line
-    // flight cannot touch anything but its own target. useGravity=false
-    // keeps the flight path exactly straight, so a real-Jolt hit is a
-    // deterministic distance/time away rather than a ballistic arc this
-    // test would need to compute.
-    const kb::scene::SceneObject projectile = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
-        .name = "Projectile",
-        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -8.0F, 15.0F, -8.0F } },
-    });
-    scene.Components().Rigidbodies().Set(projectile.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 0.5F, .useGravity = false });
-    scene.Components().Colliders().Set(projectile.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
-
-    constexpr kb::assets::AssetId kProjectileAsset{ 9602U };
-    scene.Components().Behaviours().Set(projectile.Entity(), kb::scene::BehaviourComponent{
-        .behaviourAssetId = kProjectileAsset.value,
-        .backend = kb::scene::BehaviourBackend::Lua,
-        .enabled = true,
-    });
-
+    // LIB-014/LIB-015: reuse this SAME scene and the SAME scriptHost already
+    // attached above (a second ScriptRuntimeHost on one Scene is untested
+    // territory, and reusing the existing one is also simply correct: it is
+    // still the same live scene). Target sits at y=15, x/z far from the
+    // floor's +-5 footprint and the trigger/faller rig near x=3, so a
+    // straight-line flight from (-8,15,-8) cannot touch anything but this
+    // target. useGravity=false on every projectile keeps the flight path
+    // exactly straight, so a real-Jolt hit is a deterministic distance/time
+    // away rather than a ballistic arc these tests would need to compute.
     const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Target",
         .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -2.0F, 15.0F, -8.0F } },
@@ -341,127 +358,103 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     scene.Components().Rigidbodies().Set(target.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
     scene.Components().Colliders().Set(target.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F } });
 
-    // LIB-014: the launch retries in Tick (not a one-shot in Ready) because
-    // a freshly-spawned entity's Rigidbody/Collider is not guaranteed to
-    // have a live Jolt body yet by the time Ready fires - the physics and
-    // script scene systems' relative execution order is not guaranteed
-    // (see LIB-127's own notes; LIB-128's job to formalize). Retrying every
-    // Tick until Physics.SetVelocity actually reports applied=true is both
-    // the robust fix and realistic template code a real project would want
-    // anyway, not merely a test workaround.
-    const std::string projectileLuaScript =
-        "local launched = false\n"
-        "function Tick(self, dt)\n"
-        "    if not launched then\n"
-        "        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)\n"
-        "        if applied then\n"
-        "            launched = true\n"
-        "        end\n"
-        "    end\n"
-        "end\n"
-        "function OnCollisionEnter(self, event)\n"
-        "    SetShared(\"projectileHit\", true)\n"
-        "    SetShared(\"projectileHitOther\", event.args.other)\n"
-        "    World.Destroy(self.entity)\n"
-        "end\n";
-    kb::tests::Require(scriptHost.LuaRuntime().LoadScript(kProjectileAsset, projectileLuaScript).succeeded, "LIB-014 projectile template Lua script did not load");
+    // LIB-014: ship the REAL Projectile.lua + Projectile.kbprefab template
+    // through the exact production path a game author gets it through -
+    // `kb_cli init-agent` / ScriptAgentProjectFiles::Write (LIB-013's own
+    // pattern) - not a hand-built entity or an ad-hoc test-only script. This
+    // closes the "no delivered prefab artifact" 2026-07-17 audit gap
+    // directly: the projectile entity below comes from loading and
+    // instantiating the REAL shipped .kbprefab file, exactly as
+    // World.InstantiatePrefab does in production (ScriptWorldApi.cpp).
+    const std::filesystem::path sampleProjectRoot = std::filesystem::temp_directory_path() / "21kb_engine_physics_scene_tests_lib014_015";
+    std::error_code sampleResetError;
+    std::filesystem::remove_all(sampleProjectRoot, sampleResetError);
+    std::filesystem::create_directories(sampleProjectRoot, sampleResetError);
+    kb::tests::Require(!sampleResetError, "LIB-014/015 sample project root could not be prepared");
+
+    const kb::script::ScriptApiCatalog sampleCatalog = kb::script::ScriptApiCatalog::Build(scriptHost);
+    const kb::script::ScriptAgentProjectFilesResult written = kb::script::ScriptAgentProjectFiles::Write(sampleProjectRoot, sampleCatalog);
+    const std::string writeFailureMessage = "LIB-014 ScriptAgentProjectFiles::Write failed: " + written.error;
+    kb::tests::Require(written.succeeded, writeFailureMessage.c_str());
+    kb::tests::Require(std::filesystem::exists(sampleProjectRoot / "Assets" / "Logic" / "Projectile.lua"), "LIB-014 shipped Projectile.lua missing on disk");
+    kb::tests::Require(std::filesystem::exists(sampleProjectRoot / "Assets" / "Prefabs" / "Projectile.kbprefab"), "LIB-014 shipped Projectile.kbprefab missing on disk");
+
+    kb::tests::Require(scene.Assets().MountProject(sampleProjectRoot), "LIB-014/015 sample project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 3U,
+        "LIB-014/015 sample project did not discover exactly PlayerController.lua + Projectile.lua + Projectile.kbprefab");
+
+    kb::assets::AssetHandle<kb::scene::ScenePrefab> projectilePrefabAsset = scene.Assets().LoadPrefab("/Game/Prefabs/Projectile.kbprefab");
+    kb::tests::Require(projectilePrefabAsset.IsLoaded(), "LIB-014 shipped Projectile.kbprefab could not be loaded as a real project asset");
+    const kb::scene::ScenePrefabInstance projectileInstance = scene.Prefabs().Instantiate(*projectilePrefabAsset.Get());
+    kb::tests::Require(!projectileInstance.Empty(), "LIB-014 shipped Projectile.kbprefab did not instantiate any entity");
+    const kb::scene::SceneObject projectile = projectileInstance.RootObject();
+    {
+        kb::scene::TransformComponent projectileTransform = scene.Transforms().Get(projectile.Entity());
+        projectileTransform.localPosition = kb::scene::Vec3{ -8.0F, 15.0F, -8.0F };
+        scene.Transforms().Set(projectile.Entity(), projectileTransform);
+    }
 
     for (int i = 0; i < 150; ++i) {
         [[maybe_unused]] const bool projectileProgressed = scene.Runtime().Update(1.0F / 60.0F);
     }
 
-    const std::optional<kb::script::ScriptValue> projectileHit = scriptHost.SharedState().Get("projectileHit");
-    kb::tests::Require(projectileHit.has_value() && projectileHit->AsBool(), "LIB-014 projectile template must receive a real OnCollisionEnter when it hits the target");
-    const std::optional<kb::script::ScriptValue> projectileHitOther = scriptHost.SharedState().Get("projectileHitOther");
-    kb::tests::Require(projectileHitOther.has_value() && static_cast<std::uint64_t>(projectileHitOther->AsInt()) == target.Entity().Id(),
-        "LIB-014 projectile template's OnCollisionEnter must report the real target entity it hit");
+    const auto containsLogFragment = [&capturedLogs](std::string_view fragment) {
+        return std::any_of(capturedLogs.begin(), capturedLogs.end(), [fragment](const std::string& message) {
+            return message.find(fragment) != std::string::npos;
+        });
+    };
+    kb::tests::Require(containsLogFragment("projectile hit"),
+        "LIB-014 shipped Projectile.lua must make a real Log(...) call when it hits the target - not a SetShared test marker");
     kb::tests::Require(!scene.Entities().IsAlive(projectile.Entity()), "LIB-014 projectile template must destroy itself via World.Destroy after a real collision");
 
     // LIB-015: sample scene end-to-end - input -> movement -> spawn -> real
-    // collision -> log, chaining LIB-014's Projectile template behind a
-    // real Input action instead of spawning it directly from C++. Reuses
-    // this SAME scene/scriptHost/Target (the "2 sequential Jolt scenes"
-    // constraint - see notes above) - the LIB-014 projectile that used to
-    // occupy (-8,15,-8) is already destroyed, so a freshly spawned one can
-    // safely reuse that same start point and fly at the same still-alive
-    // Target.
-    const std::filesystem::path sampleProjectRoot = std::filesystem::temp_directory_path() / "21kb_engine_physics_scene_tests_lib015";
-    std::error_code sampleResetError;
-    std::filesystem::remove_all(sampleProjectRoot, sampleResetError);
-    std::filesystem::create_directories(sampleProjectRoot / "Assets" / "Logic", sampleResetError);
-    kb::tests::Require(!sampleResetError, "LIB-015 sample scene project root could not be prepared");
+    // collision -> log. Reuses this SAME scene/scriptHost/Target/shipped
+    // Projectile prefab from LIB-014 immediately above (the "2 sequential
+    // Jolt scenes" constraint - see notes above) - the LIB-014 projectile
+    // that used to occupy (-8,15,-8) is already destroyed, so a freshly
+    // spawned one can safely reuse that same start point and fly at the
+    // same still-alive Target. Unlike the previous version of this test,
+    // there is no second, ad-hoc ProjectileSpawn.lua/.kbprefab pair here:
+    // the player below spawns the EXACT SAME shipped
+    // Assets/Prefabs/Projectile.kbprefab LIB-014 just proved, closing
+    // LIB-014's "not really a delivered template" gap and LIB-015's
+    // "duplicated ad-hoc content" gap together.
 
-    {
-        std::ofstream spawnScriptFile{ sampleProjectRoot / "Assets" / "Logic" / "ProjectileSpawn.lua", std::ios::binary | std::ios::trunc };
-        kb::tests::Require(spawnScriptFile.is_open(), "LIB-015 projectile spawn script could not be opened for writing");
-        spawnScriptFile << "local launched = false\n"
-                           "function Tick(self, dt)\n"
-                           "    if not launched then\n"
-                           "        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)\n"
-                           "        if applied then\n"
-                           "            launched = true\n"
-                           "        end\n"
-                           "    end\n"
-                           "end\n"
-                           "function OnCollisionEnter(self, event)\n"
-                           "    SetShared(\"sampleProjectileHit\", true)\n"
-                           "    SetShared(\"sampleProjectileHitOther\", event.args.other)\n"
-                           "    World.Destroy(self.entity)\n"
-                           "end\n";
-        kb::tests::Require(spawnScriptFile.good(), "LIB-015 projectile spawn script could not be written");
-    }
-
-    // AssetId is a deterministic hash of the virtual path (LIB-009) - a
-    // throwaway discovery scene resolves the SAME id the shared `scene`
-    // will later discover when it mounts this same project, so the
-    // prefab's baked BehaviourComponent can reference it up front.
-    kb::assets::AssetId sampleSpawnScriptAssetId{};
-    {
-        kb::scene::Scene discoveryScene;
-        kb::tests::Require(discoveryScene.Assets().MountProject(sampleProjectRoot), "LIB-015 sample scene project mount (discovery) failed");
-        kb::tests::Require(discoveryScene.Assets().Discover() == 1U, "LIB-015 sample scene did not discover exactly the projectile spawn script");
-        const kb::assets::AssetMetadata* metadata = discoveryScene.Assets().Manager().Registry().FindByPath("/Game/Logic/ProjectileSpawn.lua");
-        kb::tests::Require(metadata != nullptr, "LIB-015 sample scene could not resolve the projectile spawn script's asset id");
-        sampleSpawnScriptAssetId = metadata->id;
-    }
-
-    {
-        kb::scene::Scene prefabSource;
-        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ProjectileSpawn" });
-        prefabSource.Components().Rigidbodies().Set(prefabRoot.Entity(), kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 0.5F, .useGravity = false });
-        prefabSource.Components().Colliders().Set(prefabRoot.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F });
-        prefabSource.Components().Behaviours().Set(prefabRoot.Entity(), kb::scene::BehaviourComponent{
-            .behaviourAssetId = sampleSpawnScriptAssetId.value,
-            .backend = kb::scene::BehaviourBackend::Lua,
-            .enabled = true,
-        });
-        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "ProjectileSpawn");
-        std::error_code prefabDirError;
-        std::filesystem::create_directories(sampleProjectRoot / "Assets" / "Prefabs", prefabDirError);
-        kb::tests::Require(!prefabDirError, "LIB-015 sample scene prefab directory could not be created");
-        kb::tests::Require(prefabSource.Prefabs().Save(prefab, sampleProjectRoot / "Assets" / "Prefabs" / "ProjectileSpawn.kbprefab"), "LIB-015 projectile spawn prefab could not be saved");
-    }
-
-    kb::tests::Require(scene.Assets().MountProject(sampleProjectRoot), "LIB-015 sample scene project mount failed");
-    kb::tests::Require(scene.Assets().Discover() == 2U, "LIB-015 sample scene did not discover both the script and the prefab");
-
-    // --- Input: a real "Fire" action bound to a real key, evaluated
-    // through the real InputSubsystem - not a fabricated shortcut.
+    // --- Input: real "Move" (Axis2D, WASD composite) and "Fire" (Bool, key
+    // F) actions, evaluated through the real InputSubsystem - not a
+    // fabricated shortcut. "Move" mirrors the exact composite pattern
+    // ScriptRuntimeTests.cpp's PlayerController movement test already
+    // proves (D -> +x, A -> -x, W -> +y, S -> -y).
     using kb::input::InputActionAsset;
     using kb::input::InputActionValueType;
+    using kb::input::InputCompositeBinding;
+    using kb::input::InputCompositeSlot;
     using kb::input::InputKey;
     using kb::input::InputKeyMapping;
     using kb::input::InputMappingContextAsset;
+
+    auto moveAction = std::make_shared<InputActionAsset>();
+    moveAction->name = "Move";
+    moveAction->valueType = InputActionValueType::Axis2D;
 
     auto fireAction = std::make_shared<InputActionAsset>();
     fireAction->name = "Fire";
     fireAction->valueType = InputActionValueType::Bool;
 
-    auto fireContext = std::make_shared<InputMappingContextAsset>();
-    fireContext->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::F });
+    auto sampleContext = std::make_shared<InputMappingContextAsset>();
+    sampleContext->composites.push_back(InputCompositeBinding{
+        .actionId = 1U,
+        .slots = {
+            InputCompositeSlot{ .key = InputKey::D, .axis = 0U, .scale = 1.0F },
+            InputCompositeSlot{ .key = InputKey::A, .axis = 0U, .scale = -1.0F },
+            InputCompositeSlot{ .key = InputKey::W, .axis = 1U, .scale = 1.0F },
+            InputCompositeSlot{ .key = InputKey::S, .axis = 1U, .scale = -1.0F },
+        },
+    });
+    sampleContext->mappings.push_back(InputKeyMapping{ .actionId = 2U, .key = InputKey::F });
 
-    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> sampleActions{ { 1U, fireAction } };
-    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> sampleContexts{ { 60U, fireContext } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> sampleActions{ { 1U, moveAction }, { 2U, fireAction } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> sampleContexts{ { 60U, sampleContext } };
     scene.Input().SetResolvers(
         [&sampleActions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
             const auto found = sampleActions.find(id);
@@ -471,13 +464,12 @@ void RunPhysicsSceneSystemFallingBodyTest() {
             const auto found = sampleContexts.find(id);
             return found != sampleContexts.end() ? found->second : nullptr;
         });
-    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "LIB-015 sample scene could not add its Fire mapping context");
-    scene.Input().MutableDeviceState().SetKeyDown(InputKey::F, true);
-    scene.Input().Evaluate(1.0F / 60.0F);
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "LIB-015 sample scene could not add its Move/Fire mapping context");
 
-    // --- Player: reads the real Fire action and spawns the projectile
-    // prefab exactly once, at the SAME start point/target as LIB-014's
-    // direct-spawn proof above - the "spawn" step this sample adds on top.
+    // --- Player: moves every Tick from real "Move" input (Transform.
+    // Translate, same shape as the shipped PlayerController.lua template),
+    // then independently reads "Fire" and spawns the shipped Projectile
+    // prefab exactly once.
     constexpr kb::assets::AssetId kPlayerAsset{ 9603U };
     const kb::scene::SceneObject player = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" });
     scene.Components().Behaviours().Set(player.Entity(), kb::scene::BehaviourComponent{
@@ -487,15 +479,40 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
     const std::string playerLuaScript =
         "local fired = false\n"
+        "local speed = 2.0\n"
         "function Tick(self, dt)\n"
+        "    local move = Input.Vector2(\"Move\")\n"
+        "    Transform.Translate(self.entity, (move.x or 0.0) * speed * dt, (move.y or 0.0) * speed * dt, 0.0)\n"
         "    if not fired and Input.ActionBool(\"Fire\") then\n"
         "        fired = true\n"
-        "        local spawned = World.InstantiatePrefab({ prefab = \"/Game/Prefabs/ProjectileSpawn.kbprefab\", x = -8.0, y = 15.0, z = -8.0 })\n"
+        "        local spawned = World.InstantiatePrefab({ prefab = \"/Game/Prefabs/Projectile.kbprefab\", x = -8.0, y = 15.0, z = -8.0 })\n"
+        "        Log(\"player fired\")\n"
         "        SetShared(\"sampleSpawnedEntity\", spawned)\n"
         "    end\n"
         "end\n";
     kb::tests::Require(scriptHost.LuaRuntime().LoadScript(kPlayerAsset, playerLuaScript).succeeded, "LIB-015 sample scene player script did not load");
 
+    // Phase 1: real "Move" input only (D held, Fire NOT yet pressed) - the
+    // player must actually move before anything is spawned. This closes the
+    // 2026-07-17 audit's "brak ruchu gracza między wejściem a spawnem" gap
+    // with a measured, multi-frame Transform displacement between input and
+    // spawn, not just code that happens to run in the right order within a
+    // single Tick.
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::D, true);
+    scene.Input().Evaluate(1.0F / 60.0F);
+    const kb::scene::TransformComponent playerTransformBeforeMovement = scene.Transforms().Get(player.Entity());
+    constexpr int kMovementOnlyFrames = 10;
+    for (int i = 0; i < kMovementOnlyFrames; ++i) {
+        [[maybe_unused]] const bool movementProgressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    const kb::scene::TransformComponent playerTransformAfterMovement = scene.Transforms().Get(player.Entity());
+    kb::tests::Require(playerTransformAfterMovement.localPosition.x > playerTransformBeforeMovement.localPosition.x + 0.01F,
+        "LIB-015 sample scene player must actually move (real Transform.Translate driven by real Move input) before firing");
+
+    // Phase 2: press Fire and let the rest of the chain play out - spawn,
+    // flight, collision, real Log, destruction.
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::F, true);
+    scene.Input().Evaluate(1.0F / 60.0F);
     for (int i = 0; i < 150; ++i) {
         [[maybe_unused]] const bool sampleProgressed = scene.Runtime().Update(1.0F / 60.0F);
     }
@@ -509,15 +526,22 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     // hit here for an entity RETURN VALUE instead) - a small entity id
     // comes back tagged Int, not Entity, so it must be read via AsInt(),
     // not AsUInt64() (which only reads the Entity/Component/Hash/UInt32
-    // variant slot and would silently return the 0 fallback here).
+    // variant slot and would silently return the 0 fallback here). This
+    // SetShared use is a legitimate entity-handle relay (there is no other
+    // channel to observe a Lua return value from C++) - unlike the OLD
+    // "sampleProjectileHit"/"sampleProjectileHitOther" markers this test
+    // used to use for its OWN collision bookkeeping, which the real
+    // capturedLogs sink above now replaces.
     const kb::scene::SceneEntity spawnedProjectile{ static_cast<std::uint64_t>(spawnedEntityValue->AsInt()) };
     kb::tests::Require(spawnedProjectile.IsValid(), "LIB-015 sample scene World.InstantiatePrefab must return a real spawned entity");
+    kb::tests::Require(spawnedProjectile != projectile.Entity(), "LIB-015 sample scene must spawn a NEW projectile, not reuse LIB-014's already-destroyed one");
 
-    const std::optional<kb::script::ScriptValue> sampleHit = scriptHost.SharedState().Get("sampleProjectileHit");
-    kb::tests::Require(sampleHit.has_value() && sampleHit->AsBool(), "LIB-015 sample scene's spawned projectile must receive a real OnCollisionEnter when it hits the target");
-    const std::optional<kb::script::ScriptValue> sampleHitOther = scriptHost.SharedState().Get("sampleProjectileHitOther");
-    kb::tests::Require(sampleHitOther.has_value() && static_cast<std::uint64_t>(sampleHitOther->AsInt()) == target.Entity().Id(),
-        "LIB-015 sample scene's spawned projectile must report the real target entity it hit");
+    kb::tests::Require(containsLogFragment("player fired"), "LIB-015 sample scene player must make a real Log(...) call when it fires");
+    const std::size_t hitLogCount = static_cast<std::size_t>(std::count_if(capturedLogs.begin(), capturedLogs.end(), [](const std::string& message) {
+        return message.find("projectile hit") != std::string::npos;
+    }));
+    kb::tests::Require(hitLogCount >= 2U,
+        "LIB-015 sample scene's spawned projectile must ALSO make a real Log(...) call on collision, in addition to LIB-014's own direct-instantiate hit above - not a SetShared test marker");
     kb::tests::Require(!scene.Entities().IsAlive(spawnedProjectile), "LIB-015 sample scene's spawned projectile must destroy itself via World.Destroy after a real collision");
 
     // LIB-129: named collision layers + interaction matrix, against the SAME
