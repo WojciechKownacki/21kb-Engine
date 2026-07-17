@@ -597,6 +597,97 @@ void RunCommandApplicationContractTest() {
         "Engine21kbLibrary command application must dispatch Created then Tick to the spawned entity starting the next frame");
 }
 
+// LIB-006 audit gap closed 2026-07-17: RunCommandApplicationContractTest
+// above only proved immediacy for Tick (via a direct
+// kb::scene::SceneEntities::CreateObject shortcut, not the public
+// World.Spawn/World.Destroy front-end) and FixedTick (as a bare
+// CommandApplicationPointFor() constant check). This test drives the
+// prober behaviour through EVERY one of the ten ScriptLifecycleEvent
+// phases and, in each one, calls World.Spawn then World.Destroy through
+// ScriptExecutionContext::CallFunction — the exact ScriptFunctionRegistry
+// path Lua/VisualGraph/native code all share — proving the "Immediate"
+// contract holds behaviourally for the full phase matrix through the real
+// public front-end, not just as CommandApplicationPointFor's
+// always-Immediate constant.
+void RunCommandApplicationImmediateAcrossAllPhasesTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Command application all-phases test host setup failed");
+
+    constexpr kb::assets::AssetId kProberAsset{ 9121U };
+
+    const auto probe = [](std::string_view phaseName, kb::script::ScriptExecutionContext& context) {
+        const std::vector<kb::script::ScriptFunctionArgument> spawnArgs{
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Probe_" } + std::string{ phaseName } } },
+        };
+        const kb::script::ScriptFunctionCallResult spawnResult = context.CallFunction("World.Spawn", spawnArgs);
+        const std::string spawnFailMessage = "Engine21kbLibrary World.Spawn call through CallFunction failed for phase " + std::string{ phaseName };
+        kb::tests::Require(spawnResult.Succeeded(), spawnFailMessage.c_str());
+        const std::optional<kb::script::ScriptValue> spawnedValue = spawnResult.Output("entity");
+        const std::string spawnOutputMessage = "Engine21kbLibrary World.Spawn did not return an entity output for phase " + std::string{ phaseName };
+        kb::tests::Require(spawnedValue.has_value(), spawnOutputMessage.c_str());
+        const kb::scene::SceneEntity spawned{ spawnedValue->AsUInt64() };
+        const std::string spawnAliveMessage = "Engine21kbLibrary World.Spawn must make the entity live before the call returns, for phase " + std::string{ phaseName };
+        kb::tests::Require(context.GetScene().Entities().IsAlive(spawned), spawnAliveMessage.c_str());
+
+        const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ spawned.Id(), kb::script::ScriptValueType::Entity } },
+        };
+        const kb::script::ScriptFunctionCallResult destroyResult = context.CallFunction("World.Destroy", destroyArgs);
+        const std::string destroyFailMessage = "Engine21kbLibrary World.Destroy call through CallFunction failed for phase " + std::string{ phaseName };
+        kb::tests::Require(destroyResult.Succeeded() && destroyResult.Output("destroyed").has_value() && destroyResult.Output("destroyed")->AsBool(), destroyFailMessage.c_str());
+        const std::string destroyGoneMessage = "Engine21kbLibrary World.Destroy must make the entity gone before the call returns, for phase " + std::string{ phaseName };
+        kb::tests::Require(!context.GetScene().Entities().IsAlive(spawned), destroyGoneMessage.c_str());
+    };
+
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Created,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Created", context); }),
+        "All-phases command application test Created registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Activated,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Activated", context); }),
+        "All-phases command application test Activated registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Ready,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Ready", context); }),
+        "All-phases command application test Ready registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::FixedTick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("FixedTick", context); }),
+        "All-phases command application test FixedTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Tick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Tick", context); }),
+        "All-phases command application test Tick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::LateTick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("LateTick", context); }),
+        "All-phases command application test LateTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::BeforeRender,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("BeforeRender", context); }),
+        "All-phases command application test BeforeRender registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::AfterRender,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("AfterRender", context); }),
+        "All-phases command application test AfterRender registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Deactivated,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Deactivated", context); }),
+        "All-phases command application test Deactivated registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Destroyed,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Destroyed", context); }),
+        "All-phases command application test Destroyed registration failed");
+
+    const kb::scene::SceneObject proberObject = SpawnNativeBehaviourObject(scene, kProberAsset, "CommandApplicationProber");
+
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    // One frame with the default fixedDeltaSeconds (1/60) dispatches
+    // Created, Activated, Ready (all from the same SyncBehaviourLifecycles
+    // call, first time this behaviour is seen), then exactly one FixedTick,
+    // then Tick, LateTick, BeforeRender, AfterRender — eight of the ten
+    // phases in a single ExecuteFrame call.
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+
+    // Removing the BehaviourComponent and running one more frame makes
+    // SyncBehaviourLifecycles dispatch Deactivated then Destroyed for the
+    // departing record — the remaining two phases.
+    scene.Components().Behaviours().Remove(proberObject.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+}
+
 // LIB-007: BehaviourContext, FixedContext, FrameContext and RenderContext
 // must be reachable from a real dispatch for every LibraryLifecycleContextKind
 // (Behaviour, Fixed, Frame, Render), report the exact Self()/Phase() the
@@ -2894,6 +2985,7 @@ void RunEngineLibraryTests() {
     RunLifecycleContextClassificationTest();
     RunExecutionOrderContractTest();
     RunCommandApplicationContractTest();
+    RunCommandApplicationImmediateAcrossAllPhasesTest();
     RunLibraryContextTest();
     RunMultipleBehavioursRemovedSameFrameOrderTest();
     RunShutdownDispatchesDeactivateAndDestroyInOrderTest();
