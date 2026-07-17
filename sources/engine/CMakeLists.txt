@@ -29,6 +29,10 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/save/SaveGame.hpp
+    include/engine/save/SaveGameMigration.hpp
+    include/engine/save/SaveGameService.hpp
+    include/engine/save/SaveValue.hpp
     include/engine/ecs/ChunkSizeAutoTuner.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/CommandBuffer.hpp
@@ -225,6 +229,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
     include/engine/script/ScriptRuntimeHost.hpp
     include/engine/script/ScriptRuntimeSceneSystem.hpp
+    include/engine/script/ScriptSaveApi.hpp
     include/engine/script/ScriptSceneApi.hpp
     include/engine/script/ScriptSceneComponentApi.hpp
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
@@ -448,6 +453,11 @@ add_library(kb_engine STATIC
     src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp
     src/scene/SceneTransformIterationService.cpp
+    src/save/SaveGame.cpp
+    src/save/SaveGameBinaryIO.cpp
+    src/save/SaveGameCodec.cpp
+    src/save/SaveGameMigration.cpp
+    src/save/SaveGameService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
     src/scene/asset/io/SceneAssetComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetAudioComponentCodec.cpp
@@ -723,6 +733,7 @@ add_library(kb_engine STATIC
     src/script/ScriptRuntimeAssetPreparer.cpp
     src/script/ScriptRuntimeHost.cpp
     src/script/ScriptRuntimeSceneSystem.cpp
+    src/script/ScriptSaveApi.cpp
     src/script/ScriptSceneApi.cpp
     src/script/ScriptSceneComponentApi.cpp
     src/script/ScriptSceneVisualGraphBindings.cpp
@@ -826,6 +837,9 @@ add_library(kb_engine STATIC
     src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
+    src/private/save/SaveGameBinaryIO.hpp
+    src/private/save/SaveGameCodec.hpp
+    src/private/save/SaveGameFormat.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTaskService.hpp
     src/private/scene/SceneTimerService.hpp
@@ -1152,6 +1166,7 @@ if(BUILD_TESTING)
         tests/EcsComponentApiTests.cpp
         tests/EcsCommandBufferTests.cpp
         tests/AssetRuntimeTests.cpp
+        tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp

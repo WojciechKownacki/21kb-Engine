@@ -10492,6 +10492,73 @@ void RunScriptAssetsApiTest() {
         "Assets.LoadAsync's task must genuinely report Failed for an asset type with no registered loader, not fake Completed");
 }
 
+// LIB-162: the Save.* script surface over the scene's ambient SaveGame buffer.
+// Proves registration (Native + VisualGraph parity), every scalar type round-
+// tripping through the script boundary, the honest typed-miss / empty-key
+// contracts, Has/Remove/Clear, and a real Write-to-disk / Clear / Read-back
+// cycle driven entirely through script calls.
+void RunScriptSaveApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script save API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Save.SetInt") != nullptr, "Save.SetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.GetInt") != nullptr, "Save.GetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.Write") != nullptr, "Save.Write was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.Read") != nullptr, "Save.Read was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Save.SetInt") != nullptr,
+        "Script save API did not register VisualGraph runtime binding for Save.SetInt");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto call = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> args) {
+        return host.Functions().Call(name, args, context);
+    };
+    const auto keyArg = [](std::string key) {
+        return kb::script::ScriptFunctionArgument{ .name = "key", .value = kb::script::ScriptValue{ std::move(key) } };
+    };
+
+    // Set every scalar type.
+    kb::tests::Require(call("Save.SetBool", { keyArg("flag"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ true } } }).Output("set")->AsBool(), "Save.SetBool must set");
+    kb::tests::Require(call("Save.SetInt", { keyArg("score"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 99 } } }).Output("set")->AsBool(), "Save.SetInt must set");
+    kb::tests::Require(call("Save.SetFloat", { keyArg("vol"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.5F } } }).Output("set")->AsBool(), "Save.SetFloat must set");
+    kb::tests::Require(call("Save.SetString", { keyArg("name"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ std::string{ "Ada" } } } }).Output("set")->AsBool(), "Save.SetString must set");
+
+    // Read each back through the script boundary.
+    const kb::script::ScriptFunctionCallResult getBool = call("Save.GetBool", { keyArg("flag") });
+    kb::tests::Require(getBool.Output("found")->AsBool() && getBool.Output("value")->AsBool(), "Save.GetBool must round-trip the stored bool");
+    const kb::script::ScriptFunctionCallResult getInt = call("Save.GetInt", { keyArg("score") });
+    kb::tests::Require(getInt.Output("found")->AsBool() && getInt.Output("value")->AsInt() == 99, "Save.GetInt must round-trip the stored int");
+    const kb::script::ScriptFunctionCallResult getFloat = call("Save.GetFloat", { keyArg("vol") });
+    kb::tests::Require(getFloat.Output("found")->AsBool() && kb::tests::NearlyEqual(getFloat.Output("value")->AsFloat(), 0.5F), "Save.GetFloat must round-trip the stored float");
+    const kb::script::ScriptFunctionCallResult getString = call("Save.GetString", { keyArg("name") });
+    kb::tests::Require(getString.Output("found")->AsBool() && getString.Output("value")->AsString() == "Ada", "Save.GetString must round-trip the stored string");
+
+    // Typed miss (asking for the wrong type) and absent key are honest false.
+    kb::tests::Require(!call("Save.GetInt", { keyArg("name") }).Output("found")->AsBool(), "Save.GetInt on a String key must honestly miss");
+    kb::tests::Require(!call("Save.GetInt", { keyArg("absent") }).Output("found")->AsBool(), "Save.GetInt on an absent key must honestly miss");
+    // Empty key is a malformed request.
+    kb::tests::Require(!call("Save.SetInt", { keyArg(""), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 1 } } }).Succeeded(), "Save.SetInt must reject an empty key");
+
+    // Has / Remove.
+    kb::tests::Require(call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report a present key");
+    kb::tests::Require(call("Save.Remove", { keyArg("score") }).Output("removed")->AsBool(), "Save.Remove must remove a present key");
+    kb::tests::Require(!call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report false after removal");
+
+    // Write to disk, clear the buffer, read it back — all through script.
+    const std::filesystem::path savePath = TestRoot() / "ScriptSave" / "slot.kbsave";
+    ResetTestRoot();
+    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
+    kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
+    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    kb::tests::Require(read.Output("loaded")->AsBool() && read.Output("status")->AsString() == "Ok", "Save.Read must load the previously written save");
+    kb::tests::Require(call("Save.GetString", { keyArg("name") }).Output("value")->AsString() == "Ada", "Save.Read must restore the entries the script wrote earlier");
+
+    // Reading a missing file is an honest, non-crashing failure with status.
+    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
+    kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound", "Save.Read of a missing file must report loaded=false and status FileNotFound");
+}
+
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
 // std::function objects — no scene needed, these are pure closures.
 void RunEngineLibraryTaskFactoriesTest() {
@@ -12248,6 +12315,7 @@ void RunScriptRuntimeTests() {
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
     RunScriptAssetsApiTest();
+    RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();
