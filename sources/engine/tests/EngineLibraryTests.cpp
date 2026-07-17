@@ -2230,6 +2230,120 @@ void RunDeprecationTest() {
     kb::tests::Require(unmigratable[0].symbol == "Function.World.Legacy", "Engine21kbLibrary Visual Graph migration must leave the node untouched when no replacement is declared");
 }
 
+// LIB-025 real wiring (the 2026-07-17 audit's gap): EngineLibraryModule::
+// InstallModules must apply a LibraryFunctionDesc's declared deprecation to
+// the real, now-registered ScriptFunctionRegistry entry, and calling that
+// function - through EVERY frontend that matters, Native directly AND a
+// REAL Lua script via the generic CallFunction global - must actually
+// surface FormatDeprecationWarning's exact text, not just compute it and
+// drop it. Uses a throwaway module/function: nothing in the real
+// production catalog is deprecated today, and marking a live one just to
+// exercise this would be a lie the warning would tell every real caller.
+void RunFunctionDeprecationWiringTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary deprecation wiring test host setup failed");
+
+    // A real native "Log" sink, registered before ANY dispatch (LIB-021
+    // locks the registry after the first one) - the same mechanism kb_cli
+    // run's RegisterStdoutLog uses, capturing to a vector instead of a
+    // stream. ScriptExecutionContext::CallFunction forwards a deprecation
+    // warning through exactly this channel (see its own comment), so
+    // capturing it here is the real, observable proof a Lua caller
+    // actually sees the warning, not just the native ScriptFunctionCallResult.
+    std::vector<std::string> capturedLogs;
+    {
+        kb::script::ScriptFunctionDesc logDesc;
+        logDesc.signature.name = "Log";
+        logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+        logDesc.callback = [&capturedLogs](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
+            for (const kb::script::ScriptFunctionArgument& argument : arguments) {
+                if (argument.name == "message") {
+                    capturedLogs.push_back(argument.value.AsString());
+                    break;
+                }
+            }
+            return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+        };
+        kb::tests::Require(host.RegisterFunction(std::move(logDesc)), "Engine21kbLibrary deprecation wiring test Log sink registration failed");
+    }
+
+    const auto noopCallback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+    };
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.OldFunction" }, .callback = noopCallback }),
+        "Engine21kbLibrary deprecation wiring test function registration failed");
+    // Registered up front too (not after the Lua dispatch below), since
+    // LIB-021 locks the registry against new Register() calls after the
+    // first lifecycle dispatch.
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.NewFunction" }, .callback = noopCallback }),
+        "Engine21kbLibrary deprecation wiring test replacement function registration failed");
+
+    const kb::library::LibraryDeprecation deprecation{
+        .message = "test-only deprecation",
+        .replacementCanonicalName = "Tests.NewFunction",
+        .sinceVersion = kb::library::LibraryApiVersion{ 9U, 9U, 9U },
+    };
+    const std::string expectedWarning = kb::library::FormatDeprecationWarning("Tests.OldFunction", deprecation);
+
+    const std::vector<kb::library::LibraryModuleDesc> modules{
+        kb::library::LibraryModuleDesc{
+            .name = "Tests",
+            .Register = [](kb::script::ScriptRuntimeHost&) { return true; }, // both functions already registered above
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Tests.OldFunction", .deprecation = deprecation } },
+        },
+    };
+    const kb::library::EngineLibraryModuleResult installResult = kb::library::EngineLibraryModule::InstallModules(host, modules);
+    kb::tests::Require(installResult.succeeded, "Engine21kbLibrary deprecation wiring test install must succeed");
+
+    // --- Native call: the raw ScriptFunctionCallResult already carries it.
+    const kb::script::ScriptFunctionCallResult nativeResult =
+        host.Functions().Call("Tests.OldFunction", {}, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(nativeResult.Succeeded(), "Engine21kbLibrary deprecation wiring test native call must still succeed - a deprecation warning is not an error");
+    kb::tests::Require(nativeResult.warnings.size() == 1U && nativeResult.warnings.front() == expectedWarning,
+        "Engine21kbLibrary deprecation wiring test native call must carry the exact deprecation warning");
+
+    // --- Negative control: a non-deprecated function must never warn.
+    const kb::script::ScriptFunctionCallResult freshResult =
+        host.Functions().Call("Tests.NewFunction", {}, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(freshResult.warnings.empty(), "Engine21kbLibrary deprecation wiring test: a non-deprecated function must never warn");
+
+    // --- Real Lua call through the generic CallFunction global, proving
+    // the warning reaches a REAL running Lua script, not just the native
+    // struct a C++ caller happens to inspect.
+    constexpr kb::assets::AssetId kDeprecationTestAsset{ 700601U };
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kDeprecationTestAsset,
+        "function Tick(self, dt)\n"
+        "    CallFunction(\"Tests.OldFunction\", {})\n"
+        "end\n");
+    kb::tests::Require(loadedLua.succeeded, "Engine21kbLibrary deprecation wiring test Lua script did not load");
+
+    const kb::scene::SceneObject deprecationObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DeprecationCaller" });
+    scene.Components().Behaviours().Set(deprecationObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kDeprecationTestAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tickResult = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tickResult.diagnostics.empty(), "Engine21kbLibrary deprecation wiring test Tick produced script diagnostics");
+    kb::tests::Require(!capturedLogs.empty() && capturedLogs.front() == expectedWarning,
+        "Engine21kbLibrary deprecation wiring test: a real Lua CallFunction call must surface the exact deprecation warning through Log");
+
+    // --- Catalog integrity: a LibraryFunctionDesc declaring deprecation for
+    // a function that does not actually exist must fail installation, not
+    // silently no-op (mirrors LIB-020's own "don't silently ignore a
+    // catalog/registry mismatch" standard).
+    const std::vector<kb::library::LibraryModuleDesc> danglingDeprecation{
+        kb::library::LibraryModuleDesc{
+            .name = "Tests",
+            .Register = [](kb::script::ScriptRuntimeHost&) { return true; },
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Tests.DoesNotExist", .deprecation = deprecation } },
+        },
+    };
+    const kb::library::EngineLibraryModuleResult danglingResult = kb::library::EngineLibraryModule::InstallModules(host, danglingDeprecation);
+    kb::tests::Require(!danglingResult.succeeded, "Engine21kbLibrary deprecation wiring test must reject a deprecation declared for a nonexistent function");
+}
+
 // LIB-026: a function's id must depend only on its canonical name, not on
 // where it lands in ScriptFunctionRegistry::Functions() or which
 // ScriptRuntimeHost instance registered it.
@@ -3170,6 +3284,30 @@ void RunNoPointersCrossScriptBoundaryTest() {
         "kb::script::ScriptValue::Storage must never hold a raw pointer or reference type");
     static_assert(std::is_same_v<std::variant_alternative_t<0, Storage>, std::monostate>, "ScriptValue::Storage alternative 0 must stay std::monostate (the Void representation)");
     kb::tests::Require(true, "kb::script::ScriptValue::Storage shape is verified at compile time above");
+
+    // LIB-032, second half: the 2026-07-17 audit flagged that
+    // LibraryContextBase::Raw() still returned a call-scoped C++ reference
+    // and the context types were copyable, leaving a reference smuggleable
+    // past the callback boundary that constructed it. Re-reading
+    // EngineLibraryContext.hpp fresh shows that gap was ALREADY closed by
+    // LIB-007's own fix earlier this session (Raw() removed entirely, copy/
+    // move deleted) - the audit note was stale, not a real remaining gap -
+    // but nothing regression-locked that fact until now. A SFINAE-based
+    // static_assert that Raw() specifically does not exist was tried for
+    // LIB-007 and abandoned (MSVC's requires-expression is not
+    // SFINAE-friendly enough for a genuinely nonexistent member in this
+    // non-template context - see EngineLibraryContext.hpp's own history);
+    // the copy/move deletion below is the real, provable guard: even a
+    // hypothetical future reference-returning accessor could not be
+    // smuggled out by copying the context that produced it.
+    static_assert(!std::is_copy_constructible_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-copy-constructible");
+    static_assert(!std::is_copy_assignable_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-copy-assignable");
+    static_assert(!std::is_move_constructible_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-move-constructible");
+    static_assert(!std::is_move_assignable_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-move-assignable");
+    static_assert(!std::is_copy_constructible_v<kb::library::BehaviourContext>, "kb::library::BehaviourContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::FixedContext>, "kb::library::FixedContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::FrameContext>, "kb::library::FrameContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::RenderContext>, "kb::library::RenderContext must inherit LibraryContextBase's deleted copy");
 }
 
 // LIB-035: every LibraryErrorCode must format to a stable, distinct name,
@@ -3466,6 +3604,7 @@ void RunEngineLibraryTests() {
     RunApiManifestTest();
     RunApiCompatibilityComparisonTest();
     RunDeprecationTest();
+    RunFunctionDeprecationWiringTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunEngineLibraryEventSchemaRegistryTest();

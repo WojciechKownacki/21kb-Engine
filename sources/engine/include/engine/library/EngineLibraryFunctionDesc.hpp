@@ -1,8 +1,10 @@
 #pragma once
 
+#include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -65,6 +67,17 @@ struct LibraryFunctionDesc {
     bool canFail = false;
     std::vector<kb::script::ScriptApiPin> inputs;
     std::vector<kb::script::ScriptApiPin> outputs;
+    // LIB-025: std::nullopt for every function today — nothing in this
+    // engine is actually being phased out yet, and marking a live function
+    // deprecated just to exercise this field would be a lie the warning
+    // message would tell every caller. When set, EngineLibraryModule::
+    // InstallModules applies it to the real ScriptFunctionRegistry entry
+    // via ScriptFunctionRegistry::MarkDeprecated right after the owning
+    // module registers, so Call() (Native, Lua, and Visual Graph alike —
+    // the one choke point every frontend shares) surfaces
+    // FormatDeprecationWarning(canonicalName, *deprecation) in
+    // ScriptFunctionCallResult::warnings on every real invocation.
+    std::optional<LibraryDeprecation> deprecation;
 };
 
 // Cross-checks a LibraryFunctionDesc's recorded canonicalName/inputs/outputs
