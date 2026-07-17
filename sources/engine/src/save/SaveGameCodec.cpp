@@ -73,10 +73,11 @@ void WriteScalar(std::vector<std::uint8_t>& out, const SaveValue& value) {
 
 } // namespace
 
-std::vector<std::uint8_t> SaveGameCodec::Encode(const SaveGame& save, std::uint32_t schemaVersion) {
+std::vector<std::uint8_t> SaveGameCodec::Encode(const SaveGame& save, std::uint32_t schemaVersion, SaveDomain domain) {
     std::vector<std::uint8_t> bytes;
     SaveGameBinaryIO::WriteRaw(bytes, SaveGameFormat::kMagic.data(), SaveGameFormat::kMagic.size());
     SaveGameBinaryIO::WriteUInt32(bytes, schemaVersion);
+    SaveGameBinaryIO::WriteUInt8(bytes, static_cast<std::uint8_t>(domain));
     SaveGameBinaryIO::WriteUInt32(bytes, static_cast<std::uint32_t>(save.Entries().size()));
 
     // Deterministic key order -> identical saves produce identical bytes.
@@ -97,7 +98,7 @@ std::vector<std::uint8_t> SaveGameCodec::Encode(const SaveGame& save, std::uint3
     return bytes;
 }
 
-SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, std::uint32_t targetVersion, std::span<const SaveGameMigration> migrations) {
+SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, std::uint32_t targetVersion, SaveDomain expectedDomain, std::span<const SaveGameMigration> migrations) {
     SaveGameLoadResult result;
     SaveGameBinaryIO::ByteReader reader{ bytes };
 
@@ -114,6 +115,19 @@ SaveGameLoadResult SaveGameCodec::Decode(std::span<const std::uint8_t> bytes, st
     }
     if (schemaVersion == 0 || schemaVersion > targetVersion) {
         result.status = SaveGameLoadStatus::UnsupportedVersion;
+        return result;
+    }
+
+    // LIB-163: the domain tag separates the persistence categories — a file
+    // written for another domain is a valid file but the wrong KIND of data,
+    // rejected here rather than loaded into the wrong store.
+    std::uint8_t domainTag = 0;
+    if (!reader.ReadUInt8(domainTag)) {
+        result.status = SaveGameLoadStatus::Corrupt;
+        return result;
+    }
+    if (domainTag != static_cast<std::uint8_t>(expectedDomain)) {
+        result.status = SaveGameLoadStatus::WrongDomain;
         return result;
     }
 

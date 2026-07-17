@@ -430,6 +430,10 @@ public:
     // scene, mirroring how the rest of the Assets/World/Prefab script APIs
     // reach scene-owned state.
     kb::save::SaveGame ambientSave;
+    // LIB-163: the scene's ambient user-settings buffer — a store separate
+    // from ambientSave (game progress), serialized under the UserSettings
+    // domain so the two persistence categories cannot cross-contaminate.
+    kb::save::SaveGame ambientSettings;
     // LIB-129: the last layers configuration applied via
     // PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers - kept here
     // (backend-independent) so name -> bit resolution (PhysicsBackend::

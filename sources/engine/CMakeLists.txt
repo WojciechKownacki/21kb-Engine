@@ -29,6 +29,7 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/save/SaveDomain.hpp
     include/engine/save/SaveGame.hpp
     include/engine/save/SaveGameMigration.hpp
     include/engine/save/SaveGameService.hpp
