@@ -413,6 +413,30 @@ void RunNoiseAndRandomTest() {
 
     kb::tests::Require(kb::math::Noise1D(0.37F, 42U) == kb::math::Noise2D(0.37F, 0.0F, 42U), "Noise1D must exactly match Noise2D/Noise3D with the unused axes pinned to 0 (same underlying implementation, not a second one)");
     kb::tests::Require(kb::math::Noise2D(0.37F, 0.61F, 42U) == kb::math::Noise3D(0.37F, 0.61F, 0.0F, 42U), "Noise2D must exactly match Noise3D with the unused axis pinned to 0");
+
+    // LIB-054 (2026-07-17 audit gap): a NaN or infinite coordinate must not
+    // reach the `static_cast<int32_t>(Floor(coord))` lattice conversion,
+    // which is undefined behaviour for a non-finite (or out-of-int32-range)
+    // float. Noise3D screens them out and returns the neutral 0.0F. Every
+    // non-finite input on every axis is exercised.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    kb::tests::Require(kb::math::Noise3D(nan, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 (not UB) for a NaN x coordinate");
+    kb::tests::Require(kb::math::Noise3D(0.5F, nan, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a NaN y coordinate");
+    kb::tests::Require(kb::math::Noise3D(0.5F, 0.5F, nan, 42U) == 0.0F, "Noise3D must return 0 for a NaN z coordinate");
+    kb::tests::Require(kb::math::Noise3D(inf, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a +infinity coordinate");
+    kb::tests::Require(kb::math::Noise3D(-inf, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a -infinity coordinate");
+    kb::tests::Require(kb::math::Noise1D(nan, 42U) == 0.0F, "Noise1D must inherit Noise3D's non-finite guard (returns 0 for NaN)");
+    kb::tests::Require(kb::math::Noise2D(inf, inf, 42U) == 0.0F, "Noise2D must inherit Noise3D's non-finite guard (returns 0 for infinity)");
+
+    // A finite coordinate larger in magnitude than INT32_MAX must produce a
+    // defined result via the lattice clamp, not UB from an out-of-range
+    // float->int32 cast. The value only needs to be finite and in range —
+    // the point is that it does not crash or trap.
+    const float huge = 5.0e9F; // > INT32_MAX (~2.147e9)
+    const float hugeNoise = kb::math::Noise3D(huge, -huge, huge, 42U);
+    kb::tests::Require(std::isfinite(hugeNoise) && hugeNoise > -2.0F && hugeNoise < 2.0F,
+        "Noise3D must return a defined, in-amplitude value for a finite coordinate beyond int32 range, not trigger UB");
 }
 
 // LIB-051: RandomStream's whole point is that its state IS a plain value
