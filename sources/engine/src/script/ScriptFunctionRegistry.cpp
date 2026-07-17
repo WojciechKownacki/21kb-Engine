@@ -81,6 +81,17 @@ const ScriptFunctionSignature* ScriptFunctionRegistry::FindSignature(std::string
     return iter == functions_.end() ? nullptr : &iter->signature;
 }
 
+bool ScriptFunctionRegistry::MarkDeprecated(std::string_view name, std::string message) noexcept {
+    const auto iter = std::ranges::find_if(functions_, [name](const ScriptFunctionDesc& function) {
+        return function.signature.name == name;
+    });
+    if (iter == functions_.end()) {
+        return false;
+    }
+    iter->signature.deprecationMessage = std::move(message);
+    return true;
+}
+
 const std::vector<ScriptFunctionDesc>& ScriptFunctionRegistry::Functions() const noexcept {
     return functions_;
 }
@@ -139,6 +150,16 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
             .errors = { "script function '" + std::string{ name } + "' threw a non-standard exception" },
         };
     }
+    // LIB-025: the call was actually attempted (reached the callback),
+    // regardless of whether it - or the output validation below - ends up
+    // succeeding, so the caller learns it used a deprecated function either
+    // way. A call rejected before this point (unknown name, bad input
+    // type, reentrancy limit) never reaches here, so it never warns - there
+    // was no real invocation to warn about.
+    if (!iter->signature.deprecationMessage.empty()) {
+        result.warnings.push_back(iter->signature.deprecationMessage);
+    }
+
     if (!result.Succeeded()) {
         return result;
     }

@@ -3,6 +3,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
 
+#include <array>
 #include <utility>
 
 namespace kb::script {
@@ -121,14 +122,34 @@ ScriptFunctionCallResult ScriptExecutionContext::CallFunction(std::string_view n
             .errors = {"script function registry is not available"},
         };
     }
-    return functions_->Call(name, arguments, ScriptFunctionCallContext{
-                                      .scene = &scene_,
-                                      .caller = self_,
-                                      .callerAsset = assetId_,
-                                      .callerBackend = backend_,
-                                      .lifecycle = lifecycle_,
-                                      .deltaSeconds = deltaSeconds_,
-                                  });
+    const ScriptFunctionCallContext context{
+        .scene = &scene_,
+        .caller = self_,
+        .callerAsset = assetId_,
+        .callerBackend = backend_,
+        .lifecycle = lifecycle_,
+        .deltaSeconds = deltaSeconds_,
+    };
+    ScriptFunctionCallResult result = functions_->Call(name, arguments, context);
+    // LIB-025: this one method is the real, universal choke point every
+    // calling path shares — the generic Lua CallFunction global, EVERY
+    // individual Lua sugar wrapper (LuaWorldExists, LuaAudioPlay, ... —
+    // they all delegate to this same context method rather than calling
+    // ScriptFunctionRegistry::Call directly), Native backend calls, and
+    // Visual Graph's generated CallNative code. Surfacing a deprecation
+    // warning here, instead of in every individual wrapper, is what
+    // actually makes it reach Lua and C++ callers alike without a
+    // sprawling, easy-to-miss edit in dozens of places. Routed through the
+    // SAME "Log" channel every script backend already observes — a no-op
+    // when nothing has registered "Log" (headless hosts), exactly like
+    // Log(...) itself (PucLuaFunctionApi.cpp's LuaLog). Calls functions_->
+    // Call directly (not this->CallFunction) so a hypothetical deprecated
+    // "Log" could never recurse into warning about itself.
+    for (const std::string& warning : result.warnings) {
+        static_cast<void>(functions_->Call(
+            "Log", std::array{ ScriptFunctionArgument{ .name = "message", .value = ScriptValue{ warning } } }, context));
+    }
+    return result;
 }
 
 void ScriptExecutionContext::Emit(std::string eventName) {
