@@ -721,6 +721,64 @@ void RunMultipleBehavioursRemovedSameFrameOrderTest() {
         "Engine21kbLibrary must dispatch Deactivated for multiple behaviours removed in the same frame in TickGroup order, not unordered_map iteration order");
 }
 
+// LIB-005 audit gap closed 2026-07-17: the regression above only proves
+// Deactivated order through SyncBehaviourLifecycles' per-frame removal path.
+// ExecuteShutdown (ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours) is a
+// SEPARATE production call site — SceneSystemContext::OnDestroy (world/host
+// teardown) and kb-cli's `run` command (CliRunCommand.cpp) both call it
+// directly — and nothing previously proved its Deactivated+Destroyed
+// dispatch also follows the guaranteed execution order rather than
+// lifecycleRecords_'s unordered_map iteration order. Three behaviours are
+// tracked (via one prior ExecuteFrame, matching real startup) in Camera,
+// Input, Gameplay creation order — the same scrambled order as the test
+// above — then torn down in one ExecuteShutdown call, without ever removing
+// their BehaviourComponent first (a real "world is going away" shutdown,
+// not a per-behaviour removal).
+void RunShutdownDispatchesDeactivateAndDestroyInOrderTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kCameraAsset{ 9311U };
+    constexpr kb::assets::AssetId kInputAsset{ 9312U };
+    constexpr kb::assets::AssetId kGameplayAsset{ 9313U };
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    std::vector<std::string> order;
+    const auto registerPair = [&](kb::assets::AssetId assetId, const char* label) {
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Deactivated, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Deactivated");
+            }),
+            "Shutdown order test Deactivated registration failed");
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Destroyed, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Destroyed");
+            }),
+            "Shutdown order test Destroyed registration failed");
+    };
+    registerPair(kCameraAsset, "Camera");
+    registerPair(kInputAsset, "Input");
+    registerPair(kGameplayAsset, "Gameplay");
+
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Shutdown order test backend registration failed");
+
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kCameraAsset, "Camera", kb::scene::BehaviourTickGroup::Camera));
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kInputAsset, "Input", kb::scene::BehaviourTickGroup::Input));
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kGameplayAsset, "Gameplay", kb::scene::BehaviourTickGroup::Gameplay));
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(order.empty(), "Shutdown order test fixture must not deactivate/destroy anything before shutdown");
+
+    static_cast<void>(system.ExecuteShutdown(scene, 1.0F / 60.0F));
+
+    const std::vector<std::string> expected{ "Input.Deactivated", "Input.Destroyed", "Gameplay.Deactivated", "Gameplay.Destroyed", "Camera.Deactivated", "Camera.Destroyed" };
+    kb::tests::Require(
+        order == expected,
+        "Engine21kbLibrary ExecuteShutdown must dispatch Deactivated then Destroyed per behaviour, visiting behaviours in TickGroup order, not unordered_map iteration order");
+}
+
 // LIB-008: EntityHandle must report alive only for an entity that is both
 // structurally valid and actually alive in the exact Scene it was built
 // from — not merely "some entity with this id exists somewhere" — and must
@@ -2838,6 +2896,7 @@ void RunEngineLibraryTests() {
     RunCommandApplicationContractTest();
     RunLibraryContextTest();
     RunMultipleBehavioursRemovedSameFrameOrderTest();
+    RunShutdownDispatchesDeactivateAndDestroyInOrderTest();
     RunEntityHandleTest();
     RunEntityHandleScriptComponentAccessTest();
     RunEntityHandleMeshRendererComponentAccessTest();
