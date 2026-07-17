@@ -367,6 +367,30 @@ void RunModuleValidationDuplicateFunctionTest() {
     kb::tests::Require(!result.succeeded, "Engine21kbLibrary module validation must reject a function audited by two modules at once");
 }
 
+// LIB-003: a LibraryFunctionDesc living in the wrong module's functions list
+// (e.g. copy-pasted, or attributed after a rename) is a real catalog
+// corruption the duplicate-function check above cannot catch on its own —
+// there is nothing duplicated, just a mismatched owner.
+void RunModuleValidationFunctionPrefixMismatchTest() {
+    const std::vector<kb::library::LibraryModuleDesc> mismatched{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Physics.Raycast" } },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult mismatchedResult = kb::library::ValidateModuleCatalog(mismatched);
+    kb::tests::Require(!mismatchedResult.succeeded, "Engine21kbLibrary module validation must reject a function name not prefixed with its declaring module's name");
+
+    const std::vector<kb::library::LibraryModuleDesc> matched{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "World.Exists" } },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult matchedResult = kb::library::ValidateModuleCatalog(matched);
+    kb::tests::Require(matchedResult.succeeded, "Engine21kbLibrary module validation must accept a function name correctly prefixed with its declaring module's name");
+}
+
 // A catalog that fails validation must register nothing at all — not even
 // the modules that would otherwise have registered successfully.
 void RunModuleInstallFailsFastOnInvalidCatalogTest() {
@@ -2805,6 +2829,7 @@ void RunEngineLibraryTests() {
     RunModuleValidationUnknownDependencyTest();
     RunModuleValidationCycleTest();
     RunModuleValidationDuplicateFunctionTest();
+    RunModuleValidationFunctionPrefixMismatchTest();
     RunModuleInstallFailsFastOnInvalidCatalogTest();
     RunTypeDescTest();
     RunPropertyDescTest();
