@@ -39,7 +39,18 @@ using EntityId = kb::ecs::Entity::IdType;
 // hash of the asset's logical path, stable across sessions and builds),
 // nothing in the current LIB-xxx plan owns closing this gap for
 // ComponentId yet — treat it as an open, unassigned gap, not a promise any
-// shipped task has fulfilled.
+// shipped task has fulfilled. Real consumer: kb::library::Query's
+// QueryFilterOptions (EngineLibraryQuery.hpp) resolves this exact type per
+// filtered component type, entirely within one process/frame, so the
+// process-only stability caveat above never applies to that use.
+//
+// Not to be confused with kb::library::LibraryComponentId (LIB-076,
+// EngineLibraryComponentDesc.hpp) — a DIFFERENT, deliberately narrower type:
+// a content-stable FNV-1a hash of a component's name, defined only for the
+// closed set of components EngineLibraryComponentRegistry::Catalog() lists.
+// This ComponentId is the general, always-available-but-process-only
+// identifier every registered component gets; LibraryComponentId is the
+// cross-session-stable identifier only the cataloged subset gets.
 using ComponentId = kb::ecs::ComponentId;
 
 } // namespace kb::library
