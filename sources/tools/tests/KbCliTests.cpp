@@ -282,38 +282,24 @@ void RunPlayerControllerTemplateTests() {
     Require(tickCount == static_cast<std::size_t>(kFrames), "player controller template did not tick exactly once per simulated frame");
 }
 
+// LIB-014: Projectile.lua (and its Assets/Prefabs/Projectile.kbprefab
+// companion) is no longer duplicated as a hardcoded string in this test
+// fixture — same fix as LIB-013's PlayerController, same reasoning: it is
+// written by the REAL production path a game author actually gets it
+// through, `kb_cli init-agent` (ScriptAgentProjectFiles::Write). This closes
+// the "no shipped template, only a test fixture" gap for the script itself;
+// the shipped prefab artifact is asserted below and proven under real Jolt
+// physics in PhysicsSceneSystemTests.cpp's LIB-014 section.
 void PrepareProjectileTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
-    WriteTextFile(root / "Assets" / "Logic" / "Projectile.lua", R"(
-local launched = false
 
-function Ready(self, dt)
-    Log("projectile ready")
-end
-
--- The launch retries every Tick (not a one-shot in Ready) because a
--- freshly-spawned entity's Rigidbody/Collider is not guaranteed to have a
--- live physics body yet by the time Ready fires - the physics and script
--- scene systems' relative execution order is not guaranteed (see LIB-127's
--- notes; LIB-128 is where that gets formalized). Retrying until
--- Physics.SetVelocity actually reports applied=true is the robust,
--- production-shape way to write this, not merely a test workaround.
-function Tick(self, dt)
-    if not launched then
-        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)
-        if applied then
-            launched = true
-            Emit("ProjectileLaunched", {})
-        end
-    end
-end
-
-function OnCollisionEnter(self, event)
-    Emit("ProjectileHit", {})
-    World.Destroy(self.entity)
-end
-)");
+    const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
+    Require(initAgent.exitCode == 0, "projectile template project init-agent failed");
+    Require(std::filesystem::exists(root / "Assets" / "Logic" / "Projectile.lua"),
+        "kb_cli init-agent did not write the real Projectile.lua template");
+    Require(std::filesystem::exists(root / "Assets" / "Prefabs" / "Projectile.kbprefab"),
+        "kb_cli init-agent did not write the real Projectile.kbprefab artifact");
 
     kb::scene::Scene scene;
     static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" }));
@@ -368,7 +354,7 @@ void RunProjectileTemplateTests() {
     });
     Require(run.exitCode == 0, "projectile template run reported diagnostics");
     Require(Contains(run.output, "[log] projectile ready"), "projectile template did not run Ready");
-    Require(!Contains(run.output, "ProjectileLaunched"),
+    Require(!Contains(run.output, "[log] projectile launched"),
         "projectile template must NOT report a launch when kb_cli run has no physics backend loaded - Physics.SetVelocity must keep honestly failing, never fabricate success");
     Require(Contains(run.output, "0 diagnostics"), "projectile template run was not clean even though Physics.SetVelocity fails every frame");
 }
@@ -388,6 +374,10 @@ void RunApiCommandTests() {
     Require(std::filesystem::exists(TestRoot() / ".luarc.json"), "init-agent did not write .luarc.json");
     Require(std::filesystem::exists(TestRoot() / "Assets" / "Logic" / "PlayerController.lua"),
         "init-agent did not write the PlayerController.lua template (LIB-013)");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Logic" / "Projectile.lua"),
+        "init-agent did not write the Projectile.lua template (LIB-014)");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Prefabs" / "Projectile.kbprefab"),
+        "init-agent did not write the Projectile.kbprefab artifact (LIB-014)");
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
     // calls ScriptAgentProjectFiles::Write() a second time whenever the
