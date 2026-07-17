@@ -787,13 +787,19 @@ static_assert(!std::is_move_constructible_v<kb::library::RenderContext>, "Engine
 // false in a non-template context, so a compile-time "must not compile"
 // check for a fully-removed member isn't expressible portably here).
 
-// LIB-005 regression: SyncBehaviourLifecycles must dispatch Deactivated for
-// multiple behaviours removed in the same frame in the guaranteed execution
-// order (TickGroup ascending, then executionOrder, then entity id) — never
-// in lifecycleRecords_'s unordered_map iteration order. The three
-// behaviours are created in Camera, Input, Gameplay order, which differs
-// from the expected TickGroup-sorted dispatch order (Input, Gameplay,
-// Camera), so only a real sort before dispatch can produce that sequence.
+// LIB-005/LIB-012 regression: SyncBehaviourLifecycles must dispatch BOTH
+// Deactivated and Destroyed for multiple behaviours removed (via
+// BehaviourComponent removal, not entity destruction or world shutdown) in
+// the same frame, in the guaranteed execution order (TickGroup ascending,
+// then executionOrder, then entity id) — never in lifecycleRecords_'s
+// unordered_map iteration order. The three behaviours are created in
+// Camera, Input, Gameplay order, which differs from the expected
+// TickGroup-sorted dispatch order (Input, Gameplay, Camera), so only a real
+// sort before dispatch can produce that sequence. Destroyed coverage closed
+// 2026-07-17 (audit gap: this test previously registered/checked Deactivated
+// only — RunShutdownDispatchesDeactivateAndDestroyInOrderTest, LIB-005,
+// proves the SAME order for the SEPARATE ExecuteShutdown/world-teardown
+// path, not this one).
 void RunMultipleBehavioursRemovedSameFrameOrderTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -805,21 +811,21 @@ void RunMultipleBehavioursRemovedSameFrameOrderTest() {
     kb::script::NativeScriptBackend* native = nativeBackend.get();
 
     std::vector<std::string> order;
-    kb::tests::Require(
-        native->RegisterLifecycle(kCameraAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Camera");
-        }),
-        "Multi-removal order test Camera registration failed");
-    kb::tests::Require(
-        native->RegisterLifecycle(kInputAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Input");
-        }),
-        "Multi-removal order test Input registration failed");
-    kb::tests::Require(
-        native->RegisterLifecycle(kGameplayAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Gameplay");
-        }),
-        "Multi-removal order test Gameplay registration failed");
+    const auto registerPair = [&](kb::assets::AssetId assetId, const char* label) {
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Deactivated, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Deactivated");
+            }),
+            "Multi-removal order test Deactivated registration failed");
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Destroyed, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Destroyed");
+            }),
+            "Multi-removal order test Destroyed registration failed");
+    };
+    registerPair(kCameraAsset, "Camera");
+    registerPair(kInputAsset, "Input");
+    registerPair(kGameplayAsset, "Gameplay");
 
     kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Multi-removal order test backend registration failed");
 
@@ -829,16 +835,17 @@ void RunMultipleBehavioursRemovedSameFrameOrderTest() {
 
     kb::script::ScriptRuntimeSceneSystem system{ runtime };
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
-    kb::tests::Require(order.empty(), "Multi-removal order test fixture must not deactivate anything before removal");
+    kb::tests::Require(order.empty(), "Multi-removal order test fixture must not deactivate/destroy anything before removal");
 
     scene.Components().Behaviours().Remove(cameraObject.Entity());
     scene.Components().Behaviours().Remove(inputObject.Entity());
     scene.Components().Behaviours().Remove(gameplayObject.Entity());
 
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    const std::vector<std::string> expected{ "Input.Deactivated", "Input.Destroyed", "Gameplay.Deactivated", "Gameplay.Destroyed", "Camera.Deactivated", "Camera.Destroyed" };
     kb::tests::Require(
-        order.size() == 3U && order[0] == "Input" && order[1] == "Gameplay" && order[2] == "Camera",
-        "Engine21kbLibrary must dispatch Deactivated for multiple behaviours removed in the same frame in TickGroup order, not unordered_map iteration order");
+        order == expected,
+        "Engine21kbLibrary must dispatch Deactivated then Destroyed per behaviour for multiple behaviours removed in the same frame, visiting behaviours in TickGroup order, not unordered_map iteration order");
 }
 
 // LIB-005 audit gap closed 2026-07-17: the regression above only proves
@@ -2279,8 +2286,9 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(spawned.IsValid(), "Engine21kbLibrary CommandBatch::Spawn must return a valid (though not-yet-real) BatchEntity");
 
     batch.Add<kb::scene::CameraComponent>(spawned, kb::scene::CameraComponent{ .verticalFovDegrees = 45.0F });
-    batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F });
-    batch.Destroy(toDestroyHandle);
+    kb::tests::Require(batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F }),
+        "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) for a live handle");
+    kb::tests::Require(batch.Destroy(toDestroyHandle), "Engine21kbLibrary CommandBatch::Destroy must succeed (queue the command) for a live handle");
     kb::tests::Require(batch.AddTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::AddTag must succeed for a live handle");
 
     // Nothing must have applied yet — the whole point of a command batch.
@@ -2288,9 +2296,10 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must not apply anything before Flush()");
     kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::AddTag must not apply anything before Flush()");
 
-    const kb::ecs::CommandBufferPlaybackResult result = batch.Flush();
-    kb::tests::Require(result.CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
-    const kb::ecs::Entity resolvedSpawned = result.Resolve(spawned.Raw());
+    const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+    kb::tests::Require(result.has_value(), "Engine21kbLibrary CommandBatch::Flush must succeed when every tracked target is still alive");
+    kb::tests::Require(result->CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
+    const kb::ecs::Entity resolvedSpawned = result->Resolve(spawned.Raw());
     kb::tests::Require(resolvedSpawned.IsValid() && scene.Entities().IsAlive(resolvedSpawned), "Engine21kbLibrary CommandBatch::Flush must resolve Spawn's BatchEntity to a real, live entity");
     const kb::scene::CameraComponent* spawnedCamera = scene.Components().Cameras().TryGet(resolvedSpawned);
     kb::tests::Require(spawnedCamera != nullptr && kb::tests::NearlyEqual(spawnedCamera->verticalFovDegrees, 45.0F), "Engine21kbLibrary CommandBatch::Add<T> on a BatchEntity must apply to the resolved real entity after Flush()");
@@ -2306,7 +2315,8 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::RemoveTag removing the only tag must leave no TagsComponent, matching World.SetTag's existing convention");
 
     kb::library::CommandBatch removeComponentBatch{ scene };
-    removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle);
+    kb::tests::Require(removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle),
+        "Engine21kbLibrary CommandBatch::Remove<T> must succeed (queue the command) for a live handle");
     static_cast<void>(removeComponentBatch.Flush());
     kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Remove<T> must apply after Flush()");
 
@@ -2322,7 +2332,7 @@ void RunLibraryCommandBatchTest() {
     int recordedInsideLoop = 0;
     kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
                             [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
-                                recordDuringQueryBatch.Destroy(entity);
+                                static_cast<void>(recordDuringQueryBatch.Destroy(entity));
                                 ++recordedInsideLoop;
                             }),
         "Engine21kbLibrary CommandBatch test's Query<T>::ForEach must actually iterate");
@@ -2340,7 +2350,7 @@ void RunLibraryCommandBatchTest() {
     bool flushInsideQueryThrew = false;
     static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
         [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
-            flushInsideQueryBatch.Destroy(entity);
+            static_cast<void>(flushInsideQueryBatch.Destroy(entity));
             try {
                 static_cast<void>(flushInsideQueryBatch.Flush());
             } catch (const std::logic_error&) {
@@ -2348,6 +2358,69 @@ void RunLibraryCommandBatchTest() {
             }
         }));
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+}
+
+// LIB-012 audit gap closed 2026-07-17: RunLibraryCommandBatchTest above only
+// proves a command is cancelled when its EntityHandle target is ALREADY
+// dead at record time (deadHandleBatch.AddTag). Before this fix, a command
+// whose target went stale AFTER being recorded but BEFORE Flush() — the
+// literal "anulowanie pending commands" (same-frame destroy-races-a-pending-
+// command) scenario this task asks for — was not cancelled at all: it
+// reached kb::ecs::CommandBuffer::Playback, which threw std::out_of_range
+// (World::ValidateEntityHandle) uncaught. This proves the real fix: Flush()
+// re-checks every tracked target and returns std::nullopt (nothing
+// applied), for Destroy/Add<T>/Remove<T>/AddTag alike, without throwing.
+void RunLibraryCommandBatchCancelsStaleTargetOnFlushTest() {
+    kb::scene::Scene scene;
+
+    // Destroy() recorded against a target killed by an unrelated, direct
+    // path before Flush().
+    {
+        const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleDestroyTarget" });
+        const kb::library::EntityHandle handle{ target.Entity(), scene.Id() };
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Destroy(handle), "Engine21kbLibrary CommandBatch::Destroy must succeed (queue the command) while the target is still alive");
+        scene.Entities().Destroy(target.Entity());
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Destroy's target died before Flush()");
+    }
+
+    // Add<T>() recorded against a target killed the same way — and a SECOND,
+    // otherwise-valid command in the SAME batch must also NOT apply: Flush()
+    // is all-or-nothing, so one stale target cancels the whole batch rather
+    // than silently partially applying it.
+    {
+        const kb::scene::SceneObject staleTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleAddTarget" });
+        const kb::library::EntityHandle staleHandle{ staleTarget.Entity(), scene.Id() };
+        const kb::scene::SceneObject otherTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleAddOtherTarget" });
+        const kb::library::EntityHandle otherHandle{ otherTarget.Entity(), scene.Id() };
+
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Add<kb::scene::CameraComponent>(staleHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 10.0F }),
+            "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) while the target is still alive");
+        kb::tests::Require(batch.Add<kb::scene::CameraComponent>(otherHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 20.0F }),
+            "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) for the second, unrelated target");
+        scene.Entities().Destroy(staleTarget.Entity());
+
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Add<T>'s target died before Flush()");
+        kb::tests::Require(!scene.Components().Cameras().Has(otherTarget.Entity()),
+            "Engine21kbLibrary CommandBatch::Flush cancelling for one stale target must not leave the OTHER, still-valid command in this batch partially applied");
+    }
+
+    // Remove<T>() and AddTag/RemoveTag are covered by the same tracked-
+    // target mechanism as Destroy/Add<T> — a single representative check
+    // (Remove<T>) confirms the fix is not Destroy/Add-specific.
+    {
+        const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleRemoveTarget" });
+        scene.Components().Cameras().Set(target.Entity(), kb::scene::CameraComponent{});
+        const kb::library::EntityHandle handle{ target.Entity(), scene.Id() };
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Remove<kb::scene::CameraComponent>(handle), "Engine21kbLibrary CommandBatch::Remove<T> must succeed (queue the command) while the target is still alive");
+        scene.Entities().Destroy(target.Entity());
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Remove<T>'s target died before Flush()");
+    }
 }
 
 // LIB-081: kb::library::ComponentChangeTracker<Component> — proves the
@@ -2632,7 +2705,7 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
         static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
             [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
                 if (entity.Entity() == toDestroy.Entity()) {
-                    batch.Destroy(entity);
+                    static_cast<void>(batch.Destroy(entity));
                 }
             }));
         static_cast<void>(batch.Flush());
@@ -2655,16 +2728,16 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
         const kb::scene::SceneObject addThenDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AddThenDestroy" });
         const kb::library::EntityHandle addThenDestroyHandle{ addThenDestroy.Entity(), scene.Id() };
         kb::library::CommandBatch addThenDestroyBatch{ scene };
-        addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F });
-        addThenDestroyBatch.Destroy(addThenDestroyHandle);
+        static_cast<void>(addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F }));
+        static_cast<void>(addThenDestroyBatch.Destroy(addThenDestroyHandle));
         static_cast<void>(addThenDestroyBatch.Flush());
         kb::tests::Require(!scene.Entities().IsAlive(addThenDestroy.Entity()), "Engine21kbLibrary CommandBatch: Add<T> recorded BEFORE Destroy on the same entity must still result in the entity being destroyed after Flush()");
 
         const kb::scene::SceneObject destroyThenAdd = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyThenAdd" });
         const kb::library::EntityHandle destroyThenAddHandle{ destroyThenAdd.Entity(), scene.Id() };
         kb::library::CommandBatch destroyThenAddBatch{ scene };
-        destroyThenAddBatch.Destroy(destroyThenAddHandle);
-        destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F });
+        static_cast<void>(destroyThenAddBatch.Destroy(destroyThenAddHandle));
+        static_cast<void>(destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F }));
         static_cast<void>(destroyThenAddBatch.Flush());
         kb::tests::Require(!scene.Entities().IsAlive(destroyThenAdd.Entity()), "Engine21kbLibrary CommandBatch: Destroy recorded BEFORE Add<T> on the same entity must still result in the entity being destroyed after Flush() — recording order must not change the outcome");
     }
@@ -3043,6 +3116,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
+    RunLibraryCommandBatchCancelsStaleTargetOnFlushTest();
     RunComponentChangeTrackerTest();
     RunTransformChangeTrackerTest();
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
