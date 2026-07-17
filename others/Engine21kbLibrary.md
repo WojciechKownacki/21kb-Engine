@@ -637,6 +637,10 @@ Visual Graph.
 
   AUDYT 2026-07-17: NIEZALICZONE — brak wspólnej macierzy/testu round-trip obejmującego każdą publiczną wartość oraz wszystkie referencje assetów; istnieją tylko rozproszone testy poszczególnych formatów.
 
+- [ ] LIB-263 Dać `kb::library::AssetRef<T>`/`SceneRef` i typowanym aliasom (`PrefabRef`/`GraphRef`/`AudioClipRef`/`InputActionRef`/`InputMapRef`/`WeakAssetRef`, LIB-009/157/158) realnego konsumenta w natywnym kodzie silnika, nie tylko w teście.
+
+  ZNALEZIONE PODCZAS WERYFIKACJI LIB-009 (2026-07-17): cała rodzina aliasów istnieje wyłącznie w `EngineLibraryAssetRef.hpp` + `RunAssetRefTest` — zero użyć poza testem w całym `sources/` (sprawdzone grepem: `ScriptAssetsApi.cpp` świadomie operuje na gołym `kb::assets::AssetId`, nie na `AssetHandle<T>`/`AssetRef<T>`; moduły natywne z własnymi asset id — `MeshRenderer.SetMesh`/`SetMaterial`, `MaterialInstance`, `Particles` — używają surowych `uint64` id, nie typowanych referencji). To jest zgodne z dokumentacją typu (`AssetRef<T>` jawnie "native C++ only", jak `kb::library::Query<T>`), ale w przeciwieństwie do `Query<T>` (którego realny konsument, `ClassifyLifecycleContext`'owa bramka, jest wewnątrz samego `kb::library` i wykonuje się na żywym ECS) `AssetRef<T>` nie ma DZIŚ żadnego wewnętrznego ani zewnętrznego wywołania — czysto deklaratywny kontrakt czekający na przyszły natywny kod gry. Nie jest to od razu naprawiane w tej turze (brak realnego natywnego konsumenta do podpięcia bez wymyślania sztucznego), zadanie jawnie zapisane do domknięcia: albo (a) przepiąć jeden z istniejących modułów z surowym asset id (np. `MeshRenderer`/`MaterialInstance`) na `AssetRef<T>`, albo (b) jeśli to architektonicznie niepożądane, jawnie udokumentować i zamknąć jako "poprawnie zaprojektowany, czeka na przyszły kod gry" zamiast pozostawiać otwartą, niezaadresowaną notatkę.
+
 ## 14. Animacja, skinned mesh i cinematic
 
 - [ ] LIB-166 Zdefiniować `Animator`, `AnimationClip`, `AnimatorController`, parameters i layer mask.
