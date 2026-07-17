@@ -3,6 +3,7 @@
 namespace kb::tests {
 
 void RunAssetRuntimeTests();
+void RunSaveGameTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneSystemTests();

@@ -1,5 +1,9 @@
 #include "engine/scene/Scene.hpp"
 
+#include "engine/save/SaveGame.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
+
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -98,6 +102,14 @@ SceneParticleSystems Scene::Particles() noexcept {
 
 SceneParticleSystemQueries Scene::Particles() const noexcept {
     return SceneParticleSystemQueries{ *this };
+}
+
+kb::save::SaveGame& Scene::AmbientSave() noexcept {
+    return SceneAccess::State(*this).ambientSave;
+}
+
+const kb::save::SaveGame& Scene::AmbientSave() const noexcept {
+    return SceneAccess::State(*this).ambientSave;
 }
 
 } // namespace kb::scene
