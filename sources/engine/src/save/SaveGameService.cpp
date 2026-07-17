@@ -31,20 +31,20 @@ namespace {
 
 } // namespace
 
-bool SaveGameService::Save(const std::filesystem::path& path, const SaveGame& save) {
+bool SaveGameService::Save(const std::filesystem::path& path, const SaveGame& save, SaveDomain domain) {
     if (!WithinFormatLimits(save)) {
         return false;
     }
-    const std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion);
+    const std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain);
     return SaveGameBinaryIO::WriteBytesAtomically(path, bytes);
 }
 
-SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path) {
+SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, SaveDomain expectedDomain) {
     std::vector<std::uint8_t> bytes;
     if (!SaveGameBinaryIO::ReadAllBytes(path, bytes)) {
         return SaveGameLoadResult{ .status = SaveGameLoadStatus::FileNotFound, .save = {} };
     }
-    return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, BuiltInSaveGameMigrations());
+    return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations());
 }
 
 } // namespace kb::save
