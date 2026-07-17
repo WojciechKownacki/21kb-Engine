@@ -755,6 +755,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryDeprecation.cpp
     src/library/EngineLibraryEntityHandle.cpp
     src/library/EngineLibraryEventSchema.cpp
+    src/library/EngineLibraryFunctionDesc.cpp
     src/library/EngineLibraryFunctionId.cpp
     src/library/EngineLibraryError.cpp
     src/library/EngineLibraryLifecycle.cpp
