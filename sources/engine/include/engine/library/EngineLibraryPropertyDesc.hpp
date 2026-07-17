@@ -4,17 +4,19 @@
 
 namespace kb::library {
 
-// Describes one safely-exposed field of a component (or, once an asset
-// property system exists, an asset): the canonical dotted path a script
-// reads/writes it by (e.g. "localPosition.x"), its ScriptValueType, and
-// whether scripts may write it. kb::library reuses
-// kb::script::ScriptApiCatalogProperty exactly rather than re-deriving
-// component reflection: every property kb::script::ScriptApiCatalog::Build()
-// already reports for a component (see ScriptSceneComponentApi.cpp, the
-// only place component properties are registered today) is already a
-// LibraryPropertyDesc. Asset properties have no script-facing accessor to
-// describe yet (LIB-155+ Assets module); this alias is what that future
-// module will reuse rather than a second property shape.
+// Describes one safely-exposed field of a component or an asset: the
+// canonical name a script reads it by (a dotted path like
+// "localPosition.x" for components, a flat name like "virtualPath" for
+// assets), its ScriptValueType, and whether scripts may write it.
+// kb::library reuses kb::script::ScriptApiCatalogProperty exactly rather
+// than re-deriving reflection for either source: every property
+// kb::script::ScriptApiCatalog::Build() already reports for a component
+// (see ScriptSceneComponentApi.cpp, the only place component properties
+// are registered) is already a LibraryPropertyDesc, and so is every entry
+// kb::script::ScriptAssetsApi::AssetProperties() reports for an asset
+// (virtualPath, type — both read-only; see Assets.GetProperty,
+// ScriptAssetsApi.cpp, LIB-019) after the same trivial construction the
+// component path gets for free from the catalog.
 using LibraryPropertyDesc = kb::script::ScriptApiCatalogProperty;
 
 } // namespace kb::library

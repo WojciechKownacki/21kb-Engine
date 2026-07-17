@@ -368,6 +368,64 @@ ScriptFunctionCallResult Validate(const ScriptFunctionCallContext& context, std:
     };
 }
 
+// LIB-019: the ENTIRE safe asset-property surface — deliberately just the
+// two AssetMetadata fields that are both meaningful to a script and safe to
+// expose (never AssetMetadata::physicalPath, for the exact LIB-156 reason
+// ResolveReference above never resolves one: an OS path is not something a
+// sandboxed script should ever see). Both read-only: renaming or retyping
+// an asset from script is not a safe operation this task adds. Kept as a
+// small, hand-maintained array (mirroring ScriptSceneComponentApi's own
+// per-component property tables) rather than reflected, since AssetMetadata
+// has exactly two fields worth this treatment today.
+constexpr ScriptSceneComponentPropertyDesc kAssetProperties[] = {
+    { "virtualPath", ScriptValueType::String, false },
+    { "type", ScriptValueType::String, false },
+};
+
+// LIB-019: the second half of "LibraryPropertyDesc dla bezpiecznych pól
+// komponentów I assetów" — ScriptSceneComponentApi::GetProperty already
+// covers components; this is the asset equivalent, same generic
+// name-string shape, same ResolveReference (LIB-155/156) used by every
+// other Assets.* function. An unresolvable reference is a legitimate
+// found=false (the asset just doesn't exist); an unrecognized property
+// name is an honest error (a caller typo), mirroring Assets.FindTyped's
+// unknown-kind handling and ScriptSceneComponentApi::GetProperty's own
+// error-string return for an unknown component property.
+ScriptFunctionCallResult GetProperty(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const ScriptValue* propertyValue = FindArg(arguments, "property");
+    const std::string propertyName = propertyValue == nullptr ? std::string{} : propertyValue->AsString();
+    bool knownProperty = false;
+    for (const ScriptSceneComponentPropertyDesc& candidate : kAssetProperties) {
+        if (candidate.name == propertyName) {
+            knownProperty = true;
+            break;
+        }
+    }
+    if (!knownProperty) {
+        return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { "unknown asset property: " + propertyName } };
+    }
+
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    const kb::assets::AssetMetadata* metadata = id.IsValid() ? context.scene->Assets().Manager().Registry().Find(id) : nullptr;
+    if (metadata == nullptr) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = { ScriptFunctionArgument{ "found", ScriptValue{ false } }, ScriptFunctionArgument{ "value", ScriptValue{ std::string{} } } },
+            .errors = {},
+        };
+    }
+
+    const std::string value = propertyName == "virtualPath" ? metadata->virtualPath.generic_string() : metadata->type;
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "found", ScriptValue{ true } }, ScriptFunctionArgument{ "value", ScriptValue{ value } } },
+        .errors = {},
+    };
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs, std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -429,7 +487,15 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
               { ScriptFunctionPin{ "compatible", ScriptValueType::Bool, true }, ScriptFunctionPin{ "issueCount", ScriptValueType::Int, true }, ScriptFunctionPin{ "diagnostics", ScriptValueType::String, true } }, &Validate)
         && ok;
+    ok = RegisterFunction(host, "Assets.GetProperty",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::String, true } }, &GetProperty)
+        && ok;
     return ok;
+}
+
+std::span<const ScriptSceneComponentPropertyDesc> ScriptAssetsApi::AssetProperties() noexcept {
+    return kAssetProperties;
 }
 
 } // namespace kb::script
