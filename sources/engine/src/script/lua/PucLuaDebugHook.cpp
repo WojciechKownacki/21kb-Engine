@@ -97,7 +97,14 @@ namespace {
     return snapshot;
 }
 
-void Hook(lua_State* state, lua_Debug* debug) {
+// The actual hook logic, split out from Hook() below so the latter can
+// wrap it in a try/catch. Builds std::string/std::vector snapshots
+// (CapturePause, ChunkFromDebug) that can in principle throw (std::
+// bad_alloc); the intentional luaL_error call at the end (a Lua-level
+// breakpoint stop, not a C++ exception) is unaffected by that catch —
+// luaL_error is a longjmp, which unwinds straight past a try block without
+// ever entering its catch handlers.
+void HookImpl(lua_State* state, lua_Debug* debug) {
     auto* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
     if (runtime == nullptr || debug == nullptr) {
         return;
@@ -133,6 +140,26 @@ void Hook(lua_State* state, lua_Debug* debug) {
             label = "lua step break";
         }
         luaL_error(state, "%s at %s:%d", label, chunk.c_str(), debug->currentline);
+    }
+}
+
+// LIB-010: lua_sethook registers this directly with Lua's bytecode
+// interpreter (LUA_MASKLINE — fired on every executed line while a debug
+// session is active), entirely outside ScriptFunctionRegistry::Call and
+// PucLuaSafeCall's lua_CFunction-shaped trampoline (a hook is
+// void(lua_State*, lua_Debug*), not int(lua_State*), so it cannot be
+// registered through lua_pushcclosure/PucLuaSafeCall). A C++ exception
+// escaping here would need to unwind through the interpreter's own C
+// dispatch loop — the identical undefined-behaviour risk PucLuaSafeCall
+// closes for every registered function, just reached through Lua's other
+// C callback mechanism instead of lua_pcall.
+void Hook(lua_State* state, lua_Debug* debug) {
+    try {
+        HookImpl(state, debug);
+    } catch (const std::exception& exception) {
+        luaL_error(state, "%s", exception.what());
+    } catch (...) {
+        luaL_error(state, "kb::script: unknown C++ exception crossed the Lua debug hook");
     }
 }
 
