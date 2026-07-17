@@ -128,18 +128,43 @@ int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    const CatalogBuildResult built = BuildCatalog(project);
+    CatalogBuildResult built = BuildCatalog(project);
     if (!built.succeeded) {
         io.err << "error: " << built.error << '\n';
         return 1;
     }
 
-    const kb::script::ScriptAgentProjectFilesResult written =
+    kb::script::ScriptAgentProjectFilesResult written =
         kb::script::ScriptAgentProjectFiles::Write(*project, built.catalog);
     if (!written.succeeded) {
         io.err << "error: " << written.error << '\n';
         return 1;
     }
+
+    // LIB-013: Write() can itself create a new project asset (currently
+    // only Assets/Logic/PlayerController.lua, write-once, on a project's
+    // FIRST init-agent run) - the catalog just used to write kb.lua/
+    // script_api.md/script_api.json above was necessarily built BEFORE
+    // that file existed, so it does not yet reflect it as a discoverable
+    // project entry. Rebuilding and writing once more (now that the file
+    // is on disk; this second Write() call will report it as already
+    // existing, not written) keeps every generated file - and the manifest
+    // hash computed below - consistent with the project's actual final
+    // state, instead of silently drifting on the very next, otherwise-
+    // unchanged run.
+    if (written.wroteProjectAsset) {
+        built = BuildCatalog(project);
+        if (!built.succeeded) {
+            io.err << "error: " << built.error << '\n';
+            return 1;
+        }
+        written = kb::script::ScriptAgentProjectFiles::Write(*project, built.catalog);
+        if (!written.succeeded) {
+            io.err << "error: " << written.error << '\n';
+            return 1;
+        }
+    }
+
     for (const std::filesystem::path& path : written.writtenFiles) {
         io.out << "wrote " << path.generic_string() << '\n';
     }
