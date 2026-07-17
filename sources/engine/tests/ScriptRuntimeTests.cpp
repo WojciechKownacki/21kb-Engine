@@ -10,6 +10,8 @@
 #include "engine/input/InputPollingSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/library/EngineLibraryAsyncResult.hpp"
+#include "engine/library/EngineLibraryEntityHandle.hpp"
+#include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
@@ -11738,6 +11740,45 @@ void RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest() {
     kb::tests::Require(!scene.Timers().Cancel(timer), "Explicit Cancel on a timer already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
     kb::tests::Require(!scene.Tasks().Cancel(task), "Explicit Cancel on a task already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
     kb::tests::Require(!bus.Unsubscribe(subscription), "Explicit Unsubscribe on a subscription already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+
+    // LIB-040 "błąd po unloadzie sceny" (error after scene unload): the
+    // fire-and-forget cancellation handles above correctly stay idempotent
+    // bool — a redundant Cancel/Unsubscribe is not an error, it is the
+    // documented contract. The REQUIRED error for USING a scene resource
+    // after unload is surfaced where it belongs: the resource's owning
+    // entity. Every one of those timers/tasks/subscriptions was owned by
+    // `owner`, which Scene.Unload genuinely destroyed — so an EntityHandle
+    // to it, run through the real LIB-035 error path (CheckError, the
+    // non-throwing counterpart of Validate), reports a concrete
+    // ScriptError, not a silent false. This is the diagnostic the
+    // 2026-07-17 audit found missing: proof that a scene resource used
+    // after unload is a reported error, not just a no-op.
+    const kb::library::EntityHandle ownerHandle{ owner, scene.Id() };
+    const std::optional<kb::library::ScriptError> afterUnloadError = ownerHandle.CheckError(scene, "Timer.Cancel");
+    kb::tests::Require(afterUnloadError.has_value(), "Using a scene resource's owning entity after Scene.Unload must report a ScriptError, not a silent no-op");
+    kb::tests::Require(afterUnloadError->code == kb::library::LibraryErrorCode::InvalidHandle,
+        "The after-unload error must be classified InvalidHandle (the owning entity was destroyed by unload)");
+    kb::tests::Require(!afterUnloadError->message.empty() && afterUnloadError->operation == "Timer.Cancel",
+        "The after-unload error must name the operation that touched the unloaded resource");
+
+    // The throwing counterpart (Validate) must also fail loudly for the
+    // same unloaded owner — callers that must hard-fail on a stale scene
+    // resource get an exception, not a silently-ignored operation.
+    bool validateThrew = false;
+    try {
+        ownerHandle.Validate(scene, "Timer.Cancel");
+    } catch (const std::exception&) {
+        validateThrew = true;
+    }
+    kb::tests::Require(validateThrew, "Validate() on an entity destroyed by Scene.Unload must throw, not silently pass");
+
+    // Negative control: a still-live entity in the same scene reports NO
+    // error, so the after-unload error above is specific to the unloaded
+    // resource's owner, not a blanket failure of every handle.
+    const kb::scene::SceneObject liveEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PostUnloadLiveEntity" });
+    const kb::library::EntityHandle liveHandle{ liveEntity.Entity(), scene.Id() };
+    kb::tests::Require(!liveHandle.CheckError(scene, "Timer.Cancel").has_value(),
+        "A live entity created after Scene.Unload must report no error — the after-unload error is specific to the destroyed owner");
 }
 
 // LIB-106: proves Emit/Broadcast's new recipient filters (tag/component/
