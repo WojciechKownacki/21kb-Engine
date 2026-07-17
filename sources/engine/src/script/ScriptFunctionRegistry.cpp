@@ -219,6 +219,20 @@ ScriptFunctionArgument ScriptFunctionRegistry::CoerceArgument(const ScriptFuncti
             .value = ScriptValue{ static_cast<std::uint64_t>(argument.value.AsInt()), expectedType },
         };
     }
+    // LIB-050: a non-negative Int coerces to UInt32. The Lua bridge infers
+    // a small non-negative integer literal (a Random/Noise seed or index)
+    // as Int (PucLuaValueBridge::FromLua), so without this a Lua call to a
+    // UInt32-pinned function (Math.Random01, Math.Noise2D/3D, ...) would be
+    // rejected as a type mismatch — the API was registered but uncallable
+    // from Lua. A non-negative `int` (0..INT32_MAX) always fits UInt32, so
+    // the narrowing cast is lossless; a negative Int is left unconverted
+    // and fails validation loudly rather than wrapping to a huge seed.
+    if (expectedType == ScriptValueType::UInt32 && argument.value.Type() == ScriptValueType::Int && argument.value.AsInt() >= 0) {
+        return ScriptFunctionArgument{
+            .name = argument.name,
+            .value = ScriptValue{ static_cast<std::uint32_t>(argument.value.AsInt()) },
+        };
+    }
     return argument;
 }
 
@@ -227,7 +241,11 @@ bool ScriptFunctionRegistry::IsCompatible(ScriptValue value, ScriptValueType exp
         return true;
     }
     return (expectedType == ScriptValueType::Float && value.Type() == ScriptValueType::Int) ||
-           ((expectedType == ScriptValueType::Entity || expectedType == ScriptValueType::Component) && value.Type() == ScriptValueType::Int && value.AsInt() >= 0);
+           ((expectedType == ScriptValueType::Entity || expectedType == ScriptValueType::Component) && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
+           // LIB-050: a non-negative Int satisfies a UInt32 pin (see
+           // CoerceArgument for why the Lua Random/Noise seed/index path
+           // needs this). Negative Ints stay incompatible and fail loudly.
+           (expectedType == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int && value.AsInt() >= 0);
 }
 
 void ScriptFunctionRegistry::ValidateInputs(
