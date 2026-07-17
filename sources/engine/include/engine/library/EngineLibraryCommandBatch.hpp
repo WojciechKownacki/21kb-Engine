@@ -10,6 +10,7 @@
 #include "engine/scene/TagsComponent.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -84,6 +85,13 @@ private:
 // CommandApplicationPointFor's own "no phase performs this automatically"
 // contract, EngineLibraryCommandApplication.hpp) — a script must call it
 // explicitly, after any open Query loop has returned.
+//
+// LIB-012: every EntityHandle-targeted command (Destroy/Add<T>/Remove<T>/
+// AddTag/RemoveTag) is cancelled — not queued at all — for a handle already
+// dead when the call is made, and re-checked again at Flush() for one that
+// went stale AFTER being recorded but BEFORE Flush() ran (see Flush()'s own
+// comment). Neither case throws; both are ordinary, expected outcomes of a
+// script racing its own command batch against a direct destroy elsewhere.
 class CommandBatch final {
 public:
     explicit CommandBatch(kb::scene::Scene& scene) noexcept
@@ -98,8 +106,23 @@ public:
         commandBuffer_.Worker(0).DestroyEntity(entity.Raw());
     }
 
-    void Destroy(EntityHandle entity) {
+    // LIB-012: false (no command queued), not a crash, for an already-dead
+    // handle — the same honest contract QueueTagChange already established
+    // for AddTag/RemoveTag. `entity` is also tracked so Flush() can re-check
+    // it: kb::ecs::World::ValidateEntityHandle (reached through
+    // CommandBuffer::Playback's Apply/Destroy phases) throws std::
+    // out_of_range for a target that was ALIVE when recorded here but got
+    // destroyed through some unrelated, immediate path before Flush() ran —
+    // a real race this single-threaded-but-reentrant-via-scripts engine can
+    // genuinely hit (one behaviour records a command against an entity a
+    // LATER-dispatched behaviour in the same frame then destroys directly).
+    [[nodiscard]] bool Destroy(EntityHandle entity) {
+        if (!entity.IsAlive(*scene_)) {
+            return false;
+        }
         commandBuffer_.Worker(0).DestroyEntity(entity.Entity());
+        trackedTargets_.push_back(entity);
+        return true;
     }
 
     template <typename Component>
@@ -108,10 +131,17 @@ public:
         commandBuffer_.Worker(0).Set<Component>(entity.Raw(), value);
     }
 
+    // See the EntityHandle overload of Destroy() for why this returns bool
+    // and tracks `entity`.
     template <typename Component>
-    void Add(EntityHandle entity, const Component& value) {
+    [[nodiscard]] bool Add(EntityHandle entity, const Component& value) {
         static_cast<void>(sizeof(ScriptComponentAccess<Component>));
+        if (!entity.IsAlive(*scene_)) {
+            return false;
+        }
         commandBuffer_.Worker(0).Set<Component>(entity.Entity(), value);
+        trackedTargets_.push_back(entity);
+        return true;
     }
 
     template <typename Component>
@@ -120,10 +150,17 @@ public:
         commandBuffer_.Worker(0).Remove<Component>(entity.Raw());
     }
 
+    // See the EntityHandle overload of Destroy() for why this returns bool
+    // and tracks `entity`.
     template <typename Component>
-    void Remove(EntityHandle entity) {
+    [[nodiscard]] bool Remove(EntityHandle entity) {
         static_cast<void>(sizeof(ScriptComponentAccess<Component>));
+        if (!entity.IsAlive(*scene_)) {
+            return false;
+        }
         commandBuffer_.Worker(0).Remove<Component>(entity.Entity());
+        trackedTargets_.push_back(entity);
+        return true;
     }
 
     // Queues a Set<TagsComponent> command that adds `tag` to the entity's
@@ -142,7 +179,27 @@ public:
         return QueueTagChange(entity, tag, false);
     }
 
-    [[nodiscard]] kb::ecs::CommandBufferPlaybackResult Flush() {
+    // LIB-012: nullopt — not a crash, not a partial/silent apply — if any
+    // EntityHandle-targeted command recorded by this batch (Destroy/Add/
+    // Remove/AddTag/RemoveTag) has since gone stale (its target was
+    // destroyed by something other than this batch between the recording
+    // call and this Flush()). Re-checks every tracked target BEFORE calling
+    // Playback, so a stale target is caught here — an honest "nothing in
+    // this batch applied" — rather than reaching kb::ecs::CommandBuffer::
+    // Playback, which would throw std::out_of_range (World::
+    // ValidateEntityHandle) and roll back everything Playback itself had
+    // already applied; this pre-check keeps Playback's own throw reserved
+    // for genuine command-buffer misuse (e.g. a malformed deferred
+    // CommandEntity reference), not a legitimate same-frame destroy race.
+    // BatchEntity-targeted commands need no such check: a freshly-spawned
+    // entity is not resolvable (and therefore not destroyable) by any other
+    // code until this same Flush() creates it.
+    [[nodiscard]] std::optional<kb::ecs::CommandBufferPlaybackResult> Flush() {
+        for (const EntityHandle& target : trackedTargets_) {
+            if (!target.IsAlive(*scene_)) {
+                return std::nullopt;
+            }
+        }
         return commandBuffer_.Playback(scene_->Runtime().EcsWorld());
     }
 
@@ -180,6 +237,7 @@ private:
             kb::scene::SetTagsText(tagsComponent, JoinTagList(tags));
             commandBuffer_.Worker(0).Set<kb::scene::TagsComponent>(entity.Entity(), tagsComponent);
         }
+        trackedTargets_.push_back(entity);
         return true;
     }
 
@@ -225,6 +283,12 @@ private:
 
     kb::scene::Scene* scene_ = nullptr;
     kb::ecs::CommandBuffer commandBuffer_;
+    // LIB-012: every EntityHandle an already-recorded command targets
+    // (Destroy/Add/Remove/AddTag/RemoveTag) — re-checked for liveness by
+    // Flush(). Not deduplicated: batches are small (script-authored, one
+    // Query loop's worth of entities), and re-checking the same entity
+    // twice is harmless.
+    std::vector<EntityHandle> trackedTargets_;
 };
 
 } // namespace kb::library
