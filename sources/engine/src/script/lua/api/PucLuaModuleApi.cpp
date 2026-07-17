@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaModuleApi.hpp"
 
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 
 extern "C" {
@@ -37,7 +38,7 @@ int LuaImport(lua_State* state) {
 
 void PucLuaModuleApi::AttachImport(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime) {
     lua_pushlightuserdata(state, &runtime);
-    lua_pushcclosure(state, &LuaImport, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaImport>, 1);
     lua_setfield(state, environmentIndex, "Import");
 }
 

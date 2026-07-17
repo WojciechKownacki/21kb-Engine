@@ -195,6 +195,7 @@ add_library(kb_engine STATIC
     include/engine/script/NativeScriptPlugin.hpp
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
+    include/engine/script/PucLuaSafeCall.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
     include/engine/script/ScriptAgentProjectFiles.hpp
     include/engine/script/ScriptApiCatalog.hpp
@@ -701,6 +702,7 @@ add_library(kb_engine STATIC
     src/script/lua/api/PucLuaSharedApi.cpp
     src/script/lua/PucLuaDebugHook.cpp
     src/script/lua/PucLuaRuntimeApi.cpp
+    src/script/lua/PucLuaSafeCall.cpp
     src/script/lua/PucLuaSandboxEnvironment.cpp
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
