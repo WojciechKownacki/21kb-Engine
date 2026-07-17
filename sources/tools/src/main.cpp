@@ -15,6 +15,9 @@ Usage: kb_cli <command> [options]
 Commands:
   api          Generate the script API contract (Lua stubs, Markdown, JSON).
                  --project <dir> | --out <dir> | --print markdown|json|lua
+  api-check    Compare the current API surface against a committed baseline
+               and fail on breaking changes (CI compatibility gate).
+                 --baseline <path> [--project <dir>] [--update-baseline]
   init-agent   Provision a game project for AI coding agents (AGENTS.md,
                .luarc.json, .kb/api/*).
                  --project <dir>
@@ -36,7 +39,7 @@ Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
 )";
 
-constexpr std::array<std::string_view, 2> kFlagNames{ "--disabled", "--quiet" };
+constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
 
 } // namespace
 
@@ -64,6 +67,9 @@ int main(int argc, char** argv) {
 
     if (command == "api") {
         return kb::cli::RunApiCommand(arguments, io);
+    }
+    if (command == "api-check") {
+        return kb::cli::RunApiCheckCommand(arguments, io);
     }
     if (command == "init-agent") {
         return kb::cli::RunInitAgentCommand(arguments, io);

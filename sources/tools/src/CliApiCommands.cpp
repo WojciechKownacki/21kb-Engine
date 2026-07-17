@@ -1,14 +1,19 @@
 #include "CliCommands.hpp"
+#include "MiniJson.hpp"
 
 #include "engine/library/EngineLibraryManifest.hpp"
+#include "engine/library/EngineLibraryManifestComparison.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptValue.hpp"
 
 #include <fstream>
+#include <iterator>
+#include <string>
 
 namespace kb::cli {
 
@@ -64,6 +69,145 @@ struct CatalogBuildResult {
         error = "could not write file: " + path.string();
         return false;
     }
+    return true;
+}
+
+// LIB-024: reconstruct the subset of ScriptApiCatalog that
+// kb::library::CompareApiCatalogs actually inspects (lifecycle events,
+// functions with their input/output pins, components with their
+// properties) from the JSON kb_cli api emits. Everything CompareApiCatalogs
+// ignores (luaBindings, projectEntries, the "generator" tag) is skipped —
+// reconstructing it would be dead work the comparison never reads. Returns
+// false with a populated error only for structurally invalid JSON (not for
+// a missing optional array — an older baseline with no "components" key is
+// treated as "no components", the honest reading).
+[[nodiscard]] bool ParsePins(const JsonValue& pinsArray, std::vector<kb::script::ScriptApiPin>& out, std::string& error) {
+    if (pinsArray.GetKind() != JsonValue::Kind::Array) {
+        error = "expected a JSON array of pins";
+        return false;
+    }
+    out.clear();
+    out.reserve(pinsArray.Size());
+    for (std::size_t index = 0; index < pinsArray.Size(); ++index) {
+        const JsonValue* pin = pinsArray.At(index);
+        if (pin == nullptr || pin->GetKind() != JsonValue::Kind::Object) {
+            error = "pin entry is not a JSON object";
+            return false;
+        }
+        const JsonValue* name = pin->Find("name");
+        const JsonValue* type = pin->Find("type");
+        const JsonValue* required = pin->Find("required");
+        if (name == nullptr || type == nullptr || required == nullptr) {
+            error = "pin entry is missing name, type, or required";
+            return false;
+        }
+        kb::script::ScriptValueType parsedType{};
+        if (!kb::script::TryParse(type->AsString(), parsedType)) {
+            error = "pin '" + name->AsString() + "' has an unknown type '" + type->AsString() + "'";
+            return false;
+        }
+        out.push_back(kb::script::ScriptApiPin{ .name = name->AsString(), .type = parsedType, .required = required->AsBool() });
+    }
+    return true;
+}
+
+[[nodiscard]] bool ReconstructCatalogFromJson(std::string_view json, kb::script::ScriptApiCatalog& out, std::string& error) {
+    JsonValue root;
+    if (!JsonValue::Parse(json, root, error)) {
+        return false;
+    }
+    if (root.GetKind() != JsonValue::Kind::Object) {
+        error = "baseline API catalog is not a JSON object";
+        return false;
+    }
+
+    if (const JsonValue* lifecycle = root.Find("lifecycleEvents"); lifecycle != nullptr && lifecycle->GetKind() == JsonValue::Kind::Array) {
+        for (std::size_t index = 0; index < lifecycle->Size(); ++index) {
+            const JsonValue* event = lifecycle->At(index);
+            if (event != nullptr && event->GetKind() == JsonValue::Kind::String) {
+                out.lifecycleEvents.push_back(event->AsString());
+            }
+        }
+    }
+
+    if (const JsonValue* functions = root.Find("functions"); functions != nullptr && functions->GetKind() == JsonValue::Kind::Array) {
+        for (std::size_t index = 0; index < functions->Size(); ++index) {
+            const JsonValue* function = functions->At(index);
+            if (function == nullptr || function->GetKind() != JsonValue::Kind::Object) {
+                error = "function entry is not a JSON object";
+                return false;
+            }
+            const JsonValue* name = function->Find("name");
+            const JsonValue* inputs = function->Find("inputs");
+            const JsonValue* outputs = function->Find("outputs");
+            if (name == nullptr || inputs == nullptr || outputs == nullptr) {
+                error = "function entry is missing name, inputs, or outputs";
+                return false;
+            }
+            kb::script::ScriptApiCatalogFunction reconstructed;
+            reconstructed.name = name->AsString();
+            if (!ParsePins(*inputs, reconstructed.inputs, error) || !ParsePins(*outputs, reconstructed.outputs, error)) {
+                return false;
+            }
+            out.functions.push_back(std::move(reconstructed));
+        }
+    }
+
+    if (const JsonValue* components = root.Find("components"); components != nullptr && components->GetKind() == JsonValue::Kind::Array) {
+        for (std::size_t index = 0; index < components->Size(); ++index) {
+            const JsonValue* component = components->At(index);
+            if (component == nullptr || component->GetKind() != JsonValue::Kind::Object) {
+                error = "component entry is not a JSON object";
+                return false;
+            }
+            const JsonValue* name = component->Find("name");
+            const JsonValue* properties = component->Find("properties");
+            if (name == nullptr) {
+                error = "component entry is missing name";
+                return false;
+            }
+            kb::script::ScriptApiCatalogComponent reconstructed;
+            reconstructed.name = name->AsString();
+            if (properties != nullptr && properties->GetKind() == JsonValue::Kind::Array) {
+                for (std::size_t propertyIndex = 0; propertyIndex < properties->Size(); ++propertyIndex) {
+                    const JsonValue* property = properties->At(propertyIndex);
+                    if (property == nullptr || property->GetKind() != JsonValue::Kind::Object) {
+                        error = "property entry is not a JSON object";
+                        return false;
+                    }
+                    const JsonValue* propertyName = property->Find("name");
+                    const JsonValue* propertyType = property->Find("type");
+                    const JsonValue* writable = property->Find("writable");
+                    if (propertyName == nullptr || propertyType == nullptr || writable == nullptr) {
+                        error = "property entry is missing name, type, or writable";
+                        return false;
+                    }
+                    kb::script::ScriptValueType parsedType{};
+                    if (!kb::script::TryParse(propertyType->AsString(), parsedType)) {
+                        error = "property '" + propertyName->AsString() + "' has an unknown type '" + propertyType->AsString() + "'";
+                        return false;
+                    }
+                    reconstructed.properties.push_back(kb::script::ScriptApiCatalogProperty{
+                        .name = propertyName->AsString(),
+                        .type = parsedType,
+                        .writable = writable->AsBool(),
+                    });
+                }
+            }
+            out.components.push_back(std::move(reconstructed));
+        }
+    }
+
+    return true;
+}
+
+[[nodiscard]] bool ReadFileText(const std::filesystem::path& path, std::string& content, std::string& error) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        error = "could not open file for reading: " + path.string();
+        return false;
+    }
+    content.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
     return true;
 }
 
@@ -194,6 +338,84 @@ int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "wrote " << manifestPath.generic_string() << '\n';
 
     io.out << "project is ready for AI coding agents; see AGENTS.md\n";
+    return 0;
+}
+
+// LIB-024: compare the API surface the current build registers against a
+// committed baseline, classify every difference, and fail (exit 1) on a
+// breaking change. This is the CI compatibility gate: the comparison engine
+// (kb::library::CompareApiCatalogs) was already complete and tested; what
+// was blocked was the baseline-storage decision. Decision made here: the
+// baseline is a committed reference JSON in the repo
+// (others/api_baseline/script_api.json), produced by the exact same
+// project-agnostic path (kb_cli api, no --project) whose live equivalent
+// this command rebuilds — so the two are directly comparable. An
+// intentional API change is recorded by re-running with --update-baseline,
+// which rewrites the baseline file and commits it as part of the same PR
+// that changed the API, making the change explicit and reviewable rather
+// than silent.
+int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> baseline = arguments.Option("--baseline");
+    if (!baseline.has_value()) {
+        io.err << "error: api-check requires --baseline <path>\n";
+        return 1;
+    }
+    const std::optional<std::string> project = arguments.Option("--project");
+
+    const CatalogBuildResult built = BuildCatalog(project);
+    if (!built.succeeded) {
+        io.err << "error: " << built.error << '\n';
+        return 1;
+    }
+
+    const std::filesystem::path baselinePath{ *baseline };
+
+    // --update-baseline: intentionally overwrite the baseline with the
+    // current surface instead of comparing. Used when an API change is
+    // deliberate — the rewritten baseline is committed alongside it.
+    if (arguments.Flag("--update-baseline")) {
+        std::string writeError;
+        if (!WriteTextFile(baselinePath, kb::script::ScriptApiExport::ToJson(built.catalog), writeError)) {
+            io.err << "error: " << writeError << '\n';
+            return 1;
+        }
+        io.out << "updated baseline " << baselinePath.generic_string() << '\n';
+        return 0;
+    }
+
+    std::string baselineJson;
+    std::string readError;
+    if (!ReadFileText(baselinePath, baselineJson, readError)) {
+        io.err << "error: " << readError << '\n';
+        io.err << "hint: create it with `kb_cli api-check --baseline " << baselinePath.generic_string() << " --update-baseline`\n";
+        return 1;
+    }
+
+    kb::script::ScriptApiCatalog baselineCatalog;
+    std::string parseError;
+    if (!ReconstructCatalogFromJson(baselineJson, baselineCatalog, parseError)) {
+        io.err << "error: could not parse baseline API catalog: " << parseError << '\n';
+        return 1;
+    }
+
+    const kb::library::ApiCompatibilityReport report = kb::library::CompareApiCatalogs(baselineCatalog, built.catalog);
+    std::size_t breakingCount = 0;
+    for (const kb::library::ApiChange& change : report.changes) {
+        const bool breaking = change.severity == kb::library::ApiChangeSeverity::Breaking;
+        if (breaking) {
+            ++breakingCount;
+        }
+        std::ostream& stream = breaking ? io.err : io.out;
+        stream << (breaking ? "BREAKING: " : "additive: ") << change.description << '\n';
+    }
+
+    if (report.HasBreakingChanges()) {
+        io.err << "error: API surface has " << breakingCount << " breaking change(s) against the baseline; "
+               << "if this is intentional, re-run with --update-baseline and commit the updated baseline\n";
+        return 1;
+    }
+
+    io.out << "API surface is compatible with the baseline (" << report.changes.size() << " additive change(s))\n";
     return 0;
 }
 

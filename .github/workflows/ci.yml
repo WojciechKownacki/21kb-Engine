@@ -23,7 +23,8 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_editor;kb_cli_tests"
+            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_editor;kb_cli;kb_cli_tests"
+            api_compat_check: "ON"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
@@ -31,6 +32,7 @@ jobs:
             build_renderer: "OFF"
             sanitizer: "ON"
             targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
+            api_compat_check: "OFF"
           - name: macOS Clang ASan UBSan
             os: macos-15
             generator: "Unix Makefiles"
@@ -38,6 +40,7 @@ jobs:
             build_renderer: "OFF"
             sanitizer: "ON"
             targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
+            api_compat_check: "OFF"
 
     steps:
       - name: Check out sources
@@ -78,3 +81,20 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/ci -C Debug --output-on-failure
+
+      # LIB-024: fail the build on a breaking change to the script API
+      # surface versus the committed baseline. Runs only on the full
+      # Windows build that generated the baseline; the reconstructed catalog
+      # is platform-independent (renderer script APIs are compiled into
+      # kb_engine unconditionally), but restricting to one job keeps the
+      # gate unambiguous. An intentional API change updates the baseline via
+      # `kb_cli api-check --baseline others/api_baseline/script_api.json
+      # --update-baseline` in the same PR.
+      - name: API compatibility check
+        if: matrix.api_compat_check == 'ON'
+        shell: pwsh
+        run: |
+          & "build/ci/bin/Debug/kb_cli.exe" api-check --baseline others/api_baseline/script_api.json
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
