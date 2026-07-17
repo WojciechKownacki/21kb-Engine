@@ -201,25 +201,21 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 }
 
+// LIB-013: PlayerController.lua is no longer duplicated as a hardcoded
+// string in this test fixture — it is written by the REAL production path
+// a game author actually gets it through, `kb_cli init-agent`
+// (ScriptAgentProjectFiles::Write), the exact same file AGENTS.md's own
+// worked example already references. This closes the "no shipped template,
+// only a test fixture" audit gap: what this test exercises below IS the
+// file init-agent produces, not a second, driftable copy of similar text.
 void PreparePlayerControllerTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
-    WriteTextFile(root / "Assets" / "Logic" / "PlayerController.lua", R"(
-local speed = 2.0
 
-function Ready(self, dt)
-    Log("player ready")
-end
-
-function Tick(self, dt)
-    local move = Input.Vector2("Move")
-    local dx = (move.x or 0.0) * speed * dt
-    local dy = (move.y or 0.0) * speed * dt
-    Transform.Translate(self.entity, dx, dy, 0.0)
-    Log("player tick")
-    Emit("PlayerMoved", {})
-end
-)");
+    const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
+    Require(initAgent.exitCode == 0, "player controller template project init-agent failed");
+    Require(std::filesystem::exists(root / "Assets" / "Logic" / "PlayerController.lua"),
+        "kb_cli init-agent did not write the real PlayerController.lua template");
 
     kb::scene::Scene scene;
     static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" }));
@@ -237,9 +233,16 @@ end
 // project + scene and drives a real ScriptRuntimeHost/ScriptRuntimeSceneSystem
 // frame loop headless, with zero bgfx/window/editor involvement. This test
 // exercises the exact workflow ScriptAgentProjectFiles' generated AGENTS.md
-// documents (scene-attach -> validate -> run) against a PlayerController.lua
-// that reads Input.Vector2 and drives Transform.Translate, then runs several
-// simulated frames through the real CLI commands, in-process.
+// documents (init-agent -> scene-attach -> validate -> run) against the REAL,
+// shipped PlayerController.lua template (LIB-013 — written by init-agent
+// itself, not a second hardcoded copy of similar text) that reads
+// Input.Vector2 and drives Transform.Translate, then runs several simulated
+// frames through the real CLI commands, in-process. Proves lifecycle
+// callbacks/events fire correctly headless; RunPlayerControllerTemplateMoves
+// TransformWithRealInputTest (ScriptRuntimeTests.cpp) proves the SAME
+// shipped file actually moves the entity for real, non-zero input — this
+// harness has no channel to observe Transform state (see that test's own
+// comment for why).
 void RunPlayerControllerTemplateTests() {
     PreparePlayerControllerTemplateProject();
     const std::string root = TestRoot().string();
