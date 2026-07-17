@@ -7756,6 +7756,70 @@ void RunScriptMathApiTest() {
         context);
     kb::tests::Require(noised.Succeeded() && noised.Output("result").has_value() && noised.Output("result")->AsFloat() == 0.0F, "Math.Noise3D direct call at an integer lattice point must be exactly zero");
 
+    // LIB-050 (2026-07-17 audit gap): a UInt32 seed/index pin must accept an
+    // Int argument, because the Lua bridge infers a small non-negative
+    // integer literal as Int, not UInt32 — without the Int->UInt32 coercion
+    // this call fails validation as a type mismatch and the whole
+    // Random/Noise API is uncallable from Lua despite being registered.
+    const kb::script::ScriptFunctionCallResult randomedFromInt = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ 42 } },
+            { .name = "index", .value = kb::script::ScriptValue{ 7 } },
+        },
+        context);
+    kb::tests::Require(randomedFromInt.Succeeded() && randomedFromInt.Output("result").has_value(),
+        "Math.Random01 must accept Int seed/index (the type the Lua bridge produces) via Int->UInt32 coercion, not reject it as a type mismatch");
+    // Same seed value, whether it arrives as Int or UInt32, must produce the
+    // identical deterministic result — the coercion must be value-preserving,
+    // not a reinterpretation.
+    kb::tests::Require(randomedFromInt.Output("result")->AsFloat() == randomed.Output("result")->AsFloat(),
+        "Math.Random01 must be deterministic regardless of whether the seed arrived as Int or UInt32");
+
+    // A negative Int must NOT silently wrap to a huge UInt32 seed — it stays
+    // incompatible and fails loudly.
+    const kb::script::ScriptFunctionCallResult randomedFromNegative = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ -1 } },
+            { .name = "index", .value = kb::script::ScriptValue{ 7 } },
+        },
+        context);
+    kb::tests::Require(!randomedFromNegative.Succeeded(),
+        "Math.Random01 must reject a negative Int seed rather than silently wrapping it to a huge UInt32");
+
+    // Full end-to-end proof through a REAL Lua script: a behaviour that
+    // calls Math.Random01 with plain Lua integer literals (which the bridge
+    // marshals as Int) and stores the result. Before the coercion fix this
+    // raised a type-mismatch error inside CallFunction; now it runs cleanly.
+    {
+        kb::scene::Scene luaScene;
+        kb::script::ScriptRuntimeHost luaHost{ luaScene };
+        kb::tests::Require(luaHost.Succeeded(), "LIB-050 Lua Random test host setup failed");
+        constexpr kb::assets::AssetId kRandomLuaAsset{ 700701U };
+        // Math.* has no Lua sugar table (LIB-045) — scripts reach it via the
+        // generic CallFunction(name, {named args}), which marshals the
+        // integer literals through PucLuaValueBridge::FromLua as Int, the
+        // exact path the 2026-07-17 audit reported failing on type.
+        const kb::script::PucLuaLoadResult loaded = luaHost.LuaRuntime().LoadScript(kRandomLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local r = CallFunction(\"Math.Random01\", { seed = 123, index = 4 })\n"
+            "    SetShared(\"luaRandomOk\", r ~= nil and r >= 0.0 and r <= 1.0)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-050 Lua Random test script did not load");
+        const kb::scene::SceneObject caller = luaScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RandomCaller" });
+        luaScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kRandomLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = luaHost.Runtime().ExecuteLifecycle(luaScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-050 real Lua Math.Random01 call must run without a type-mismatch diagnostic");
+        const std::optional<kb::script::ScriptValue> luaRandomOk = luaHost.SharedState().Get("luaRandomOk");
+        kb::tests::Require(luaRandomOk.has_value() && luaRandomOk->AsBool(),
+            "LIB-050 a real Lua script must be able to call Math.Random01 with integer literals and get a value in [0,1]");
+    }
+
     // LIB-051: RandomStream's state (streamSeed/streamCounter, both
     // UInt32) must round-trip through Math.RandomSeed and then thread
     // correctly through Math.RandomRangeInt — proving the {value,
