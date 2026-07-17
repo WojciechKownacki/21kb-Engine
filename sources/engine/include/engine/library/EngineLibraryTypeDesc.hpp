@@ -27,7 +27,17 @@ struct LibraryTypeDesc {
     // The Lua type the (private) PucLuaValueBridge marshals this
     // ScriptValueType to/from. Documentation only: the bridge's own code
     // is the actual behavior; this string exists so LIB-022's manifest
-    // generation and human-facing docs have something to print.
+    // generation and human-facing docs have something to print. Verified
+    // against the REAL bridge (not just asserted) by
+    // RunTypeDescLuaRoundTripTest (EngineLibraryTests.cpp) — every base
+    // word here (before the parenthetical detail) is checked to be the
+    // actual Lua type() of a real round-tripped value, for every
+    // ScriptValueType except Void. That same test also documents, with an
+    // explicit regression-locked assertion, that this round-trip fidelity
+    // only holds through a TYPED pin (a registered function's declared
+    // input/output type, which ScriptFunctionRegistry::CoerceArgument can
+    // re-tag against): SetShared has no declared target type, so an Entity
+    // id passed through it comes back as Int, not Entity.
     std::string_view luaTypeName;
     // Every ScriptValueType supports structural equality via
     // ScriptValue::operator==; true for all of them today.
