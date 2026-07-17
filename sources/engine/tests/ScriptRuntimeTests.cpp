@@ -73,6 +73,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -7630,6 +7631,28 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(asinInDomain.Succeeded() && asinInDomain.Output("result").has_value() && kb::tests::NearlyEqual(asinInDomain.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Asin with a boundary-valid value (1.0) must succeed, not be rejected as out of domain");
+
+    // LIB-047 (2026-07-17 audit gap): a NaN input must ALSO be rejected as a
+    // domain error, not slip through `value < -1 || value > 1` (false for
+    // NaN) and fabricate a "successful" NaN result into the graph. Same for
+    // +/-infinity. Covers both Asin and Acos, since they share the domain
+    // check.
+    const float quietNaN = std::numeric_limits<float>::quiet_NaN();
+    const float positiveInfinity = std::numeric_limits<float>::infinity();
+    for (const char* function : { "Math.Asin", "Math.Acos" }) {
+        const kb::script::ScriptFunctionCallResult nanResult = host.Functions().Call(
+            function,
+            std::vector<kb::script::ScriptFunctionArgument>{ { .name = "value", .value = kb::script::ScriptValue{ quietNaN } } },
+            context);
+        kb::tests::Require(!nanResult.Succeeded() && !nanResult.errors.empty(),
+            "Math.Asin/Acos with a NaN input must report a real domain error, never succeed and pass NaN into the graph");
+        const kb::script::ScriptFunctionCallResult infResult = host.Functions().Call(
+            function,
+            std::vector<kb::script::ScriptFunctionArgument>{ { .name = "value", .value = kb::script::ScriptValue{ positiveInfinity } } },
+            context);
+        kb::tests::Require(!infResult.Succeeded() && !infResult.errors.empty(),
+            "Math.Asin/Acos with an infinite input must report a real domain error");
+    }
 
     // LIB-048: Vec3 is not a script pin type — every Vec3-shaped Math.*
     // function decomposes into named-prefix Float pins (aX/aY/aZ, ...),

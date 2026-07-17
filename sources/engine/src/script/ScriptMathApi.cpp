@@ -307,18 +307,30 @@ ScriptFunctionCallResult Tan(const ScriptFunctionCallContext&, std::span<const S
 // script graph, where it could reach e.g. Transform.SetRotation many
 // nodes later with no indication of where the invalid value came from —
 // exactly what "zdefiniowana domena błędu" (LIB-047) requires.
+//
+// The domain test is written as !(value in [-1,1]) rather than
+// (value < -1 || value > 1) precisely so a NaN input is ALSO rejected: a
+// NaN fails every ordered comparison, so `value < -1 || value > 1` is
+// false for NaN and would let it through as a fabricated success — the
+// exact hole the 2026-07-17 audit found. `!(value >= -1 && value <= 1)`
+// is true for NaN (both inner comparisons are false), so NaN is caught by
+// the same single check as a finite out-of-range value.
+[[nodiscard]] bool InAsinAcosDomain(float value) noexcept {
+    return value >= -1.0F && value <= 1.0F;
+}
+
 ScriptFunctionCallResult Asin(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     const float value = FloatArg(arguments, "value");
-    if (value < -1.0F || value > 1.0F) {
-        return DomainError("Math.Asin", "value must be in [-1, 1]");
+    if (!InAsinAcosDomain(value)) {
+        return DomainError("Math.Asin", "value must be a real number in [-1, 1]");
     }
     return FloatResult("result", kb::math::Asin(value).Value());
 }
 
 ScriptFunctionCallResult Acos(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     const float value = FloatArg(arguments, "value");
-    if (value < -1.0F || value > 1.0F) {
-        return DomainError("Math.Acos", "value must be in [-1, 1]");
+    if (!InAsinAcosDomain(value)) {
+        return DomainError("Math.Acos", "value must be a real number in [-1, 1]");
     }
     return FloatResult("result", kb::math::Acos(value).Value());
 }
