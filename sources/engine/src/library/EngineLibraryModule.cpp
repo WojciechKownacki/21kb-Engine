@@ -206,11 +206,17 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::assets::AssetManager",
             .Register = &kb::script::ScriptAssetsApi::Register,
         },
-        // LIB-162: Save.SetInt/SetFloat/SetString/SetBool/GetInt/.../Has/
-        // Remove/Clear/Write/Read — the scalar key/value SaveGame surface
-        // over the scene's ambient save buffer (kb::save::SaveGame), with
-        // Write/Read serializing to disk through kb::save::SaveGameService
-        // (versioned schema, migration on load, atomic write). No Lua sugar
+        // LIB-162/163: two SEPARATE scalar key/value surfaces over two
+        // separate scene-ambient buffers and two separate save domains —
+        // Save.* (game progress, SaveDomain::SaveGame, Scene::AmbientSave) and
+        // Settings.* (user preferences, SaveDomain::UserSettings, Scene::
+        // AmbientSettings). Each exposes SetInt/SetFloat/SetString/SetBool/
+        // GetInt/.../Has/Remove/Clear/Write/Read; Write/Read serialize through
+        // kb::save::SaveGameService (versioned schema, migration on load,
+        // atomic write) stamping the matching domain, so a save-game file can
+        // never be loaded as settings or vice versa (WrongDomain). Scene state
+        // (kb::scene::SceneDocumentService) and network data (section 18) are
+        // already separate subsystems, not kb::save domains. No Lua sugar
         // table (mirrors Assets/Task/Timer — generic CallFunction).
         LibraryModuleDesc{
             .name = "Save",

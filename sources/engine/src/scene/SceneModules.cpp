@@ -112,4 +112,12 @@ const kb::save::SaveGame& Scene::AmbientSave() const noexcept {
     return SceneAccess::State(*this).ambientSave;
 }
 
+kb::save::SaveGame& Scene::AmbientSettings() noexcept {
+    return SceneAccess::State(*this).ambientSettings;
+}
+
+const kb::save::SaveGame& Scene::AmbientSettings() const noexcept {
+    return SceneAccess::State(*this).ambientSettings;
+}
+
 } // namespace kb::scene
