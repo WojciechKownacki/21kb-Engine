@@ -6,8 +6,10 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
     include/engine/audio/AudioSettings.hpp
+    include/engine/assets/AssetCompatibility.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
+    include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
@@ -27,6 +29,11 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/save/SaveDomain.hpp
+    include/engine/save/SaveGame.hpp
+    include/engine/save/SaveGameMigration.hpp
+    include/engine/save/SaveGameService.hpp
+    include/engine/save/SaveValue.hpp
     include/engine/ecs/ChunkSizeAutoTuner.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/CommandBuffer.hpp
@@ -188,6 +195,7 @@ add_library(kb_engine STATIC
     include/engine/script/NativeScriptPlugin.hpp
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
+    include/engine/script/PucLuaSafeCall.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
     include/engine/script/ScriptAgentProjectFiles.hpp
     include/engine/script/ScriptApiCatalog.hpp
@@ -198,6 +206,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptAudioApi.hpp
     include/engine/script/ScriptAsset.hpp
     include/engine/script/ScriptAssetLoader.hpp
+    include/engine/script/ScriptAssetsApi.hpp
     include/engine/script/ScriptBackend.hpp
     include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptBehaviourBindingService.hpp
@@ -222,6 +231,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
     include/engine/script/ScriptRuntimeHost.hpp
     include/engine/script/ScriptRuntimeSceneSystem.hpp
+    include/engine/script/ScriptSaveApi.hpp
     include/engine/script/ScriptSceneApi.hpp
     include/engine/script/ScriptSceneComponentApi.hpp
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
@@ -310,6 +320,8 @@ add_library(kb_engine STATIC
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
+    src/assets/AssetKind.cpp
+    src/assets/AssetCompatibility.cpp
     src/assets/AssetDiscoveryService.cpp
     src/assets/AssetFileOperations.cpp
     src/assets/AssetFileSystem.cpp
@@ -443,6 +455,11 @@ add_library(kb_engine STATIC
     src/scene/SceneTaskService.cpp
     src/scene/SceneTimerService.cpp
     src/scene/SceneTransformIterationService.cpp
+    src/save/SaveGame.cpp
+    src/save/SaveGameBinaryIO.cpp
+    src/save/SaveGameCodec.cpp
+    src/save/SaveGameMigration.cpp
+    src/save/SaveGameService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
     src/scene/asset/io/SceneAssetComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetAudioComponentCodec.cpp
@@ -685,6 +702,7 @@ add_library(kb_engine STATIC
     src/script/lua/api/PucLuaSharedApi.cpp
     src/script/lua/PucLuaDebugHook.cpp
     src/script/lua/PucLuaRuntimeApi.cpp
+    src/script/lua/PucLuaSafeCall.cpp
     src/script/lua/PucLuaSandboxEnvironment.cpp
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
@@ -697,6 +715,7 @@ add_library(kb_engine STATIC
     src/script/ScriptApiDeclarationParser.cpp
     src/script/ScriptAudioApi.cpp
     src/script/ScriptAssetLoader.cpp
+    src/script/ScriptAssetsApi.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
     src/script/ScriptEventBus.cpp
@@ -717,6 +736,7 @@ add_library(kb_engine STATIC
     src/script/ScriptRuntimeAssetPreparer.cpp
     src/script/ScriptRuntimeHost.cpp
     src/script/ScriptRuntimeSceneSystem.cpp
+    src/script/ScriptSaveApi.cpp
     src/script/ScriptSceneApi.cpp
     src/script/ScriptSceneComponentApi.cpp
     src/script/ScriptSceneVisualGraphBindings.cpp
@@ -820,6 +840,9 @@ add_library(kb_engine STATIC
     src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
+    src/private/save/SaveGameBinaryIO.hpp
+    src/private/save/SaveGameCodec.hpp
+    src/private/save/SaveGameFormat.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTaskService.hpp
     src/private/scene/SceneTimerService.hpp
@@ -1146,6 +1169,7 @@ if(BUILD_TESTING)
         tests/EcsComponentApiTests.cpp
         tests/EcsCommandBufferTests.cpp
         tests/AssetRuntimeTests.cpp
+        tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp

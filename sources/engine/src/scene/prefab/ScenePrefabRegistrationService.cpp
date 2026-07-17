@@ -3,6 +3,7 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabRecordFactory.hpp"
+#include "scene/prefab/ScenePrefabVariantOverrideList.hpp"
 #include "scene/prefab/ScenePrefabVariantRefreshService.hpp"
 
 #include <optional>
@@ -49,7 +50,12 @@ ScenePrefabHandle ScenePrefabRegistrationService::RegisterVariant(ScenePrefabRec
         return {};
     }
 
-    ScenePrefabRecord record = ScenePrefabRecordFactory::CreateVariant(std::move(name), basePrefab, *base, records.NextId(), std::move(overrides));
+    // LIB-161: canonicalize the override list at registration (last-write-
+    // wins per (nodeId|nodeIndex, propertyPath), empty paths dropped) so the
+    // stored variant layer matches the instance-apply Upsert rule and never
+    // carries a duplicate that a later single-property Upsert would leave
+    // stale.
+    ScenePrefabRecord record = ScenePrefabRecordFactory::CreateVariant(std::move(name), basePrefab, *base, records.NextId(), ScenePrefabVariantOverrideList::Normalize(std::move(overrides)));
     if (!ScenePrefabVariantRefreshService::Materialize(records, record)) {
         return {};
     }
@@ -69,7 +75,7 @@ ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoadedVariant(ScenePre
         return {};
     }
 
-    ScenePrefabRecord record = ScenePrefabRecordFactory::CreateLoadedVariant(std::move(guid), std::move(name), baseHandle, std::move(basePrefabGuid), std::move(overrides));
+    ScenePrefabRecord record = ScenePrefabRecordFactory::CreateLoadedVariant(std::move(guid), std::move(name), baseHandle, std::move(basePrefabGuid), ScenePrefabVariantOverrideList::Normalize(std::move(overrides)));
     if (!ScenePrefabVariantRefreshService::Materialize(records, record)) {
         return {};
     }

@@ -11,6 +11,7 @@
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
@@ -407,6 +408,32 @@ public:
     // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
     // own doc comment on PendingCollisionEvent for the full contract).
     std::vector<PendingCollisionEvent> pendingCollisionEvents;
+    // LIB-160: prefab-instantiation completion notifications. World.
+    // InstantiatePrefab queues one per instantiation whose caller is a live
+    // entity; ScriptRuntimeSceneSystem drains them each frame into an
+    // ENTITY-LOCAL "OnPrefabInstantiated" event targeting the CALLER (the
+    // script that requested the spawn) carrying the instantiated root and
+    // object count — the same "the operation you started completed, here's
+    // the result" shape TaskCompleted/TimerFired use (a synchronous
+    // instantiate has no async completion to wait for, so this is the
+    // decoupled push channel, not a fabricated async result).
+    struct PendingPrefabInstantiatedEvent {
+        SceneEntity caller;
+        SceneEntity root;
+        std::int32_t count = 0;
+    };
+    std::vector<PendingPrefabInstantiatedEvent> pendingPrefabInstantiatedEvents;
+    // LIB-162: the scene's ambient SaveGame buffer — the scalar key/value
+    // table the script Save.* surface reads and mutates, and that Save.Write/
+    // Save.Read serialize to/from disk. Scene-scoped (reached via Scene::
+    // AmbientSave()) so it is accessible through a ScriptFunctionCallContext's
+    // scene, mirroring how the rest of the Assets/World/Prefab script APIs
+    // reach scene-owned state.
+    kb::save::SaveGame ambientSave;
+    // LIB-163: the scene's ambient user-settings buffer — a store separate
+    // from ambientSave (game progress), serialized under the UserSettings
+    // domain so the two persistence categories cannot cross-contaminate.
+    kb::save::SaveGame ambientSettings;
     // LIB-129: the last layers configuration applied via
     // PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers - kept here
     // (backend-independent) so name -> bit resolution (PhysicsBackend::

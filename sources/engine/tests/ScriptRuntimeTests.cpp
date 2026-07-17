@@ -1711,6 +1711,73 @@ end
     kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
 }
 
+// LIB-010 audit gap closed 2026-07-17: every existing Lua adapter test
+// (RunLuaCallFunctionResultAdapterTest above) only covered a registered
+// callback RETURNING a failed ScriptFunctionCallResult — never one that
+// actually THROWS a C++ exception through the real lua_pcall call path
+// Lua's CallFunction(name, args) global uses (LuaCallFunction,
+// PucLuaFunctionApi.cpp, now wrapped in PucLuaSafeCall). This proves the
+// full real chain end to end: real Lua script text calls CallFunction,
+// which invokes a native function that throws; ScriptFunctionRegistry::
+// Call catches it and reports failure; LuaCallFunction turns that into
+// Lua's nil+error-string convention; the Lua script's own assignment and
+// every subsequent line execute normally — no crash, no corrupted Lua
+// state, and (the actual point of this test) proof that a SECOND,
+// unrelated Tick on the SAME lua_State afterwards still works correctly.
+void RunLuaCallFunctionThrowingCallbackSafetyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua throwing-callback safety host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.ThrowsForLua" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
+                               throw std::runtime_error("lua throwing callback safety boom");
+                           },
+                       }),
+        "Lua throwing-callback safety did not register Tests.ThrowsForLua");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5017U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaThrowingCallbackSafety" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+local tickCount = 0
+function Tick(self, dt)
+    tickCount = tickCount + 1
+    local value, err = CallFunction("Tests.ThrowsForLua", {})
+    SetShared("luaThrowSawNilValue", value == nil)
+    SetShared("luaThrowSawErrorString", type(err) == "string")
+    SetShared("luaThrowErrorMessage", err)
+    SetShared("luaThrowTickCount", tickCount)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua throwing-callback safety script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult firstTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(firstTick.Succeeded(), "Lua throwing-callback safety Tick produced diagnostics instead of a handled Lua-level result");
+
+    const std::optional<kb::script::ScriptValue> sawNilValue = host.SharedState().Get("luaThrowSawNilValue");
+    kb::tests::Require(sawNilValue.has_value() && sawNilValue->AsBool(), "CallFunction must return nil as its first value when the registered callback throws, not propagate the exception into Lua");
+    const std::optional<kb::script::ScriptValue> sawErrorString = host.SharedState().Get("luaThrowSawErrorString");
+    kb::tests::Require(sawErrorString.has_value() && sawErrorString->AsBool(), "CallFunction must return a string error when the registered callback throws");
+    const std::optional<kb::script::ScriptValue> errorMessage = host.SharedState().Get("luaThrowErrorMessage");
+    kb::tests::Require(errorMessage.has_value() && errorMessage->AsString().find("lua throwing callback safety boom") != std::string::npos,
+        "CallFunction's error string must carry the real thrown exception's message, reached through the actual lua_pcall call path");
+
+    // The real proof this isn't just "didn't crash this one call": the same
+    // lua_State, same loaded chunk, dispatched again — a corrupted Lua
+    // interpreter stack from an unsafely-crossed C++ exception would show up
+    // here as a wrong tick count, a load/dispatch failure, or a crash.
+    const kb::script::ScriptRuntimeExecutionResult secondTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(secondTick.Succeeded(), "Lua throwing-callback safety second Tick produced diagnostics — the Lua state did not survive the first throw cleanly");
+    const std::optional<kb::script::ScriptValue> tickCount = host.SharedState().Get("luaThrowTickCount");
+    kb::tests::Require(tickCount.has_value() && tickCount->AsInt() == 2, "Lua state must remain fully usable (correct closure-local tickCount) after a callback it called threw a C++ exception");
+}
+
 // LIB-010: a registered callback throwing a C++ exception must become a
 // ScriptFunctionCallResult error, not propagate. This is the single choke
 // point every caller (Native direct call, Lua's CallFunction, the future
@@ -6845,6 +6912,125 @@ void RunWorldInstantiatePrefabOwnershipTest() {
         "World.Destroy on the prefab instance's root must cascade to destroy its child too — the caller that owns the returned handle owns the WHOLE instantiated hierarchy, not just the root");
 }
 
+// LIB-160: World.InstantiatePrefab's new parent, full-transform (position +
+// rotation + scale) and completion-callback dimensions. Part A drives the
+// direct-call surface (parent + pose applied to the instantiated root). Part
+// B proves the completion callback end-to-end: the binding queues an
+// "OnPrefabInstantiated" event to the CALLER, which a real
+// ScriptRuntimeSceneSystem frame dispatches to the caller's behaviour with
+// the root and count — and an instantiation with no caller queues nothing.
+void RunWorldInstantiatePrefabParentTransformCallbackTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "PrefabSpawnProject";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "SpawnPrefab.kbprefab";
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Root" });
+        static_cast<void>(prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = prefabRoot }));
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "SpawnPrefab");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Prefab spawn test fixture was not saved");
+    }
+
+    // ---- Part A: parent + full transform on the direct call. ----
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab spawn test project mount failed (A)");
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab spawn test prefab was not discovered (A)");
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "Prefab spawn test host setup failed (A)");
+        const kb::scene::SceneObject spawnParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SpawnParent" });
+
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+            kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ spawnParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 3.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 4.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 5.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "rotY", .value = kb::script::ScriptValue{ 0.70710678F } },
+            kb::script::ScriptFunctionArgument{ .name = "rotW", .value = kb::script::ScriptValue{ 0.70710678F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleX", .value = kb::script::ScriptValue{ 2.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleY", .value = kb::script::ScriptValue{ 2.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "scaleZ", .value = kb::script::ScriptValue{ 2.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+        kb::tests::Require(result.Succeeded() && result.Output("count")->AsInt() == 2, "World.InstantiatePrefab (A) must instantiate the root and child");
+        const kb::scene::SceneEntity root{ result.Output("entity")->AsUInt64() };
+        kb::tests::Require(root.IsValid() && scene.Entities().IsAlive(root), "World.InstantiatePrefab (A) must return a live root");
+
+        const kb::scene::TransformComponent transform = scene.Transforms().Get(root);
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localPosition.x, 3.0F) && kb::tests::NearlyEqual(transform.localPosition.y, 4.0F) && kb::tests::NearlyEqual(transform.localPosition.z, 5.0F),
+            "World.InstantiatePrefab must apply the spawn position to the root");
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localRotation.y, 0.70710678F) && kb::tests::NearlyEqual(transform.localRotation.w, 0.70710678F) &&
+                kb::tests::NearlyEqual(transform.localRotation.x, 0.0F) && kb::tests::NearlyEqual(transform.localRotation.z, 0.0F),
+            "World.InstantiatePrefab must apply exactly the supplied rotation components (y/w) and leave the unsupplied ones (x/z) at their authored identity value");
+        kb::tests::Require(kb::tests::NearlyEqual(transform.localScale.x, 2.0F) && kb::tests::NearlyEqual(transform.localScale.y, 2.0F) && kb::tests::NearlyEqual(transform.localScale.z, 2.0F),
+            "World.InstantiatePrefab must apply the spawn scale to the root");
+
+        const std::vector<kb::scene::SceneEntity> parentChildren = scene.Hierarchy().ChildEntities(spawnParent.Entity());
+        kb::tests::Require(std::find(parentChildren.begin(), parentChildren.end(), root) != parentChildren.end(),
+            "World.InstantiatePrefab must parent the instantiated root under the given parent entity");
+    }
+
+    // ---- Part B: completion callback end-to-end through a real frame. ----
+    {
+        kb::scene::Scene scene;
+        kb::tests::Require(scene.Assets().MountProject(projectRoot), "Prefab spawn test project mount failed (B)");
+        kb::tests::Require(scene.Assets().Discover() == 1U, "Prefab spawn test prefab was not discovered (B)");
+        kb::script::ScriptRuntimeHost host{ scene };
+        kb::tests::Require(host.Succeeded(), "Prefab spawn test host setup failed (B)");
+
+        constexpr kb::assets::AssetId kCallerAsset{ 1601U };
+        const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SpawnCaller" });
+        scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kCallerAsset.value,
+            .backend = kb::scene::BehaviourBackend::Native,
+            .enabled = true,
+        });
+
+        kb::script::ScriptRuntime runtime;
+        auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+        std::size_t callbackCount = 0U;
+        std::uint64_t callbackRoot = 0U;
+        int callbackObjectCount = 0;
+        kb::tests::Require(nativeBackend->RegisterEvent(kCallerAsset, "OnPrefabInstantiated", [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                                ++callbackCount;
+                                for (const kb::script::ScriptEventArgument& argument : event.arguments) {
+                                    if (argument.name == "root") {
+                                        callbackRoot = argument.value.AsUInt64();
+                                    } else if (argument.name == "count") {
+                                        callbackObjectCount = argument.value.AsInt();
+                                    }
+                                }
+                            }),
+            "OnPrefabInstantiated listener registration failed");
+        kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Prefab callback native backend registration failed");
+        kb::script::ScriptRuntimeSceneSystem system{ runtime };
+
+        const std::vector<kb::script::ScriptFunctionArgument> args{
+            kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+        };
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+        kb::tests::Require(result.Succeeded(), "World.InstantiatePrefab (B) must succeed");
+        const std::uint64_t root = result.Output("entity")->AsUInt64();
+
+        // The completion event must NOT have fired synchronously within the call.
+        kb::tests::Require(callbackCount == 0U, "OnPrefabInstantiated must not fire synchronously inside the instantiate call — only on the next dispatched frame");
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "OnPrefabInstantiated must fire exactly once, on the caller, after the instantiate is drained by a frame");
+        kb::tests::Require(callbackRoot == root && callbackObjectCount == 2, "OnPrefabInstantiated must carry the instantiated root entity and object count");
+
+        // A second drain with nothing queued must not re-fire.
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "OnPrefabInstantiated must not re-fire once its queued completion has been drained");
+
+        // An instantiation with NO caller queues no completion callback.
+        const kb::script::ScriptFunctionCallResult noCallerResult = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+        kb::tests::Require(noCallerResult.Succeeded(), "World.InstantiatePrefab with no caller must still succeed");
+        static_cast<void>(system.ExecuteFrame(scene, 0.1F));
+        kb::tests::Require(callbackCount == 1U, "An instantiation with no caller must queue no completion callback");
+    }
+}
+
 // LIB-071: Scene.Load/Unload/SetActive/GetActive/Find/LoadProgress — proves
 // additive loading genuinely preserves prior content (not merely
 // non-destructive in name), selective Unload only removes its own record's
@@ -10074,6 +10260,392 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
     kb::tests::Require(ownerCompleted == 1U && ownerFailed == 1U && otherCompleted == 1U, "A dead-owner task must never dispatch TaskCompleted or TaskFailed");
 }
 
+// LIB-155/156: Assets.Find/IsLoaded/Load/LoadAsync/Unload — the generic,
+// type-erased script surface over AssetManager::LoadOpaque/Unload/IsLoaded
+// plus a pure metadata lookup (Find). Proves registration (Native+VisualGraph
+// parity via host.Functions().Call + VisualGraphRuntimeBindings, mirroring
+// RunScriptTaskApiTest/RunScriptMaterialInstanceApiTest's established
+// no-Lua-sugar-module pattern — see EngineLibraryModule.cpp's Assets entry
+// doc comment for why no PucLuaFunctionApi wrapper is added), reference
+// resolution by BOTH numeric id and virtual path, honest false for an
+// unresolved reference on every function (never an error), that a physical
+// OS path string NEVER resolves through Assets.Find (LIB-156's own
+// requirement), and LoadAsync's real Task-based completion end-to-end —
+// Completed for a loadable asset, genuinely Failed (not silently swallowed)
+// for one whose type has no registered loader — through a real
+// scene.Tasks().Advance.
+void RunScriptAssetsApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "AssetsApiSubject.lua", "function Tick(self, dt)\nend\n");
+    // A second fixture of a genuinely typed kind (VisualGraph -> "Graph"),
+    // so the typed FindTyped/KindOf coverage below has a real registered
+    // asset to classify (the .lua fixture is a LuaScript, which is
+    // deliberately NONE of the typed-reference kinds).
+    WriteTextFile(assetsRoot / "Logic" / "AssetsApiGraph.kbgraph", "kbgraph 1\nname AssetsApiGraph\nnode 1 Event Tick\npin 1 Output then Void\n");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Assets API test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Assets API test discovery did not find the Lua and VisualGraph fixture assets");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/AssetsApiSubject.lua");
+    kb::tests::Require(metadata != nullptr, "Assets API test fixture asset could not be resolved");
+    const kb::assets::AssetId assetId = metadata->id;
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/AssetsApiGraph.kbgraph");
+    kb::tests::Require(graphMetadata != nullptr && graphMetadata->type == "VisualGraph", "Assets API graph fixture asset was not classified as VisualGraph");
+    const kb::assets::AssetId graphId = graphMetadata->id;
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script assets API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Find") != nullptr, "Assets.Find was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.FindTyped") != nullptr, "Assets.FindTyped was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.KindOf") != nullptr, "Assets.KindOf was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.IsLoaded") != nullptr, "Assets.IsLoaded was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Load") != nullptr, "Assets.Load was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.LoadAsync") != nullptr, "Assets.LoadAsync was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.Unload") != nullptr, "Assets.Unload was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.Load") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.Load");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.FindTyped") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.FindTyped");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    // Unresolved reference: honest false everywhere, never an error.
+    const std::vector<kb::script::ScriptFunctionArgument> unknownArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/DoesNotExist.lua" } } },
+    };
+    const kb::script::ScriptFunctionCallResult unknownIsLoaded = host.Functions().Call("Assets.IsLoaded", unknownArgs, context);
+    kb::tests::Require(unknownIsLoaded.Succeeded() && !unknownIsLoaded.Output("loaded")->AsBool(), "Assets.IsLoaded must honestly report false for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownLoad = host.Functions().Call("Assets.Load", unknownArgs, context);
+    kb::tests::Require(unknownLoad.Succeeded() && !unknownLoad.Output("success")->AsBool() && unknownLoad.Output("asset")->AsUInt64() == 0U, "Assets.Load must honestly report failure for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownUnload = host.Functions().Call("Assets.Unload", unknownArgs, context);
+    kb::tests::Require(unknownUnload.Succeeded() && !unknownUnload.Output("unloaded")->AsBool(), "Assets.Unload must honestly report false for an unresolved reference, not error");
+    const kb::script::ScriptFunctionCallResult unknownLoadAsync = host.Functions().Call("Assets.LoadAsync", unknownArgs, context);
+    kb::tests::Require(unknownLoadAsync.Succeeded() && !unknownLoadAsync.Output("started")->AsBool() && unknownLoadAsync.Output("task")->AsUInt64() == 0U,
+        "Assets.LoadAsync must honestly report failure for an unresolved reference without creating a task");
+    const kb::script::ScriptFunctionCallResult unknownFind = host.Functions().Call("Assets.Find", unknownArgs, context);
+    kb::tests::Require(unknownFind.Succeeded() && !unknownFind.Output("found")->AsBool() && unknownFind.Output("asset")->AsUInt64() == 0U, "Assets.Find must honestly report not-found for an unresolved reference, not error");
+
+    // LIB-156: Assets.Find must NEVER resolve a physical OS path — its
+    // resolution surface is exclusively stable id / virtual project path
+    // (ResolveReference never reads AssetMetadata::physicalPath). A string
+    // that looks like a real Windows filesystem path — including the
+    // fixture asset's OWN real physicalPath on disk — must report
+    // not-found, proving there is no fallback path from physical path to
+    // asset id anywhere in this resolution surface.
+    const std::vector<kb::script::ScriptFunctionArgument> physicalPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ (assetsRoot / "Logic" / "AssetsApiSubject.lua").string() } },
+    };
+    const kb::script::ScriptFunctionCallResult physicalPathFind = host.Functions().Call("Assets.Find", physicalPathArgs, context);
+    kb::tests::Require(physicalPathFind.Succeeded() && !physicalPathFind.Output("found")->AsBool() && physicalPathFind.Output("asset")->AsUInt64() == 0U,
+        "Assets.Find must reject a real physical OS path for a registered asset — resolution is by stable id/virtual path only, never physicalPath");
+    const std::vector<kb::script::ScriptFunctionArgument> arbitraryOsPathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "C:\\Windows\\System32\\drivers\\etc\\hosts" } } },
+    };
+    const kb::script::ScriptFunctionCallResult arbitraryOsPathFind = host.Functions().Call("Assets.Find", arbitraryOsPathArgs, context);
+    kb::tests::Require(arbitraryOsPathFind.Succeeded() && !arbitraryOsPathFind.Output("found")->AsBool(), "Assets.Find must reject an arbitrary absolute OS path, not attempt to resolve it");
+
+    // Resolve by virtual path.
+    const std::vector<kb::script::ScriptFunctionArgument> pathArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/AssetsApiSubject.lua" } } },
+    };
+    const kb::script::ScriptFunctionCallResult beforeLoad = host.Functions().Call("Assets.IsLoaded", pathArgs, context);
+    kb::tests::Require(beforeLoad.Succeeded() && !beforeLoad.Output("loaded")->AsBool(), "Assets.IsLoaded must report false before the asset has been loaded");
+
+    // Assets.Find is a PURE lookup — resolving must not load the asset (no
+    // cache side effect), distinguishing it from Assets.Load.
+    const kb::script::ScriptFunctionCallResult findByPath = host.Functions().Call("Assets.Find", pathArgs, context);
+    kb::tests::Require(findByPath.Succeeded() && findByPath.Output("found")->AsBool() && findByPath.Output("asset")->AsUInt64() == assetId.value,
+        "Assets.Find (virtual path) must resolve a real registered asset to its own stable id");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Find must be a pure lookup — it must NOT force-load the asset into AssetManager's cache");
+
+    const kb::script::ScriptFunctionCallResult load = host.Functions().Call("Assets.Load", pathArgs, context);
+    kb::tests::Require(load.Succeeded() && load.Output("success")->AsBool(), "Assets.Load (virtual path) must succeed for a real, loader-backed asset");
+    kb::tests::Require(load.Output("asset")->AsUInt64() == assetId.value, "Assets.Load must return the resolved asset's own id as the ownership handle");
+
+    const kb::script::ScriptFunctionCallResult afterLoad = host.Functions().Call("Assets.IsLoaded", pathArgs, context);
+    kb::tests::Require(afterLoad.Succeeded() && afterLoad.Output("loaded")->AsBool(), "Assets.IsLoaded must report true immediately after Assets.Load succeeds");
+    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.Load must populate the SAME AssetManager cache Load<T> observes");
+
+    // Resolve by numeric id string — must reach the identical cache entry.
+    const std::vector<kb::script::ScriptFunctionArgument> idArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(assetId) } },
+    };
+    const kb::script::ScriptFunctionCallResult idIsLoaded = host.Functions().Call("Assets.IsLoaded", idArgs, context);
+    kb::tests::Require(idIsLoaded.Succeeded() && idIsLoaded.Output("loaded")->AsBool(), "Assets.IsLoaded must resolve a numeric-id-string reference identically to a virtual path");
+    const kb::script::ScriptFunctionCallResult findById = host.Functions().Call("Assets.Find", idArgs, context);
+    kb::tests::Require(findById.Succeeded() && findById.Output("found")->AsBool() && findById.Output("asset")->AsUInt64() == assetId.value,
+        "Assets.Find must resolve a numeric-id-string reference identically to a virtual path");
+
+    // LIB-157: typed references — Assets.FindTyped / Assets.KindOf against
+    // the real VisualGraph fixture ("Graph" kind).
+    const std::vector<kb::script::ScriptFunctionArgument> graphArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/AssetsApiGraph.kbgraph" } } },
+    };
+    // Correct kind: resolves and returns the id.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedGraphArgs = graphArgs;
+    findTypedGraphArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Graph" } } });
+    const kb::script::ScriptFunctionCallResult findTypedMatch = host.Functions().Call("Assets.FindTyped", findTypedGraphArgs, context);
+    kb::tests::Require(findTypedMatch.Succeeded() && findTypedMatch.Output("found")->AsBool() && findTypedMatch.Output("asset")->AsUInt64() == graphId.value,
+        "Assets.FindTyped must resolve a real asset of the requested kind (VisualGraph as Graph) to its id");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(graphId), "Assets.FindTyped must be a pure lookup — it must NOT force-load the asset");
+
+    // Wrong kind for a resolvable asset: a legitimate found=false, NOT an error.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedWrongArgs = graphArgs;
+    findTypedWrongArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Mesh" } } });
+    const kb::script::ScriptFunctionCallResult findTypedMismatch = host.Functions().Call("Assets.FindTyped", findTypedWrongArgs, context);
+    kb::tests::Require(findTypedMismatch.Succeeded() && !findTypedMismatch.Output("found")->AsBool() && findTypedMismatch.Output("asset")->AsUInt64() == 0U,
+        "Assets.FindTyped must report found=false (not error) for a resolvable asset of a different kind");
+
+    // Unresolvable reference under a valid kind: found=false, not error.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedUnknownRefArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/Nope.kbgraph" } } },
+        kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Graph" } } },
+    };
+    const kb::script::ScriptFunctionCallResult findTypedUnknownRef = host.Functions().Call("Assets.FindTyped", findTypedUnknownRefArgs, context);
+    kb::tests::Require(findTypedUnknownRef.Succeeded() && !findTypedUnknownRef.Output("found")->AsBool(), "Assets.FindTyped must report found=false for an unresolvable reference under a valid kind");
+
+    // Unknown kind string is a malformed request: honest error, not found=false.
+    std::vector<kb::script::ScriptFunctionArgument> findTypedBadKindArgs = graphArgs;
+    findTypedBadKindArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "kind", .value = kb::script::ScriptValue{ std::string{ "Widget" } } });
+    const kb::script::ScriptFunctionCallResult findTypedBadKind = host.Functions().Call("Assets.FindTyped", findTypedBadKindArgs, context);
+    kb::tests::Require(!findTypedBadKind.Succeeded(), "Assets.FindTyped must honestly error on an unknown kind name, not silently report found=false");
+
+    // KindOf: classifies the graph, honest not-found for an unclassifiable
+    // asset (the LuaScript fixture is none of the typed kinds) and for an
+    // unresolvable reference.
+    const kb::script::ScriptFunctionCallResult kindOfGraph = host.Functions().Call("Assets.KindOf", graphArgs, context);
+    kb::tests::Require(kindOfGraph.Succeeded() && kindOfGraph.Output("found")->AsBool() && kindOfGraph.Output("kind")->AsString() == "Graph",
+        "Assets.KindOf must classify a VisualGraph asset as the Graph kind");
+    const kb::script::ScriptFunctionCallResult kindOfLua = host.Functions().Call("Assets.KindOf", pathArgs, context);
+    kb::tests::Require(kindOfLua.Succeeded() && !kindOfLua.Output("found")->AsBool() && kindOfLua.Output("kind")->AsString().empty(),
+        "Assets.KindOf must honestly report not-found for an asset that is none of the typed-reference kinds (a LuaScript)");
+    const kb::script::ScriptFunctionCallResult kindOfUnknown = host.Functions().Call("Assets.KindOf", unknownArgs, context);
+    kb::tests::Require(kindOfUnknown.Succeeded() && !kindOfUnknown.Output("found")->AsBool(), "Assets.KindOf must report not-found for an unresolvable reference");
+
+    // LIB-158: cache reference count / unload policy through the script
+    // surface. RefCount observes NATIVE strong holders; drive it with a real
+    // native AssetHandle held in this test over the graph fixture.
+    kb::tests::Require(host.Functions().FindSignature("Assets.RefCount") != nullptr, "Assets.RefCount was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.SetUnloadPolicy") != nullptr, "Assets.SetUnloadPolicy was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.UnloadPolicy") != nullptr, "Assets.UnloadPolicy was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Assets.PruneUnreferenced") != nullptr, "Assets.PruneUnreferenced was not registered");
+
+    const kb::script::ScriptFunctionCallResult refCountUncached = host.Functions().Call("Assets.RefCount", graphArgs, context);
+    kb::tests::Require(refCountUncached.Succeeded() && refCountUncached.Output("count")->AsInt() == 0, "Assets.RefCount must report 0 for an asset that is not cached");
+    const kb::script::ScriptFunctionCallResult policyUncached = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+    kb::tests::Require(policyUncached.Succeeded() && !policyUncached.Output("cached")->AsBool() && policyUncached.Output("policy")->AsString() == "Retain",
+        "Assets.UnloadPolicy must report cached=false and the default Retain policy for an uncached asset");
+    const kb::script::ScriptFunctionCallResult setPolicyUncached = host.Functions().Call("Assets.SetUnloadPolicy",
+        std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "Retain" } } } }, context);
+    kb::tests::Require(setPolicyUncached.Succeeded() && !setPolicyUncached.Output("applied")->AsBool(), "Assets.SetUnloadPolicy must report applied=false for an asset that is not cached");
+
+    {
+        const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> nativeGraphHandle = scene.Assets().Manager().Load<kb::visual::VisualGraphAsset>(graphId);
+        kb::tests::Require(nativeGraphHandle.IsLoaded(), "LIB-158 script test could not load the graph fixture natively");
+        const kb::script::ScriptFunctionCallResult refCountHeld = host.Functions().Call("Assets.RefCount", graphArgs, context);
+        kb::tests::Require(refCountHeld.Succeeded() && refCountHeld.Output("count")->AsInt() == 1, "Assets.RefCount must report the one live native AssetHandle holder");
+        const kb::script::ScriptFunctionCallResult policyCached = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+        kb::tests::Require(policyCached.Succeeded() && policyCached.Output("cached")->AsBool() && policyCached.Output("policy")->AsString() == "Retain",
+            "Assets.UnloadPolicy must report cached=true and Retain for a freshly loaded asset");
+
+        // Unknown policy is a malformed request: honest error, not applied=false.
+        const kb::script::ScriptFunctionCallResult badPolicy = host.Functions().Call("Assets.SetUnloadPolicy",
+            std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "Sometimes" } } } }, context);
+        kb::tests::Require(!badPolicy.Succeeded(), "Assets.SetUnloadPolicy must honestly error on an unknown policy name");
+
+        const kb::script::ScriptFunctionCallResult setRelease = host.Functions().Call("Assets.SetUnloadPolicy",
+            std::vector<kb::script::ScriptFunctionArgument>{ graphArgs[0], kb::script::ScriptFunctionArgument{ .name = "policy", .value = kb::script::ScriptValue{ std::string{ "ReleaseWhenUnreferenced" } } } }, context);
+        kb::tests::Require(setRelease.Succeeded() && setRelease.Output("applied")->AsBool(), "Assets.SetUnloadPolicy(ReleaseWhenUnreferenced) must apply to a cached, live asset");
+        const kb::script::ScriptFunctionCallResult policyReleased = host.Functions().Call("Assets.UnloadPolicy", graphArgs, context);
+        kb::tests::Require(policyReleased.Succeeded() && policyReleased.Output("policy")->AsString() == "ReleaseWhenUnreferenced", "Assets.UnloadPolicy must report the newly set ReleaseWhenUnreferenced policy");
+        const kb::script::ScriptFunctionCallResult stillLoaded = host.Functions().Call("Assets.IsLoaded", graphArgs, context);
+        kb::tests::Require(stillLoaded.Succeeded() && stillLoaded.Output("loaded")->AsBool(), "Under ReleaseWhenUnreferenced, the asset must stay loaded while a native handle still holds it");
+    }
+    // The native handle is gone — the graph payload is released.
+    const kb::script::ScriptFunctionCallResult afterRelease = host.Functions().Call("Assets.IsLoaded", graphArgs, context);
+    kb::tests::Require(afterRelease.Succeeded() && !afterRelease.Output("loaded")->AsBool(), "Dropping the last native handle under ReleaseWhenUnreferenced must free the graph payload");
+    const kb::script::ScriptFunctionCallResult refCountReleased = host.Functions().Call("Assets.RefCount", graphArgs, context);
+    kb::tests::Require(refCountReleased.Succeeded() && refCountReleased.Output("count")->AsInt() == 0, "Assets.RefCount must be 0 after the released payload is freed");
+    const kb::script::ScriptFunctionCallResult pruned = host.Functions().Call("Assets.PruneUnreferenced", std::vector<kb::script::ScriptFunctionArgument>{}, context);
+    kb::tests::Require(pruned.Succeeded() && pruned.Output("removed")->AsInt() >= 1, "Assets.PruneUnreferenced must remove the dead graph cache entry");
+
+    // LIB-159: Assets.Validate — compatibility / missing-dependency
+    // diagnostics through the script surface.
+    kb::tests::Require(host.Functions().FindSignature("Assets.Validate") != nullptr, "Assets.Validate was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Assets.Validate") != nullptr,
+        "Script assets API did not register VisualGraph runtime binding for Assets.Validate");
+    // The graph fixture has no dependencies and a registered loader -> compatible.
+    const kb::script::ScriptFunctionCallResult validateGraph = host.Functions().Call("Assets.Validate", graphArgs, context);
+    kb::tests::Require(validateGraph.Succeeded() && validateGraph.Output("compatible")->AsBool() && validateGraph.Output("issueCount")->AsInt() == 0 && validateGraph.Output("diagnostics")->AsString().empty(),
+        "Assets.Validate must report a dependency-free, loadable asset as compatible with no diagnostics");
+
+    // A synthetic asset with a genuinely missing dependency -> incompatible,
+    // with a readable diagnostic naming the missing dependency.
+    const kb::assets::AssetId brokenId{ 0x5159B10CU };
+    const kb::assets::AssetId brokenMissingDep{ 0x5159DEADU };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = brokenId, .type = "VisualGraph", .name = "BrokenValidate",
+                           .virtualPath = "/Game/Logic/BrokenValidate.kbgraph", .physicalPath = "BrokenValidate.kbgraph", .contentHash = 1U,
+                           .dependencies = { brokenMissingDep },
+                       }),
+        "LIB-159 script test could not register the broken-dependency fixture");
+    const std::vector<kb::script::ScriptFunctionArgument> brokenArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(brokenId) } },
+    };
+    const kb::script::ScriptFunctionCallResult validateBroken = host.Functions().Call("Assets.Validate", brokenArgs, context);
+    kb::tests::Require(validateBroken.Succeeded() && !validateBroken.Output("compatible")->AsBool() && validateBroken.Output("issueCount")->AsInt() == 1,
+        "Assets.Validate must report an asset with a missing dependency as incompatible with one issue");
+    kb::tests::Require(validateBroken.Output("diagnostics")->AsString().find(kb::assets::ToString(brokenMissingDep)) != std::string::npos,
+        "Assets.Validate's readable diagnostics must name the missing dependency id");
+
+    // An unresolvable reference is a legitimate validation answer, not a call error.
+    const kb::script::ScriptFunctionCallResult validateUnknown = host.Functions().Call("Assets.Validate", unknownArgs, context);
+    kb::tests::Require(validateUnknown.Succeeded() && !validateUnknown.Output("compatible")->AsBool() && !validateUnknown.Output("diagnostics")->AsString().empty(),
+        "Assets.Validate must report an unresolvable reference as incompatible with a diagnostic, not fail the call");
+
+    const kb::script::ScriptFunctionCallResult unload = host.Functions().Call("Assets.Unload", idArgs, context);
+    kb::tests::Require(unload.Succeeded() && unload.Output("unloaded")->AsBool(), "Assets.Unload must succeed for a loaded asset");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.Unload must remove the asset from AssetManager's cache");
+    const kb::script::ScriptFunctionCallResult unloadAgain = host.Functions().Call("Assets.Unload", idArgs, context);
+    kb::tests::Require(unloadAgain.Succeeded() && !unloadAgain.Output("unloaded")->AsBool(), "Assets.Unload must be idempotent — a second unload of an already-unloaded asset must report unloaded=false, not error");
+
+    // No-scene context must fail honestly (executed=false), never silently
+    // fabricate a result.
+    const kb::script::ScriptFunctionCallContext noSceneContext{ .scene = nullptr };
+    const kb::script::ScriptFunctionCallResult noSceneLoad = host.Functions().Call("Assets.Load", pathArgs, noSceneContext);
+    kb::tests::Require(!noSceneLoad.Succeeded(), "Assets.Load must fail honestly without a scene rather than silently succeeding");
+
+    // LoadAsync end-to-end: the task's poll performs the REAL load on its
+    // first Advance (honest one-tick-delayed completion — see
+    // ScriptAssetsApi.cpp's doc comment on LoadAsync), never within the
+    // starting call itself.
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Assets LoadAsync Caller" });
+    const kb::script::ScriptFunctionCallContext callerContext{ .scene = &scene, .caller = caller.Entity() };
+    const kb::script::ScriptFunctionCallResult loadAsync = host.Functions().Call("Assets.LoadAsync", pathArgs, callerContext);
+    kb::tests::Require(loadAsync.Succeeded() && loadAsync.Output("started")->AsBool(), "Assets.LoadAsync must succeed for a resolvable reference");
+    const std::uint64_t asyncTaskId = loadAsync.Output("task")->AsUInt64();
+    kb::tests::Require(asyncTaskId != 0U && scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync must create a real, live SceneTasks task");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself — only its task's first poll does");
+
+    const std::vector<kb::scene::TaskCompletionRecord> asyncCompletions = scene.Tasks().Advance(0.1F);
+    kb::tests::Require(!scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync's task must resolve on its very first poll");
+    kb::tests::Require(asyncCompletions.size() == 1U && asyncCompletions[0].id == asyncTaskId && asyncCompletions[0].succeeded && asyncCompletions[0].owner == caller.Entity(),
+        "Assets.LoadAsync's task must report Completed, owned by the calling entity, on its first Advance");
+    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync's task poll must have performed the real load by the time it reports Completed");
+
+    // LoadAsync failure path: a resolvable reference whose type has no
+    // registered loader must start a task that genuinely reports Failed —
+    // not silently swallowed, not fabricated as Completed.
+    const kb::assets::AssetId noLoaderId{ assetId.value + 1U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = noLoaderId,
+                           .type = "GhostType",
+                           .name = "GhostAsset",
+                           .virtualPath = "/Game/Logic/Ghost.ghost",
+                           .physicalPath = "Ghost.ghost",
+                           .contentHash = 1U,
+                       }),
+        "Registration of the no-loader LoadAsync failure fixture failed");
+    const std::vector<kb::script::ScriptFunctionArgument> ghostArgs{
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ kb::assets::ToString(noLoaderId) } },
+    };
+    const kb::script::ScriptFunctionCallResult ghostLoadAsync = host.Functions().Call("Assets.LoadAsync", ghostArgs, callerContext);
+    kb::tests::Require(ghostLoadAsync.Succeeded() && ghostLoadAsync.Output("started")->AsBool(), "Assets.LoadAsync must start a task even for an asset whose loader will fail (the failure surfaces through the task, not the start call)");
+    const std::uint64_t ghostTaskId = ghostLoadAsync.Output("task")->AsUInt64();
+    const std::vector<kb::scene::TaskCompletionRecord> ghostCompletions = scene.Tasks().Advance(0.1F);
+    kb::tests::Require(ghostCompletions.size() == 1U && ghostCompletions[0].id == ghostTaskId && !ghostCompletions[0].succeeded,
+        "Assets.LoadAsync's task must genuinely report Failed for an asset type with no registered loader, not fake Completed");
+}
+
+// LIB-162: the Save.* script surface over the scene's ambient SaveGame buffer.
+// Proves registration (Native + VisualGraph parity), every scalar type round-
+// tripping through the script boundary, the honest typed-miss / empty-key
+// contracts, Has/Remove/Clear, and a real Write-to-disk / Clear / Read-back
+// cycle driven entirely through script calls.
+void RunScriptSaveApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script save API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Save.SetInt") != nullptr, "Save.SetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.GetInt") != nullptr, "Save.GetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.Write") != nullptr, "Save.Write was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.Read") != nullptr, "Save.Read was not registered");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Save.SetInt") != nullptr,
+        "Script save API did not register VisualGraph runtime binding for Save.SetInt");
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto call = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> args) {
+        return host.Functions().Call(name, args, context);
+    };
+    const auto keyArg = [](std::string key) {
+        return kb::script::ScriptFunctionArgument{ .name = "key", .value = kb::script::ScriptValue{ std::move(key) } };
+    };
+
+    // Set every scalar type.
+    kb::tests::Require(call("Save.SetBool", { keyArg("flag"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ true } } }).Output("set")->AsBool(), "Save.SetBool must set");
+    kb::tests::Require(call("Save.SetInt", { keyArg("score"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 99 } } }).Output("set")->AsBool(), "Save.SetInt must set");
+    kb::tests::Require(call("Save.SetFloat", { keyArg("vol"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.5F } } }).Output("set")->AsBool(), "Save.SetFloat must set");
+    kb::tests::Require(call("Save.SetString", { keyArg("name"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ std::string{ "Ada" } } } }).Output("set")->AsBool(), "Save.SetString must set");
+
+    // Read each back through the script boundary.
+    const kb::script::ScriptFunctionCallResult getBool = call("Save.GetBool", { keyArg("flag") });
+    kb::tests::Require(getBool.Output("found")->AsBool() && getBool.Output("value")->AsBool(), "Save.GetBool must round-trip the stored bool");
+    const kb::script::ScriptFunctionCallResult getInt = call("Save.GetInt", { keyArg("score") });
+    kb::tests::Require(getInt.Output("found")->AsBool() && getInt.Output("value")->AsInt() == 99, "Save.GetInt must round-trip the stored int");
+    const kb::script::ScriptFunctionCallResult getFloat = call("Save.GetFloat", { keyArg("vol") });
+    kb::tests::Require(getFloat.Output("found")->AsBool() && kb::tests::NearlyEqual(getFloat.Output("value")->AsFloat(), 0.5F), "Save.GetFloat must round-trip the stored float");
+    const kb::script::ScriptFunctionCallResult getString = call("Save.GetString", { keyArg("name") });
+    kb::tests::Require(getString.Output("found")->AsBool() && getString.Output("value")->AsString() == "Ada", "Save.GetString must round-trip the stored string");
+
+    // Typed miss (asking for the wrong type) and absent key are honest false.
+    kb::tests::Require(!call("Save.GetInt", { keyArg("name") }).Output("found")->AsBool(), "Save.GetInt on a String key must honestly miss");
+    kb::tests::Require(!call("Save.GetInt", { keyArg("absent") }).Output("found")->AsBool(), "Save.GetInt on an absent key must honestly miss");
+    // Empty key is a malformed request.
+    kb::tests::Require(!call("Save.SetInt", { keyArg(""), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 1 } } }).Succeeded(), "Save.SetInt must reject an empty key");
+
+    // Has / Remove.
+    kb::tests::Require(call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report a present key");
+    kb::tests::Require(call("Save.Remove", { keyArg("score") }).Output("removed")->AsBool(), "Save.Remove must remove a present key");
+    kb::tests::Require(!call("Save.Has", { keyArg("score") }).Output("has")->AsBool(), "Save.Has must report false after removal");
+
+    // Write to disk, clear the buffer, read it back — all through script.
+    const std::filesystem::path savePath = TestRoot() / "ScriptSave" / "slot.kbsave";
+    ResetTestRoot();
+    const kb::script::ScriptFunctionCallResult written = call("Save.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
+    kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
+    const kb::script::ScriptFunctionCallResult read = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
+    kb::tests::Require(read.Output("loaded")->AsBool() && read.Output("status")->AsString() == "Ok", "Save.Read must load the previously written save");
+    kb::tests::Require(call("Save.GetString", { keyArg("name") }).Output("value")->AsString() == "Ada", "Save.Read must restore the entries the script wrote earlier");
+
+    // Reading a missing file is an honest, non-crashing failure with status.
+    const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
+    kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound", "Save.Read of a missing file must report loaded=false and status FileNotFound");
+
+    // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
+    kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Settings.Write") != nullptr, "Settings.Write was not registered");
+
+    // The same key in each surface is an independent value — the buffers do
+    // not share state.
+    kb::tests::Require(call("Save.SetInt", { keyArg("shared"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 111 } } }).Output("set")->AsBool(), "Save.SetInt must set into the save buffer");
+    kb::tests::Require(call("Settings.SetInt", { keyArg("shared"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 222 } } }).Output("set")->AsBool(), "Settings.SetInt must set into the settings buffer");
+    kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111, "The save buffer must keep its own value for a key the settings buffer also uses");
+    kb::tests::Require(call("Settings.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 222, "The settings buffer must keep its own independent value");
+
+    // A Settings file and a Save file are separated on disk: reading one as the
+    // other reports WrongDomain, never loads the wrong category.
+    const std::filesystem::path settingsPath = TestRoot() / "ScriptSave" / "settings.kbsave";
+    kb::tests::Require(call("Settings.Write", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } }).Output("written")->AsBool(), "Settings.Write must write the settings buffer");
+    const kb::script::ScriptFunctionCallResult crossRead = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
+    const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ settingsPath.string() } } });
+    kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
+}
+
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain
 // std::function objects — no scene needed, these are pure closures.
 void RunEngineLibraryTaskFactoriesTest() {
@@ -11788,6 +12360,7 @@ void RunScriptRuntimeTests() {
     RunScriptFunctionRegistryCrossBackendTest();
     RunVisualGraphCallNativeFailureBranchTest();
     RunLuaCallFunctionResultAdapterTest();
+    RunLuaCallFunctionThrowingCallbackSafetyTest();
     RunScriptFunctionRegistryExceptionSafetyTest();
     RunNativeScriptBackendExceptionSafetyTest();
     RunUnexposedFunctionCannotBeCalledTest();
@@ -11829,6 +12402,8 @@ void RunScriptRuntimeTests() {
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunScriptAssetsApiTest();
+    RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();
@@ -11865,6 +12440,7 @@ void RunScriptRuntimeTests() {
     RunWorldSetPropertyTest();
     RunWorldSetPropertyPhysicsComponentsTest();
     RunWorldInstantiatePrefabOwnershipTest();
+    RunWorldInstantiatePrefabParentTransformCallbackTest();
     RunSceneLoadedContentApiTest();
     RunWorldPersistentStateTest();
     RunScenePersistentEntitySurvivesLoadTest();

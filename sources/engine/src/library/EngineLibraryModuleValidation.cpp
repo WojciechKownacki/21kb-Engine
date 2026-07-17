@@ -80,12 +80,27 @@ ModuleCatalogValidationResult ValidateModuleCatalog(std::span<const LibraryModul
 
     std::unordered_map<std::string, std::string> functionOwner;
     for (const LibraryModuleDesc& module : modules) {
+        const std::string expectedPrefix = module.name + ".";
         for (const LibraryFunctionDesc& function : module.functions) {
             const auto [iter, inserted] = functionOwner.emplace(function.canonicalName, module.name);
             if (!inserted && iter->second != module.name) {
                 result.succeeded = false;
                 result.errors.push_back(
                     "function '" + function.canonicalName + "' is audited by both module '" + iter->second + "' and '" + module.name + "'");
+            }
+            // A LibraryFunctionDesc lives inside the module that audited it,
+            // but nothing about std::vector membership actually ties its
+            // canonicalName to that module's own namespace prefix — a
+            // copy-pasted entry (LIB-003's catalog is hand-authored) could
+            // silently attribute e.g. "Physics.Raycast" to the "World"
+            // module. Catch that as a catalog-integrity error, the same way
+            // the duplicate-ownership check above catches two modules
+            // claiming the same function.
+            if (function.canonicalName.compare(0, expectedPrefix.size(), expectedPrefix) != 0) {
+                result.succeeded = false;
+                result.errors.push_back(
+                    "function '" + function.canonicalName + "' is audited by module '" + module.name +
+                    "' but its name is not prefixed with '" + expectedPrefix + "'");
             }
         }
     }

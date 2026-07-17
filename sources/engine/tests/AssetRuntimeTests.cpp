@@ -3,6 +3,7 @@
 
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/assets/AssetImportService.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -129,6 +130,309 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->id == metadata->id, "Restored asset manifest did not preserve stable asset id");
     kb::tests::Require(restoredMetadata->contentHash == metadata->contentHash, "Restored asset manifest did not preserve content hash");
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
+}
+
+// LIB-155: AssetManager::LoadOpaque — the type-erased force-load the
+// generic script-facing Assets.Load surface needs, because kb_engine cannot
+// name a compile-time payload T for asset kinds whose C++ type lives in
+// another module (kb_render's RenderMesh/Material/Texture). Proves it
+// reaches the exact same cache as Load<T> (LoadedCount/IsLoaded agree) and
+// fails honestly (LastError set, no crash) for every non-happy path: an
+// invalid id, an unregistered id, and a registered id whose type has no
+// loader.
+void RunAssetManagerLoadOpaqueTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "OpaqueProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Opaque.txt", "opaque load payload");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset discovery did not find the text asset");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Opaque.txt");
+    kb::tests::Require(metadata != nullptr, "Discovered opaque-load asset could not be resolved by virtual path");
+    const kb::assets::AssetId textAssetId = metadata->id;
+
+    kb::tests::Require(!manager.LoadOpaque(kb::assets::AssetId{}), "LoadOpaque must reject an invalid asset id");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error for an invalid asset id");
+
+    const kb::assets::AssetId unknownId{ textAssetId.value + 999999U };
+    kb::tests::Require(!manager.LoadOpaque(unknownId), "LoadOpaque must reject an id with no registered metadata");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error for an unregistered id");
+
+    const kb::assets::AssetId noLoaderId{ textAssetId.value + 1U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = noLoaderId,
+                           .type = "GhostType",
+                           .name = "GhostAsset",
+                           .virtualPath = "/Game/Text/Ghost.ghost",
+                           .physicalPath = "Ghost.ghost",
+                           .contentHash = 1U,
+                       }),
+        "Registration of the no-loader fixture asset failed");
+    kb::tests::Require(!manager.LoadOpaque(noLoaderId), "LoadOpaque must reject an asset type with no registered loader");
+    kb::tests::Require(!manager.LastError().empty(), "LoadOpaque must report an error when no loader is registered for the asset type");
+
+    kb::tests::Require(!manager.IsLoaded(textAssetId), "Opaque-load asset must not be loaded before LoadOpaque is called");
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must succeed for a registered id with a matching loader");
+    kb::tests::Require(manager.IsLoaded(textAssetId), "LoadOpaque must populate the SAME cache Load<T>/IsLoaded observe");
+    kb::tests::Require(manager.LoadedCount() == 1, "LoadOpaque must add exactly one cache entry");
+
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be idempotent for an already-cached asset");
+    kb::tests::Require(manager.LoadedCount() == 1, "A second LoadOpaque on an already-cached asset must not duplicate the cache entry");
+
+    const kb::assets::AssetHandle<std::string> viaTypedLoad = manager.Load<std::string>(textAssetId);
+    kb::tests::Require(viaTypedLoad.IsLoaded() && *viaTypedLoad.Get() == "opaque load payload", "LoadOpaque's cache entry must be reachable through the existing typed Load<T> path");
+
+    kb::tests::Require(manager.Unload(textAssetId), "Unload must remove the cache entry LoadOpaque populated");
+    kb::tests::Require(!manager.IsLoaded(textAssetId), "Asset must report unloaded after Unload following a LoadOpaque");
+    kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be able to reload an asset after Unload");
+    kb::tests::Require(manager.IsLoaded(textAssetId), "Reload through LoadOpaque after Unload must repopulate the cache");
+}
+
+// LIB-157: kb::assets::AssetKind — the single source of truth mapping each
+// typed-reference kind to its concrete AssetMetadata::type string(s). Pure
+// value-type test, no scene needed. Proves ToString/TryParseAssetKind round
+// trip for every kind, AssetMatchesKind accepts the right type and rejects a
+// foreign one, the Audio kind's dual acceptance (native AudioClip AND
+// imported-media ImportedAsset+category), TryClassifyAssetKind's unambiguous
+// reverse classification, and honest rejection of an unrecognised name / an
+// unclassifiable asset type.
+// LIB-158: the runtime cache reference-count, weak-reference and unload
+// policy contract. Uses the same TextAssetLoader fixture as the LoadOpaque
+// test. Proves: the default Retain policy keeps a payload resident with no
+// live handle (pre-LIB-158 behaviour unchanged); ReferenceCount tracks live
+// AssetHandle holders; a WeakAssetHandle observes without extending
+// lifetime; ReleaseWhenUnreferenced frees the payload the moment the last
+// handle drops (IsLoaded then false, a reload succeeds); PruneUnreferenced
+// sweeps the dead entry; and LoadedCount stays honest across all of it.
+void RunAssetCacheReferenceAndPolicyTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "CacheProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Cached.txt", "cache policy payload");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset discovery did not find the text asset");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Cached.txt");
+    kb::tests::Require(metadata != nullptr, "Cache policy fixture asset could not be resolved");
+    const kb::assets::AssetId id = metadata->id;
+
+    // Default policy is Retain: a fresh Load caches the payload; even after
+    // the returned handle is dropped, the cache keeps it resident (the
+    // pre-LIB-158 behaviour) and the external ReferenceCount is 0.
+    kb::tests::Require(manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::Retain, "An uncached asset must report the default Retain policy");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "ReferenceCount of an uncached asset must be 0");
+    {
+        const kb::assets::AssetHandle<std::string> handle = manager.Load<std::string>(id);
+        kb::tests::Require(handle.IsLoaded(), "Retain Load must succeed");
+        kb::tests::Require(manager.ReferenceCount(id) == 1, "One live AssetHandle must give an external ReferenceCount of 1 (the cache's own Retain reference is not counted)");
+        const kb::assets::AssetHandle<std::string> second = manager.Load<std::string>(id);
+        kb::tests::Require(manager.ReferenceCount(id) == 2, "A second live handle must raise the external ReferenceCount to 2");
+    }
+    kb::tests::Require(manager.IsLoaded(id) && manager.ReferenceCount(id) == 0, "Under Retain, the payload must stay cached after every external handle drops, with ReferenceCount back to 0");
+    kb::tests::Require(manager.LoadedCount() == 1, "LoadedCount must report the single retained asset");
+
+    // A weak handle observes without extending lifetime.
+    const kb::assets::WeakAssetHandle<std::string> weak = manager.WeakHandle<std::string>(id);
+    kb::tests::Require(!weak.Expired() && weak.Id() == id, "WeakHandle of a cached asset must be live and carry the asset id");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "A WeakAssetHandle must NOT contribute to the strong ReferenceCount");
+    {
+        const kb::assets::AssetHandle<std::string> locked = weak.Lock();
+        kb::tests::Require(locked.IsLoaded() && *locked.Get() == "cache policy payload", "Locking a live WeakAssetHandle must yield the payload");
+        kb::tests::Require(manager.ReferenceCount(id) == 1, "A locked weak handle is a strong holder and must count toward ReferenceCount");
+    }
+
+    // Switch to ReleaseWhenUnreferenced. With no live handle right now, the
+    // payload frees immediately and the entry is pruned.
+    kb::tests::Require(manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced), "SetUnloadPolicy must succeed for a cached asset");
+    kb::tests::Require(!manager.IsLoaded(id), "Switching to ReleaseWhenUnreferenced with no live handle must free the payload immediately");
+    kb::tests::Require(weak.Expired(), "The observing WeakAssetHandle must expire once the released payload is freed");
+    kb::tests::Require(manager.LoadedCount() == 0, "LoadedCount must drop to 0 after the released payload is freed");
+    kb::tests::Require(!manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::Retain), "SetUnloadPolicy must fail (false) for an asset that is no longer cached");
+
+    // Reload it, THEN move to release policy while a handle is alive: the
+    // payload survives exactly as long as that handle.
+    {
+        const kb::assets::AssetHandle<std::string> held = manager.Load<std::string>(id);
+        kb::tests::Require(held.IsLoaded(), "Reload after release must succeed");
+        kb::tests::Require(manager.SetUnloadPolicy(id, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced), "SetUnloadPolicy(Release) with a live handle must succeed");
+        kb::tests::Require(manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced, "UnloadPolicy must report the newly set policy");
+        kb::tests::Require(manager.IsLoaded(id) && manager.ReferenceCount(id) == 1, "Under Release with one live handle, the asset stays loaded with ReferenceCount 1");
+    }
+    // The handle is gone — the payload is released, but the (now dead) map
+    // entry lingers until a prune.
+    kb::tests::Require(!manager.IsLoaded(id), "Under Release, dropping the last handle must free the payload");
+    kb::tests::Require(manager.ReferenceCount(id) == 0, "ReferenceCount of a released asset must be 0");
+    kb::tests::Require(manager.PruneUnreferenced() == 1, "PruneUnreferenced must remove exactly the one dead cache entry");
+    kb::tests::Require(manager.PruneUnreferenced() == 0, "A second PruneUnreferenced must find nothing to remove");
+
+    // A reload after release restores the default Retain policy (the entry
+    // was pruned, so it is a brand-new Load).
+    const kb::assets::AssetHandle<std::string> reloaded = manager.Load<std::string>(id);
+    kb::tests::Require(reloaded.IsLoaded() && manager.UnloadPolicy(id) == kb::assets::AssetUnloadPolicy::Retain, "A reload after the entry was pruned must start fresh under the default Retain policy");
+}
+
+// LIB-159: AssetManager::ValidateCompatibility — registry-level dependency
+// and loadability validation with readable diagnostics, no disk I/O and no
+// payload loading. Uses RegisterAsset with explicit dependency lists (the
+// same field AssetDiscoveryService populates via DiscoverDependencies).
+void RunAssetCompatibilityValidationTest() {
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
+
+    const kb::assets::AssetId leafId{ 7001U };
+    const kb::assets::AssetId midId{ 7002U };
+    const kb::assets::AssetId rootId{ 7003U };
+    const kb::assets::AssetId missingId{ 7999U };
+
+    // leaf: a plain, loadable Text asset with no dependencies.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = leafId, .type = "Text", .name = "Leaf",
+                           .virtualPath = "/Game/Text/Leaf.txt", .physicalPath = "Leaf.txt", .contentHash = 1U,
+                       }),
+        "Compatibility test leaf registration failed");
+
+    // An asset that is registered and loadable and depends only on leaf -> compatible.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 1U,
+                           .dependencies = { leafId },
+                       }),
+        "Compatibility test mid registration failed");
+    const kb::assets::AssetCompatibilityReport midReport = manager.ValidateCompatibility(midId);
+    kb::tests::Require(midReport.compatible && midReport.diagnostics.empty() && manager.IsCompatible(midId), "An asset whose dependency is registered and loadable must validate as compatible");
+    kb::tests::Require(midReport.FormatDiagnostics().empty(), "A compatible report must format to an empty diagnostic string");
+
+    // Missing dependency: mid also depends on a never-registered asset.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 2U,
+                           .dependencies = { leafId, missingId },
+                       }),
+        "Compatibility test mid-with-missing-dep registration failed");
+    const kb::assets::AssetCompatibilityReport missingReport = manager.ValidateCompatibility(midId);
+    kb::tests::Require(!missingReport.compatible && missingReport.diagnostics.size() == 1U, "An asset with one missing dependency must report exactly one diagnostic");
+    kb::tests::Require(missingReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::MissingDependency && missingReport.diagnostics[0].dependency == missingId,
+        "The missing-dependency diagnostic must name the unregistered dependency id");
+    kb::tests::Require(missingReport.FormatDiagnostics().find(kb::assets::ToString(missingId)) != std::string::npos && missingReport.FormatDiagnostics().find("/Game/Text/Mid.txt") != std::string::npos,
+        "The readable missing-dependency diagnostic must name both the depending asset and the missing dependency");
+
+    // Incompatible type: an asset whose type has no registered loader.
+    const kb::assets::AssetId ghostId{ 7500U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = ghostId, .type = "GhostType", .name = "Ghost",
+                           .virtualPath = "/Game/Ghost.ghost", .physicalPath = "Ghost.ghost", .contentHash = 1U,
+                       }),
+        "Compatibility test ghost registration failed");
+    const kb::assets::AssetCompatibilityReport ghostReport = manager.ValidateCompatibility(ghostId);
+    kb::tests::Require(!ghostReport.compatible && ghostReport.diagnostics.size() == 1U && ghostReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::IncompatibleType,
+        "An asset whose type has no registered loader must report an IncompatibleType diagnostic");
+    kb::tests::Require(ghostReport.FormatDiagnostics().find("GhostType") != std::string::npos, "The IncompatibleType diagnostic must name the unloadable type");
+
+    // Root not registered at all -> a single MissingDependency naming itself.
+    const kb::assets::AssetCompatibilityReport unregisteredReport = manager.ValidateCompatibility(kb::assets::AssetId{ 6000U });
+    kb::tests::Require(!unregisteredReport.compatible && unregisteredReport.diagnostics.size() == 1U && unregisteredReport.diagnostics[0].issue == kb::assets::AssetCompatibilityIssue::MissingDependency,
+        "Validating an unregistered asset must report a single MissingDependency for the asset itself");
+
+    // Transitive missing dependency: root -> mid(clean) -> leaf, but give leaf
+    // a missing dependency several levels below the validated root.
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = leafId, .type = "Text", .name = "Leaf",
+                           .virtualPath = "/Game/Text/Leaf.txt", .physicalPath = "Leaf.txt", .contentHash = 2U,
+                           .dependencies = { missingId },
+                       }),
+        "Compatibility test transitive-missing leaf update failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = midId, .type = "Text", .name = "Mid",
+                           .virtualPath = "/Game/Text/Mid.txt", .physicalPath = "Mid.txt", .contentHash = 3U,
+                           .dependencies = { leafId },
+                       }),
+        "Compatibility test transitive-missing mid update failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = rootId, .type = "Text", .name = "Root",
+                           .virtualPath = "/Game/Text/Root.txt", .physicalPath = "Root.txt", .contentHash = 1U,
+                           .dependencies = { midId },
+                       }),
+        "Compatibility test root registration failed");
+    const kb::assets::AssetCompatibilityReport transitiveReport = manager.ValidateCompatibility(rootId);
+    kb::tests::Require(!transitiveReport.compatible && transitiveReport.diagnostics.size() == 1U && transitiveReport.diagnostics[0].dependency == missingId,
+        "ValidateCompatibility must catch a missing dependency several levels deep in the dependency closure");
+
+    // Cycle safety: two assets that depend on each other must not loop, and
+    // (both registered + loadable) must validate as compatible.
+    const kb::assets::AssetId cycleA{ 7100U };
+    const kb::assets::AssetId cycleB{ 7101U };
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = cycleA, .type = "Text", .name = "CycleA",
+                           .virtualPath = "/Game/Text/CycleA.txt", .physicalPath = "CycleA.txt", .contentHash = 1U, .dependencies = { cycleB },
+                       }),
+        "Compatibility test cycle A registration failed");
+    kb::tests::Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                           .id = cycleB, .type = "Text", .name = "CycleB",
+                           .virtualPath = "/Game/Text/CycleB.txt", .physicalPath = "CycleB.txt", .contentHash = 1U, .dependencies = { cycleA },
+                       }),
+        "Compatibility test cycle B registration failed");
+    const kb::assets::AssetCompatibilityReport cycleReport = manager.ValidateCompatibility(cycleA);
+    kb::tests::Require(cycleReport.compatible, "A dependency cycle of otherwise-loadable assets must validate as compatible without looping forever");
+}
+
+void RunAssetKindClassificationTest() {
+    // ToString <-> TryParseAssetKind round trip for every kind, in order.
+    const kb::assets::AssetKind kinds[] = {
+        kb::assets::AssetKind::Mesh, kb::assets::AssetKind::Material, kb::assets::AssetKind::Texture,
+        kb::assets::AssetKind::Audio, kb::assets::AssetKind::Prefab, kb::assets::AssetKind::Scene,
+        kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction, kb::assets::AssetKind::InputMap,
+    };
+    static_assert(std::size(kinds) == kb::assets::kAssetKindCount, "AssetKind test must cover every kind");
+    for (const kb::assets::AssetKind kind : kinds) {
+        const std::string_view name = kb::assets::ToString(kind);
+        kb::tests::Require(!name.empty(), "AssetKind::ToString must return a non-empty friendly name for every kind");
+        kb::assets::AssetKind parsed{};
+        kb::tests::Require(kb::assets::TryParseAssetKind(name, parsed) && parsed == kind, "AssetKind ToString/TryParseAssetKind must round trip for every kind");
+    }
+    kb::assets::AssetKind unusedKind{};
+    kb::tests::Require(!kb::assets::TryParseAssetKind("NotAKind", unusedKind), "TryParseAssetKind must reject an unrecognised kind name");
+    kb::tests::Require(!kb::assets::TryParseAssetKind("mesh", unusedKind), "TryParseAssetKind must be case-sensitive (reject a mis-cased kind name)");
+
+    // Each kind accepts exactly its own concrete type string(s).
+    const auto matches = [](std::string_view type, kb::assets::AssetKind kind, std::string importCategory = {}) {
+        return kb::assets::AssetMatchesKind(kb::assets::AssetMetadata{ .type = std::string{ type }, .importCategory = std::move(importCategory) }, kind);
+    };
+    kb::tests::Require(matches("RenderMesh", kb::assets::AssetKind::Mesh), "AssetMatchesKind must accept RenderMesh as Mesh");
+    kb::tests::Require(matches("RenderMaterial", kb::assets::AssetKind::Material) && matches("RenderMaterialInstance", kb::assets::AssetKind::Material),
+        "AssetMatchesKind must accept both RenderMaterial and RenderMaterialInstance as Material");
+    kb::tests::Require(!matches("RenderMaterialType", kb::assets::AssetKind::Material) && !matches("RenderMaterialGraph", kb::assets::AssetKind::Material),
+        "AssetMatchesKind must NOT treat authoring-only material sub-types as the runtime Material kind");
+    kb::tests::Require(matches("RenderTexture", kb::assets::AssetKind::Texture), "AssetMatchesKind must accept RenderTexture as Texture");
+    kb::tests::Require(matches("AudioClip", kb::assets::AssetKind::Audio), "AssetMatchesKind must accept AudioClip as Audio");
+    kb::tests::Require(matches("ImportedAsset", kb::assets::AssetKind::Audio, "Audio"), "AssetMatchesKind must accept an imported-media asset with importCategory Audio as Audio");
+    kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Audio, "Texture"), "AssetMatchesKind must NOT accept a non-audio ImportedAsset as Audio");
+    kb::tests::Require(matches("ScenePrefab", kb::assets::AssetKind::Prefab), "AssetMatchesKind must accept ScenePrefab as Prefab");
+    kb::tests::Require(matches("Scene", kb::assets::AssetKind::Scene), "AssetMatchesKind must accept Scene as Scene");
+    kb::tests::Require(matches("VisualGraph", kb::assets::AssetKind::Graph), "AssetMatchesKind must accept VisualGraph as Graph");
+    kb::tests::Require(matches("InputAction", kb::assets::AssetKind::InputAction), "AssetMatchesKind must accept InputAction as InputAction");
+    kb::tests::Require(matches("InputMappingContext", kb::assets::AssetKind::InputMap), "AssetMatchesKind must accept InputMappingContext as InputMap");
+
+    // Cross-kind rejection: a mesh is not a texture, a scene is not a prefab.
+    kb::tests::Require(!matches("RenderMesh", kb::assets::AssetKind::Texture), "AssetMatchesKind must reject RenderMesh as Texture");
+    kb::tests::Require(!matches("Scene", kb::assets::AssetKind::Prefab) && !matches("ScenePrefab", kb::assets::AssetKind::Scene),
+        "AssetMatchesKind must keep the distinct Scene and ScenePrefab types in their own kinds");
+
+    // Reverse classification is unambiguous and honest for unknowns.
+    const auto classify = [](std::string_view type, kb::assets::AssetKind& out, std::string importCategory = {}) {
+        return kb::assets::TryClassifyAssetKind(kb::assets::AssetMetadata{ .type = std::string{ type }, .importCategory = std::move(importCategory) }, out);
+    };
+    kb::assets::AssetKind classified{};
+    kb::tests::Require(classify("RenderMaterialInstance", classified) && classified == kb::assets::AssetKind::Material, "TryClassifyAssetKind must classify RenderMaterialInstance as Material");
+    kb::tests::Require(classify("VisualGraph", classified) && classified == kb::assets::AssetKind::Graph, "TryClassifyAssetKind must classify VisualGraph as Graph");
+    kb::tests::Require(classify("ImportedAsset", classified, "Audio") && classified == kb::assets::AssetKind::Audio, "TryClassifyAssetKind must classify an audio ImportedAsset as Audio");
+    kb::tests::Require(!classify("LuaScript", classified), "TryClassifyAssetKind must return false for a type that is none of the typed-reference kinds (LuaScript)");
+    kb::tests::Require(!classify("NativeBehaviour", classified), "TryClassifyAssetKind must return false for a NativeBehaviour asset");
+    kb::tests::Require(!classify("ImportedAsset", classified, "Texture"), "TryClassifyAssetKind must return false for a non-audio ImportedAsset (not one of the typed kinds)");
 }
 
 void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
@@ -442,6 +746,10 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
+    RunAssetManagerLoadOpaqueTest();
+    RunAssetCacheReferenceAndPolicyTest();
+    RunAssetCompatibilityValidationTest();
+    RunAssetKindClassificationTest();
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();

@@ -1,7 +1,9 @@
 #include "engine/library/EngineLibraryModule.hpp"
 
 #include "engine/library/EngineLibraryModuleValidation.hpp"
+#include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
+#include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
@@ -178,6 +180,48 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Renderer",
             .ownerRuntime = "kb::scene::SceneRenderFeedback",
             .Register = &kb::script::ScriptRendererApi::Register,
+        },
+        // LIB-155..159: Assets.Find/FindTyped/KindOf/IsLoaded/Load/
+        // LoadAsync/Unload/RefCount/SetUnloadPolicy/UnloadPolicy/
+        // PruneUnreferenced/Validate — a generic, type-erased script surface over the
+        // SAME kb::assets::AssetManager cache Load<T>/Unload/IsLoaded
+        // already drive natively. The returned `asset` Hash is a
+        // cache-membership token; per-holder reference counting, weak
+        // references (native WeakAssetRef<T>) and the Retain vs
+        // ReleaseWhenUnreferenced unload policy are the LIB-158 cache
+        // contract (see kb::assets::AssetUnloadPolicy). Find/resolution is
+        // exclusively by stable id or virtual/logical project path — never
+        // a physical OS path (see ScriptAssetsApi.cpp's ResolveReference
+        // doc comment). FindTyped/KindOf are typed references (LIB-157):
+        // resolve-and-validate / classify against kb::assets::AssetKind's
+        // single-source-of-truth kind<->type tag mapping — see
+        // EngineLibraryAssetRef.hpp for the parallel native typed AssetRef
+        // aliases. LoadAsync is an honestly-synchronous Task facade
+        // (completes on its first poll, exactly the shape SceneTasks.hpp's
+        // own LIB-098 doc comment anticipated for asset load). No Lua sugar
+        // table (mirrors Task/Timer/Scene/Math, which also rely on the
+        // generic CallFunction escape hatch).
+        LibraryModuleDesc{
+            .name = "Assets",
+            .ownerRuntime = "kb::assets::AssetManager",
+            .Register = &kb::script::ScriptAssetsApi::Register,
+        },
+        // LIB-162/163: two SEPARATE scalar key/value surfaces over two
+        // separate scene-ambient buffers and two separate save domains —
+        // Save.* (game progress, SaveDomain::SaveGame, Scene::AmbientSave) and
+        // Settings.* (user preferences, SaveDomain::UserSettings, Scene::
+        // AmbientSettings). Each exposes SetInt/SetFloat/SetString/SetBool/
+        // GetInt/.../Has/Remove/Clear/Write/Read; Write/Read serialize through
+        // kb::save::SaveGameService (versioned schema, migration on load,
+        // atomic write) stamping the matching domain, so a save-game file can
+        // never be loaded as settings or vice versa (WrongDomain). Scene state
+        // (kb::scene::SceneDocumentService) and network data (section 18) are
+        // already separate subsystems, not kb::save domains. No Lua sugar
+        // table (mirrors Assets/Task/Timer — generic CallFunction).
+        LibraryModuleDesc{
+            .name = "Save",
+            .ownerRuntime = "kb::save::SaveGameService",
+            .Register = &kb::script::ScriptSaveApi::Register,
         },
     };
     return kCatalog;

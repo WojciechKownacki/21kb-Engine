@@ -160,6 +160,8 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Transform.GetPosition",
         "Math.Clamp",
         "Scene.Load",
+        "Assets.Load",
+        "Save.SetInt",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -179,7 +181,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 15U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 17U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -191,8 +193,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly fifteen domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer", "Assets", "Save" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly seventeen domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -363,6 +365,30 @@ void RunModuleValidationDuplicateFunctionTest() {
     };
     const kb::library::ModuleCatalogValidationResult result = kb::library::ValidateModuleCatalog(modules);
     kb::tests::Require(!result.succeeded, "Engine21kbLibrary module validation must reject a function audited by two modules at once");
+}
+
+// LIB-003: a LibraryFunctionDesc living in the wrong module's functions list
+// (e.g. copy-pasted, or attributed after a rename) is a real catalog
+// corruption the duplicate-function check above cannot catch on its own —
+// there is nothing duplicated, just a mismatched owner.
+void RunModuleValidationFunctionPrefixMismatchTest() {
+    const std::vector<kb::library::LibraryModuleDesc> mismatched{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Physics.Raycast" } },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult mismatchedResult = kb::library::ValidateModuleCatalog(mismatched);
+    kb::tests::Require(!mismatchedResult.succeeded, "Engine21kbLibrary module validation must reject a function name not prefixed with its declaring module's name");
+
+    const std::vector<kb::library::LibraryModuleDesc> matched{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "World.Exists" } },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult matchedResult = kb::library::ValidateModuleCatalog(matched);
+    kb::tests::Require(matchedResult.succeeded, "Engine21kbLibrary module validation must accept a function name correctly prefixed with its declaring module's name");
 }
 
 // A catalog that fails validation must register nothing at all — not even
@@ -571,6 +597,97 @@ void RunCommandApplicationContractTest() {
         "Engine21kbLibrary command application must dispatch Created then Tick to the spawned entity starting the next frame");
 }
 
+// LIB-006 audit gap closed 2026-07-17: RunCommandApplicationContractTest
+// above only proved immediacy for Tick (via a direct
+// kb::scene::SceneEntities::CreateObject shortcut, not the public
+// World.Spawn/World.Destroy front-end) and FixedTick (as a bare
+// CommandApplicationPointFor() constant check). This test drives the
+// prober behaviour through EVERY one of the ten ScriptLifecycleEvent
+// phases and, in each one, calls World.Spawn then World.Destroy through
+// ScriptExecutionContext::CallFunction — the exact ScriptFunctionRegistry
+// path Lua/VisualGraph/native code all share — proving the "Immediate"
+// contract holds behaviourally for the full phase matrix through the real
+// public front-end, not just as CommandApplicationPointFor's
+// always-Immediate constant.
+void RunCommandApplicationImmediateAcrossAllPhasesTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Command application all-phases test host setup failed");
+
+    constexpr kb::assets::AssetId kProberAsset{ 9121U };
+
+    const auto probe = [](std::string_view phaseName, kb::script::ScriptExecutionContext& context) {
+        const std::vector<kb::script::ScriptFunctionArgument> spawnArgs{
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Probe_" } + std::string{ phaseName } } },
+        };
+        const kb::script::ScriptFunctionCallResult spawnResult = context.CallFunction("World.Spawn", spawnArgs);
+        const std::string spawnFailMessage = "Engine21kbLibrary World.Spawn call through CallFunction failed for phase " + std::string{ phaseName };
+        kb::tests::Require(spawnResult.Succeeded(), spawnFailMessage.c_str());
+        const std::optional<kb::script::ScriptValue> spawnedValue = spawnResult.Output("entity");
+        const std::string spawnOutputMessage = "Engine21kbLibrary World.Spawn did not return an entity output for phase " + std::string{ phaseName };
+        kb::tests::Require(spawnedValue.has_value(), spawnOutputMessage.c_str());
+        const kb::scene::SceneEntity spawned{ spawnedValue->AsUInt64() };
+        const std::string spawnAliveMessage = "Engine21kbLibrary World.Spawn must make the entity live before the call returns, for phase " + std::string{ phaseName };
+        kb::tests::Require(context.GetScene().Entities().IsAlive(spawned), spawnAliveMessage.c_str());
+
+        const std::vector<kb::script::ScriptFunctionArgument> destroyArgs{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ spawned.Id(), kb::script::ScriptValueType::Entity } },
+        };
+        const kb::script::ScriptFunctionCallResult destroyResult = context.CallFunction("World.Destroy", destroyArgs);
+        const std::string destroyFailMessage = "Engine21kbLibrary World.Destroy call through CallFunction failed for phase " + std::string{ phaseName };
+        kb::tests::Require(destroyResult.Succeeded() && destroyResult.Output("destroyed").has_value() && destroyResult.Output("destroyed")->AsBool(), destroyFailMessage.c_str());
+        const std::string destroyGoneMessage = "Engine21kbLibrary World.Destroy must make the entity gone before the call returns, for phase " + std::string{ phaseName };
+        kb::tests::Require(!context.GetScene().Entities().IsAlive(spawned), destroyGoneMessage.c_str());
+    };
+
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Created,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Created", context); }),
+        "All-phases command application test Created registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Activated,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Activated", context); }),
+        "All-phases command application test Activated registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Ready,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Ready", context); }),
+        "All-phases command application test Ready registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::FixedTick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("FixedTick", context); }),
+        "All-phases command application test FixedTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Tick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Tick", context); }),
+        "All-phases command application test Tick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::LateTick,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("LateTick", context); }),
+        "All-phases command application test LateTick registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::BeforeRender,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("BeforeRender", context); }),
+        "All-phases command application test BeforeRender registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::AfterRender,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("AfterRender", context); }),
+        "All-phases command application test AfterRender registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Deactivated,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Deactivated", context); }),
+        "All-phases command application test Deactivated registration failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kProberAsset, kb::script::ScriptLifecycleEvent::Destroyed,
+                            [&](kb::script::ScriptExecutionContext& context) { probe("Destroyed", context); }),
+        "All-phases command application test Destroyed registration failed");
+
+    const kb::scene::SceneObject proberObject = SpawnNativeBehaviourObject(scene, kProberAsset, "CommandApplicationProber");
+
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    // One frame with the default fixedDeltaSeconds (1/60) dispatches
+    // Created, Activated, Ready (all from the same SyncBehaviourLifecycles
+    // call, first time this behaviour is seen), then exactly one FixedTick,
+    // then Tick, LateTick, BeforeRender, AfterRender — eight of the ten
+    // phases in a single ExecuteFrame call.
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+
+    // Removing the BehaviourComponent and running one more frame makes
+    // SyncBehaviourLifecycles dispatch Deactivated then Destroyed for the
+    // departing record — the remaining two phases.
+    scene.Components().Behaviours().Remove(proberObject.Entity());
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+}
+
 // LIB-007: BehaviourContext, FixedContext, FrameContext and RenderContext
 // must be reachable from a real dispatch for every LibraryLifecycleContextKind
 // (Behaviour, Fixed, Frame, Render), report the exact Self()/Phase() the
@@ -641,13 +758,48 @@ void RunLibraryContextTest() {
     kb::tests::Require(sawCreated && sawFixed && sawFrame && sawRender, "Engine21kbLibrary context types were not exercised for every classified lifecycle phase");
 }
 
-// LIB-005 regression: SyncBehaviourLifecycles must dispatch Deactivated for
-// multiple behaviours removed in the same frame in the guaranteed execution
-// order (TickGroup ascending, then executionOrder, then entity id) — never
-// in lifecycleRecords_'s unordered_map iteration order. The three
-// behaviours are created in Camera, Input, Gameplay order, which differs
-// from the expected TickGroup-sorted dispatch order (Input, Gameplay,
-// Camera), so only a real sort before dispatch can produce that sequence.
+// LIB-007 audit gap closed 2026-07-17: BehaviourContext/FixedContext/
+// FrameContext/RenderContext were copyable and exposed Raw() (a reference
+// to the call-scoped ScriptExecutionContext with no lifetime enforcement
+// beyond a comment) — a script could copy a context out of its callback,
+// retain it, and later call Raw() (or even the by-value accessors, which
+// also dereference the same dangling pointer) on a destroyed
+// ScriptExecutionContext. Compile-time proof the fix actually closes this:
+// none of the four types are copy- or move-constructible/-assignable
+// (deleted in LibraryContextBase, inherited by every final derived type),
+// and Raw() no longer exists as a callable member at all.
+static_assert(!std::is_copy_constructible_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be copy-constructible");
+static_assert(!std::is_copy_assignable_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be copy-assignable");
+static_assert(!std::is_move_constructible_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be move-constructible");
+static_assert(!std::is_move_assignable_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be move-assignable");
+static_assert(!std::is_copy_constructible_v<kb::library::FixedContext>, "Engine21kbLibrary FixedContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::FixedContext>, "Engine21kbLibrary FixedContext must not be move-constructible");
+static_assert(!std::is_copy_constructible_v<kb::library::FrameContext>, "Engine21kbLibrary FrameContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::FrameContext>, "Engine21kbLibrary FrameContext must not be move-constructible");
+static_assert(!std::is_copy_constructible_v<kb::library::RenderContext>, "Engine21kbLibrary RenderContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::RenderContext>, "Engine21kbLibrary RenderContext must not be move-constructible");
+
+// Raw() itself is gone (not merely restricted): EngineLibraryContext.hpp no
+// longer declares it on LibraryContextBase, so any code that tried to call
+// ctx.Raw() fails to compile with "Raw is not a member" — verified directly
+// while developing this fix, not asserted here (MSVC does not treat a
+// requires-expression over a genuinely nonexistent member as a SFINAE-able
+// false in a non-template context, so a compile-time "must not compile"
+// check for a fully-removed member isn't expressible portably here).
+
+// LIB-005/LIB-012 regression: SyncBehaviourLifecycles must dispatch BOTH
+// Deactivated and Destroyed for multiple behaviours removed (via
+// BehaviourComponent removal, not entity destruction or world shutdown) in
+// the same frame, in the guaranteed execution order (TickGroup ascending,
+// then executionOrder, then entity id) — never in lifecycleRecords_'s
+// unordered_map iteration order. The three behaviours are created in
+// Camera, Input, Gameplay order, which differs from the expected
+// TickGroup-sorted dispatch order (Input, Gameplay, Camera), so only a real
+// sort before dispatch can produce that sequence. Destroyed coverage closed
+// 2026-07-17 (audit gap: this test previously registered/checked Deactivated
+// only — RunShutdownDispatchesDeactivateAndDestroyInOrderTest, LIB-005,
+// proves the SAME order for the SEPARATE ExecuteShutdown/world-teardown
+// path, not this one).
 void RunMultipleBehavioursRemovedSameFrameOrderTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -659,21 +811,21 @@ void RunMultipleBehavioursRemovedSameFrameOrderTest() {
     kb::script::NativeScriptBackend* native = nativeBackend.get();
 
     std::vector<std::string> order;
-    kb::tests::Require(
-        native->RegisterLifecycle(kCameraAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Camera");
-        }),
-        "Multi-removal order test Camera registration failed");
-    kb::tests::Require(
-        native->RegisterLifecycle(kInputAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Input");
-        }),
-        "Multi-removal order test Input registration failed");
-    kb::tests::Require(
-        native->RegisterLifecycle(kGameplayAsset, kb::script::ScriptLifecycleEvent::Deactivated, [&](kb::script::ScriptExecutionContext&) {
-            order.emplace_back("Gameplay");
-        }),
-        "Multi-removal order test Gameplay registration failed");
+    const auto registerPair = [&](kb::assets::AssetId assetId, const char* label) {
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Deactivated, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Deactivated");
+            }),
+            "Multi-removal order test Deactivated registration failed");
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Destroyed, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Destroyed");
+            }),
+            "Multi-removal order test Destroyed registration failed");
+    };
+    registerPair(kCameraAsset, "Camera");
+    registerPair(kInputAsset, "Input");
+    registerPair(kGameplayAsset, "Gameplay");
 
     kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Multi-removal order test backend registration failed");
 
@@ -683,16 +835,75 @@ void RunMultipleBehavioursRemovedSameFrameOrderTest() {
 
     kb::script::ScriptRuntimeSceneSystem system{ runtime };
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
-    kb::tests::Require(order.empty(), "Multi-removal order test fixture must not deactivate anything before removal");
+    kb::tests::Require(order.empty(), "Multi-removal order test fixture must not deactivate/destroy anything before removal");
 
     scene.Components().Behaviours().Remove(cameraObject.Entity());
     scene.Components().Behaviours().Remove(inputObject.Entity());
     scene.Components().Behaviours().Remove(gameplayObject.Entity());
 
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    const std::vector<std::string> expected{ "Input.Deactivated", "Input.Destroyed", "Gameplay.Deactivated", "Gameplay.Destroyed", "Camera.Deactivated", "Camera.Destroyed" };
     kb::tests::Require(
-        order.size() == 3U && order[0] == "Input" && order[1] == "Gameplay" && order[2] == "Camera",
-        "Engine21kbLibrary must dispatch Deactivated for multiple behaviours removed in the same frame in TickGroup order, not unordered_map iteration order");
+        order == expected,
+        "Engine21kbLibrary must dispatch Deactivated then Destroyed per behaviour for multiple behaviours removed in the same frame, visiting behaviours in TickGroup order, not unordered_map iteration order");
+}
+
+// LIB-005 audit gap closed 2026-07-17: the regression above only proves
+// Deactivated order through SyncBehaviourLifecycles' per-frame removal path.
+// ExecuteShutdown (ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours) is a
+// SEPARATE production call site — SceneSystemContext::OnDestroy (world/host
+// teardown) and kb-cli's `run` command (CliRunCommand.cpp) both call it
+// directly — and nothing previously proved its Deactivated+Destroyed
+// dispatch also follows the guaranteed execution order rather than
+// lifecycleRecords_'s unordered_map iteration order. Three behaviours are
+// tracked (via one prior ExecuteFrame, matching real startup) in Camera,
+// Input, Gameplay creation order — the same scrambled order as the test
+// above — then torn down in one ExecuteShutdown call, without ever removing
+// their BehaviourComponent first (a real "world is going away" shutdown,
+// not a per-behaviour removal).
+void RunShutdownDispatchesDeactivateAndDestroyInOrderTest() {
+    kb::script::ScriptRuntime runtime;
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kCameraAsset{ 9311U };
+    constexpr kb::assets::AssetId kInputAsset{ 9312U };
+    constexpr kb::assets::AssetId kGameplayAsset{ 9313U };
+
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+
+    std::vector<std::string> order;
+    const auto registerPair = [&](kb::assets::AssetId assetId, const char* label) {
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Deactivated, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Deactivated");
+            }),
+            "Shutdown order test Deactivated registration failed");
+        kb::tests::Require(
+            native->RegisterLifecycle(assetId, kb::script::ScriptLifecycleEvent::Destroyed, [&order, label](kb::script::ScriptExecutionContext&) {
+                order.emplace_back(std::string(label) + ".Destroyed");
+            }),
+            "Shutdown order test Destroyed registration failed");
+    };
+    registerPair(kCameraAsset, "Camera");
+    registerPair(kInputAsset, "Input");
+    registerPair(kGameplayAsset, "Gameplay");
+
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Shutdown order test backend registration failed");
+
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kCameraAsset, "Camera", kb::scene::BehaviourTickGroup::Camera));
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kInputAsset, "Input", kb::scene::BehaviourTickGroup::Input));
+    static_cast<void>(SpawnNativeBehaviourObject(scene, kGameplayAsset, "Gameplay", kb::scene::BehaviourTickGroup::Gameplay));
+
+    kb::script::ScriptRuntimeSceneSystem system{ runtime };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(order.empty(), "Shutdown order test fixture must not deactivate/destroy anything before shutdown");
+
+    static_cast<void>(system.ExecuteShutdown(scene, 1.0F / 60.0F));
+
+    const std::vector<std::string> expected{ "Input.Deactivated", "Input.Destroyed", "Gameplay.Deactivated", "Gameplay.Destroyed", "Camera.Deactivated", "Camera.Destroyed" };
+    kb::tests::Require(
+        order == expected,
+        "Engine21kbLibrary ExecuteShutdown must dispatch Deactivated then Destroyed per behaviour, visiting behaviours in TickGroup order, not unordered_map iteration order");
 }
 
 // LIB-008: EntityHandle must report alive only for an entity that is both
@@ -1395,6 +1606,46 @@ void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::SceneRef, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::SceneRef must alias kb::assets::AssetHandle<SceneDocument>, not duplicate it");
     static_assert(std::is_same_v<kb::library::AssetRef<kb::scene::SceneDocument>, kb::assets::AssetHandle<kb::scene::SceneDocument>>, "kb::library::AssetRef<T> must alias kb::assets::AssetHandle<T>, not duplicate it");
 
+    // LIB-157: the typed asset-reference aliases for the kinds whose payload
+    // type kb_engine can name are exactly AssetRef<PayloadType> — no second
+    // handle model. (Mesh/Material/Texture have no alias here on purpose:
+    // their payloads live in kb_render; see EngineLibraryAssetRef.hpp.)
+    static_assert(std::is_same_v<kb::library::PrefabRef, kb::assets::AssetHandle<kb::scene::ScenePrefab>>, "kb::library::PrefabRef must alias kb::assets::AssetHandle<ScenePrefab>");
+    static_assert(std::is_same_v<kb::library::GraphRef, kb::assets::AssetHandle<kb::visual::VisualGraphAsset>>, "kb::library::GraphRef must alias kb::assets::AssetHandle<VisualGraphAsset>");
+    static_assert(std::is_same_v<kb::library::AudioClipRef, kb::assets::AssetHandle<kb::audio::AudioClipAsset>>, "kb::library::AudioClipRef must alias kb::assets::AssetHandle<AudioClipAsset>");
+    static_assert(std::is_same_v<kb::library::InputActionRef, kb::assets::AssetHandle<kb::input::InputActionAsset>>, "kb::library::InputActionRef must alias kb::assets::AssetHandle<InputActionAsset>");
+    static_assert(std::is_same_v<kb::library::InputMapRef, kb::assets::AssetHandle<kb::input::InputMappingContextAsset>>, "kb::library::InputMapRef must alias kb::assets::AssetHandle<InputMappingContextAsset>");
+
+    // A typed alias is a real, usable handle, not just a name: construct one
+    // over an AssetManager-shaped shared payload and prove it dereferences
+    // and reports its id/loaded state exactly like the generic AssetHandle
+    // it aliases (the file-backed Load<T> path itself is covered by
+    // RunAssetRuntimeTests; here we only prove the alias carries a payload).
+    const kb::assets::AssetId clipId{ 90201U };
+    const kb::library::AudioClipRef clipRef{ clipId, std::make_shared<const kb::audio::AudioClipAsset>(kb::audio::AudioClipAsset{ .path = "/Game/Audio/Typed.wav" }) };
+    kb::tests::Require(clipRef.IsLoaded() && clipRef.Id() == clipId, "Engine21kbLibrary AudioClipRef must behave as a loaded AssetHandle carrying its id");
+    kb::tests::Require(clipRef->path == std::filesystem::path{ "/Game/Audio/Typed.wav" }, "Engine21kbLibrary AudioClipRef must dereference to its typed payload");
+    const kb::library::AudioClipRef emptyClipRef{};
+    kb::tests::Require(!emptyClipRef.IsLoaded(), "Engine21kbLibrary AudioClipRef default-constructs to an unloaded handle");
+
+    // LIB-158: WeakAssetRef<T> is the non-owning companion — it aliases
+    // kb::assets::WeakAssetHandle<T>, observes a payload without extending
+    // its lifetime, and Lock()s back to a strong AssetRef while alive.
+    static_assert(std::is_same_v<kb::library::WeakAssetRef<kb::audio::AudioClipAsset>, kb::assets::WeakAssetHandle<kb::audio::AudioClipAsset>>,
+        "kb::library::WeakAssetRef<T> must alias kb::assets::WeakAssetHandle<T>, not duplicate it");
+    {
+        kb::library::AudioClipRef strong{ clipId, std::make_shared<const kb::audio::AudioClipAsset>(kb::audio::AudioClipAsset{ .path = "/Game/Audio/Weak.wav" }) };
+        const kb::library::WeakAssetRef<kb::audio::AudioClipAsset> weakRef{ strong };
+        kb::tests::Require(!weakRef.Expired() && weakRef.Id() == clipId, "A WeakAssetRef built from a live AssetRef must not be expired and must carry its id");
+        const kb::library::AudioClipRef relocked = weakRef.Lock();
+        kb::tests::Require(relocked.IsLoaded() && relocked->path == std::filesystem::path{ "/Game/Audio/Weak.wav" }, "Locking a live WeakAssetRef must yield the strong payload");
+        strong = kb::library::AudioClipRef{};
+        // `relocked` still holds it — not yet expired.
+        kb::tests::Require(!weakRef.Expired(), "A WeakAssetRef must stay live while ANY strong holder (the relocked handle) remains");
+    }
+    const kb::library::WeakAssetRef<kb::audio::AudioClipAsset> expiredWeak{ kb::library::AudioClipRef{ clipId, std::make_shared<const kb::audio::AudioClipAsset>() } };
+    kb::tests::Require(expiredWeak.Expired() && !expiredWeak.Lock().IsLoaded(), "A WeakAssetRef whose only strong holder was a temporary must be expired, and Lock() must yield an empty handle");
+
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_asset_ref_tests";
     std::error_code removeError;
     std::filesystem::remove_all(testRoot, removeError);
@@ -2035,8 +2286,9 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(spawned.IsValid(), "Engine21kbLibrary CommandBatch::Spawn must return a valid (though not-yet-real) BatchEntity");
 
     batch.Add<kb::scene::CameraComponent>(spawned, kb::scene::CameraComponent{ .verticalFovDegrees = 45.0F });
-    batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F });
-    batch.Destroy(toDestroyHandle);
+    kb::tests::Require(batch.Add<kb::scene::CameraComponent>(existingHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 77.0F }),
+        "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) for a live handle");
+    kb::tests::Require(batch.Destroy(toDestroyHandle), "Engine21kbLibrary CommandBatch::Destroy must succeed (queue the command) for a live handle");
     kb::tests::Require(batch.AddTag(existingHandle, "Enemy"), "Engine21kbLibrary CommandBatch::AddTag must succeed for a live handle");
 
     // Nothing must have applied yet — the whole point of a command batch.
@@ -2044,9 +2296,10 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(scene.Entities().IsAlive(toDestroyObject.Entity()), "Engine21kbLibrary CommandBatch::Destroy must not apply anything before Flush()");
     kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::AddTag must not apply anything before Flush()");
 
-    const kb::ecs::CommandBufferPlaybackResult result = batch.Flush();
-    kb::tests::Require(result.CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
-    const kb::ecs::Entity resolvedSpawned = result.Resolve(spawned.Raw());
+    const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+    kb::tests::Require(result.has_value(), "Engine21kbLibrary CommandBatch::Flush must succeed when every tracked target is still alive");
+    kb::tests::Require(result->CreatedCount() == 1U, "Engine21kbLibrary CommandBatch::Flush must report exactly one created entity");
+    const kb::ecs::Entity resolvedSpawned = result->Resolve(spawned.Raw());
     kb::tests::Require(resolvedSpawned.IsValid() && scene.Entities().IsAlive(resolvedSpawned), "Engine21kbLibrary CommandBatch::Flush must resolve Spawn's BatchEntity to a real, live entity");
     const kb::scene::CameraComponent* spawnedCamera = scene.Components().Cameras().TryGet(resolvedSpawned);
     kb::tests::Require(spawnedCamera != nullptr && kb::tests::NearlyEqual(spawnedCamera->verticalFovDegrees, 45.0F), "Engine21kbLibrary CommandBatch::Add<T> on a BatchEntity must apply to the resolved real entity after Flush()");
@@ -2062,7 +2315,8 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(scene.Components().Tags().TryGet(existingObject.Entity()) == nullptr, "Engine21kbLibrary CommandBatch::RemoveTag removing the only tag must leave no TagsComponent, matching World.SetTag's existing convention");
 
     kb::library::CommandBatch removeComponentBatch{ scene };
-    removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle);
+    kb::tests::Require(removeComponentBatch.Remove<kb::scene::CameraComponent>(existingHandle),
+        "Engine21kbLibrary CommandBatch::Remove<T> must succeed (queue the command) for a live handle");
     static_cast<void>(removeComponentBatch.Flush());
     kb::tests::Require(!scene.Components().Cameras().Has(existingObject.Entity()), "Engine21kbLibrary CommandBatch::Remove<T> must apply after Flush()");
 
@@ -2078,7 +2332,7 @@ void RunLibraryCommandBatchTest() {
     int recordedInsideLoop = 0;
     kb::tests::Require(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
                             [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
-                                recordDuringQueryBatch.Destroy(entity);
+                                static_cast<void>(recordDuringQueryBatch.Destroy(entity));
                                 ++recordedInsideLoop;
                             }),
         "Engine21kbLibrary CommandBatch test's Query<T>::ForEach must actually iterate");
@@ -2096,7 +2350,7 @@ void RunLibraryCommandBatchTest() {
     bool flushInsideQueryThrew = false;
     static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
         [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
-            flushInsideQueryBatch.Destroy(entity);
+            static_cast<void>(flushInsideQueryBatch.Destroy(entity));
             try {
                 static_cast<void>(flushInsideQueryBatch.Flush());
             } catch (const std::logic_error&) {
@@ -2104,6 +2358,69 @@ void RunLibraryCommandBatchTest() {
             }
         }));
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+}
+
+// LIB-012 audit gap closed 2026-07-17: RunLibraryCommandBatchTest above only
+// proves a command is cancelled when its EntityHandle target is ALREADY
+// dead at record time (deadHandleBatch.AddTag). Before this fix, a command
+// whose target went stale AFTER being recorded but BEFORE Flush() — the
+// literal "anulowanie pending commands" (same-frame destroy-races-a-pending-
+// command) scenario this task asks for — was not cancelled at all: it
+// reached kb::ecs::CommandBuffer::Playback, which threw std::out_of_range
+// (World::ValidateEntityHandle) uncaught. This proves the real fix: Flush()
+// re-checks every tracked target and returns std::nullopt (nothing
+// applied), for Destroy/Add<T>/Remove<T>/AddTag alike, without throwing.
+void RunLibraryCommandBatchCancelsStaleTargetOnFlushTest() {
+    kb::scene::Scene scene;
+
+    // Destroy() recorded against a target killed by an unrelated, direct
+    // path before Flush().
+    {
+        const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleDestroyTarget" });
+        const kb::library::EntityHandle handle{ target.Entity(), scene.Id() };
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Destroy(handle), "Engine21kbLibrary CommandBatch::Destroy must succeed (queue the command) while the target is still alive");
+        scene.Entities().Destroy(target.Entity());
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Destroy's target died before Flush()");
+    }
+
+    // Add<T>() recorded against a target killed the same way — and a SECOND,
+    // otherwise-valid command in the SAME batch must also NOT apply: Flush()
+    // is all-or-nothing, so one stale target cancels the whole batch rather
+    // than silently partially applying it.
+    {
+        const kb::scene::SceneObject staleTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleAddTarget" });
+        const kb::library::EntityHandle staleHandle{ staleTarget.Entity(), scene.Id() };
+        const kb::scene::SceneObject otherTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleAddOtherTarget" });
+        const kb::library::EntityHandle otherHandle{ otherTarget.Entity(), scene.Id() };
+
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Add<kb::scene::CameraComponent>(staleHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 10.0F }),
+            "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) while the target is still alive");
+        kb::tests::Require(batch.Add<kb::scene::CameraComponent>(otherHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 20.0F }),
+            "Engine21kbLibrary CommandBatch::Add<T> must succeed (queue the command) for the second, unrelated target");
+        scene.Entities().Destroy(staleTarget.Entity());
+
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Add<T>'s target died before Flush()");
+        kb::tests::Require(!scene.Components().Cameras().Has(otherTarget.Entity()),
+            "Engine21kbLibrary CommandBatch::Flush cancelling for one stale target must not leave the OTHER, still-valid command in this batch partially applied");
+    }
+
+    // Remove<T>() and AddTag/RemoveTag are covered by the same tracked-
+    // target mechanism as Destroy/Add<T> — a single representative check
+    // (Remove<T>) confirms the fix is not Destroy/Add-specific.
+    {
+        const kb::scene::SceneObject target = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StaleRemoveTarget" });
+        scene.Components().Cameras().Set(target.Entity(), kb::scene::CameraComponent{});
+        const kb::library::EntityHandle handle{ target.Entity(), scene.Id() };
+        kb::library::CommandBatch batch{ scene };
+        kb::tests::Require(batch.Remove<kb::scene::CameraComponent>(handle), "Engine21kbLibrary CommandBatch::Remove<T> must succeed (queue the command) while the target is still alive");
+        scene.Entities().Destroy(target.Entity());
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> result = batch.Flush();
+        kb::tests::Require(!result.has_value(), "Engine21kbLibrary CommandBatch::Flush must cancel (return nullopt), not throw, when a recorded Remove<T>'s target died before Flush()");
+    }
 }
 
 // LIB-081: kb::library::ComponentChangeTracker<Component> — proves the
@@ -2388,7 +2705,7 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
         static_cast<void>(kb::library::Query<kb::scene::CameraComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
             [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent&) {
                 if (entity.Entity() == toDestroy.Entity()) {
-                    batch.Destroy(entity);
+                    static_cast<void>(batch.Destroy(entity));
                 }
             }));
         static_cast<void>(batch.Flush());
@@ -2411,16 +2728,16 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
         const kb::scene::SceneObject addThenDestroy = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AddThenDestroy" });
         const kb::library::EntityHandle addThenDestroyHandle{ addThenDestroy.Entity(), scene.Id() };
         kb::library::CommandBatch addThenDestroyBatch{ scene };
-        addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F });
-        addThenDestroyBatch.Destroy(addThenDestroyHandle);
+        static_cast<void>(addThenDestroyBatch.Add<kb::scene::CameraComponent>(addThenDestroyHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 5.0F }));
+        static_cast<void>(addThenDestroyBatch.Destroy(addThenDestroyHandle));
         static_cast<void>(addThenDestroyBatch.Flush());
         kb::tests::Require(!scene.Entities().IsAlive(addThenDestroy.Entity()), "Engine21kbLibrary CommandBatch: Add<T> recorded BEFORE Destroy on the same entity must still result in the entity being destroyed after Flush()");
 
         const kb::scene::SceneObject destroyThenAdd = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DestroyThenAdd" });
         const kb::library::EntityHandle destroyThenAddHandle{ destroyThenAdd.Entity(), scene.Id() };
         kb::library::CommandBatch destroyThenAddBatch{ scene };
-        destroyThenAddBatch.Destroy(destroyThenAddHandle);
-        destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F });
+        static_cast<void>(destroyThenAddBatch.Destroy(destroyThenAddHandle));
+        static_cast<void>(destroyThenAddBatch.Add<kb::scene::CameraComponent>(destroyThenAddHandle, kb::scene::CameraComponent{ .verticalFovDegrees = 6.0F }));
         static_cast<void>(destroyThenAddBatch.Flush());
         kb::tests::Require(!scene.Entities().IsAlive(destroyThenAdd.Entity()), "Engine21kbLibrary CommandBatch: Destroy recorded BEFORE Add<T> on the same entity must still result in the entity being destroyed after Flush() — recording order must not change the outcome");
     }
@@ -2763,14 +3080,17 @@ void RunEngineLibraryTests() {
     RunModuleValidationUnknownDependencyTest();
     RunModuleValidationCycleTest();
     RunModuleValidationDuplicateFunctionTest();
+    RunModuleValidationFunctionPrefixMismatchTest();
     RunModuleInstallFailsFastOnInvalidCatalogTest();
     RunTypeDescTest();
     RunPropertyDescTest();
     RunLifecycleContextClassificationTest();
     RunExecutionOrderContractTest();
     RunCommandApplicationContractTest();
+    RunCommandApplicationImmediateAcrossAllPhasesTest();
     RunLibraryContextTest();
     RunMultipleBehavioursRemovedSameFrameOrderTest();
+    RunShutdownDispatchesDeactivateAndDestroyInOrderTest();
     RunEntityHandleTest();
     RunEntityHandleScriptComponentAccessTest();
     RunEntityHandleMeshRendererComponentAccessTest();
@@ -2796,6 +3116,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
     RunLibraryCommandBatchTest();
+    RunLibraryCommandBatchCancelsStaleTargetOnFlushTest();
     RunComponentChangeTrackerTest();
     RunTransformChangeTrackerTest();
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();

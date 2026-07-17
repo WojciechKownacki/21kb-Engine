@@ -8,9 +8,34 @@
 #include "assets/AssetPathUtilities.hpp"
 #include "assets/AssetRuntimeLoadService.hpp"
 
+#include <string>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace kb::assets {
+
+std::string_view ToString(AssetUnloadPolicy policy) noexcept {
+    switch (policy) {
+    case AssetUnloadPolicy::Retain:
+        return "Retain";
+    case AssetUnloadPolicy::ReleaseWhenUnreferenced:
+        return "ReleaseWhenUnreferenced";
+    }
+    return "Retain";
+}
+
+bool TryParseAssetUnloadPolicy(std::string_view name, AssetUnloadPolicy& out) noexcept {
+    if (name == "Retain") {
+        out = AssetUnloadPolicy::Retain;
+        return true;
+    }
+    if (name == "ReleaseWhenUnreferenced") {
+        out = AssetUnloadPolicy::ReleaseWhenUnreferenced;
+        return true;
+    }
+    return false;
+}
 
 AssetMountTable& AssetManager::Mounts() noexcept {
     return mounts_;
@@ -188,20 +213,171 @@ bool AssetManager::DeleteAsset(AssetId id) {
     return true;
 }
 
+bool AssetManager::LoadOpaque(AssetId id) {
+    lastError_.clear();
+    if (!id.IsValid()) {
+        lastError_ = "Invalid asset id";
+        return false;
+    }
+
+    const AssetMetadata* metadata = registry_.Find(id);
+    if (metadata == nullptr) {
+        lastError_ = "Asset is not registered";
+        return false;
+    }
+
+    IAssetLoader* loader = LoaderForType(metadata->type);
+    if (loader == nullptr) {
+        lastError_ = "No loader registered for asset type: " + metadata->type;
+        return false;
+    }
+
+    return LoadUntyped(id, loader->PayloadType()) != nullptr;
+}
+
 bool AssetManager::Unload(AssetId id) noexcept {
     return cache_.erase(id.value) > 0;
 }
 
 bool AssetManager::IsLoaded(AssetId id) const noexcept {
-    return cache_.contains(id.value);
+    const auto cached = cache_.find(id.value);
+    return cached != cache_.end() && !cached->second.weak.expired();
 }
 
 std::size_t AssetManager::LoadedCount() const noexcept {
-    return cache_.size();
+    std::size_t count = 0;
+    for (const auto& [key, entry] : cache_) {
+        if (!entry.weak.expired()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t AssetManager::ReferenceCount(AssetId id) const noexcept {
+    const auto cached = cache_.find(id.value);
+    if (cached == cache_.end()) {
+        return 0;
+    }
+    const long total = cached->second.weak.use_count();
+    const long cacheOwned = cached->second.retained != nullptr ? 1 : 0;
+    const long external = total - cacheOwned;
+    return external <= 0 ? 0 : static_cast<std::size_t>(external);
+}
+
+AssetUnloadPolicy AssetManager::UnloadPolicy(AssetId id) const noexcept {
+    const auto cached = cache_.find(id.value);
+    return cached == cache_.end() ? AssetUnloadPolicy::Retain : cached->second.policy;
+}
+
+bool AssetManager::SetUnloadPolicy(AssetId id, AssetUnloadPolicy policy) {
+    const auto cached = cache_.find(id.value);
+    if (cached == cache_.end() || cached->second.weak.expired()) {
+        return false;
+    }
+    cached->second.policy = policy;
+    if (policy == AssetUnloadPolicy::ReleaseWhenUnreferenced) {
+        // Drop the cache's strong reference; the payload now lives only as
+        // long as some external AssetHandle holds it. If none does, it is
+        // freed here and the dead entry pruned immediately.
+        cached->second.retained.reset();
+        if (cached->second.weak.expired()) {
+            cache_.erase(cached);
+        }
+    } else {
+        // Re-pin the still-live payload so the cache keeps it resident.
+        cached->second.retained = cached->second.weak.lock();
+    }
+    return true;
+}
+
+std::size_t AssetManager::PruneUnreferenced() noexcept {
+    std::size_t removed = 0;
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        if (it->second.weak.expired()) {
+            it = cache_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
 }
 
 bool AssetManager::HasLoaderForType(std::string_view type) const noexcept {
     return LoaderForType(type) != nullptr;
+}
+
+namespace {
+
+[[nodiscard]] std::string DescribeAsset(const AssetMetadata& metadata) {
+    const std::string virtualPath = NormalizeAssetPath(metadata.virtualPath);
+    return (virtualPath.empty() ? ToString(metadata.id) : virtualPath) + " (" + ToString(metadata.id) + ")";
+}
+
+} // namespace
+
+AssetCompatibilityReport AssetManager::ValidateCompatibility(AssetId id) const {
+    AssetCompatibilityReport report;
+
+    const AssetMetadata* root = registry_.Find(id);
+    if (root == nullptr) {
+        report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+            .issue = AssetCompatibilityIssue::MissingDependency,
+            .asset = id,
+            .dependency = id,
+            .message = "Asset " + ToString(id) + " is not registered",
+        });
+        report.compatible = false;
+        return report;
+    }
+
+    std::unordered_set<std::uint64_t> visited;
+    std::vector<AssetId> pending{ id };
+    while (!pending.empty()) {
+        const AssetId current = pending.back();
+        pending.pop_back();
+        if (!visited.insert(current.value).second) {
+            continue;
+        }
+
+        const AssetMetadata* metadata = registry_.Find(current);
+        if (metadata == nullptr) {
+            // Only ids we already confirmed registered are pushed, so this
+            // path is unreachable in practice; guard defensively.
+            continue;
+        }
+
+        if (LoaderForType(metadata->type) == nullptr) {
+            report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+                .issue = AssetCompatibilityIssue::IncompatibleType,
+                .asset = current,
+                .dependency = {},
+                .message = "Asset " + DescribeAsset(*metadata) + " has type \"" + metadata->type + "\" which has no registered loader in this runtime",
+            });
+        }
+
+        for (const AssetId dependency : metadata->dependencies) {
+            const AssetMetadata* dependencyMetadata = registry_.Find(dependency);
+            if (dependencyMetadata == nullptr) {
+                report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+                    .issue = AssetCompatibilityIssue::MissingDependency,
+                    .asset = current,
+                    .dependency = dependency,
+                    .message = "Asset " + DescribeAsset(*metadata) + " depends on " + ToString(dependency) + " which is not registered",
+                });
+                continue;
+            }
+            pending.push_back(dependency);
+        }
+    }
+
+    report.compatible = report.diagnostics.empty();
+    return report;
+}
+
+bool AssetManager::IsCompatible(AssetId id) const {
+    return ValidateCompatibility(id).compatible;
 }
 
 std::string AssetManager::LastError() const {

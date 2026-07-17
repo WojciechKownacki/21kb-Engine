@@ -8,6 +8,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTasks.hpp"
@@ -96,6 +97,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     AdvanceParticleSystems(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -251,6 +253,23 @@ void ScriptRuntimeSceneSystem::DispatchPendingAudioMarkerEvents(kb::scene::Scene
         event.arguments.push_back(ScriptEventArgument{ .name = "voice", .value = ScriptValue{ static_cast<int>(pending.voiceId) } });
         event.arguments.push_back(ScriptEventArgument{ .name = "marker", .value = ScriptValue{ pending.marker } });
         event.arguments.push_back(ScriptEventArgument{ .name = "positionSeconds", .value = ScriptValue{ pending.positionSeconds } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingPrefabInstantiatedEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // LIB-160: ENTITY-LOCAL, exactly like the collision/marker events above -
+    // the target is the CALLER that requested the spawn (World.
+    // InstantiatePrefab's context.caller), and the arguments carry the
+    // instantiated root entity and the object count, so a spawn-manager
+    // script gets a real "your prefab finished instantiating, here is its
+    // root" completion callback.
+    for (const kb::scene::ScenePrefabInstantiatedEventRecord& pending : scene.Prefabs().DrainPendingInstantiatedEvents()) {
+        ScriptEvent event;
+        event.name = "OnPrefabInstantiated";
+        event.target = pending.caller;
+        event.arguments.push_back(ScriptEventArgument{ .name = "root", .value = ScriptValue{ pending.root.Id(), ScriptValueType::Entity } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "count", .value = ScriptValue{ pending.count } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }
