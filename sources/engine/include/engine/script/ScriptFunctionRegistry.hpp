@@ -32,6 +32,15 @@ struct ScriptFunctionSignature {
     std::string name;
     std::vector<ScriptFunctionPin> inputs;
     std::vector<ScriptFunctionPin> outputs;
+    // LIB-025: empty when the function is not deprecated. Set via
+    // ScriptFunctionRegistry::MarkDeprecated (never at Register() time —
+    // deprecation is authored as kb::library::LibraryFunctionDesc::
+    // deprecation, a higher-level concept kb::script must not depend on;
+    // kb::library applies it to the already-registered signature after the
+    // fact instead). A plain string, not a richer type, so this stays a
+    // kb::script-only concern: Call() below only needs to know THAT there
+    // is a warning to surface, not why.
+    std::string deprecationMessage;
 };
 
 struct ScriptFunctionCallContext {
@@ -47,6 +56,13 @@ struct ScriptFunctionCallResult {
     bool executed = false;
     std::vector<ScriptFunctionArgument> outputs;
     std::vector<std::string> errors;
+    // LIB-025: populated by Call() below when the invoked function's
+    // signature carries a deprecationMessage — present on ANY actual
+    // invocation attempt (successful or one that later fails output
+    // validation), never on a call rejected before it ran (unknown
+    // function, input type mismatch, reentrancy limit). A warning, not an
+    // error: it never affects Succeeded().
+    std::vector<std::string> warnings;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return errors.empty();
@@ -74,6 +90,16 @@ public:
     [[nodiscard]] bool Register(ScriptFunctionDesc function);
     [[nodiscard]] const ScriptFunctionSignature* FindSignature(std::string_view name) const noexcept;
     [[nodiscard]] const std::vector<ScriptFunctionDesc>& Functions() const noexcept;
+    // LIB-025: sets an already-registered function's deprecation warning
+    // message (Call() surfaces it via ScriptFunctionCallResult::warnings on
+    // every real invocation). Returns false if `name` is not registered.
+    // Deliberately independent of Lock(): kb::library applies this once, at
+    // ScriptRuntimeHost setup right after EngineLibraryModule::Install()
+    // registers the module that owns `name`, which is itself before any
+    // dispatch — but this is a signature-metadata update, not a new
+    // function becoming callable, so it does not need Lock()'s "visible to
+    // every already-snapshotted dispatch path" guarantee.
+    [[nodiscard]] bool MarkDeprecated(std::string_view name, std::string message) noexcept;
     [[nodiscard]] ScriptFunctionCallResult Call(
         std::string_view name,
         std::span<const ScriptFunctionArgument> arguments,
