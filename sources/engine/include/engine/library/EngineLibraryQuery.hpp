@@ -6,6 +6,7 @@
 #include "engine/ecs/StructuralChangeValidator.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
+#include "engine/library/EngineLibraryExecutionOrder.hpp"
 #include "engine/library/EngineLibraryLifecycle.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -92,7 +93,11 @@ public:
         return *this;
     }
 
-    using ComponentIdResolver = kb::ecs::ComponentId (*)(const kb::ecs::World&);
+    // ComponentId (LIB-005) — the same kb::ecs::ComponentId, named through
+    // kb::library's own alias rather than the raw engine type, so this
+    // resolver is a real consumer of the identifier LIB-005 defines instead
+    // of leaving it declared-only.
+    using ComponentIdResolver = ComponentId (*)(const kb::ecs::World&);
     using AnyPredicate = bool (*)(const kb::ecs::World&, kb::ecs::Entity);
 
     [[nodiscard]] std::span<const ComponentIdResolver> WithResolvers() const noexcept { return with_; }
@@ -104,7 +109,7 @@ public:
 
 private:
     template <typename Component>
-    [[nodiscard]] static kb::ecs::ComponentId ResolveComponentId(const kb::ecs::World& world) noexcept {
+    [[nodiscard]] static ComponentId ResolveComponentId(const kb::ecs::World& world) noexcept {
         return world.Component<Component>();
     }
 
