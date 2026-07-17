@@ -758,6 +758,35 @@ void RunLibraryContextTest() {
     kb::tests::Require(sawCreated && sawFixed && sawFrame && sawRender, "Engine21kbLibrary context types were not exercised for every classified lifecycle phase");
 }
 
+// LIB-007 audit gap closed 2026-07-17: BehaviourContext/FixedContext/
+// FrameContext/RenderContext were copyable and exposed Raw() (a reference
+// to the call-scoped ScriptExecutionContext with no lifetime enforcement
+// beyond a comment) — a script could copy a context out of its callback,
+// retain it, and later call Raw() (or even the by-value accessors, which
+// also dereference the same dangling pointer) on a destroyed
+// ScriptExecutionContext. Compile-time proof the fix actually closes this:
+// none of the four types are copy- or move-constructible/-assignable
+// (deleted in LibraryContextBase, inherited by every final derived type),
+// and Raw() no longer exists as a callable member at all.
+static_assert(!std::is_copy_constructible_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be copy-constructible");
+static_assert(!std::is_copy_assignable_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be copy-assignable");
+static_assert(!std::is_move_constructible_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be move-constructible");
+static_assert(!std::is_move_assignable_v<kb::library::BehaviourContext>, "Engine21kbLibrary BehaviourContext must not be move-assignable");
+static_assert(!std::is_copy_constructible_v<kb::library::FixedContext>, "Engine21kbLibrary FixedContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::FixedContext>, "Engine21kbLibrary FixedContext must not be move-constructible");
+static_assert(!std::is_copy_constructible_v<kb::library::FrameContext>, "Engine21kbLibrary FrameContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::FrameContext>, "Engine21kbLibrary FrameContext must not be move-constructible");
+static_assert(!std::is_copy_constructible_v<kb::library::RenderContext>, "Engine21kbLibrary RenderContext must not be copy-constructible");
+static_assert(!std::is_move_constructible_v<kb::library::RenderContext>, "Engine21kbLibrary RenderContext must not be move-constructible");
+
+// Raw() itself is gone (not merely restricted): EngineLibraryContext.hpp no
+// longer declares it on LibraryContextBase, so any code that tried to call
+// ctx.Raw() fails to compile with "Raw is not a member" — verified directly
+// while developing this fix, not asserted here (MSVC does not treat a
+// requires-expression over a genuinely nonexistent member as a SFINAE-able
+// false in a non-template context, so a compile-time "must not compile"
+// check for a fully-removed member isn't expressible portably here).
+
 // LIB-005 regression: SyncBehaviourLifecycles must dispatch Deactivated for
 // multiple behaviours removed in the same frame in the guaranteed execution
 // order (TickGroup ascending, then executionOrder, then entity id) — never
