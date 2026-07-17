@@ -286,6 +286,22 @@ Radians Atan2(float y, float x) noexcept {
 
 namespace {
 
+// LIB-054: a lattice coordinate is `static_cast<int32_t>(Floor(coord))`.
+// Casting a float that is NaN, +/-infinity, or simply larger in magnitude
+// than INT32_MAX to int32_t is undefined behaviour. Non-finite inputs are
+// screened out before this is ever called (Noise3D returns 0 for them);
+// this additionally clamps a finite but out-of-int32-range floored value
+// to the representable range (leaving headroom for the `+ 1` neighbour
+// lattice index) so the cast is always defined. A coordinate past
+// +/-2.1e9 is astronomically far from any real sampling; saturating there
+// is a defined, benign result rather than UB.
+[[nodiscard]] std::int32_t FloorToLatticeInt(float flooredCoord) noexcept {
+    constexpr float kMaxLattice = 2147483646.0F; // INT32_MAX - 1, exactly representable as float
+    constexpr float kMinLattice = -2147483648.0F; // INT32_MIN, exactly representable as float
+    const float clamped = flooredCoord > kMaxLattice ? kMaxLattice : (flooredCoord < kMinLattice ? kMinLattice : flooredCoord);
+    return static_cast<std::int32_t>(clamped);
+}
+
 [[nodiscard]] constexpr std::uint32_t CornerHash(std::int32_t x, std::int32_t y, std::int32_t z, std::uint32_t seed) noexcept {
     std::uint32_t h = Hash32(x, seed);
     h = Hash32(y, h);
@@ -316,12 +332,19 @@ float Random01(std::uint32_t seed, std::uint32_t index) noexcept {
 }
 
 float Noise3D(float x, float y, float z, std::uint32_t seed) noexcept {
+    // LIB-054: gradient noise has no defined meaning at a NaN or infinite
+    // coordinate, and flooring-then-casting one to int32 (below) would be
+    // UB. Return the neutral 0.0F (the same value the noise takes at every
+    // integer lattice point) instead of computing on undefined data.
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        return 0.0F;
+    }
     const float floorX = Floor(x);
     const float floorY = Floor(y);
     const float floorZ = Floor(z);
-    const std::int32_t xi = static_cast<std::int32_t>(floorX);
-    const std::int32_t yi = static_cast<std::int32_t>(floorY);
-    const std::int32_t zi = static_cast<std::int32_t>(floorZ);
+    const std::int32_t xi = FloorToLatticeInt(floorX);
+    const std::int32_t yi = FloorToLatticeInt(floorY);
+    const std::int32_t zi = FloorToLatticeInt(floorZ);
     const float fx = x - floorX;
     const float fy = y - floorY;
     const float fz = z - floorZ;
