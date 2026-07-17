@@ -1,5 +1,6 @@
 #include "engine/library/EngineLibraryModule.hpp"
 
+#include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
@@ -300,6 +301,25 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
         } else {
             entry.installed = true;
+            // LIB-025: apply each audited function's declared deprecation
+            // (if any) to the now-registered ScriptFunctionRegistry entry —
+            // the one place kb::library is allowed to reach into a
+            // kb::script signature after the fact, since deprecation is
+            // authored here (LibraryFunctionDesc), not in ScriptXxxApi::
+            // Register(). A canonicalName that fails to resolve here is a
+            // real catalog bug (an audited deprecation for a function that
+            // does not actually exist under that name), not something to
+            // silently drop.
+            for (const LibraryFunctionDesc& function : module.functions) {
+                if (!function.deprecation.has_value()) {
+                    continue;
+                }
+                if (!host.Functions().MarkDeprecated(function.canonicalName, FormatDeprecationWarning(function.canonicalName, *function.deprecation))) {
+                    result.succeeded = false;
+                    result.diagnostics.emplace_back(
+                        "module '" + module.name + "' declares '" + function.canonicalName + "' deprecated, but that function is not registered");
+                }
+            }
         }
         result.report.push_back(std::move(entry));
     }
