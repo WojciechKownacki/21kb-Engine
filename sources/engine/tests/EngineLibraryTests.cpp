@@ -288,7 +288,12 @@ void RunModuleInstallStartupReportTest() {
 // LIB-017: every audited LibraryFunctionDesc::canonicalName across the
 // whole module catalog must resolve to a function ScriptApiCatalog reports
 // as actually registered — an audited function description can never
-// outlive (or predate) the real ScriptFunctionRegistry entry it describes.
+// outlive (or predate) the real ScriptFunctionRegistry entry it describes —
+// AND its recorded inputs/outputs must machine-match the real, live
+// ScriptFunctionSignature-derived pins (FunctionDescMatchesCatalog), not
+// just its name. This is the "wejścia, wyjścia" half of LIB-017's contract
+// the 2026-07-17 audit found unfulfilled: recording pins that are never
+// cross-checked against the registry would be no better than prose.
 void RunFunctionDescCatalogResolvesTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -302,9 +307,55 @@ void RunFunctionDescCatalogResolvesTest() {
             kb::tests::Require(
                 catalog.FindFunction(function.canonicalName) != nullptr,
                 "Engine21kbLibrary LibraryFunctionDesc names a function ScriptApiCatalog does not report as registered");
+            kb::tests::Require(
+                kb::library::FunctionDescMatchesCatalog(function, catalog),
+                "Engine21kbLibrary LibraryFunctionDesc's recorded inputs/outputs do not machine-match the real registered signature");
         }
     }
     kb::tests::Require(sawAnyAuditedFunction, "Engine21kbLibrary module catalog must have at least one audited LibraryFunctionDesc");
+}
+
+// LIB-017 adversarial: FunctionDescMatchesCatalog must actually be capable
+// of REJECTING a mismatch, not just accepting whatever the production
+// catalog happens to contain today. Exercises a wrong pin name, a wrong
+// pin type, a wrong required flag, a missing pin, and an unresolvable
+// canonicalName — each independently, each caught.
+void RunFunctionDescMatchesCatalogRejectsMismatchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary function desc mismatch test host setup failed");
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+
+    const kb::library::LibraryFunctionDesc correct{
+        .canonicalName = "World.Exists",
+        .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+        .outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Bool, true } },
+    };
+    kb::tests::Require(kb::library::FunctionDescMatchesCatalog(correct, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must accept a genuinely correct description");
+
+    kb::library::LibraryFunctionDesc wrongName = correct;
+    wrongName.canonicalName = "World.DoesNotExist";
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongName, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject an unresolvable canonicalName");
+
+    kb::library::LibraryFunctionDesc wrongInputName = correct;
+    wrongInputName.inputs = { kb::script::ScriptApiPin{ "target", kb::script::ScriptValueType::Entity, true } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongInputName, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong input pin name");
+
+    kb::library::LibraryFunctionDesc wrongOutputType = correct;
+    wrongOutputType.outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Int, true } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongOutputType, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong output pin type");
+
+    kb::library::LibraryFunctionDesc wrongRequired = correct;
+    wrongRequired.inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, false } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongRequired, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong required flag");
+
+    kb::library::LibraryFunctionDesc missingInput = correct;
+    missingInput.inputs.clear();
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(missingInput, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a missing input pin");
+
+    kb::library::LibraryFunctionDesc extraOutput = correct;
+    extraOutput.outputs.push_back(kb::script::ScriptApiPin{ "extra", kb::script::ScriptValueType::Bool, true });
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(extraOutput, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject an extra output pin");
 }
 
 // LIB-020: the real production catalog EngineLibraryModule::Catalog()
@@ -3075,6 +3126,7 @@ void RunEngineLibraryTests() {
     RunModuleInstallSkipsUnavailableCapabilityTest();
     RunModuleInstallStartupReportTest();
     RunFunctionDescCatalogResolvesTest();
+    RunFunctionDescMatchesCatalogRejectsMismatchTest();
     RunModuleCatalogValidatesTest();
     RunModuleValidationDuplicateNameTest();
     RunModuleValidationUnknownDependencyTest();
