@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaEventApi.hpp"
 
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
@@ -56,10 +57,10 @@ int LuaEmitTo(lua_State* state) {
 
 void PucLuaEventApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEmit, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEmit>, 1);
     lua_setfield(state, environmentIndex, "Emit");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEmitTo, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEmitTo>, 1);
     lua_setfield(state, environmentIndex, "EmitTo");
 }
 

@@ -1711,6 +1711,73 @@ end
     kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
 }
 
+// LIB-010 audit gap closed 2026-07-17: every existing Lua adapter test
+// (RunLuaCallFunctionResultAdapterTest above) only covered a registered
+// callback RETURNING a failed ScriptFunctionCallResult — never one that
+// actually THROWS a C++ exception through the real lua_pcall call path
+// Lua's CallFunction(name, args) global uses (LuaCallFunction,
+// PucLuaFunctionApi.cpp, now wrapped in PucLuaSafeCall). This proves the
+// full real chain end to end: real Lua script text calls CallFunction,
+// which invokes a native function that throws; ScriptFunctionRegistry::
+// Call catches it and reports failure; LuaCallFunction turns that into
+// Lua's nil+error-string convention; the Lua script's own assignment and
+// every subsequent line execute normally — no crash, no corrupted Lua
+// state, and (the actual point of this test) proof that a SECOND,
+// unrelated Tick on the SAME lua_State afterwards still works correctly.
+void RunLuaCallFunctionThrowingCallbackSafetyTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua throwing-callback safety host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.ThrowsForLua" },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
+                               throw std::runtime_error("lua throwing callback safety boom");
+                           },
+                       }),
+        "Lua throwing-callback safety did not register Tests.ThrowsForLua");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5017U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaThrowingCallbackSafety" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+local tickCount = 0
+function Tick(self, dt)
+    tickCount = tickCount + 1
+    local value, err = CallFunction("Tests.ThrowsForLua", {})
+    SetShared("luaThrowSawNilValue", value == nil)
+    SetShared("luaThrowSawErrorString", type(err) == "string")
+    SetShared("luaThrowErrorMessage", err)
+    SetShared("luaThrowTickCount", tickCount)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua throwing-callback safety script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult firstTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(firstTick.Succeeded(), "Lua throwing-callback safety Tick produced diagnostics instead of a handled Lua-level result");
+
+    const std::optional<kb::script::ScriptValue> sawNilValue = host.SharedState().Get("luaThrowSawNilValue");
+    kb::tests::Require(sawNilValue.has_value() && sawNilValue->AsBool(), "CallFunction must return nil as its first value when the registered callback throws, not propagate the exception into Lua");
+    const std::optional<kb::script::ScriptValue> sawErrorString = host.SharedState().Get("luaThrowSawErrorString");
+    kb::tests::Require(sawErrorString.has_value() && sawErrorString->AsBool(), "CallFunction must return a string error when the registered callback throws");
+    const std::optional<kb::script::ScriptValue> errorMessage = host.SharedState().Get("luaThrowErrorMessage");
+    kb::tests::Require(errorMessage.has_value() && errorMessage->AsString().find("lua throwing callback safety boom") != std::string::npos,
+        "CallFunction's error string must carry the real thrown exception's message, reached through the actual lua_pcall call path");
+
+    // The real proof this isn't just "didn't crash this one call": the same
+    // lua_State, same loaded chunk, dispatched again — a corrupted Lua
+    // interpreter stack from an unsafely-crossed C++ exception would show up
+    // here as a wrong tick count, a load/dispatch failure, or a crash.
+    const kb::script::ScriptRuntimeExecutionResult secondTick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(secondTick.Succeeded(), "Lua throwing-callback safety second Tick produced diagnostics — the Lua state did not survive the first throw cleanly");
+    const std::optional<kb::script::ScriptValue> tickCount = host.SharedState().Get("luaThrowTickCount");
+    kb::tests::Require(tickCount.has_value() && tickCount->AsInt() == 2, "Lua state must remain fully usable (correct closure-local tickCount) after a callback it called threw a C++ exception");
+}
+
 // LIB-010: a registered callback throwing a C++ exception must become a
 // ScriptFunctionCallResult error, not propagate. This is the single choke
 // point every caller (Native direct call, Lua's CallFunction, the future
@@ -12293,6 +12360,7 @@ void RunScriptRuntimeTests() {
     RunScriptFunctionRegistryCrossBackendTest();
     RunVisualGraphCallNativeFailureBranchTest();
     RunLuaCallFunctionResultAdapterTest();
+    RunLuaCallFunctionThrowingCallbackSafetyTest();
     RunScriptFunctionRegistryExceptionSafetyTest();
     RunNativeScriptBackendExceptionSafetyTest();
     RunUnexposedFunctionCannotBeCalledTest();

@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaEventsApi.hpp"
 
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
@@ -246,23 +247,23 @@ void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecu
 
     lua_pushlightuserdata(state, &context);
     lua_pushlightuserdata(state, const_cast<void*>(static_cast<const void*>(&runtime)));
-    lua_pushcclosure(state, &LuaEventsSubscribe, 2);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsSubscribe>, 2);
     lua_setfield(state, tableIndex, "Subscribe");
 
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEventsUnsubscribe, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsUnsubscribe>, 1);
     lua_setfield(state, tableIndex, "Unsubscribe");
 
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEventsEmit, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmit>, 1);
     lua_setfield(state, tableIndex, "Emit");
 
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEventsEmitDeferred, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsEmitDeferred>, 1);
     lua_setfield(state, tableIndex, "EmitDeferred");
 
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaEventsBroadcast, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsBroadcast>, 1);
     lua_setfield(state, tableIndex, "Broadcast");
 
     lua_setfield(state, environmentIndex, "Events");

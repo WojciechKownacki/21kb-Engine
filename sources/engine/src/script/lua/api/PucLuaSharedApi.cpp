@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaSharedApi.hpp"
 
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
@@ -70,16 +71,16 @@ int LuaRemoveShared(lua_State* state) {
 
 void PucLuaSharedApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSetShared, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSetShared>, 1);
     lua_setfield(state, environmentIndex, "SetShared");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaGetShared, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaGetShared>, 1);
     lua_setfield(state, environmentIndex, "GetShared");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaHasShared, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaHasShared>, 1);
     lua_setfield(state, environmentIndex, "HasShared");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaRemoveShared, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaRemoveShared>, 1);
     lua_setfield(state, environmentIndex, "RemoveShared");
 }
 

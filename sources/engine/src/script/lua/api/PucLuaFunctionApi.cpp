@@ -1,6 +1,7 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
 
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
@@ -2289,9 +2290,24 @@ int LuaInputStopVibration(lua_State* state) {
     return 1;
 }
 
+// LIB-010: SetClosure's `function` is a runtime value (123 call sites each
+// pass a different one), so it cannot become PucLuaSafeCall's compile-time
+// template parameter without touching every call site. Instead this
+// trampoline carries `function` as a second upvalue (appended AFTER the
+// existing context upvalue, so every LuaXxx body's own
+// lua_upvalueindex(1)==context read is completely unaffected — Lua's
+// "currently running closure" while function(state) executes here is still
+// this trampoline's own frame, holding both upvalues unchanged) and routes
+// through the same PucLuaSafeInvoke every other registration site uses.
+int SetClosureTrampoline(lua_State* state) {
+    const auto function = reinterpret_cast<lua_CFunction>(lua_touserdata(state, lua_upvalueindex(2)));
+    return PucLuaSafeInvoke(state, function);
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, function, 1);
+    lua_pushlightuserdata(state, reinterpret_cast<void*>(function));
+    lua_pushcclosure(state, &SetClosureTrampoline, 2);
     lua_setfield(state, -2, name);
 }
 
@@ -2299,16 +2315,16 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaCallFunction, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaCallFunction>, 1);
     lua_setfield(state, environmentIndex, "CallFunction");
 
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaLog, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 
     lua_createtable(state, 0, 20);
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaAudioPlay, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaAudioPlay>, 1);
     lua_setfield(state, -2, "Play");
     SetClosure(state, "SetMixer", &LuaAudioSetMixer, context);
     SetClosure(state, "ActiveMixer", &LuaAudioActiveMixer, context);

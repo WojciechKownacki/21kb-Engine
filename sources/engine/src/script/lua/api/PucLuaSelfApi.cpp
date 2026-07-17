@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaSelfApi.hpp"
 
+#include "engine/script/PucLuaSafeCall.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
@@ -141,19 +142,19 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
     }
     lua_setfield(state, -2, "variables");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSelfHasComponent, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfHasComponent>, 1);
     lua_setfield(state, -2, "HasComponent");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSelfGetProperty, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfGetProperty>, 1);
     lua_setfield(state, -2, "GetProperty");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSelfSetProperty, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetProperty>, 1);
     lua_setfield(state, -2, "SetProperty");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSelfGetVariable, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfGetVariable>, 1);
     lua_setfield(state, -2, "GetVariable");
     lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &LuaSelfSetVariable, 1);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetVariable>, 1);
     lua_setfield(state, -2, "SetVariable");
 }
 
