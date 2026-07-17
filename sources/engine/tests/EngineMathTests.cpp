@@ -912,6 +912,79 @@ void RunSerializationPropertyTest() {
     }
 }
 
+// LIB-055 (2026-07-17 audit gap): RunSerializationPropertyTest above only
+// ever feeds Deserialize bytes that Serialize itself produced, so it never
+// exercises the DESERIALIZATION boundary against hostile or corrupt input —
+// it cannot detect an unbounded count/reserve. This fuzzes that boundary
+// with deterministic pseudo-random bytes and, critically, with valid-magic
+// headers carrying a fabricated huge count. The universal property: every
+// call must RETURN (true or false) in bounded time — never crash, hang, or
+// allocate proportionally to a declared-but-unbacked count. This whole test
+// would hang (multi-gigabyte reserve) without LIB-053's payload-size guard,
+// so it is the running proof of that guard, not just a unit check.
+void RunSerializationFuzzTest() {
+    using kb::math::Curve;
+    using kb::math::Gradient;
+
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(24601U);
+    const auto nextByte = [&stream]() -> std::uint8_t {
+        const kb::math::RandomStreamUInt32Result r = kb::math::NextUInt32(stream);
+        stream = r.stream;
+        return static_cast<std::uint8_t>(r.value & 0xFFU);
+    };
+
+    // Valid magic prefixes, harvested from Serialize's own output (the magic
+    // constants are private to EngineMath.cpp) so the fuzzer can build
+    // headers that pass the magic check and reach the count/reserve path.
+    Curve seedCurve;
+    seedCurve.keyframes.push_back(kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.0F, .easing = kb::math::Easing::Linear });
+    const std::vector<std::uint8_t> seedCurveBytes = kb::math::Serialize(seedCurve);
+    const std::vector<std::uint8_t> curveMagic{ seedCurveBytes.begin(), seedCurveBytes.begin() + 4 };
+    Gradient seedGradient;
+    seedGradient.stops.push_back(kb::math::GradientStop{ .time = 0.0F, .color = kb::math::Color{} });
+    const std::vector<std::uint8_t> seedGradientBytes = kb::math::Serialize(seedGradient);
+    const std::vector<std::uint8_t> gradientMagic{ seedGradientBytes.begin(), seedGradientBytes.begin() + 4 };
+
+    constexpr int kIterations = 2000;
+    for (int i = 0; i < kIterations; ++i) {
+        // (a) A fully random, random-length payload (0..48 bytes).
+        const std::size_t length = static_cast<std::size_t>(nextByte()) % 49U;
+        std::vector<std::uint8_t> payload;
+        payload.reserve(length);
+        for (std::size_t b = 0; b < length; ++b) {
+            payload.push_back(nextByte());
+        }
+        Curve curveResult;
+        Gradient gradientResult;
+        // The ONLY property that must hold: these return without crashing,
+        // hanging, or over-allocating. The bool value itself is unconstrained
+        // (random bytes may occasionally form a technically-valid document).
+        static_cast<void>(kb::math::Deserialize(std::span<const std::uint8_t>{ payload }, curveResult));
+        static_cast<void>(kb::math::Deserialize(std::span<const std::uint8_t>{ payload }, gradientResult));
+
+        // (b) Valid magic + a fabricated 32-bit count + NO element bytes.
+        // This is the exact shape a hostile file uses to try to force a huge
+        // reserve; it must always be rejected (false), never allocate.
+        std::vector<std::uint8_t> hostileCurve = curveMagic;
+        std::vector<std::uint8_t> hostileGradient = gradientMagic;
+        for (int b = 0; b < 4; ++b) {
+            const std::uint8_t countByte = nextByte();
+            hostileCurve.push_back(countByte);
+            hostileGradient.push_back(countByte);
+        }
+        // Force the high byte non-zero so the declared count is always far
+        // larger than the (zero) element payload can back.
+        hostileCurve.back() = 0xFFU;
+        hostileGradient.back() = 0xFFU;
+        Curve hostileCurveResult;
+        Gradient hostileGradientResult;
+        kb::tests::Require(!kb::math::Deserialize(std::span<const std::uint8_t>{ hostileCurve }, hostileCurveResult),
+            "Property violated: a valid-magic Curve header with a huge count and no element bytes must be rejected without allocating");
+        kb::tests::Require(!kb::math::Deserialize(std::span<const std::uint8_t>{ hostileGradient }, hostileGradientResult),
+            "Property violated: a valid-magic Gradient header with a huge count and no element bytes must be rejected without allocating");
+    }
+}
+
 } // namespace
 
 void RunEngineMathTests() {
@@ -934,6 +1007,7 @@ void RunEngineMathTests() {
     RunQuaternionPropertyTest();
     RunInterpolationPropertyTest();
     RunSerializationPropertyTest();
+    RunSerializationFuzzTest();
 }
 
 } // namespace kb::tests
