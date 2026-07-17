@@ -46,6 +46,8 @@
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/script/ScriptEventTaxonomy.hpp"
@@ -2267,6 +2269,103 @@ end
     }
     const std::vector<std::string> expected{ "Native", "Lua", "Graph" };
     kb::tests::Require(who == expected, "Cross-backend lifecycle dispatch must respect BehaviourExecutionOrderLess regardless of backend");
+}
+
+// LIB-013 audit gap closed 2026-07-17: RunPlayerControllerTemplateTests
+// (KbCliTests.cpp) proves the shipped PlayerController.lua template runs
+// cleanly headless through kb_cli's real Play Mode surface, but kb_cli run
+// exposes no channel to observe Transform state (CliRunCommand.cpp only
+// prints Log/event/diagnostic text) and that test never supplied non-zero
+// input — so it only proved lifecycle callbacks fired, not that steering
+// actually moves the entity. This drives the SAME real, shipped template —
+// written by ScriptAgentProjectFiles::Write, the exact function `kb_cli
+// init-agent` calls, not a second hardcoded copy of the Lua text — through
+// a real "Move" Axis2D input composite with an actual key held down, and
+// reads the entity's Transform back directly to prove real movement.
+void RunPlayerControllerTemplateMovesTransformWithRealInputTest() {
+    kb::scene::Scene scene;
+
+    // Real "Move" Axis2D action + WASD composite (D/A -> x, W/S -> y),
+    // mirroring the InputCompositeBinding pattern InputMappingContextAsset.hpp
+    // documents for exactly this shape ("D -> +x, A -> -x, W -> +y, S -> -y").
+    auto moveAction = std::make_shared<kb::input::InputActionAsset>();
+    moveAction->name = "Move";
+    moveAction->valueType = kb::input::InputActionValueType::Axis2D;
+    auto moveContext = std::make_shared<kb::input::InputMappingContextAsset>();
+    moveContext->composites.push_back(kb::input::InputCompositeBinding{
+        .actionId = 1U,
+        .slots = {
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::D, .axis = 0U, .scale = 1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::A, .axis = 0U, .scale = -1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::W, .axis = 1U, .scale = 1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::S, .axis = 1U, .scale = -1.0F },
+        },
+    });
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputActionAsset>> actions{ { 1U, moveAction } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputMappingContextAsset>> contexts{ { 60U, moveContext } };
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "Player controller template movement test mapping context could not be added");
+    scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::D, true);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Player controller template movement test host setup failed");
+
+    // Produce the REAL, shipped template file through the exact production
+    // path `kb_cli init-agent` uses.
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_player_controller_template_movement_test";
+    std::error_code errorCode;
+    std::filesystem::remove_all(projectRoot, errorCode);
+    std::filesystem::create_directories(projectRoot, errorCode);
+    kb::tests::Require(!errorCode, "Player controller template movement test project root could not be created");
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    const kb::script::ScriptAgentProjectFilesResult written = kb::script::ScriptAgentProjectFiles::Write(projectRoot, catalog);
+    kb::tests::Require(written.succeeded, "Player controller template movement test could not write project files");
+    const std::filesystem::path templatePath = projectRoot / "Assets" / "Logic" / "PlayerController.lua";
+    kb::tests::Require(std::filesystem::exists(templatePath), "ScriptAgentProjectFiles::Write did not write the PlayerController.lua template");
+    std::ifstream templateStream{ templatePath, std::ios::binary };
+    const std::string templateSource{ std::istreambuf_iterator<char>{ templateStream }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(!templateSource.empty(), "PlayerController.lua template file is empty");
+
+    constexpr kb::assets::AssetId kPlayerAsset{ 5601U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kPlayerAsset, templateSource, "PlayerController.lua");
+    kb::tests::Require(loaded.succeeded, "Real PlayerController.lua template did not load");
+
+    const kb::scene::SceneObject player = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" });
+    scene.Components().Behaviours().Set(player.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kPlayerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    constexpr float kDeltaSeconds = 1.0F / 60.0F;
+    scene.EvaluateAllLocalUserInput(kDeltaSeconds);
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    static_cast<void>(system.ExecuteFrame(scene, kDeltaSeconds));
+    kb::tests::Require(system.LastResult().Succeeded(), "Real PlayerController.lua template Tick produced diagnostics");
+
+    bool sawPlayerMoved = false;
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        sawPlayerMoved = sawPlayerMoved || event.name == "PlayerMoved";
+    }
+    kb::tests::Require(sawPlayerMoved, "Real PlayerController.lua template did not emit PlayerMoved");
+
+    constexpr float kSpeed = 2.0F; // must match PlayerController.lua's own `local speed = 2.0`
+    const float expectedDeltaX = kSpeed * kDeltaSeconds; // D held, composite scale +1, unit key magnitude
+    const kb::scene::TransformComponent& transform = scene.Transforms().Get(player.Entity());
+    kb::tests::Require(
+        kb::tests::NearlyEqual(transform.localPosition.x, expectedDeltaX),
+        "Real PlayerController.lua template must move Transform.localPosition.x by speed*dt for a real, non-zero Move.x input - proves ACTUAL steering, not just that lifecycle callbacks fired");
+    kb::tests::Require(
+        kb::tests::NearlyEqual(transform.localPosition.y, 0.0F),
+        "Real PlayerController.lua template must not move along Y when only the +x key (D) is held");
 }
 
 void RunScriptAudioApiTest() {
@@ -12370,6 +12469,7 @@ void RunScriptRuntimeTests() {
     RunPucLuaFullLifecycleOrderTest();
     RunVisualGraphFullLifecycleOrderTest();
     RunCrossBackendLifecycleOrderParityTest();
+    RunPlayerControllerTemplateMovesTransformWithRealInputTest();
     RunScriptAudioApiTest();
     RunScriptMeshRendererApiTest();
     RunScriptMeshRendererMaterialSlotApiTest();
