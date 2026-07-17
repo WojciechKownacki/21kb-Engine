@@ -61,12 +61,18 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "World",
             .ownerRuntime = "kb::scene::SceneEntities",
             .Register = &kb::script::ScriptWorldApi::Register,
-            // Pilot for LIB-017: World.Exists (ScriptWorldApi.cpp) is a
-            // pure query over kb::scene::SceneEntities::IsAlive — same
-            // scene state and entity id always yield the same bool, it
-            // never depends on wall time, and it produces no ScriptError
-            // for a missing/invalid entity (it just returns false). The
-            // rest of this module's functions are not yet audited; see
+            // Pilots for LIB-017: World.Exists and World.IsActive
+            // (ScriptWorldApi.cpp) are both pure queries — over
+            // kb::scene::SceneEntities::IsAlive and ::IsActive respectively
+            // — same scene state and entity id always yield the same bool,
+            // neither depends on wall time, and neither produces a
+            // ScriptError for a missing/invalid entity (both just return
+            // false). inputs/outputs below are copied verbatim from their
+            // real RegisterFunction() call sites and are machine-checked
+            // against the live ScriptApiCatalog by
+            // RunFunctionDescCatalogResolvesTest (EngineLibraryTests.cpp),
+            // not merely transcribed once and left to drift. The rest of
+            // this module's functions are not yet audited; see
             // LibraryFunctionDesc's comment for what that means.
             .functions = {
                 LibraryFunctionDesc{
@@ -74,6 +80,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
                     .threadAffinity = LibraryThreadAffinity::MainThread,
                     .determinism = LibraryDeterminism::Deterministic,
                     .canFail = false,
+                    .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+                    .outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Bool, true } },
+                },
+                LibraryFunctionDesc{
+                    .canonicalName = "World.IsActive",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+                    .outputs = { kb::script::ScriptApiPin{ "active", kb::script::ScriptValueType::Bool, true } },
                 },
             },
         },
