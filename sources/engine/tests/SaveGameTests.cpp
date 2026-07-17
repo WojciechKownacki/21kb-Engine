@@ -139,12 +139,51 @@ void RunSaveGameCorruptionTest() {
     // A valid header claiming 2 entries but with a truncated body.
     std::vector<std::uint8_t> truncated{ magic.begin(), magic.end() };
     appendUInt32(truncated, 1U); // schema version 1
+    truncated.push_back(0U);     // domain 0 (SaveGame)
     appendUInt32(truncated, 2U); // claims 2 entries
     appendUInt32(truncated, 3U); // a key length of 3...
     truncated.push_back('a');    // ...but only 1 byte of it
     const std::filesystem::path truncatedPath = SaveTestRoot() / "truncated.kbsave";
     WriteRawFile(truncatedPath, truncated);
     kb::tests::Require(kb::save::SaveGameService::Load(truncatedPath).status == kb::save::SaveGameLoadStatus::Corrupt, "A truncated payload must report Corrupt, never read out of bounds");
+
+    // A well-formed header carrying an unrecognized domain byte (neither
+    // SaveGame nor UserSettings) must be rejected as WrongDomain, not accepted.
+    std::vector<std::uint8_t> garbageDomain{ magic.begin(), magic.end() };
+    appendUInt32(garbageDomain, 1U); // schema version 1
+    garbageDomain.push_back(99U);    // an unknown domain
+    appendUInt32(garbageDomain, 0U); // zero entries
+    const std::filesystem::path garbageDomainPath = SaveTestRoot() / "garbagedomain.kbsave";
+    WriteRawFile(garbageDomainPath, garbageDomain);
+    kb::tests::Require(kb::save::SaveGameService::Load(garbageDomainPath, kb::save::SaveDomain::SaveGame).status == kb::save::SaveGameLoadStatus::WrongDomain,
+        "A file with an unrecognized domain byte must be rejected as WrongDomain");
+}
+
+// LIB-163: the persistence domains are separated — a file written for one
+// domain cannot be loaded as another (WrongDomain), so save games and user
+// settings never cross-contaminate even when they share the kb::save format.
+void RunSaveGameDomainSeparationTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path savePath = SaveTestRoot() / "progress.kbsave";
+    const std::filesystem::path settingsPath = SaveTestRoot() / "settings.kbsave";
+
+    kb::save::SaveGame progress;
+    progress.SetInt("level", 7);
+    kb::tests::Require(kb::save::SaveGameService::Save(savePath, progress, kb::save::SaveDomain::SaveGame), "Saving a SaveGame-domain file must succeed");
+
+    kb::save::SaveGame settings;
+    settings.SetFloat("masterVolume", 0.8);
+    kb::tests::Require(kb::save::SaveGameService::Save(settingsPath, settings, kb::save::SaveDomain::UserSettings), "Saving a UserSettings-domain file must succeed");
+
+    // Same-domain load works.
+    kb::tests::Require(kb::save::SaveGameService::Load(savePath, kb::save::SaveDomain::SaveGame).Succeeded(), "Loading a SaveGame file as SaveGame must succeed");
+    kb::tests::Require(kb::save::SaveGameService::Load(settingsPath, kb::save::SaveDomain::UserSettings).Succeeded(), "Loading a UserSettings file as UserSettings must succeed");
+
+    // Cross-domain load is rejected (the core of the separation).
+    kb::tests::Require(kb::save::SaveGameService::Load(savePath, kb::save::SaveDomain::UserSettings).status == kb::save::SaveGameLoadStatus::WrongDomain,
+        "Loading a SaveGame file as UserSettings must be rejected as WrongDomain");
+    kb::tests::Require(kb::save::SaveGameService::Load(settingsPath, kb::save::SaveDomain::SaveGame).status == kb::save::SaveGameLoadStatus::WrongDomain,
+        "Loading a UserSettings file as SaveGame must be rejected as WrongDomain");
 }
 
 // LIB-162: the schema migration mechanism, exercised directly with real steps
@@ -214,6 +253,7 @@ void RunSaveGameTests() {
     RunSaveGameAtomicWriteTest();
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
+    RunSaveGameDomainSeparationTest();
 }
 
 } // namespace kb::tests

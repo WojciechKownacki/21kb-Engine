@@ -1,8 +1,21 @@
 #include "engine/save/SaveGame.hpp"
 
+#include "engine/save/SaveDomain.hpp"
+
 #include <utility>
 
 namespace kb::save {
+
+std::string_view ToString(SaveDomain domain) noexcept {
+    switch (domain) {
+    case SaveDomain::SaveGame:
+        return "SaveGame";
+    case SaveDomain::UserSettings:
+        return "UserSettings";
+    }
+    return "SaveGame";
+}
+
 namespace {
 
 [[nodiscard]] const SaveValue* FindTyped(const std::unordered_map<std::string, SaveValue>& entries, std::string_view key, SaveValueType type) {
