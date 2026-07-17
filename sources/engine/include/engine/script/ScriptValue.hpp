@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -97,6 +98,15 @@ private:
 };
 
 [[nodiscard]] const char* ToString(ScriptValueType type) noexcept;
+// The exact inverse of ToString(ScriptValueType): parses one of the
+// canonical PascalCase names ToString emits back to its enum value. Defined
+// in terms of ToString itself (not a second hand-maintained string table),
+// so it can never drift from ToString as the enum grows. Returns false for
+// any string ToString never produces. Used by tooling that reads back a
+// machine-generated API catalog (kb_cli api-check, LIB-024) — deliberately
+// strict (no lowercase aliases), unlike ScriptAssetLoader's own lenient
+// parser for hand-authored `-- @expose` directives.
+[[nodiscard]] bool TryParse(std::string_view text, ScriptValueType& out) noexcept;
 [[nodiscard]] kb::visual::VisualGraphValueType ToVisualGraphValueType(ScriptValueType type) noexcept;
 
 // LIB-032: ScriptValue is the only channel through which data crosses the

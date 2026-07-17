@@ -562,7 +562,17 @@ void RunTypeDescTest() {
         kb::tests::Require(desc.visualGraphPinType == kb::script::ToVisualGraphValueType(type), "Engine21kbLibrary LibraryTypeDesc.visualGraphPinType must match kb::script::ToVisualGraphValueType");
         kb::tests::Require(!desc.luaTypeName.empty(), "Engine21kbLibrary LibraryTypeDesc.luaTypeName must be documented");
         kb::tests::Require(desc.defaultValue.Type() == type, "Engine21kbLibrary LibraryTypeDesc.defaultValue must carry the described type");
+        // LIB-024: kb::script::TryParse must be the exact inverse of
+        // ToString — every type ToString emits must parse back to itself.
+        // This is what lets kb_cli api-check reconstruct a baseline catalog
+        // from its JSON without a second, driftable type table.
+        ScriptValueType parsed{};
+        kb::tests::Require(kb::script::TryParse(kb::script::ToString(type), parsed), "Engine21kbLibrary kb::script::TryParse must accept every name ToString emits");
+        kb::tests::Require(parsed == type, "Engine21kbLibrary kb::script::TryParse must be the exact inverse of ToString");
     }
+    ScriptValueType rejected{};
+    kb::tests::Require(!kb::script::TryParse("NotARealType", rejected), "Engine21kbLibrary kb::script::TryParse must reject a string ToString never produces");
+    kb::tests::Require(!kb::script::TryParse("bool", rejected), "Engine21kbLibrary kb::script::TryParse must be case-sensitive (canonical PascalCase only)");
 
     kb::tests::Require(ScriptValue{ 1 } == ScriptValue{ 1 }, "Engine21kbLibrary ScriptValue equality must hold for equal Int values");
     kb::tests::Require(ScriptValue{ 1 } != ScriptValue{ 2 }, "Engine21kbLibrary ScriptValue equality must reject different Int values");

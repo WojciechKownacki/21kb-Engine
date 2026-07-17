@@ -52,7 +52,7 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     return text.find(needle) != std::string::npos;
 }
 
-constexpr std::array<std::string_view, 2> kFlagNames{ "--disabled", "--quiet" };
+constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
 
 struct CommandRun {
     int exitCode = 0;
@@ -408,6 +408,96 @@ void RunApiCommandTests() {
     Require(manifestContent == manifestContentAgain, "manifest.json hash must be stable across repeated builds of an unchanged project");
 }
 
+// LIB-024: api-check must generate a baseline, pass an identical surface,
+// flag a breaking change (removed function / changed pin contract) with a
+// non-zero exit, and treat a purely-additive difference as compatible.
+// Exercised through the real RunApiCheckCommand against the real,
+// project-agnostic engine catalog (no --project) — the same path CI runs.
+void RunApiCheckCommandTests() {
+    ResetTestRoot();
+    const std::string baseline = (TestRoot() / "baseline.json").string();
+
+    // A missing baseline is an honest error, not a silent pass.
+    const CommandRun missing = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline });
+    Require(missing.exitCode == 1, "api-check must fail when the baseline file is missing");
+
+    // --update-baseline writes the current surface as the new baseline.
+    const CommandRun update = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline, "--update-baseline" });
+    Require(update.exitCode == 0, "api-check --update-baseline must succeed");
+    Require(std::filesystem::exists(TestRoot() / "baseline.json"), "api-check --update-baseline must write the baseline file");
+
+    // An unchanged surface is compatible.
+    const CommandRun identical = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline });
+    Require(identical.exitCode == 0, "api-check must pass an identical API surface");
+    Require(Contains(identical.output, "compatible"), "api-check must report compatibility for an identical surface");
+
+    // Read the generated baseline so the breaking/additive fixtures below
+    // are edits of the REAL catalog, not hand-invented shapes that might
+    // not match what the engine actually registers.
+    std::ifstream baselineStream{ TestRoot() / "baseline.json", std::ios::binary };
+    const std::string baselineText{ std::istreambuf_iterator<char>{ baselineStream }, std::istreambuf_iterator<char>{} };
+    Require(Contains(baselineText, "\"World.Exists\""), "api-check baseline is missing the expected World.Exists function");
+
+    // BREAKING (removed function): a baseline claiming a function the
+    // current surface does not have.
+    {
+        std::string breaking = baselineText;
+        const std::string anchor = "\"functions\":[";
+        const std::size_t pos = breaking.find(anchor);
+        Require(pos != std::string::npos, "api-check baseline has no functions array");
+        breaking.insert(pos + anchor.size(), R"({"name":"Ghost.Removed","inputs":[],"outputs":[]},)");
+        const std::string breakingPath = (TestRoot() / "breaking.json").string();
+        WriteTextFile(breakingPath, breaking);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", breakingPath });
+        Require(run.exitCode == 1, "api-check must fail on a removed function");
+        Require(Contains(run.output, "BREAKING") && Contains(run.output, "Ghost.Removed"), "api-check must name the removed function as breaking");
+    }
+
+    // BREAKING (changed output contract): World.Exists's "exists" output
+    // retyped Bool -> Int.
+    {
+        std::string pinChange = baselineText;
+        const std::string needle = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool")";
+        const std::size_t pos = pinChange.find(needle);
+        Require(pos != std::string::npos, "api-check baseline World.Exists shape changed unexpectedly");
+        const std::string replacement = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Int")";
+        pinChange.replace(pos, needle.size(), replacement);
+        const std::string pinChangePath = (TestRoot() / "pinchange.json").string();
+        WriteTextFile(pinChangePath, pinChange);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", pinChangePath });
+        Require(run.exitCode == 1, "api-check must fail on a changed output contract");
+        Require(Contains(run.output, "BREAKING") && Contains(run.output, "World.Exists"), "api-check must name the changed function as breaking");
+    }
+
+    // ADDITIVE (baseline lacks a function the current surface has): the
+    // current-only function is additive, never breaking. Removing the
+    // known World.Exists object (rather than trying to empty the whole
+    // functions array, whose nested inputs/outputs brackets make naive
+    // bracket-matching unsafe) is the minimal, robust way to construct this.
+    {
+        std::string additive = baselineText;
+        const std::string worldExists = R"({"name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool","required":true}]})";
+        const std::size_t pos = additive.find(worldExists);
+        Require(pos != std::string::npos, "api-check baseline World.Exists object shape changed unexpectedly");
+        // Remove the object plus one adjacent comma so the array stays valid
+        // JSON whether World.Exists was first, middle, or last.
+        std::size_t removeStart = pos;
+        std::size_t removeLength = worldExists.size();
+        if (pos + worldExists.size() < additive.size() && additive[pos + worldExists.size()] == ',') {
+            removeLength += 1; // trailing comma
+        } else if (pos > 0 && additive[pos - 1] == ',') {
+            removeStart -= 1; // leading comma (World.Exists was the last entry)
+            removeLength += 1;
+        }
+        additive.erase(removeStart, removeLength);
+        const std::string additivePath = (TestRoot() / "additive.json").string();
+        WriteTextFile(additivePath, additive);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", additivePath });
+        Require(run.exitCode == 0, "api-check must treat a purely-additive difference as compatible");
+        Require(Contains(run.output, "additive") && Contains(run.output, "World.Exists"), "api-check must report the added function as additive");
+    }
+}
+
 void RunMcpCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -465,6 +555,7 @@ int main() {
     RunPlayerControllerTemplateTests();
     RunProjectileTemplateTests();
     RunApiCommandTests();
+    RunApiCheckCommandTests();
     RunMcpCommandTests();
     return EXIT_SUCCESS;
 }

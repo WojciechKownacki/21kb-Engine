@@ -7,6 +7,7 @@
 namespace kb::cli {
 
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunValidateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneListCommand(const ArgumentList& arguments, CommandIo io);
