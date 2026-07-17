@@ -11,6 +11,7 @@
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
@@ -422,6 +423,13 @@ public:
         std::int32_t count = 0;
     };
     std::vector<PendingPrefabInstantiatedEvent> pendingPrefabInstantiatedEvents;
+    // LIB-162: the scene's ambient SaveGame buffer — the scalar key/value
+    // table the script Save.* surface reads and mutates, and that Save.Write/
+    // Save.Read serialize to/from disk. Scene-scoped (reached via Scene::
+    // AmbientSave()) so it is accessible through a ScriptFunctionCallContext's
+    // scene, mirroring how the rest of the Assets/World/Prefab script APIs
+    // reach scene-owned state.
+    kb::save::SaveGame ambientSave;
     // LIB-129: the last layers configuration applied via
     // PhysicsBackend::ConfigureLayers/LoadAndConfigureLayers - kept here
     // (backend-independent) so name -> bit resolution (PhysicsBackend::
