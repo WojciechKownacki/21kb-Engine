@@ -386,6 +386,20 @@ void RunApiCommandTests() {
     Require(std::filesystem::exists(TestRoot() / "AGENTS.md"), "init-agent did not write AGENTS.md");
     Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "kb.lua"), "init-agent did not write Lua stubs");
     Require(std::filesystem::exists(TestRoot() / ".luarc.json"), "init-agent did not write .luarc.json");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Logic" / "PlayerController.lua"),
+        "init-agent did not write the PlayerController.lua template (LIB-013)");
+
+    // LIB-013 regression: init-agent internally rebuilds its catalog and
+    // calls ScriptAgentProjectFiles::Write() a second time whenever the
+    // first call created a new project asset (PlayerController.lua, on a
+    // project's first-ever run) — a bug once made that second call's
+    // report silently replace the first's, so a genuinely first-time
+    // AGENTS.md/.luarc.json/PlayerController.lua write was wrongly printed
+    // as "kept ... (already exists)" even though this SAME invocation had
+    // just created it moments earlier.
+    Require(Contains(initAgent.output, "wrote") && Contains(initAgent.output, "AGENTS.md"), "init-agent's own first-ever run must report AGENTS.md as written, not kept");
+    Require(!Contains(initAgent.output, "kept") && !Contains(initAgent.output, "already exists"),
+        "init-agent must not report a file it just created in THIS SAME first-ever invocation as already existing");
 
     // LIB-023: init-agent must also write a manifest with an API hash, and
     // that hash must be stable across two builds of the identical project
