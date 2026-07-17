@@ -156,6 +156,27 @@ const char* ToString(ScriptValueType type) noexcept {
     return "Void";
 }
 
+bool TryParse(std::string_view text, ScriptValueType& out) noexcept {
+    // The full enumerator set, contiguous from Void=0. Iterating and
+    // comparing against ToString(candidate) keeps this the exact inverse of
+    // ToString with no independent string table to drift — adding a new
+    // ScriptValueType and its ToString case automatically makes it parseable
+    // here too.
+    constexpr ScriptValueType kAllTypes[]{
+        ScriptValueType::Void, ScriptValueType::Bool, ScriptValueType::Int, ScriptValueType::Float,
+        ScriptValueType::String, ScriptValueType::Entity, ScriptValueType::Component,
+        ScriptValueType::Int64, ScriptValueType::UInt32, ScriptValueType::Double,
+        ScriptValueType::Name, ScriptValueType::Guid, ScriptValueType::Hash,
+    };
+    for (const ScriptValueType candidate : kAllTypes) {
+        if (text == ToString(candidate)) {
+            out = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 kb::visual::VisualGraphValueType ToVisualGraphValueType(ScriptValueType type) noexcept {
     switch (type) {
     case ScriptValueType::Bool:
