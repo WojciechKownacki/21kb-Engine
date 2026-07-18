@@ -28,6 +28,15 @@ public:
     static void DestroyObject(Scene& scene, SceneObject object) noexcept;
     static void DestroyEntity(Scene& scene, SceneEntity entity) noexcept;
     static void DestroyObjects(Scene& scene, std::span<const SceneObject> objects) noexcept;
+    // LIB-067: enqueue an entity for destruction at the next frame playback
+    // point instead of destroying it now (World.Destroy(deferred=true)).
+    // De-duplicated by handle; a non-alive/never-existed entity is not queued.
+    static void QueueDeferredDestroy(Scene& scene, SceneEntity entity) noexcept;
+    // LIB-067: destroy every still-alive queued entity and clear the queue,
+    // returning how many were actually destroyed. Idempotent and generation-
+    // safe: a queued handle that is no longer alive (already destroyed, or its
+    // id recycled to a newer generation) is skipped, never mis-destroyed.
+    static std::size_t DrainDeferredDestroys(Scene& scene) noexcept;
     [[nodiscard]] static bool SetParent(Scene& scene, std::span<const SceneObject> objects, SceneObject parent) noexcept;
     [[nodiscard]] static bool IsAlive(const Scene& scene, SceneObject object) noexcept;
     [[nodiscard]] static bool IsAlive(const Scene& scene, SceneEntity entity) noexcept;

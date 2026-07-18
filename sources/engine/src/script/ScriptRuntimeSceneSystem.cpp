@@ -5,6 +5,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
@@ -84,6 +85,9 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteStartup(kb:
     PrepareScene(scene);
     DispatchPendingSceneLifecycleEvents(scene, deltaSeconds);
     SyncBehaviourLifecycles(scene, deltaSeconds);
+    // LIB-067: drain here too so a deferred destroy queued from an OnStart /
+    // startup-phase behaviour is applied before the first ExecuteFrame.
+    static_cast<void>(scene.Entities().DrainDeferredDestroys());
     return lastResult_;
 }
 
@@ -131,6 +135,10 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
+    // queued during this frame's behaviour phases now that all iteration is
+    // done, so no behaviour ran against storage a deferred destroy will pull.
+    static_cast<void>(scene.Entities().DrainDeferredDestroys());
     return lastResult_;
 }
 
