@@ -36,8 +36,8 @@ ScenePrefabHandle ScenePrefabRegistry::RegisterVariant(std::string name, ScenePr
     return ScenePrefabRegistrationService::RegisterVariant(records_, std::move(name), basePrefab, std::move(overrides));
 }
 
-ScenePrefabHandle ScenePrefabRegistry::RegisterLoadedVariant(std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides) {
-    return ScenePrefabRegistrationService::RegisterLoadedVariant(records_, std::move(guid), std::move(name), std::move(basePrefabGuid), std::move(overrides));
+ScenePrefabHandle ScenePrefabRegistry::RegisterLoadedVariant(std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides, std::vector<ScenePrefabVariantAddedSubtree> addedChildren) {
+    return ScenePrefabRegistrationService::RegisterLoadedVariant(records_, std::move(guid), std::move(name), std::move(basePrefabGuid), std::move(overrides), std::move(addedChildren));
 }
 
 bool ScenePrefabRegistry::Contains(ScenePrefabHandle handle) const noexcept {
@@ -72,6 +72,26 @@ std::vector<ScenePrefabHandle> ScenePrefabRegistry::VariantChildrenOf(ScenePrefa
 
 bool ScenePrefabRegistry::UpsertVariantOverride(ScenePrefabHandle handle, ScenePrefabPropertyOverride property) {
     return ScenePrefabVariantOverrideMutationService::Upsert(records_, handle, std::move(property));
+}
+
+bool ScenePrefabRegistry::SetVariantAddedChildren(ScenePrefabHandle handle, std::vector<ScenePrefabVariantAddedSubtree> addedChildren) {
+    ScenePrefabRecord* record = records_.FindMutable(handle);
+    if (record == nullptr || record->kind != ScenePrefabRecordKind::Variant) {
+        return false;
+    }
+    // Mirror UpsertVariantOverride: build on a candidate, re-materialize, then
+    // commit atomically so a materialization failure leaves the record intact.
+    ScenePrefabRecord candidate = *record;
+    candidate.variantAddedChildren = std::move(addedChildren);
+    if (!ScenePrefabVariantRefreshService::Materialize(records_, candidate)) {
+        return false;
+    }
+    record->variantAddedChildren = std::move(candidate.variantAddedChildren);
+    record->prefab = std::move(candidate.prefab);
+    record->contentHash = ScenePrefabHasher::Hash(record->prefab);
+    RefreshBakedPrefabCache(*record);
+    ScenePrefabVariantRefreshService::RefreshDerived(records_, handle);
+    return true;
 }
 
 void ScenePrefabRegistry::RefreshContentHash(ScenePrefabHandle handle) noexcept {
