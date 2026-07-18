@@ -6,11 +6,15 @@
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/ScriptBackend.hpp"
+#include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
 #include "engine/script/ScriptSharedVisualGraphBindings.hpp"
 
 #include <memory>
+#include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -39,6 +43,8 @@ public:
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
 
 private:
+    void CollectDiagnostics();
+
     std::shared_ptr<ScriptRuntimeHostState> state_;
     ScriptRuntimeSceneSystem system_;
 };
@@ -64,6 +70,12 @@ struct ScriptRuntimeHostState final {
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
+    // Per-frame script diagnostics (compile/behaviour errors) that
+    // ExecuteFrame/PrepareScene would otherwise drop; drained by the host so
+    // the editor can surface why a behaviour is not running. De-duplicated so a
+    // recurring per-frame error is reported once, not every frame.
+    std::vector<std::string> pendingSceneSystemDiagnostics;
+    std::unordered_set<std::string> reportedSceneSystemDiagnostics;
 };
 
 namespace {
@@ -76,14 +88,30 @@ ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<Scrip
 
 void ScriptRuntimeHostSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     system_.OnCreate(context);
+    CollectDiagnostics();
 }
 
 void ScriptRuntimeHostSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
     system_.OnUpdate(context);
+    CollectDiagnostics();
 }
 
 void ScriptRuntimeHostSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     system_.OnDestroy(context);
+}
+
+void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
+    const auto push = [this](std::string line) {
+        if (state_->reportedSceneSystemDiagnostics.insert(line).second) {
+            state_->pendingSceneSystemDiagnostics.push_back(std::move(line));
+        }
+    };
+    for (const ScriptDiagnostic& diagnostic : system_.LastResult().diagnostics) {
+        push("behaviour error: " + diagnostic.message);
+    }
+    for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
+        push("behaviour could not load/compile: " + diagnostic.message);
+    }
 }
 
 } // namespace
@@ -110,6 +138,12 @@ bool ScriptRuntimeHost::Succeeded() const noexcept {
 
 const std::vector<std::string>& ScriptRuntimeHost::Diagnostics() const noexcept {
     return diagnostics_;
+}
+
+std::vector<std::string> ScriptRuntimeHost::DrainSceneSystemDiagnostics() {
+    std::vector<std::string> drained;
+    drained.swap(state_->pendingSceneSystemDiagnostics);
+    return drained;
 }
 
 const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {

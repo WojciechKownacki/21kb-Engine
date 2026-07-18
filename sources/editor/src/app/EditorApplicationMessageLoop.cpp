@@ -393,6 +393,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         runtime.SetEcsProfilerEnabled(true);
     }
     static_cast<void>(runtime.Update(deltaSeconds));
+    // Surface any scene-system fault (e.g. a plugin's system throwing) that the
+    // scheduler isolated this frame, so a broken plugin does not silently stop
+    // scripts/behaviours from running with no message in the Console.
+    for (const std::string& systemError : runtime.DrainSceneSystemErrors()) {
+        state.sceneContext.Console().Error("Scripts", systemError);
+    }
+    state.sceneContext.SurfaceScriptDiagnostics();
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();
@@ -511,7 +518,18 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 InvalidateRect(state.window, nullptr, FALSE);
             }
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, kPausedToolbarAnimationIntervalMs, QS_ALLINPUT));
-        } else if (!state.playMode.IsPlaying() && !sceneFramePresented) {
+        } else if (state.playMode.IsPlaying()) {
+            // Play advances a frame every loop iteration, but TickEditorFrame only
+            // presents the scene viewport (its own swapchain) — the GDI panels
+            // (Console, Hierarchy, Inspector) only redraw on WM_PAINT. Without
+            // invalidating here, live output produced during play (a script's
+            // Console log, the HUD, runtime stats) lands in panel state but is not
+            // drawn until the next input event forces a repaint. Invalidate each
+            // play frame — as the paused branch already does — so it shows live.
+            if (state.window != nullptr) {
+                InvalidateRect(state.window, nullptr, FALSE);
+            }
+        } else if (!sceneFramePresented) {
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.

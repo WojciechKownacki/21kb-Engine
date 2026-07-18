@@ -44,6 +44,9 @@ public:
 
     [[nodiscard]] bool Succeeded() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept;
+    // Per-frame script diagnostics (compile/behaviour errors) captured while the
+    // installed scene system ran, drained (and cleared) for the host to surface.
+    [[nodiscard]] std::vector<std::string> DrainSceneSystemDiagnostics();
     // LIB-028: the kb::library startup report (one entry per catalog
     // module: installed/disabled, version, reason) produced by the real
     // EngineLibraryModule::Install() call this host made while

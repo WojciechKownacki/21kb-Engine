@@ -4,6 +4,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace kb::ecs {
 
@@ -22,6 +24,7 @@ public:
 
     static void AddSystem(Scene& scene, std::unique_ptr<kb::ecs::System> system);
     static void AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
+    [[nodiscard]] static std::vector<std::string> DrainSceneSystemErrors(Scene& scene);
     static void SynchronizeTransforms(Scene& scene);
     static void SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept;
     // LIB-093: the script FixedTick delta (see SceneState::scriptFixedDeltaSeconds).
