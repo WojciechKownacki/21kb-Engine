@@ -371,11 +371,13 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
 
     kb::math::Vec3 worldPositionBeforeReparent{};
     kb::math::Quat worldRotationBeforeReparent{};
+    kb::math::Vec3 worldScaleBeforeReparent{ 1.0F, 1.0F, 1.0F };
     if (keepWorld) {
         context.scene->Runtime().SynchronizeTransforms();
         const kb::scene::TransformComponent beforeTransform = context.scene->Transforms().Get(entity);
         worldPositionBeforeReparent = beforeTransform.worldPosition;
         worldRotationBeforeReparent = beforeTransform.worldRotation;
+        worldScaleBeforeReparent = beforeTransform.worldScale;
     }
 
     if (!context.scene->Hierarchy().SetParent(entity, newParent)) {
@@ -390,11 +392,25 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
             const LocalPose localPose = WorldPoseToLocal(parentTransform, worldPositionBeforeReparent, worldRotationBeforeReparent);
             transform.localPosition = localPose.position;
             transform.localRotation = localPose.rotation;
+            // LIB-086: keepWorld must preserve the FULL world transform, not
+            // just position+rotation. kb::scene composes world scale
+            // component-wise (worldScale = parentWorldScale * localScale — the
+            // same model WorldPoseToLocal's SafeDivide-by-worldScale relies
+            // on), so the localScale that keeps the pre-reparent worldScale
+            // under a differently-scaled parent is worldScaleBefore /
+            // parentWorldScale, component-wise. Without this, reparenting onto
+            // a scaled parent silently rescales the entity.
+            transform.localScale = kb::scene::Vec3{
+                SafeDivide(worldScaleBeforeReparent.x, parentTransform.worldScale.x),
+                SafeDivide(worldScaleBeforeReparent.y, parentTransform.worldScale.y),
+                SafeDivide(worldScaleBeforeReparent.z, parentTransform.worldScale.z),
+            };
         } else {
             // New parent is root (none) — local IS world directly, same as
             // Transform.SetWorldPose's own root case.
             transform.localPosition = worldPositionBeforeReparent;
             transform.localRotation = worldRotationBeforeReparent;
+            transform.localScale = worldScaleBeforeReparent;
         }
         context.scene->Transforms().Set(entity, transform);
         context.scene->Runtime().SynchronizeTransforms();
