@@ -2,6 +2,7 @@
 
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
 
 #include <filesystem>
@@ -17,6 +18,9 @@ struct ScenePrefabAssetWriteDesc {
     std::string_view baseGuid;
     const ScenePrefab* prefab = nullptr;
     const std::vector<ScenePrefabPropertyOverride>* overrides = nullptr;
+    // LIB-092: a variant's added-child subtrees, serialized after the property
+    // overrides so a saved variant reproduces its added children on reload.
+    const std::vector<ScenePrefabVariantAddedSubtree>* addedChildren = nullptr;
 };
 
 class ScenePrefabAssetWriter {

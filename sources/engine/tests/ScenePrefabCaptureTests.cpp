@@ -433,6 +433,90 @@ void RunPrefabParentOverrideAssetRoundTripTest() {
     std::filesystem::remove(variantPath, removeError);
 }
 
+// LIB-092: proves a variant ADDED CHILD (a whole entity subtree attached to a
+// variant instance that the base template does not have) is promoted into the
+// variant on ApplyOverrides, reproduced for every future in-memory instance,
+// AND survives a real save+load round trip. Before this fix, the variant apply
+// path treated the added-child override as a report-only "children" string that
+// the materializer/synchronizer no-op'd — a new variant instance never grew the
+// child, and nothing about it reached disk. The fix captures the added subtree
+// (ScenePrefabCaptureService), stores it on the variant record
+// (variantAddedChildren), re-appends it as real nodes during materialization,
+// and serializes it in the variant asset — the same way a TEMPLATE ApplyOverrides
+// already re-captures added children into its base prefab.
+void RunPrefabVariantAddedChildAssetRoundTripTest() {
+    const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_addedchild_base.kbprefab";
+    const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_addedchild_variant.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab basePrefab;
+    const std::uint32_t rootNode = basePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Variant AddedChild Base Root" });
+    const kb::scene::ScenePrefabHandle baseHandle = source.Prefabs().Register("VariantAddedChildBase", std::move(basePrefab));
+    kb::tests::Require(baseHandle.IsValid(), "Variant added-child base registration failed");
+
+    std::vector<kb::scene::ScenePrefabPropertyOverride> overrides{
+        kb::scene::ScenePrefabPropertyOverride{
+            .nodeIndex = rootNode,
+            .propertyPath = "name",
+            .value = "Variant AddedChild Root",
+            .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+        },
+    };
+    const kb::scene::ScenePrefabHandle variantHandle = source.Prefabs().RegisterVariant("VariantAddedChild", baseHandle, std::move(overrides));
+    kb::tests::Require(variantHandle.IsValid(), "Variant added-child registration failed");
+
+    // Instantiate the variant, then attach a child the base does not have —
+    // the exact "AddedChild" scenario. ApplyOverrides must promote it into the
+    // variant, not merely report it.
+    const kb::scene::ScenePrefabInstance authoring = source.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(authoring.ObjectCount() == 1, "Variant added-child authoring instance should start with only the root");
+    static_cast<void>(source.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Variant Added Child",
+        .parent = authoring.ObjectAt(rootNode),
+    }));
+    kb::tests::Require(source.Prefabs().ApplyOverrides(authoring.Handle()), "Variant added-child ApplyOverrides failed");
+
+    // The variant prefab itself must now structurally contain the added child.
+    const kb::scene::ScenePrefab refreshedVariant = source.Prefabs().Get(variantHandle);
+    kb::tests::Require(refreshedVariant.NodeCount() == 2, "Variant ApplyOverrides did not promote the added child into the variant prefab");
+
+    // IN-MEMORY proof: a brand new instance of the variant reproduces the added
+    // child (a fresh spawn from the materialized variant, not the authoring one).
+    const kb::scene::ScenePrefabInstance memoryInstance = source.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(memoryInstance.ObjectCount() == 2, "New in-memory variant instance did not reproduce the added child");
+    bool memoryFound = false;
+    for (const kb::scene::SceneEntity child : source.Hierarchy().ChildEntities(memoryInstance.ObjectAt(rootNode).Entity())) {
+        memoryFound = memoryFound || source.Entities().Name(child) == "Variant Added Child";
+    }
+    kb::tests::Require(memoryFound, "New in-memory variant instance did not reproduce the added child by name");
+
+    kb::tests::Require(source.Prefabs().Save(baseHandle, basePath), "Variant added-child base asset save failed");
+    kb::tests::Require(source.Prefabs().Save(variantHandle, variantPath), "Variant added-child variant asset save failed");
+
+    // DISK proof: fresh scene, load both files, instantiate — the added child
+    // must be reproduced from the serialized subtree, parented under the root.
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabHandle loadedBase = target.Prefabs().Load(basePath);
+    const kb::scene::ScenePrefabHandle loadedVariant = target.Prefabs().Load(variantPath);
+    kb::tests::Require(loadedBase.IsValid(), "Variant added-child base asset load failed");
+    kb::tests::Require(loadedVariant.IsValid(), "Variant added-child variant asset load failed");
+
+    const kb::scene::ScenePrefabInstance loadedInstance = target.Prefabs().Instantiate(loadedVariant);
+    kb::tests::Require(loadedInstance.ObjectCount() == 2, "Loaded variant did not reproduce the added child from disk");
+    kb::tests::Require(target.Entities().Name(loadedInstance.ObjectAt(rootNode)) == "Variant AddedChild Root", "Loaded variant lost its name override");
+    bool diskFound = false;
+    for (const kb::scene::SceneEntity child : target.Hierarchy().ChildEntities(loadedInstance.ObjectAt(rootNode).Entity())) {
+        diskFound = diskFound || target.Entities().Name(child) == "Variant Added Child";
+    }
+    kb::tests::Require(diskFound, "Loaded variant did not reproduce the added child by name from disk");
+
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+}
+
 void RunNestedPrefabAssetRoundTripTest() {
     const std::filesystem::path innerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_inner.kbprefab";
     const std::filesystem::path outerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_outer.kbprefab";
@@ -485,6 +569,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
     run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
+    run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
     run("RunNestedPrefabAssetRoundTripTest", RunNestedPrefabAssetRoundTripTest);
 }
 

@@ -97,6 +97,7 @@ bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const
             .baseGuid = record->basePrefabGuid,
             .prefab = &record->prefab,
             .overrides = &record->variantOverrides,
+            .addedChildren = &record->variantAddedChildren,
         });
 }
 
@@ -111,7 +112,7 @@ ScenePrefabHandle ScenePrefabAssetService::Load(Scene& scene, const std::filesys
         if (needsMigration && !FillMissingVariantOverrideNodeIds(state.prefabs, asset.baseGuid, asset.overrides)) {
             return {};
         }
-        ScenePrefabHandle handle = state.prefabs.RegisterLoadedVariant(std::move(asset.guid), std::move(asset.name), std::move(asset.baseGuid), std::move(asset.overrides));
+        ScenePrefabHandle handle = state.prefabs.RegisterLoadedVariant(std::move(asset.guid), std::move(asset.name), std::move(asset.baseGuid), std::move(asset.overrides), std::move(asset.addedChildren));
         return SaveMigratedAsset(scene, handle, path, handle.IsValid() && needsMigration) ? handle : ScenePrefabHandle{};
     }
     const bool nestedOverrideIdsMigrated = !asset.missingOverrideNodeIds || FillMissingNestedOverrideNodeIds(state.prefabs, asset.prefab);

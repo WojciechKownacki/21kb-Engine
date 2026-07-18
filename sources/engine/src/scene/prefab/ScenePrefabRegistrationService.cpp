@@ -65,7 +65,7 @@ ScenePrefabHandle ScenePrefabRegistrationService::RegisterVariant(ScenePrefabRec
     return records.Insert(std::move(record));
 }
 
-ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoadedVariant(ScenePrefabRecordStore& records, std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides) {
+ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoadedVariant(ScenePrefabRecordStore& records, std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides, std::vector<ScenePrefabVariantAddedSubtree> addedChildren) {
     if (guid.empty() || basePrefabGuid.empty() || records.FindByGuid(guid).IsValid()) {
         return {};
     }
@@ -76,6 +76,11 @@ ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoadedVariant(ScenePre
     }
 
     ScenePrefabRecord record = ScenePrefabRecordFactory::CreateLoadedVariant(std::move(guid), std::move(name), baseHandle, std::move(basePrefabGuid), ScenePrefabVariantOverrideList::Normalize(std::move(overrides)));
+    // LIB-092: the added-child subtrees must be on the record BEFORE
+    // materialization — the materializer appends them as real nodes, so a
+    // loaded variant reproduces its added children the same way an in-memory
+    // ApplyOverrides-built one does.
+    record.variantAddedChildren = std::move(addedChildren);
     if (!ScenePrefabVariantRefreshService::Materialize(records, record)) {
         return {};
     }
