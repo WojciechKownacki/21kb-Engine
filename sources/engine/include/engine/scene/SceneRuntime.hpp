@@ -146,19 +146,28 @@ public:
     //    world* it writes is fully propagated through the hierarchy before
     //    the next fixed step (or any later reader) sees it. No manual call
     //    needed here.
-    //  - RENDERER (kb::renderer::EcsRenderSceneSynchronizer and everything
-    //    it feeds, e.g. Renderer::SubmitSceneToViewport): reads
-    //    TransformComponent::world* directly at submission time and does
-    //    NOT sync itself — it trusts whatever the caller already produced.
-    //    A caller that calls Update() (below) and submits the SAME scene
-    //    to a renderer afterward, in the same frame, sees consistent data
-    //    (Update()'s own unconditional end-of-call sync makes this safe).
-    //    A caller that instead drives script execution SEPARATELY from
-    //    Update() (e.g. calling a ScriptRuntimeSceneSystem's
-    //    ExecuteFrame() directly rather than through AddSceneSystem(), the
-    //    pattern CliRunCommand.cpp uses) is responsible for its OWN call
-    //    to this method before submitting to a renderer — Update()'s
-    //    guarantee does not extend across that split.
+    //  - RENDERER (kb::render::EcsRenderSceneSynchronizer and everything
+    //    it feeds, e.g. Renderer::SubmitSceneToViewport): does NOT call
+    //    this method itself, but it does NOT blindly trust the caller's
+    //    world* cache either. Its transform reader takes a FAST PATH that
+    //    consumes the precomputed TransformComponent::world* when that
+    //    entry is clean, and OTHERWISE FALLS BACK to a full recursive
+    //    resolve from local + parent hierarchy — so it produces a CORRECT
+    //    world transform even for an entity whose world* was never synced
+    //    (worldDirty). The two paths are counted separately as
+    //    EcsRenderSceneSynchronizerStats::transformPrecomputedReadCount vs
+    //    transformResolvedFallbackCount; RenderSceneSyncTests exercises
+    //    both — the fast path for clean transforms, and (RunSyncFallsBack
+    //    ToResolveForDirtyTransformTest) the fallback producing the right
+    //    world X for a local-only, never-Update()'d mesh. Consequently,
+    //    calling Update()/this method before submission is a PERFORMANCE
+    //    contract (it keeps the renderer on the fast path and avoids a
+    //    per-submit resolve), NOT a correctness prerequisite. A caller
+    //    that drives script execution SEPARATELY from Update() (e.g.
+    //    calling a ScriptRuntimeSceneSystem's ExecuteFrame() directly
+    //    rather than through AddSceneSystem(), the pattern CliRunCommand.
+    //    cpp uses) still submits CORRECT transforms via the fallback;
+    //    syncing first only avoids that extra resolve cost.
     void SynchronizeTransforms();
     void SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept;
     void SetTransformPropagationBudget(SceneTransformPropagationBudget budget) noexcept;
