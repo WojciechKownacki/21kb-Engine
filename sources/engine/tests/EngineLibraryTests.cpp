@@ -2766,6 +2766,50 @@ void RunLibraryQueryFilterAndOrderTest() {
     kb::tests::Require(std::abs(fovSum - 120.0F) < 0.0001F, "Engine21kbLibrary multi-component Query must also thread the first component's data (two default 60-degree cameras = 120)");
 }
 
+// LIB-079 (audit gap closed 2026-07-18): ChangedSince needs a real reference
+// point. The static Query rebuilds its change-tracking state every call, so a
+// ChangedSince query reports every match forever. PersistentQuery keeps its
+// kb::ecs::Query across runs, so ChangedSince means "changed since THIS query
+// last ran": run it twice with nothing modified between and the second run
+// must report NOTHING — the exact behaviour the static query cannot express.
+void RunLibraryPersistentQueryChangedSinceTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangedA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangedB" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+
+    kb::library::QueryFilterOptions changedOptions;
+    changedOptions.ChangedSince<kb::scene::CameraComponent>();
+    kb::library::PersistentQuery<kb::scene::CameraComponent> query{ scene, changedOptions };
+
+    // First run: both cameras were just Set(), so both are "changed since
+    // never observed" — the persistent query reports them and commits their
+    // observed versions.
+    int firstRunCount = 0;
+    kb::tests::Require(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+                           [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++firstRunCount; }),
+        "Engine21kbLibrary PersistentQuery must iterate during an allowed phase");
+    kb::tests::Require(firstRunCount == 2, "Engine21kbLibrary PersistentQuery ChangedSince first run must report both freshly-Set cameras");
+
+    // Second run with NOTHING modified in between: the observed versions now
+    // match the live ones, so a persistent ChangedSince reports NOTHING. This
+    // is the reference point the 2026-07-17 audit found missing — a fresh
+    // per-call query would report both cameras again here.
+    int unchangedRunCount = 0;
+    static_cast<void>(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++unchangedRunCount; }));
+    kb::tests::Require(unchangedRunCount == 0, "Engine21kbLibrary PersistentQuery ChangedSince must report NOTHING on a second run when nothing changed between the two — proving it tracks a real 'since when' reference point, not 'always changed'");
+
+    // Modify a camera, then run again: the change must be observed (the
+    // modified archetype's cameras are reported).
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 33.0F });
+    int afterChangeCount = 0;
+    static_cast<void>(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++afterChangeCount; }));
+    kb::tests::Require(afterChangeCount >= 1, "Engine21kbLibrary PersistentQuery ChangedSince must report a camera after its component is modified between runs");
+}
+
 // LIB-080: kb::library::CommandBatch — proves Spawn/Destroy/Add<T>/
 // Remove<T>/AddTag/RemoveTag all genuinely defer (zero effect on the live
 // world before Flush()), that Flush() actually applies them (including
@@ -3716,6 +3760,7 @@ void RunEngineLibraryTests() {
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
+    RunLibraryPersistentQueryChangedSinceTest();
     RunLibraryCommandBatchTest();
     RunLibraryCommandBatchCancelsStaleTargetOnFlushTest();
     RunComponentChangeTrackerTest();
