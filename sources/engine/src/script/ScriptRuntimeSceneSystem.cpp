@@ -163,6 +163,15 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
 }
 
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
+    // LIB-093: stamp the scene with THIS system's script FixedTick delta so
+    // Time.FixedDelta (ScriptTimeApi) reports the step a script's FixedTick
+    // actually runs at — frameSettings_.fixedDeltaSeconds — rather than the
+    // physics SceneRuntimeFixedStepSettings step, which is configured
+    // independently. Done in PrepareScene because every script entry point
+    // (ExecuteStartup/ExecuteFrame/ExecuteShutdown/ExecutePhase) routes
+    // through it, so the stamp is fresh for every phase a script may call
+    // Time.FixedDelta from, not only FixedTick.
+    scene.Runtime().SetScriptFixedDeltaSeconds(frameSettings_.fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
 }
 

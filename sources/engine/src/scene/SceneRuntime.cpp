@@ -133,6 +133,14 @@ SceneRuntimeFixedStepSettings SceneRuntimeService::FixedStepSettings(const Scene
     return SceneAccess::State(scene).fixedStepSettings;
 }
 
+void SceneRuntimeService::SetScriptFixedDeltaSeconds(Scene& scene, float seconds) noexcept {
+    SceneAccess::State(scene).scriptFixedDeltaSeconds = seconds;
+}
+
+float SceneRuntimeService::ScriptFixedDeltaSeconds(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).scriptFixedDeltaSeconds;
+}
+
 void SceneRuntimeService::SetTransformPropagationBudget(Scene& scene, SceneTransformPropagationBudget budget) noexcept {
     SceneState& state = SceneAccess::State(scene);
     state.transformPropagationBudget = budget;
