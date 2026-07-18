@@ -233,6 +233,18 @@ ScriptFunctionArgument ScriptFunctionRegistry::CoerceArgument(const ScriptFuncti
             .value = ScriptValue{ static_cast<std::uint32_t>(argument.value.AsInt()) },
         };
     }
+    // LIB-058: a non-negative Int coerces to Hash — an opaque handle (an
+    // Array/Set/Map/Queue/Stack handle, LIB-058) is a small non-negative id
+    // the Lua bridge marshals as Int, so a Hash-pinned handle argument
+    // would otherwise be rejected on the round trip Create -> handle ->
+    // Push. Same non-negative rule and lossless-widening reasoning as the
+    // Entity/Component coercion above (all three share the uint64 storage).
+    if (expectedType == ScriptValueType::Hash && argument.value.Type() == ScriptValueType::Int && argument.value.AsInt() >= 0) {
+        return ScriptFunctionArgument{
+            .name = argument.name,
+            .value = ScriptValue{ static_cast<std::uint64_t>(argument.value.AsInt()), ScriptValueType::Hash },
+        };
+    }
     return argument;
 }
 
@@ -245,7 +257,10 @@ bool ScriptFunctionRegistry::IsCompatible(ScriptValue value, ScriptValueType exp
            // LIB-050: a non-negative Int satisfies a UInt32 pin (see
            // CoerceArgument for why the Lua Random/Noise seed/index path
            // needs this). Negative Ints stay incompatible and fail loudly.
-           (expectedType == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int && value.AsInt() >= 0);
+           (expectedType == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
+           // LIB-058: a non-negative Int satisfies a Hash pin (an opaque
+           // collection handle marshalled from Lua as Int).
+           (expectedType == ScriptValueType::Hash && value.Type() == ScriptValueType::Int && value.AsInt() >= 0);
 }
 
 void ScriptFunctionRegistry::ValidateInputs(
