@@ -244,4 +244,103 @@ private:
     }
 };
 
+// LIB-079: the ChangedSince reference point. The static Query above builds a
+// fresh kb::ecs::Query on every ForEach, so its change-tracking state
+// (QueryState::observedVersions_) is always empty and a ChangedSince filter
+// reports EVERY matching entity every call — it has no "since when." A
+// PersistentQuery is CONSTRUCTED ONCE (fixed filter) and holds its
+// kb::ecs::Query across calls, so ChangedSince means exactly "changed since
+// this query last ran": the first ForEach reports all matches and commits
+// the observed per-archetype component versions (kb::ecs::QueryState::
+// CommitRecordVersions, called during iteration), and a subsequent ForEach
+// reports only entities whose component version moved since — nothing at all
+// if nothing changed between the two runs. Change granularity is per
+// archetype+component (kb::ecs::NativeArchetypeStorage::ArchetypeComponent
+// -Version), the same coarse, chunk-level granularity every ECS with
+// versioned change tracking uses; a modification bumps the whole archetype's
+// version, so every entity sharing that archetype is reported as changed.
+//
+// Native C++ script code only (same as Query — Lua/Visual Graph cannot
+// express a C++ template). A behaviour holds one as a member across ticks;
+// the phase gate, structural-change guard, and Any/Enabled per-entity
+// predicates apply on every ForEach exactly as they do for the static Query.
+template <typename... Components>
+class PersistentQuery final {
+public:
+    static_assert(sizeof...(Components) >= 1, "kb::library::PersistentQuery needs at least one component type to iterate");
+
+    PersistentQuery(kb::scene::Scene& scene, QueryFilterOptions options)
+        : scene_(&scene)
+        , options_(std::move(options)) {
+        kb::ecs::World& world = scene.Runtime().EcsWorld();
+        kb::ecs::QueryFilter filter;
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options_.WithResolvers()) {
+            filter.Require(resolve(world));
+        }
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options_.WithoutResolvers()) {
+            filter.Exclude(resolve(world));
+        }
+        for (const QueryFilterOptions::ComponentIdResolver resolve : options_.ChangedResolvers()) {
+            filter.Changed(resolve(world));
+        }
+        query_ = world.CreateQuery<Components...>(filter);
+    }
+
+    template <typename Visitor>
+    [[nodiscard]] bool ForEach(LifecycleEvent event, Visitor&& visitor) {
+        if (ClassifyLifecycleContext(event) == LibraryLifecycleContextKind::Behaviour) {
+            return false;
+        }
+
+        kb::ecs::World& world = scene_->Runtime().EcsWorld();
+        const kb::ecs::StructuralChangeValidator::Guard iterationGuard = world.EnterIteration();
+        const kb::ecs::QueryExecutionSettings settings{
+            .iterationOrder = options_.StableOrderRequested() ? kb::ecs::QueryIterationOrder::Deterministic : kb::ecs::QueryIterationOrder::StorageOrder,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+
+        query_.ForEachBatchKernel(settings, [&](const typename kb::ecs::Query<Components...>::Batch& batch) {
+            VisitBatch(batch, *scene_, world, options_, visitor, std::index_sequence_for<Components...>{});
+        });
+        return true;
+    }
+
+private:
+    // Mirrors Query<Components...>::VisitBatch — the same per-entity Enabled/
+    // Any predicate gate and pack-expanded visitor call. Kept as a private
+    // copy rather than shared through friendship because the two-pack
+    // (Components... + Is...) helper does not factor cleanly into one free
+    // function without obscuring both call sites.
+    template <typename Visitor, std::size_t... Is>
+    static void VisitBatch(
+        const typename kb::ecs::Query<Components...>::Batch& batch,
+        kb::scene::Scene& scene,
+        const kb::ecs::World& world,
+        const QueryFilterOptions& options,
+        Visitor& visitor,
+        std::index_sequence<Is...>) {
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            const kb::ecs::Entity entity = batch.EntityAt(index);
+            if (options.EnabledOnlyRequested() && !scene.Entities().IsActive(entity)) {
+                continue;
+            }
+            bool matchesEveryAnyGroup = true;
+            for (const QueryFilterOptions::AnyPredicate predicate : options.AnyPredicates()) {
+                if (!predicate(world, entity)) {
+                    matchesEveryAnyGroup = false;
+                    break;
+                }
+            }
+            if (!matchesEveryAnyGroup) {
+                continue;
+            }
+            visitor(EntityHandle{ entity, scene.Id() }, batch.template Components<Is>()[index]...);
+        }
+    }
+
+    kb::scene::Scene* scene_ = nullptr;
+    QueryFilterOptions options_;
+    kb::ecs::Query<Components...> query_;
+};
+
 } // namespace kb::library
