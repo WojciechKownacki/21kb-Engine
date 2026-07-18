@@ -556,6 +556,31 @@ void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
         "FBX importer created incorrect material section index ranges");
 }
 
+// Every real binary FBX file appends a fixed ~161-byte footer AFTER the
+// top-level null-record terminator (footer code + padding + version + magic).
+// The prior fixture stopped at the terminator, so the parser never saw a
+// footer — which is exactly why a genuine FBX (kuleczka.fbx, v7400) rendered
+// nothing: ExtractGeometry parsed the footer as a node, failed, and discarded
+// the already-decoded mesh (DC 0). This fixture reproduces the footer and
+// asserts the geometry still loads.
+void RunFbxImporterStopsAtFooterAfterNullTerminatorTest() {
+    std::vector<std::byte> fixture = MakeMultiMaterialFbxFixture();
+    const std::array<std::byte, 16U> footerHead{
+        std::byte{ 0xF8 }, std::byte{ 0x5A }, std::byte{ 0x8C }, std::byte{ 0x6A },
+        std::byte{ 0xDE }, std::byte{ 0xF5 }, std::byte{ 0xD9 }, std::byte{ 0x7E },
+        std::byte{ 0x99 }, std::byte{ 0x35 }, std::byte{ 0x2A }, std::byte{ 0x8E },
+        std::byte{ 0x33 }, std::byte{ 0xE9 }, std::byte{ 0xB2 }, std::byte{ 0x0F },
+    };
+    fixture.insert(fixture.end(), footerHead.begin(), footerHead.end());
+    fixture.insert(fixture.end(), 120U, std::byte{});
+    AppendFbxU32(fixture, 7400U);
+
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ fixture });
+    Require(asset.has_value(), "FBX importer must load geometry even with the standard FBX footer trailing the null terminator");
+    Require(asset->sections.size() == 2U, "FBX importer must preserve geometry sections when a footer follows the terminator");
+    Require(asset->materialNames.size() == 2U, "FBX importer must preserve material names when a footer follows the terminator");
+}
+
 void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_mesh_asset_loader";
     std::error_code error;
@@ -2729,6 +2754,7 @@ void RunRenderResourceRegistryTests() {
     RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
+    RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
