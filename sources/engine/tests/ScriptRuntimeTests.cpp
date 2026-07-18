@@ -7488,6 +7488,8 @@ void RunScriptMathApiTest() {
              "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
              "Math.RandomSeed", "Math.RandomNextUInt32", "Math.RandomNextFloat01", "Math.RandomRange", "Math.RandomRangeInt",
              "Math.Ease",
+             "Math.RectContains", "Math.RectIntersects", "Math.PlaneSignedDistance", "Math.RayPointAt", "Math.RayPlaneIntersect",
+             "Math.IVec2Add", "Math.IVec2ManhattanDistance",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -7904,6 +7906,132 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(!easedOutOfRange.Succeeded() && !easedOutOfRange.errors.empty(), "Math.Ease with an out-of-range easing ordinal must report a real error, not cast into undefined enum territory");
+
+    // LIB-042: geometry queries over Rect/Plane/Ray/IVec2 — a real
+    // end-to-end call through the registry for each, on known values, so the
+    // kb::math geometry ops have a proven Native consumer (not orphaned API).
+    const kb::script::ScriptFunctionCallResult rectInside = host.Functions().Call(
+        "Math.RectContains",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rectX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectWidth", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "rectHeight", .value = kb::script::ScriptValue{ 2.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(rectInside.Succeeded() && rectInside.Output("result").has_value() && rectInside.Output("result")->AsBool(), "Math.RectContains must report a point inside the rect as contained");
+
+    const kb::script::ScriptFunctionCallResult rectOutside = host.Functions().Call(
+        "Math.RectContains",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rectX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectWidth", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "rectHeight", .value = kb::script::ScriptValue{ 2.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(rectOutside.Succeeded() && rectOutside.Output("result").has_value() && !rectOutside.Output("result")->AsBool(), "Math.RectContains must report a point outside the rect as not contained");
+
+    const kb::script::ScriptFunctionCallResult planeDist = host.Functions().Call(
+        "Math.PlaneSignedDistance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "pointZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(planeDist.Succeeded() && planeDist.Output("result").has_value() && kb::tests::NearlyEqual(planeDist.Output("result")->AsFloat(), 3.0F), "Math.PlaneSignedDistance of a point 3 above the ground plane must be +3");
+
+    // A ray from (0,5,0) pointing straight down at the y=0 ground plane must
+    // hit at (0,0,0) after t=5.
+    const kb::script::ScriptFunctionCallResult rayHit = host.Functions().Call(
+        "Math.RayPlaneIntersect",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rayOriginX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayOriginY", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "rayOriginZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionY", .value = kb::script::ScriptValue{ -1.0F } },
+            { .name = "rayDirectionZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        rayHit.Succeeded() && rayHit.Output("hit").has_value() && rayHit.Output("hit")->AsBool() &&
+            kb::tests::NearlyEqual(rayHit.Output("t")->AsFloat(), 5.0F) &&
+            kb::tests::NearlyEqual(rayHit.Output("y")->AsFloat(), 0.0F),
+        "Math.RayPlaneIntersect of a downward ray from y=5 against the ground plane must hit at t=5, y=0");
+
+    // A ray pointing AWAY from the plane must report a miss, not a
+    // behind-the-origin solution.
+    const kb::script::ScriptFunctionCallResult rayMiss = host.Functions().Call(
+        "Math.RayPlaneIntersect",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rayOriginX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayOriginY", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "rayOriginZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "rayDirectionZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(rayMiss.Succeeded() && rayMiss.Output("hit").has_value() && !rayMiss.Output("hit")->AsBool(), "Math.RayPlaneIntersect of a ray pointing away from the plane must report a miss");
+
+    const kb::script::ScriptFunctionCallResult manhattan = host.Functions().Call(
+        "Math.IVec2ManhattanDistance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1 } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 2 } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 4 } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 6 } },
+        },
+        context);
+    kb::tests::Require(manhattan.Succeeded() && manhattan.Output("result").has_value() && manhattan.Output("result")->AsInt() == 7, "Math.IVec2ManhattanDistance of (1,2)->(4,6) must be |3|+|4| = 7");
+
+    // LIB-042: a REAL Lua script must be able to call the geometry bindings
+    // and get the right answer back — proving the Rect/Plane types reach the
+    // Lua frontend, not just the Native registry.
+    {
+        kb::scene::Scene luaScene;
+        kb::script::ScriptRuntimeHost luaHost{ luaScene };
+        kb::tests::Require(luaHost.Succeeded(), "LIB-042 geometry Lua host did not initialize");
+        constexpr kb::assets::AssetId kGeometryLuaAsset{ 700742U };
+        const kb::script::PucLuaLoadResult loaded = luaHost.LuaRuntime().LoadScript(kGeometryLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local inside = CallFunction(\"Math.RectContains\", { rectX = 0.0, rectY = 0.0, rectWidth = 4.0, rectHeight = 2.0, pointX = 1.0, pointY = 1.0 })\n"
+            "    local hit = CallFunction(\"Math.RayPlaneIntersect\", {\n"
+            "        rayOriginX = 0.0, rayOriginY = 5.0, rayOriginZ = 0.0,\n"
+            "        rayDirectionX = 0.0, rayDirectionY = -1.0, rayDirectionZ = 0.0,\n"
+            "        planeNormalX = 0.0, planeNormalY = 1.0, planeNormalZ = 0.0, planeDistance = 0.0 })\n"
+            "    SetShared(\"luaGeometryOk\", inside == true and hit.hit == true and hit.t == 5.0 and hit.y == 0.0)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-042 geometry Lua test script did not load");
+        const kb::scene::SceneObject caller = luaScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "GeometryCaller" });
+        luaScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kGeometryLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = luaHost.Runtime().ExecuteLifecycle(luaScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-042 geometry Lua Tick produced script diagnostics");
+        const std::optional<kb::script::ScriptValue> geometryOk = luaHost.SharedState().Get("luaGeometryOk");
+        kb::tests::Require(geometryOk.has_value() && geometryOk->AsBool(), "LIB-042 a real Lua script must call Math.RectContains and Math.RayPlaneIntersect and get correct results");
+    }
 }
 
 // LIB-056: Math.Clamp is a single ScriptFunctionRegistry-registered

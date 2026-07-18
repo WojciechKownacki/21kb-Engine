@@ -985,12 +985,67 @@ void RunSerializationFuzzTest() {
     }
 }
 
+// LIB-042: the Vec2/IVec2/Rect/Plane/Ray operations must be arithmetically
+// correct on known values — these are the native ops the Math.* geometry
+// bindings (ScriptMathApi) call, so their correctness is the correctness of
+// the script-facing geometry surface.
+void RunGeometryTypesTest() {
+    using kb::math::IVec2;
+    using kb::math::Plane;
+    using kb::math::Ray;
+    using kb::math::Rect;
+    using kb::math::Vec2;
+    using kb::math::Vec3;
+
+    // Vec2
+    const Vec2 sum2 = Vec2{ 1.0F, 2.0F } + Vec2{ 3.0F, -1.0F };
+    kb::tests::Require(sum2.x == 4.0F && sum2.y == 1.0F, "Vec2 operator+ must add component-wise");
+    kb::tests::Require(kb::math::Dot(Vec2{ 1.0F, 2.0F }, Vec2{ 3.0F, 4.0F }) == 11.0F, "Vec2 Dot must compute the 2D dot product");
+    kb::tests::Require(std::abs(kb::math::Length(Vec2{ 3.0F, 4.0F }) - 5.0F) < 0.0001F, "Vec2 Length must compute the 2D Euclidean norm (3-4-5)");
+
+    // IVec2
+    const IVec2 isum = IVec2{ 2, 3 } + IVec2{ 5, 7 };
+    kb::tests::Require(isum == IVec2{ 7, 10 }, "IVec2 operator+ and operator== must work on integer lattice points");
+    kb::tests::Require(IVec2{ 1, 2 } != IVec2{ 1, 3 }, "IVec2 operator!= must distinguish differing y");
+    kb::tests::Require(kb::math::ManhattanDistance(IVec2{ 1, 2 }, IVec2{ 4, 6 }) == 7, "IVec2 ManhattanDistance must be |dx| + |dy|");
+
+    // Rect (half-open contains; touching-edge intersects convention)
+    const Rect rect{ 0.0F, 0.0F, 4.0F, 2.0F };
+    kb::tests::Require(kb::math::Contains(rect, Vec2{ 1.0F, 1.0F }), "Rect Contains must include an interior point");
+    kb::tests::Require(kb::math::Contains(rect, Vec2{ 0.0F, 0.0F }), "Rect Contains must include the min corner (half-open low edge)");
+    kb::tests::Require(!kb::math::Contains(rect, Vec2{ 4.0F, 1.0F }), "Rect Contains must exclude the max edge (half-open high edge)");
+    kb::tests::Require(!kb::math::Contains(rect, Vec2{ -1.0F, 1.0F }), "Rect Contains must exclude a point left of the rect");
+    kb::tests::Require(kb::math::Intersects(rect, Rect{ 2.0F, 1.0F, 4.0F, 4.0F }), "Rect Intersects must detect an overlapping rect");
+    kb::tests::Require(!kb::math::Intersects(rect, Rect{ 4.0F, 0.0F, 1.0F, 1.0F }), "Rect Intersects must treat edge-only touching as no overlap");
+
+    // Plane (ground plane y=0)
+    const Plane ground{ Vec3{ 0.0F, 1.0F, 0.0F }, 0.0F };
+    kb::tests::Require(kb::math::SignedDistance(ground, Vec3{ 0.0F, 3.0F, 0.0F }) == 3.0F, "Plane SignedDistance above must be positive height");
+    kb::tests::Require(kb::math::SignedDistance(ground, Vec3{ 0.0F, -2.0F, 0.0F }) == -2.0F, "Plane SignedDistance below must be negative");
+
+    // Ray
+    const Ray down{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 0.0F, -1.0F, 0.0F } };
+    const Vec3 at = kb::math::PointAt(down, 5.0F);
+    kb::tests::Require(at.x == 0.0F && at.y == 0.0F && at.z == 0.0F, "Ray PointAt(t=5) from y=5 heading down must reach the origin");
+
+    // Ray-Plane intersection
+    const kb::math::RayPlaneIntersection hit = kb::math::Intersect(down, ground);
+    kb::tests::Require(hit.hit && std::abs(hit.t - 5.0F) < 0.0001F && std::abs(hit.point.y) < 0.0001F, "Intersect(down ray, ground plane) must hit at t=5 on y=0");
+
+    const Ray up{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F } };
+    kb::tests::Require(!kb::math::Intersect(up, ground).hit, "Intersect of a ray pointing away from the plane must report a miss, not a behind-origin solution");
+
+    const Ray parallel{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F } };
+    kb::tests::Require(!kb::math::Intersect(parallel, ground).hit, "Intersect of a ray parallel to the plane must report a miss, not divide by zero");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
     RunSceneAliasIdentityTest();
     RunDefaultValueConventionsTest();
     RunVec3MathTest();
+    RunGeometryTypesTest();
     RunQuatAndMatrixMathTest();
     RunAngleUnitsTest();
     RunScalarMathFunctionsTest();
