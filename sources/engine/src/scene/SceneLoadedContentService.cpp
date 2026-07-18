@@ -163,6 +163,29 @@ std::uint64_t SceneLoadedContentService::ActiveScene(const Scene& scene) noexcep
     return SceneAccess::State(scene).activeLoadedSceneId;
 }
 
+// LIB-071: the hierarchy root of the currently-active loaded scene, or an
+// invalid SceneEntity when nothing is loaded/active (activeLoadedSceneId==0)
+// or the active record has since been Unload'ed. This is what makes
+// Scene.SetActive actually STEER content creation: World.Spawn/
+// InstantiatePrefab parent a new root under this so a spawned entity belongs
+// to (and Unloads with) the active scene, instead of Scene.SetActive being a
+// purely observable flag.
+SceneEntity SceneLoadedContentService::ActiveSceneRoot(const Scene& scene) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    if (state.activeLoadedSceneId == 0U) {
+        return SceneEntity{};
+    }
+    for (const SceneState::LoadedSceneRecord& record : state.loadedScenes) {
+        if (record.id == state.activeLoadedSceneId) {
+            if (!record.root.IsValid() || !scene.Entities().IsAlive(record.root)) {
+                return SceneEntity{};
+            }
+            return record.root;
+        }
+    }
+    return SceneEntity{};
+}
+
 // LIB-106: walks `entity` up to its hierarchy root (SceneHierarchyAccess::
 // Parent already returns an invalid SceneEntity once there is no parent —
 // the same convention RootEntities() relies on) and matches that root
