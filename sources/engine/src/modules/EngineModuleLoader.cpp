@@ -1,8 +1,11 @@
 #include "engine/modules/EngineModuleLoader.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <ranges>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -27,6 +30,37 @@ namespace {
         output.push_back(valid ? character : '_');
     }
     return output.empty() ? "engine_module" : output;
+}
+
+[[nodiscard]] unsigned long long CurrentProcessId() {
+#if defined(_WIN32)
+    return static_cast<unsigned long long>(GetCurrentProcessId());
+#else
+    return static_cast<unsigned long long>(getpid());
+#endif
+}
+
+// Best-effort removal of leftover shadow copies for this key so per-process
+// naming does not leak temp files indefinitely. A file still mapped by a live
+// process stays locked and simply fails to delete (skipped); once its process
+// exits it becomes removable and the next load prunes it. `keep` is the file
+// we are about to (re)create and must not delete.
+void PruneRemovableShadowCopies(const std::filesystem::path& directory, std::string_view keyPrefix, const std::filesystem::path& keep) {
+    std::error_code error;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (error) {
+            return;
+        }
+        if (!entry.is_regular_file() || entry.path() == keep) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        if (name.size() < keyPrefix.size() || std::string_view{ name }.substr(0, keyPrefix.size()) != keyPrefix) {
+            continue;
+        }
+        std::error_code removeError;
+        std::filesystem::remove(entry.path(), removeError);
+    }
 }
 
 [[nodiscard]] std::string NativeLibraryError(std::string_view diagnosticLabel) {
@@ -154,6 +188,9 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
     std::filesystem::path loadPath = sourcePath;
     if (desc.shadowCopy) {
         loadPath = ResolveShadowCopyPath(desc.key, sourcePath, desc.shadowCopyDirectory, desc.shadowCopyDirectoryName, serial);
+        std::error_code shadowDirError;
+        std::filesystem::create_directories(loadPath.parent_path(), shadowDirError);
+        PruneRemovableShadowCopies(loadPath.parent_path(), SanitizeFileName(desc.key) + "_", loadPath);
         if (!CopyForLoad(sourcePath, loadPath, desc.diagnosticLabel, result.errors)) {
             return result;
         }
@@ -245,8 +282,18 @@ std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
         directory = std::filesystem::temp_directory_path() / std::string{ shadowCopyDirectoryName.empty() ? "21kb_engine_modules" : shadowCopyDirectoryName };
     }
     const std::string extension = modulePath.extension().string();
-    serial = reloadSerial_++;
-    return directory / (SanitizeFileName(key) + "_" + std::to_string(serial) + extension);
+    // Serial from a PROCESS-GLOBAL counter, not the per-loader member: every
+    // EngineModuleHost creates its own loader whose member would reset to the
+    // same value, so two loaders alive at once in one process (an editor scene
+    // reload creating a new host while the old host's plugin DLL is still mapped,
+    // or two hosts sharing a scene) would target the SAME temp filename and the
+    // second copy_file(overwrite_existing) onto the still-locked leftover fails.
+    // A process-global serial makes every shadow copy in the process unique.
+    static std::atomic<std::uint64_t> processShadowSerial{ 1U };
+    serial = processShadowSerial.fetch_add(1U, std::memory_order_relaxed);
+    // Scope the filename to THIS process id too, so it never collides with a
+    // DIFFERENT process's (possibly locked) leftover shadow copy either.
+    return directory / (SanitizeFileName(key) + "_p" + std::to_string(CurrentProcessId()) + "_" + std::to_string(serial) + extension);
 }
 
 bool EngineModuleLoader::CopyForLoad(
@@ -260,12 +307,31 @@ bool EngineModuleLoader::CopyForLoad(
         errors.push_back(std::string{ diagnosticLabel } + " shadow copy directory could not be created");
         return false;
     }
-    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
-    if (error) {
-        errors.push_back(std::string{ diagnosticLabel } + " shadow copy failed");
-        return false;
+    // The source DLL can be transiently locked with a sharing violation by an
+    // antivirus real-time scan, the search indexer, or a build tool that just
+    // wrote it — an inherent Windows condition, not a permanent failure. Retry
+    // with a short backoff (this is the standard shadow-copy behavior in .NET/
+    // Unity), and only report the failure if the lock genuinely persists.
+    // Ride out only a brief transient lock (e.g. an antivirus glancing at a
+    // freshly written DLL). Kept short on purpose: this runs on the caller's
+    // thread, so a long spin would freeze the editor UI, and a genuinely
+    // persistent lock is a real error to surface — not something to hang on.
+    // The common case (unlocked source) succeeds on the very first attempt.
+    constexpr int kMaxAttempts = 6;
+    constexpr std::chrono::milliseconds kRetryDelay{ 100 };
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        error.clear();
+        std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
+        if (!error) {
+            return true;
+        }
+        if (attempt + 1 < kMaxAttempts) {
+            std::this_thread::sleep_for(kRetryDelay);
+        }
     }
-    return true;
+    errors.push_back(std::string{ diagnosticLabel } + " shadow copy failed after retries (" + error.message() + "): " +
+                     source.string() + " -> " + destination.string());
+    return false;
 }
 
 void* EngineModuleLoader::LoadNativeLibrary(
