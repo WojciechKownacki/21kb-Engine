@@ -1,5 +1,20 @@
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/AssetRegistry.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabHandle.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 
 #include <fstream>
@@ -72,6 +87,92 @@ kb_cli run --project . --scene Assets/Scenes/Main.21kbscene --frames 120   # hea
 A change is done only when `validate` reports OK and `run` finishes without script diagnostics.
 )md";
 
+// LIB-013: the minimal PlayerController template AGENTS.md's own worked
+// example already references (`--script /Game/Logic/PlayerController.lua`)
+// but nothing previously wrote to disk — kAgentsTemplate above documented a
+// file that didn't exist. Reads a 2D "Move" input action and translates
+// this entity's Transform by speed*dt; Log/Emit calls exist so a fresh
+// project's first `kb_cli run` has something observable to confirm the
+// wiring (script -> scene -> CLI Play Mode) actually works end to end.
+constexpr std::string_view kPlayerControllerLuaTemplate = R"lua(-- PlayerController.lua - minimal starter movement script.
+-- Reads a 2D "Move" input action (bind it to WASD/left-stick via an
+-- InputMappingContext asset) and moves this entity by speed units/second.
+-- Attach with:
+--   kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node Player --script /Game/Logic/PlayerController.lua
+
+local speed = 2.0
+
+function Ready(self, dt)
+    Log("player ready")
+end
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    local dx = (move.x or 0.0) * speed * dt
+    local dy = (move.y or 0.0) * speed * dt
+    Transform.Translate(self.entity, dx, dy, 0.0)
+    Log("player tick")
+    Emit("PlayerMoved", {})
+end
+)lua";
+
+// LIB-014: the minimal Projectile template — flies straight, destroys itself
+// on collision. Shipped as a real, loadable pair: this script plus a baked
+// Assets/Prefabs/Projectile.kbprefab (see BakeProjectilePrefab below) with
+// Rigidbody+Collider+Behaviour already attached, so World.InstantiatePrefab
+// works out of the box. The launch retries every Tick rather than once in
+// Ready: a freshly-spawned entity's Rigidbody/Collider is not guaranteed to
+// have a live physics body yet by the time Ready fires (script and physics
+// scene systems' relative execution order is not guaranteed — see
+// PhysicsSceneSystemTests.cpp's LIB-014 proof, which caught exactly this as
+// a real bug in an earlier draft), so retrying until Physics.SetVelocity
+// actually reports applied=true is the robust, production-correct shape.
+//
+// "launched" is a @expose'd instance variable, not a plain Lua local — a
+// REAL bug PhysicsSceneSystemTests.cpp's LIB-015 proof caught by running TWO
+// simultaneous Projectile instances (its own direct-instantiate one plus a
+// second one spawned via World.InstantiatePrefab): PucLuaScriptRuntime
+// compiles one shared Lua environment per SCRIPT ASSET, not one per entity
+// (see PucLuaScriptRuntime.hpp's ScriptRecord, keyed only by assetId) — a
+// plain `local launched = false` is therefore SHARED by every entity using
+// this same script, so the second projectile saw the first one's
+// already-true `launched` and silently never launched at all. self:GetVariable
+// /SetVariable are the correctly per-instance-scoped alternative (keyed by
+// {entity, assetId} — PucLuaScriptRuntime.hpp's InstanceKey), which is
+// exactly what multiple simultaneously spawned prefab instances need.
+constexpr std::string_view kProjectileLuaTemplate = R"lua(-- Projectile.lua - minimal starter projectile: flies straight, destroys
+-- itself on collision. Spawn the shipped Assets/Prefabs/Projectile.kbprefab
+-- with World.InstantiatePrefab; it already carries Rigidbody, Collider, and
+-- this script attached as its Behaviour.
+--
+-- "launched" must be a @expose'd per-instance variable, not a plain local:
+-- this script's Lua environment is shared by every entity spawned from this
+-- same prefab, so a plain local would leak state between simultaneously
+-- flying projectiles.
+-- @expose launched Bool = false
+
+local speed = 5.0
+
+function Ready(self, dt)
+    Log("projectile ready")
+end
+
+function Tick(self, dt)
+    if not self:GetVariable("launched") then
+        local applied = Physics.SetVelocity(self.entity, speed, 0.0, 0.0)
+        if applied then
+            self:SetVariable("launched", true)
+            Log("projectile launched")
+        end
+    end
+end
+
+function OnCollisionEnter(self, event)
+    Log("projectile hit " .. tostring(event.args.other))
+    World.Destroy(self.entity)
+end
+)lua";
+
 constexpr std::string_view kLuarcTemplate = R"json({
     "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
     "runtime.version": "Lua 5.4",
@@ -98,6 +199,55 @@ constexpr std::string_view kLuarcTemplate = R"json({
     return true;
 }
 
+// LIB-014: bakes Assets/Prefabs/Projectile.kbprefab headlessly — the same,
+// already-proven pattern PhysicsSceneSystemTests.cpp's LIB-015 section uses
+// (throwaway discovery Scene to resolve Projectile.lua's real AssetId, then
+// a fresh prefab-source Scene to capture+save) — no editor or live physics
+// backend required. Component values mirror the ones proved to fly, collide,
+// and self-destroy correctly under real Jolt physics in that same test file.
+// Must run AFTER Projectile.lua is physically on disk: resolving its AssetId
+// requires discovering it as a real project asset first.
+[[nodiscard]] bool BakeProjectilePrefab(const std::filesystem::path& projectRoot, std::string& error) {
+    kb::assets::AssetId scriptAssetId{};
+    {
+        kb::scene::Scene discoveryScene;
+        if (!discoveryScene.Assets().MountProject(projectRoot)) {
+            error = "could not mount project to resolve Projectile.lua's asset id";
+            return false;
+        }
+        static_cast<void>(discoveryScene.Assets().Discover());
+        const kb::assets::AssetMetadata* metadata = discoveryScene.Assets().Manager().Registry().FindByPath("/Game/Logic/Projectile.lua");
+        if (metadata == nullptr) {
+            error = "could not resolve Projectile.lua's asset id";
+            return false;
+        }
+        scriptAssetId = metadata->id;
+    }
+
+    kb::scene::Scene prefabSource;
+    const kb::scene::SceneObject root = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" });
+    prefabSource.Components().Rigidbodies().Set(root.Entity(), kb::scene::RigidbodyComponent{
+                                                                    .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                                                                    .mass = 0.5F,
+                                                                    .useGravity = false,
+                                                                });
+    prefabSource.Components().Colliders().Set(root.Entity(), kb::scene::ColliderComponent{
+                                                                  .shape = kb::scene::ColliderShape::Sphere,
+                                                                  .radius = 0.3F,
+                                                              });
+    prefabSource.Components().Behaviours().Set(root.Entity(), kb::scene::BehaviourComponent{
+                                                                   .behaviourAssetId = scriptAssetId.value,
+                                                                   .backend = kb::scene::BehaviourBackend::Lua,
+                                                                   .enabled = true,
+                                                               });
+    const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(root, "Projectile");
+    if (!prefabSource.Prefabs().Save(prefab, projectRoot / "Assets" / "Prefabs" / "Projectile.kbprefab")) {
+        error = "could not save Projectile.kbprefab";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
@@ -118,18 +268,39 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         return result;
     }
 
+    // LIB-013: PlayerController.lua lives under Assets/Logic/, same as any
+    // other project behaviour script — that directory does not exist yet in
+    // a freshly-scaffolded project (only .kb/api/ is created above).
+    const std::filesystem::path logicRoot = projectRoot / "Assets" / "Logic";
+    std::filesystem::create_directories(logicRoot, errorCode);
+    if (errorCode) {
+        result.error = "could not create directory: " + logicRoot.string();
+        return result;
+    }
+
     struct GeneratedFile {
         std::filesystem::path path;
         std::string content;
         bool overwrite = true;
+        // LIB-013: see ScriptAgentProjectFilesResult::wroteProjectAsset.
+        bool isProjectAsset = false;
     };
 
     const GeneratedFile files[] = {
-        { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true },
-        { apiRoot / "script_api.md", ScriptApiExport::ToMarkdown(catalog), true },
-        { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true },
-        { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false },
-        { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false },
+        { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true, false },
+        { apiRoot / "script_api.md", ScriptApiExport::ToMarkdown(catalog), true, false },
+        { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
+        { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false, false },
+        { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false, false },
+        // Write-once like AGENTS.md/.luarc.json: a game author's edits to
+        // their own PlayerController.lua must never be clobbered by a later
+        // `kb_cli init-agent` re-run (which DOES always regenerate .kb/api/).
+        // isProjectAsset=true: unlike every other generated file here, this
+        // one lands under Assets/ and becomes discoverable project content.
+        { logicRoot / "PlayerController.lua", std::string{ kPlayerControllerLuaTemplate }, false, true },
+        // LIB-014: same write-once/isProjectAsset treatment as
+        // PlayerController.lua above.
+        { logicRoot / "Projectile.lua", std::string{ kProjectileLuaTemplate }, false, true },
     };
 
     for (const GeneratedFile& file : files) {
@@ -141,6 +312,29 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
             return result;
         }
         result.writtenFiles.push_back(file.path);
+        result.wroteProjectAsset = result.wroteProjectAsset || file.isProjectAsset;
+    }
+
+    // LIB-014: Assets/Prefabs/Projectile.kbprefab — write-once like the
+    // scripts above (a game author's own prefab edits, e.g. in the editor,
+    // must never be clobbered by a later init-agent run). Baked AFTER the
+    // loop above: baking resolves Projectile.lua's real AssetId by
+    // discovering it as a project asset, which requires it to already be on
+    // disk (see BakeProjectilePrefab).
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "Projectile.kbprefab";
+    if (std::filesystem::exists(prefabPath, errorCode) && !errorCode) {
+        result.skippedFiles.push_back(prefabPath);
+    } else {
+        std::filesystem::create_directories(prefabPath.parent_path(), errorCode);
+        if (errorCode) {
+            result.error = "could not create directory: " + prefabPath.parent_path().string();
+            return result;
+        }
+        if (!BakeProjectilePrefab(projectRoot, result.error)) {
+            return result;
+        }
+        result.writtenFiles.push_back(prefabPath);
+        result.wroteProjectAsset = true;
     }
 
     result.succeeded = true;

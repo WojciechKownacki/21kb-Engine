@@ -1,7 +1,10 @@
 #include "engine/library/EngineLibraryModule.hpp"
 
+#include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptCollectionsApi.hpp"
+#include "engine/script/ScriptTextApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
@@ -61,12 +64,18 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "World",
             .ownerRuntime = "kb::scene::SceneEntities",
             .Register = &kb::script::ScriptWorldApi::Register,
-            // Pilot for LIB-017: World.Exists (ScriptWorldApi.cpp) is a
-            // pure query over kb::scene::SceneEntities::IsAlive — same
-            // scene state and entity id always yield the same bool, it
-            // never depends on wall time, and it produces no ScriptError
-            // for a missing/invalid entity (it just returns false). The
-            // rest of this module's functions are not yet audited; see
+            // Pilots for LIB-017: World.Exists and World.IsActive
+            // (ScriptWorldApi.cpp) are both pure queries — over
+            // kb::scene::SceneEntities::IsAlive and ::IsActive respectively
+            // — same scene state and entity id always yield the same bool,
+            // neither depends on wall time, and neither produces a
+            // ScriptError for a missing/invalid entity (both just return
+            // false). inputs/outputs below are copied verbatim from their
+            // real RegisterFunction() call sites and are machine-checked
+            // against the live ScriptApiCatalog by
+            // RunFunctionDescCatalogResolvesTest (EngineLibraryTests.cpp),
+            // not merely transcribed once and left to drift. The rest of
+            // this module's functions are not yet audited; see
             // LibraryFunctionDesc's comment for what that means.
             .functions = {
                 LibraryFunctionDesc{
@@ -74,6 +83,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
                     .threadAffinity = LibraryThreadAffinity::MainThread,
                     .determinism = LibraryDeterminism::Deterministic,
                     .canFail = false,
+                    .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+                    .outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Bool, true } },
+                },
+                LibraryFunctionDesc{
+                    .canonicalName = "World.IsActive",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+                    .outputs = { kb::script::ScriptApiPin{ "active", kb::script::ScriptValueType::Bool, true } },
                 },
             },
         },
@@ -223,6 +242,28 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .ownerRuntime = "kb::save::SaveGameService",
             .Register = &kb::script::ScriptSaveApi::Register,
         },
+        // LIB-058: script-facing controlled collections (Array/Set/Map/Queue/
+        // Stack). Each collection lives in a per-host store owned by the
+        // registered callbacks (captured shared_ptr, so its lifetime is the
+        // ScriptFunctionRegistry's); a script holds only an opaque Hash
+        // handle, exactly like Assets/Timer/Task. No Lua sugar table
+        // (generic CallFunction, mirrors Assets/Save/Task/Timer). ownerRuntime
+        // names the kb::library collection templates the handles stand in for.
+        LibraryModuleDesc{
+            .name = "Collections",
+            .ownerRuntime = "kb::library::Array/Set/Map/Queue/Stack",
+            .Register = &kb::script::ScriptCollectionsApi::Register,
+        },
+        // LIB-063: script-facing locale-invariant parsing (Text.ParseInt/
+        // ParseUInt/ParseFloat/IsGuid/ParseColor/ParseDate). Each function
+        // forwards to a kb::library::TryParse* helper (std::from_chars-backed,
+        // culture-invariant) and reports success via an `ok` Bool output.
+        // Generic CallFunction, no Lua sugar table (mirrors Collections/Save).
+        LibraryModuleDesc{
+            .name = "Text",
+            .ownerRuntime = "kb::library::TryParse* (EngineLibraryParsing)",
+            .Register = &kb::script::ScriptTextApi::Register,
+        },
     };
     return kCatalog;
 }
@@ -284,6 +325,25 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
         } else {
             entry.installed = true;
+            // LIB-025: apply each audited function's declared deprecation
+            // (if any) to the now-registered ScriptFunctionRegistry entry —
+            // the one place kb::library is allowed to reach into a
+            // kb::script signature after the fact, since deprecation is
+            // authored here (LibraryFunctionDesc), not in ScriptXxxApi::
+            // Register(). A canonicalName that fails to resolve here is a
+            // real catalog bug (an audited deprecation for a function that
+            // does not actually exist under that name), not something to
+            // silently drop.
+            for (const LibraryFunctionDesc& function : module.functions) {
+                if (!function.deprecation.has_value()) {
+                    continue;
+                }
+                if (!host.Functions().MarkDeprecated(function.canonicalName, FormatDeprecationWarning(function.canonicalName, *function.deprecation))) {
+                    result.succeeded = false;
+                    result.diagnostics.emplace_back(
+                        "module '" + module.name + "' declares '" + function.canonicalName + "' deprecated, but that function is not registered");
+                }
+            }
         }
         result.report.push_back(std::move(entry));
     }

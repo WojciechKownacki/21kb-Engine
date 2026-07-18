@@ -439,6 +439,30 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // position/rotation/scale fields already imply.
 [[nodiscard]] Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept;
 
+// LIB-043: Mat3 operations. columns[] are the transformed basis vectors, so
+// m * v is the linear combination of the columns weighted by v — the same
+// column-major convention Mat4's operator* above uses.
+[[nodiscard]] constexpr Vec3 operator*(const Mat3& lhs, Vec3 rhs) noexcept {
+    return lhs.columns[0] * rhs.x + lhs.columns[1] * rhs.y + lhs.columns[2] * rhs.z;
+}
+
+// Determinant as the scalar triple product of the columns — det = c0 · (c1 ×
+// c2). Built on the Dot/Cross this file already defines, not a separately
+// transcribed expansion.
+[[nodiscard]] constexpr float Determinant(const Mat3& m) noexcept {
+    return Dot(m.columns[0], Cross(m.columns[1], m.columns[2]));
+}
+
+// The inverse-transpose (M^-1)^T — the "normal matrix" that transforms
+// surface normals correctly under a non-uniform scale/shear, where the plain
+// matrix would skew them off the surface. For a column matrix [c0 c1 c2],
+// (M^-1)^T has columns (c1×c2, c2×c0, c0×c1)/det — derived once from Cross/
+// Dot rather than hand-expanding nine cofactors. A singular matrix (|det| ~
+// 0) has no well-defined normal matrix, so this returns identity (leaving
+// normals unchanged) instead of dividing by zero — the same defined-
+// degenerate-result rule Normalize/Intersect follow (LIB-054).
+[[nodiscard]] Mat3 InverseTranspose(const Mat3& m) noexcept;
+
 // LIB-045: scalar math foundation — the plain-Float functions LIB-046
 // through LIB-049's Vec3/Quat-level operations (Dot, Cross, Slerp, ...)
 // build on. These are the same functions `sources/script/ScriptMathApi`
@@ -792,6 +816,103 @@ enum class Easing : std::uint8_t {
 // "overshoot" effect that makes them useful), so clamping the result
 // would silently break the curve's defining characteristic.
 [[nodiscard]] float Evaluate(Easing easing, float t) noexcept;
+
+// LIB-042: geometry operations on the Vec2/IVec2/Rect/Plane/Ray value types
+// this file already defines — the operations that make those types usable
+// data rather than inert structs. Every function here is built on the
+// Vec3 Dot/operators above (one source of truth), not a re-derived formula,
+// and is the native implementation the Math.* script bindings
+// (ScriptMathApi) decompose into scalar pins and call — so these types have
+// real consumers on the Native/Lua/Visual Graph path, not orphaned API.
+
+[[nodiscard]] constexpr Vec2 operator+(Vec2 lhs, Vec2 rhs) noexcept {
+    return Vec2{ lhs.x + rhs.x, lhs.y + rhs.y };
+}
+
+[[nodiscard]] constexpr Vec2 operator-(Vec2 lhs, Vec2 rhs) noexcept {
+    return Vec2{ lhs.x - rhs.x, lhs.y - rhs.y };
+}
+
+[[nodiscard]] constexpr Vec2 operator*(Vec2 lhs, float rhs) noexcept {
+    return Vec2{ lhs.x * rhs, lhs.y * rhs };
+}
+
+[[nodiscard]] constexpr float Dot(Vec2 lhs, Vec2 rhs) noexcept {
+    return lhs.x * rhs.x + lhs.y * rhs.y;
+}
+
+// Same zero-length contract as Vec3's Length (LIB-054): a real, finite
+// magnitude for every input, including the zero vector (which returns 0).
+[[nodiscard]] float Length(Vec2 value) noexcept;
+
+[[nodiscard]] constexpr IVec2 operator+(IVec2 lhs, IVec2 rhs) noexcept {
+    return IVec2{ lhs.x + rhs.x, lhs.y + rhs.y };
+}
+
+[[nodiscard]] constexpr IVec2 operator-(IVec2 lhs, IVec2 rhs) noexcept {
+    return IVec2{ lhs.x - rhs.x, lhs.y - rhs.y };
+}
+
+[[nodiscard]] constexpr bool operator==(IVec2 lhs, IVec2 rhs) noexcept {
+    return lhs.x == rhs.x && lhs.y == rhs.y;
+}
+
+[[nodiscard]] constexpr bool operator!=(IVec2 lhs, IVec2 rhs) noexcept {
+    return !(lhs == rhs);
+}
+
+// L1 (grid/taxicab) distance between two integer lattice points — the
+// natural metric for the tile/grid coordinates IVec2 exists to carry.
+[[nodiscard]] constexpr int ManhattanDistance(IVec2 lhs, IVec2 rhs) noexcept {
+    const int dx = lhs.x > rhs.x ? lhs.x - rhs.x : rhs.x - lhs.x;
+    const int dy = lhs.y > rhs.y ? lhs.y - rhs.y : rhs.y - lhs.y;
+    return dx + dy;
+}
+
+// A point lies inside the rectangle when it is within [x, x+width) on the
+// horizontal axis and [y, y+height) on the vertical — half-open so two
+// edge-sharing rects partition the plane without double-counting the seam
+// (the same convention DockRect/MaterialGraphCanvas hit-testing already
+// use). A rect with zero or negative extent contains nothing.
+[[nodiscard]] constexpr bool Contains(const Rect& rect, Vec2 point) noexcept {
+    return point.x >= rect.x && point.x < rect.x + rect.width &&
+           point.y >= rect.y && point.y < rect.y + rect.height;
+}
+
+// Two axis-aligned rectangles overlap when they overlap on BOTH axes.
+// Touching-only edges (a.x+a.width == b.x) do not count as an overlap,
+// matching Contains' half-open convention.
+[[nodiscard]] constexpr bool Intersects(const Rect& lhs, const Rect& rhs) noexcept {
+    return lhs.x < rhs.x + rhs.width && rhs.x < lhs.x + lhs.width &&
+           lhs.y < rhs.y + rhs.height && rhs.y < lhs.y + lhs.height;
+}
+
+// Signed distance from `point` to the plane along its normal: positive on
+// the side the normal points toward, negative behind, zero exactly on the
+// plane. Uses the same "Dot(normal, p) == distance defines the plane"
+// convention documented on the Plane type.
+[[nodiscard]] constexpr float SignedDistance(const Plane& plane, Vec3 point) noexcept {
+    return Dot(plane.normal, point) - plane.distance;
+}
+
+// The point a parameter `t` along the ray: origin + direction * t. With a
+// unit-length direction (Ray's documented convention) `t` is a distance.
+[[nodiscard]] constexpr Vec3 PointAt(const Ray& ray, float t) noexcept {
+    return ray.origin + ray.direction * t;
+}
+
+// Result of intersecting a ray with a plane. `hit` is false when the ray
+// is parallel to the plane (or points away from it, i.e. a negative `t`) —
+// in that case `t`/`point` are left at their defaults rather than holding a
+// NaN or a behind-the-origin solution, the same "defined result for the
+// degenerate case" rule the rest of this file follows (LIB-047/054).
+struct RayPlaneIntersection {
+    bool hit = false;
+    float t = 0.0F;
+    Vec3 point{};
+};
+
+[[nodiscard]] RayPlaneIntersection Intersect(const Ray& ray, const Plane& plane) noexcept;
 
 // LIB-053: Curve/Gradient — deterministic keyframe interpolation, reusing
 // Easing (LIB-052) as the per-segment interpolation mode rather than

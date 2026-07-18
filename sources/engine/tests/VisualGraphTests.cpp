@@ -1153,6 +1153,47 @@ void RunVisualGraphRuntimeControlFlowLoopWatchdogTest() {
     kb::tests::Require(foundStepBudgetMessage, "The watchdog's error message must clearly name the step-budget guard, not report a generic/unrelated failure");
 }
 
+// LIB-101 (audit gap closed 2026-07-18): the step-COUNT watchdog above cannot
+// stop a pathologically DEEP data-input chain from overflowing the C++ stack
+// — each level of data-dependency resolution is a real recursive ExecuteNode
+// frame, and a few thousand of them blow the stack long before a 4096-step
+// budget runs out. This hand-authors a data chain deeper than
+// kMaxVisualGraphInputDepth (each node's only input comes from the next node)
+// and proves ExecuteNode refuses it with a distinct depth diagnostic BEFORE
+// it can recurse deep enough to STATUS_STACK_OVERFLOW.
+void RunVisualGraphRuntimeDataInputDepthWatchdogTest() {
+    kb::visual::VisualGraphIrFunction function{};
+    function.event = kb::visual::VisualGraphLifecycleEvent::Tick;
+    function.entryNodeId = 1U;
+    constexpr std::uint32_t kChainLength = 400U; // comfortably past kMaxVisualGraphInputDepth (256)
+    for (std::uint32_t nodeId = 1U; nodeId <= kChainLength; ++nodeId) {
+        kb::visual::VisualGraphIrInstruction node{ .opcode = kb::visual::VisualGraphIrOpcode::Sequence, .sourceNodeId = nodeId };
+        if (nodeId < kChainLength) {
+            node.inputs.push_back(kb::visual::VisualGraphIrInput{ .sourceNodeId = nodeId + 1U });
+        }
+        function.instructions.push_back(node);
+    }
+
+    kb::visual::VisualGraphRuntimeArtifact artifact{};
+    artifact.module.functions = { function };
+
+    const kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    const kb::visual::VisualGraphRuntimeExecutor executor{ bindings };
+    kb::visual::VisualGraphRuntimeExecutionContext context;
+    const kb::visual::VisualGraphRuntimeExecutionResult result = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+
+    kb::tests::Require(!result.Succeeded(), "A hand-authored data-input chain deeper than the recursion limit must be caught as a runtime error, not crash the engine with a stack overflow");
+    kb::tests::Require(!result.diagnostics.empty(), "The data-input-depth watchdog must report a structured diagnostic, not just a bare error string");
+    bool foundDepthMessage = false;
+    for (const std::string& error : result.errors) {
+        if (error.find("data-input recursion depth") != std::string::npos) {
+            foundDepthMessage = true;
+            break;
+        }
+    }
+    kb::tests::Require(foundDepthMessage, "The data-input-depth watchdog's error must name the recursion-depth guard, distinct from the step-budget (control-flow) one");
+}
+
 void RunVisualGraphCompilerBranchTargetsTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "BranchGraph";
@@ -1524,6 +1565,7 @@ void RunVisualGraphTests() {
     RunVisualGraphCompilerRejectsInvalidDataPinsTest();
     RunVisualGraphCompilerRejectsCyclesTest();
     RunVisualGraphRuntimeControlFlowLoopWatchdogTest();
+    RunVisualGraphRuntimeDataInputDepthWatchdogTest();
     RunVisualGraphCompilerBranchTargetsTest();
     RunVisualGraphRuntimeDataDependencyDoesNotFollowExecutionTest();
     RunVisualGraphRuntimeDoesNotReevaluateExecutedDataProducerTest();

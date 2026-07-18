@@ -44,6 +44,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptEvent.hpp"
+#include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/script/ScriptRuntime.hpp"
@@ -55,7 +57,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -181,7 +185,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 17U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 19U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -193,8 +197,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer", "Assets", "Save" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly seventeen domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer", "Assets", "Save", "Collections", "Text" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly nineteen domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -288,7 +292,12 @@ void RunModuleInstallStartupReportTest() {
 // LIB-017: every audited LibraryFunctionDesc::canonicalName across the
 // whole module catalog must resolve to a function ScriptApiCatalog reports
 // as actually registered — an audited function description can never
-// outlive (or predate) the real ScriptFunctionRegistry entry it describes.
+// outlive (or predate) the real ScriptFunctionRegistry entry it describes —
+// AND its recorded inputs/outputs must machine-match the real, live
+// ScriptFunctionSignature-derived pins (FunctionDescMatchesCatalog), not
+// just its name. This is the "wejścia, wyjścia" half of LIB-017's contract
+// the 2026-07-17 audit found unfulfilled: recording pins that are never
+// cross-checked against the registry would be no better than prose.
 void RunFunctionDescCatalogResolvesTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -302,9 +311,55 @@ void RunFunctionDescCatalogResolvesTest() {
             kb::tests::Require(
                 catalog.FindFunction(function.canonicalName) != nullptr,
                 "Engine21kbLibrary LibraryFunctionDesc names a function ScriptApiCatalog does not report as registered");
+            kb::tests::Require(
+                kb::library::FunctionDescMatchesCatalog(function, catalog),
+                "Engine21kbLibrary LibraryFunctionDesc's recorded inputs/outputs do not machine-match the real registered signature");
         }
     }
     kb::tests::Require(sawAnyAuditedFunction, "Engine21kbLibrary module catalog must have at least one audited LibraryFunctionDesc");
+}
+
+// LIB-017 adversarial: FunctionDescMatchesCatalog must actually be capable
+// of REJECTING a mismatch, not just accepting whatever the production
+// catalog happens to contain today. Exercises a wrong pin name, a wrong
+// pin type, a wrong required flag, a missing pin, and an unresolvable
+// canonicalName — each independently, each caught.
+void RunFunctionDescMatchesCatalogRejectsMismatchTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary function desc mismatch test host setup failed");
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+
+    const kb::library::LibraryFunctionDesc correct{
+        .canonicalName = "World.Exists",
+        .inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, true } },
+        .outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Bool, true } },
+    };
+    kb::tests::Require(kb::library::FunctionDescMatchesCatalog(correct, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must accept a genuinely correct description");
+
+    kb::library::LibraryFunctionDesc wrongName = correct;
+    wrongName.canonicalName = "World.DoesNotExist";
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongName, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject an unresolvable canonicalName");
+
+    kb::library::LibraryFunctionDesc wrongInputName = correct;
+    wrongInputName.inputs = { kb::script::ScriptApiPin{ "target", kb::script::ScriptValueType::Entity, true } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongInputName, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong input pin name");
+
+    kb::library::LibraryFunctionDesc wrongOutputType = correct;
+    wrongOutputType.outputs = { kb::script::ScriptApiPin{ "exists", kb::script::ScriptValueType::Int, true } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongOutputType, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong output pin type");
+
+    kb::library::LibraryFunctionDesc wrongRequired = correct;
+    wrongRequired.inputs = { kb::script::ScriptApiPin{ "entity", kb::script::ScriptValueType::Entity, false } };
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(wrongRequired, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a wrong required flag");
+
+    kb::library::LibraryFunctionDesc missingInput = correct;
+    missingInput.inputs.clear();
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(missingInput, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject a missing input pin");
+
+    kb::library::LibraryFunctionDesc extraOutput = correct;
+    extraOutput.outputs.push_back(kb::script::ScriptApiPin{ "extra", kb::script::ScriptValueType::Bool, true });
+    kb::tests::Require(!kb::library::FunctionDescMatchesCatalog(extraOutput, catalog), "Engine21kbLibrary FunctionDescMatchesCatalog must reject an extra output pin");
 }
 
 // LIB-020: the real production catalog EngineLibraryModule::Catalog()
@@ -391,6 +446,84 @@ void RunModuleValidationFunctionPrefixMismatchTest() {
     kb::tests::Require(matchedResult.succeeded, "Engine21kbLibrary module validation must accept a function name correctly prefixed with its declaring module's name");
 }
 
+// LIB-020 "zmiana sygnatur" (signature changes): the SAME canonicalName
+// described twice within one module with conflicting content is a real,
+// easy-to-introduce catalog bug (a copy-pasted LibraryFunctionDesc edited
+// in one place but not the other) that RunModuleValidationDuplicateFunctionTest
+// above cannot catch — that test only exercises two DIFFERENT modules
+// claiming the same name, an ownership collision independent of whether
+// content agrees.
+void RunModuleValidationFunctionSignatureChangedTest() {
+    using kb::library::LibraryDeterminism;
+    using kb::library::LibraryFunctionDesc;
+    using kb::library::LibraryThreadAffinity;
+    using kb::script::ScriptApiPin;
+    using kb::script::ScriptValueType;
+
+    const std::vector<kb::library::LibraryModuleDesc> conflicting{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = {
+                LibraryFunctionDesc{
+                    .canonicalName = "World.Exists",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    .inputs = { ScriptApiPin{ "entity", ScriptValueType::Entity, true } },
+                    .outputs = { ScriptApiPin{ "exists", ScriptValueType::Bool, true } },
+                },
+                LibraryFunctionDesc{
+                    .canonicalName = "World.Exists",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    // Conflicting: wrong output type, as if someone edited
+                    // this copy after a real signature change and forgot
+                    // the sibling entry above.
+                    .inputs = { ScriptApiPin{ "entity", ScriptValueType::Entity, true } },
+                    .outputs = { ScriptApiPin{ "exists", ScriptValueType::Int, true } },
+                },
+            },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult conflictingResult = kb::library::ValidateModuleCatalog(conflicting);
+    kb::tests::Require(!conflictingResult.succeeded,
+        "Engine21kbLibrary module validation must reject the same function described twice with conflicting inputs/outputs, even within one module");
+
+    const std::vector<kb::library::LibraryModuleDesc> identicalDuplicate{
+        kb::library::LibraryModuleDesc{
+            .name = "World",
+            .functions = {
+                LibraryFunctionDesc{
+                    .canonicalName = "World.Exists",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    .inputs = { ScriptApiPin{ "entity", ScriptValueType::Entity, true } },
+                    .outputs = { ScriptApiPin{ "exists", ScriptValueType::Bool, true } },
+                },
+                LibraryFunctionDesc{
+                    .canonicalName = "World.Exists",
+                    .threadAffinity = LibraryThreadAffinity::MainThread,
+                    .determinism = LibraryDeterminism::Deterministic,
+                    .canFail = false,
+                    .inputs = { ScriptApiPin{ "entity", ScriptValueType::Entity, true } },
+                    .outputs = { ScriptApiPin{ "exists", ScriptValueType::Bool, true } },
+                },
+            },
+        },
+    };
+    const kb::library::ModuleCatalogValidationResult identicalResult = kb::library::ValidateModuleCatalog(identicalDuplicate);
+    kb::tests::Require(identicalResult.succeeded,
+        "Engine21kbLibrary module validation must accept the same function described twice with IDENTICAL content (harmless redundancy, not a signature change)");
+
+    // Positive control: the real production catalog (now with 2 audited
+    // World functions, LIB-017) must still pass every rule this function
+    // enforces, signature-change detection included.
+    const kb::library::ModuleCatalogValidationResult productionResult = kb::library::ValidateModuleCatalog(kb::library::EngineLibraryModule::Catalog());
+    kb::tests::Require(productionResult.succeeded, "Engine21kbLibrary production module catalog must still pass signature-change validation");
+}
+
 // A catalog that fails validation must register nothing at all — not even
 // the modules that would otherwise have registered successfully.
 void RunModuleInstallFailsFastOnInvalidCatalogTest() {
@@ -430,7 +563,17 @@ void RunTypeDescTest() {
         kb::tests::Require(desc.visualGraphPinType == kb::script::ToVisualGraphValueType(type), "Engine21kbLibrary LibraryTypeDesc.visualGraphPinType must match kb::script::ToVisualGraphValueType");
         kb::tests::Require(!desc.luaTypeName.empty(), "Engine21kbLibrary LibraryTypeDesc.luaTypeName must be documented");
         kb::tests::Require(desc.defaultValue.Type() == type, "Engine21kbLibrary LibraryTypeDesc.defaultValue must carry the described type");
+        // LIB-024: kb::script::TryParse must be the exact inverse of
+        // ToString — every type ToString emits must parse back to itself.
+        // This is what lets kb_cli api-check reconstruct a baseline catalog
+        // from its JSON without a second, driftable type table.
+        ScriptValueType parsed{};
+        kb::tests::Require(kb::script::TryParse(kb::script::ToString(type), parsed), "Engine21kbLibrary kb::script::TryParse must accept every name ToString emits");
+        kb::tests::Require(parsed == type, "Engine21kbLibrary kb::script::TryParse must be the exact inverse of ToString");
     }
+    ScriptValueType rejected{};
+    kb::tests::Require(!kb::script::TryParse("NotARealType", rejected), "Engine21kbLibrary kb::script::TryParse must reject a string ToString never produces");
+    kb::tests::Require(!kb::script::TryParse("bool", rejected), "Engine21kbLibrary kb::script::TryParse must be case-sensitive (canonical PascalCase only)");
 
     kb::tests::Require(ScriptValue{ 1 } == ScriptValue{ 1 }, "Engine21kbLibrary ScriptValue equality must hold for equal Int values");
     kb::tests::Require(ScriptValue{ 1 } != ScriptValue{ 2 }, "Engine21kbLibrary ScriptValue equality must reject different Int values");
@@ -441,6 +584,153 @@ void RunTypeDescTest() {
     kb::tests::Require(
         ScriptValue{ 5U, ScriptValueType::Entity } != ScriptValue{ 5U, ScriptValueType::Component },
         "Engine21kbLibrary ScriptValue equality must distinguish Entity from Component even with the same raw id");
+}
+
+// LIB-018 round-trip: RunTypeDescTest above only proves LibraryTypeDesc's
+// fields match kb::script's OWN reflection helpers — luaTypeName's claim
+// about the REAL (private) PucLuaValueBridge was previously undocumented
+// prose nobody verified against actual Lua behavior. This calls a real
+// native function through Lua's generic CallFunction(name, {...}) - the
+// same public mechanism every Lua sugar table (Input.*, Transform.*, ...)
+// itself uses - for every non-Void ScriptValueType, and checks the result
+// IN LUA (`result == literal`, `type(result)`), reporting only Bool/String
+// verdicts back via SetShared to avoid SetShared's OWN magnitude-based
+// inference (see the dedicated negative case below) muddying what this
+// test proves. Void is excluded: no Lua argument/return position
+// represents "no value" as a typed pin.
+//
+// Two calling shapes, chosen per type by reading PucLuaValueBridge::FromLua
+// (the REAL blind-inference rules, private header, read directly rather
+// than guessed) rather than assumed identical for every type:
+//   - identity (Bool/Int/Float/String/Entity/Component): a bare Lua literal
+//     ALREADY blind-infers to the declared pin type, or to a type
+//     ScriptFunctionRegistry::CoerceArgument bridges (Int->Float,
+//     non-negative Int->Entity/Component) - a true input+output round trip.
+//   - producer (Int64/UInt32/Double/Name/Guid/Hash): FromLua's blind
+//     inference can NEVER produce these from a bare literal (a large
+//     non-negative integer literal blind-infers to Entity, not Int64/
+//     UInt32/Hash; any Lua float literal blind-infers to Float, not
+//     Double; any Lua string literal blind-infers to String, not Name/
+//     Guid) - there is no coercion rule bridging that gap either, so a
+//     "true identity" call would be rejected as a type mismatch. These
+//     instead use a fixed C++-constructed value (a properly-tagged
+//     ScriptValue needs no blind inference to reach Lua - only the
+//     reverse direction does), proving the C++->Lua push side that
+//     luaTypeName actually documents.
+void RunTypeDescLuaRoundTripTest() {
+    using kb::script::ScriptFunctionArgument;
+    using kb::script::ScriptFunctionCallContext;
+    using kb::script::ScriptFunctionCallResult;
+    using kb::script::ScriptFunctionDesc;
+    using kb::script::ScriptFunctionPin;
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary type desc round-trip test host setup failed");
+
+    struct Case {
+        ScriptValueType type;
+        const char* suffix;
+        bool producer;
+        const char* luaLiteral; // identity: input+expected value; producer: expected value only
+        const char* expectedLuaType;
+        ScriptValue fixedValue; // producer only
+    };
+    const Case kCases[] = {
+        { ScriptValueType::Bool, "Bool", false, "true", "boolean", ScriptValue{} },
+        { ScriptValueType::Int, "Int", false, "42", "number", ScriptValue{} },
+        { ScriptValueType::Float, "Float", false, "3.5", "number", ScriptValue{} },
+        { ScriptValueType::String, "String", false, "\"hello\"", "string", ScriptValue{} },
+        { ScriptValueType::Entity, "Entity", false, "123", "number", ScriptValue{} },
+        { ScriptValueType::Component, "Component", false, "456", "number", ScriptValue{} },
+        { ScriptValueType::Int64, "Int64", true, "9007199254740993", "number", ScriptValue{ std::int64_t{ 9007199254740993LL } } },
+        { ScriptValueType::UInt32, "UInt32", true, "4000000000", "number", ScriptValue{ std::uint32_t{ 4000000000U } } },
+        { ScriptValueType::Double, "Double", true, "3.14159265358979", "number", ScriptValue{ 3.14159265358979 } },
+        { ScriptValueType::Name, "Name", true, "\"PlayerName\"", "string", ScriptValue{ std::string{ "PlayerName" }, ScriptValueType::Name } },
+        { ScriptValueType::Guid, "Guid", true, "\"550e8400-e29b-41d4-a716-446655440000\"", "string",
+            ScriptValue{ std::string{ "550e8400-e29b-41d4-a716-446655440000" }, ScriptValueType::Guid } },
+        { ScriptValueType::Hash, "Hash", true, "9007199254740993", "number", ScriptValue{ static_cast<std::uint64_t>(9007199254740993ULL), ScriptValueType::Hash } },
+    };
+
+    for (const Case& testCase : kCases) {
+        const kb::library::LibraryTypeDesc& desc = kb::library::DescribeType(testCase.type);
+        kb::tests::Require(desc.luaTypeName.find(testCase.expectedLuaType) != std::string_view::npos,
+            "Engine21kbLibrary LibraryTypeDesc.luaTypeName does not mention the real Lua base type it round-trips to");
+
+        ScriptFunctionDesc function;
+        if (testCase.producer) {
+            function.signature.name = std::string{ "Tests.Produce" } + testCase.suffix;
+            function.signature.inputs = { ScriptFunctionPin{ "trigger", ScriptValueType::Bool, true } };
+            function.signature.outputs = { ScriptFunctionPin{ "value", testCase.type, true } };
+            const ScriptValue fixedValue = testCase.fixedValue;
+            function.callback = [fixedValue](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+                return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ .name = "value", .value = fixedValue } }, .errors = {} };
+            };
+        } else {
+            function.signature.name = std::string{ "Tests.Identity" } + testCase.suffix;
+            function.signature.inputs = { ScriptFunctionPin{ "value", testCase.type, true } };
+            function.signature.outputs = { ScriptFunctionPin{ "value", testCase.type, true } };
+            function.callback = [](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+                return ScriptFunctionCallResult{ .executed = true, .outputs = { arguments[0] }, .errors = {} };
+            };
+        }
+        kb::tests::Require(host.RegisterFunction(std::move(function)),
+            "Engine21kbLibrary type desc round-trip function registration failed");
+    }
+
+    std::string luaScript = "function Tick(self, dt)\n";
+    for (const Case& testCase : kCases) {
+        if (testCase.producer) {
+            luaScript += std::string{ "    local result" } + testCase.suffix + " = CallFunction(\"Tests.Produce" + testCase.suffix + "\", { trigger = true })\n";
+        } else {
+            luaScript += std::string{ "    local result" } + testCase.suffix + " = CallFunction(\"Tests.Identity" + testCase.suffix + "\", { value = " + testCase.luaLiteral + " })\n";
+        }
+        luaScript += std::string{ "    SetShared(\"matched" } + testCase.suffix + "\", result" + testCase.suffix + " == " + testCase.luaLiteral + ")\n";
+        luaScript += std::string{ "    SetShared(\"luaType" } + testCase.suffix + "\", type(result" + testCase.suffix + "))\n";
+    }
+    // Dedicated negative case for the documented "SetShared loses the
+    // Entity tag" gap (LIB-123/124/125's known bridge limitation): unlike
+    // Tests.IdentityEntity's typed OUTPUT pin above (which correctly
+    // coerces the value back to Entity via ScriptFunctionRegistry::
+    // CoerceArgument/ValidateOutputs), SetShared has no declared target
+    // type to coerce against, so the SAME entity id comes back tagged Int,
+    // not Entity - asserted explicitly below instead of silently assumed.
+    luaScript += "    local entityResult = CallFunction(\"Tests.IdentityEntity\", { value = 777 })\n";
+    luaScript += "    SetShared(\"entityViaSetShared\", entityResult)\n";
+    luaScript += "end\n";
+
+    constexpr kb::assets::AssetId kRoundTripAsset{ 700501U };
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kRoundTripAsset, luaScript);
+    kb::tests::Require(loadedLua.succeeded, "Engine21kbLibrary type desc round-trip Lua script did not load");
+
+    const kb::scene::SceneObject roundTripObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TypeDescRoundTrip" });
+    scene.Components().Behaviours().Set(roundTripObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kRoundTripAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    const kb::script::ScriptRuntimeExecutionResult tickResult = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tickResult.diagnostics.empty(), "Engine21kbLibrary type desc round-trip Tick produced script diagnostics");
+
+    for (const Case& testCase : kCases) {
+        const std::optional<ScriptValue> matched = host.SharedState().Get(std::string{ "matched" } + testCase.suffix);
+        kb::tests::Require(matched.has_value() && matched->AsBool(),
+            "Engine21kbLibrary type desc round-trip value did not survive the real Lua bridge unchanged");
+        const std::optional<ScriptValue> luaType = host.SharedState().Get(std::string{ "luaType" } + testCase.suffix);
+        kb::tests::Require(luaType.has_value() && luaType->AsString() == testCase.expectedLuaType,
+            "Engine21kbLibrary type desc round-trip Lua type() did not match LibraryTypeDesc.luaTypeName's documented base type");
+    }
+
+    const std::optional<ScriptValue> entityViaSetShared = host.SharedState().Get("entityViaSetShared");
+    kb::tests::Require(entityViaSetShared.has_value(), "Engine21kbLibrary type desc SetShared negative case did not report a value");
+    kb::tests::Require(entityViaSetShared->Type() == ScriptValueType::Int,
+        "Engine21kbLibrary type desc SetShared negative case: an Entity id round-tripped through SetShared must currently come back as Int, "
+        "not Entity - if this now fails, the known bridge limitation was fixed and this test (and its documentation) should be updated, not just relaxed");
+    kb::tests::Require(static_cast<std::uint64_t>(entityViaSetShared->AsInt()) == 777U,
+        "Engine21kbLibrary type desc SetShared negative case lost the numeric value, not just the type tag");
 }
 
 // LIB-004: every ScriptLifecycleEvent must classify to exactly the public
@@ -1739,6 +2029,81 @@ void RunPropertyDescTest() {
     }
     kb::tests::Require(sawWritablePosition, "Engine21kbLibrary LibraryPropertyDesc did not carry Transform.localPosition.x as writable");
     kb::tests::Require(sawReadOnlyWorldPosition, "Engine21kbLibrary LibraryPropertyDesc did not carry Transform.worldPosition.x as read-only");
+
+    // LIB-019 asset half: the 2026-07-17 audit correctly flagged that
+    // "properties of assets" had no script-facing accessor at all — this
+    // proves ScriptAssetsApi::AssetProperties() entries are directly usable
+    // as LibraryPropertyDesc (a trivial string_view->string name copy, the
+    // only difference from the component path above, which already gets
+    // ScriptApiCatalogProperty-shaped entries from ScriptApiCatalog
+    // directly) AND that Assets.GetProperty actually returns real data for
+    // a real, discovered project asset - not just a shape check.
+    kb::tests::Require(kb::script::ScriptAssetsApi::AssetProperties().size() == 2U,
+        "Engine21kbLibrary asset property catalog must describe exactly virtualPath and type");
+    for (const kb::script::ScriptSceneComponentPropertyDesc& assetProperty : kb::script::ScriptAssetsApi::AssetProperties()) {
+        const kb::library::LibraryPropertyDesc asLibraryProperty{ .name = std::string{ assetProperty.name }, .type = assetProperty.type, .writable = assetProperty.writable };
+        kb::tests::Require(asLibraryProperty.type == kb::script::ScriptValueType::String, "Engine21kbLibrary asset properties must be String-typed today");
+        kb::tests::Require(!asLibraryProperty.writable, "Engine21kbLibrary asset properties (virtualPath, type) must be read-only");
+    }
+
+    const std::filesystem::path assetPropertyRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_tests_property_desc_asset";
+    std::error_code assetPropertyResetError;
+    std::filesystem::remove_all(assetPropertyRoot, assetPropertyResetError);
+    std::filesystem::create_directories(assetPropertyRoot / "Assets" / "Logic", assetPropertyResetError);
+    kb::tests::Require(!assetPropertyResetError, "Engine21kbLibrary asset property test project root could not be prepared");
+    {
+        std::ofstream sampleScript{ assetPropertyRoot / "Assets" / "Logic" / "Sample.lua", std::ios::binary | std::ios::trunc };
+        kb::tests::Require(sampleScript.is_open(), "Engine21kbLibrary asset property test sample script could not be opened for writing");
+        sampleScript << "function Ready(self, dt)\nend\n";
+        kb::tests::Require(sampleScript.good(), "Engine21kbLibrary asset property test sample script could not be written");
+    }
+    kb::tests::Require(scene.Assets().MountProject(assetPropertyRoot), "Engine21kbLibrary asset property test project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Engine21kbLibrary asset property test did not discover exactly the sample script");
+
+    const kb::script::ScriptFunctionCallResult virtualPathResult = host.Functions().Call(
+        "Assets.GetProperty",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/Sample.lua" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "virtualPath" } } },
+        },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(virtualPathResult.Succeeded(), "Engine21kbLibrary Assets.GetProperty(virtualPath) call failed");
+    const std::optional<kb::script::ScriptValue> virtualPathFound = virtualPathResult.Output("found");
+    kb::tests::Require(virtualPathFound.has_value() && virtualPathFound->AsBool(), "Engine21kbLibrary Assets.GetProperty(virtualPath) must find the real discovered asset");
+    const std::optional<kb::script::ScriptValue> virtualPathValue = virtualPathResult.Output("value");
+    kb::tests::Require(virtualPathValue.has_value() && virtualPathValue->AsString() == "/Game/Logic/Sample.lua",
+        "Engine21kbLibrary Assets.GetProperty(virtualPath) must report the asset's real virtual path");
+
+    const kb::script::ScriptFunctionCallResult typeResult = host.Functions().Call(
+        "Assets.GetProperty",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/Sample.lua" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "type" } } },
+        },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(typeResult.Succeeded(), "Engine21kbLibrary Assets.GetProperty(type) call failed");
+    const std::optional<kb::script::ScriptValue> typeValue = typeResult.Output("value");
+    kb::tests::Require(typeValue.has_value() && typeValue->AsString() == "LuaScript", "Engine21kbLibrary Assets.GetProperty(type) must report the asset's real loader type");
+
+    const kb::script::ScriptFunctionCallResult unresolvedResult = host.Functions().Call(
+        "Assets.GetProperty",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/DoesNotExist.lua" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "virtualPath" } } },
+        },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(unresolvedResult.Succeeded(), "Engine21kbLibrary Assets.GetProperty must not error on an unresolvable reference");
+    const std::optional<kb::script::ScriptValue> unresolvedFound = unresolvedResult.Output("found");
+    kb::tests::Require(unresolvedFound.has_value() && !unresolvedFound->AsBool(), "Engine21kbLibrary Assets.GetProperty must honestly report found=false for an unresolvable reference");
+
+    const kb::script::ScriptFunctionCallResult unknownPropertyResult = host.Functions().Call(
+        "Assets.GetProperty",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/Sample.lua" } } },
+            kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "physicalPath" } } },
+        },
+        kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(!unknownPropertyResult.Succeeded(), "Engine21kbLibrary Assets.GetProperty must reject an unrecognized property name as an honest error, not a silent found=false");
 }
 
 // LIB-023: the manifest hash must be deterministic (same catalog content
@@ -1874,6 +2239,120 @@ void RunDeprecationTest() {
     const std::size_t migratedWithoutReplacement = kb::library::MigrateVisualGraphCallNativeNodes(unmigratable, "World.Legacy", withoutReplacement);
     kb::tests::Require(migratedWithoutReplacement == 0U, "Engine21kbLibrary Visual Graph migration must not rewrite anything when no replacement is declared");
     kb::tests::Require(unmigratable[0].symbol == "Function.World.Legacy", "Engine21kbLibrary Visual Graph migration must leave the node untouched when no replacement is declared");
+}
+
+// LIB-025 real wiring (the 2026-07-17 audit's gap): EngineLibraryModule::
+// InstallModules must apply a LibraryFunctionDesc's declared deprecation to
+// the real, now-registered ScriptFunctionRegistry entry, and calling that
+// function - through EVERY frontend that matters, Native directly AND a
+// REAL Lua script via the generic CallFunction global - must actually
+// surface FormatDeprecationWarning's exact text, not just compute it and
+// drop it. Uses a throwaway module/function: nothing in the real
+// production catalog is deprecated today, and marking a live one just to
+// exercise this would be a lie the warning would tell every real caller.
+void RunFunctionDeprecationWiringTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary deprecation wiring test host setup failed");
+
+    // A real native "Log" sink, registered before ANY dispatch (LIB-021
+    // locks the registry after the first one) - the same mechanism kb_cli
+    // run's RegisterStdoutLog uses, capturing to a vector instead of a
+    // stream. ScriptExecutionContext::CallFunction forwards a deprecation
+    // warning through exactly this channel (see its own comment), so
+    // capturing it here is the real, observable proof a Lua caller
+    // actually sees the warning, not just the native ScriptFunctionCallResult.
+    std::vector<std::string> capturedLogs;
+    {
+        kb::script::ScriptFunctionDesc logDesc;
+        logDesc.signature.name = "Log";
+        logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+        logDesc.callback = [&capturedLogs](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
+            for (const kb::script::ScriptFunctionArgument& argument : arguments) {
+                if (argument.name == "message") {
+                    capturedLogs.push_back(argument.value.AsString());
+                    break;
+                }
+            }
+            return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+        };
+        kb::tests::Require(host.RegisterFunction(std::move(logDesc)), "Engine21kbLibrary deprecation wiring test Log sink registration failed");
+    }
+
+    const auto noopCallback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+    };
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.OldFunction" }, .callback = noopCallback }),
+        "Engine21kbLibrary deprecation wiring test function registration failed");
+    // Registered up front too (not after the Lua dispatch below), since
+    // LIB-021 locks the registry against new Register() calls after the
+    // first lifecycle dispatch.
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.NewFunction" }, .callback = noopCallback }),
+        "Engine21kbLibrary deprecation wiring test replacement function registration failed");
+
+    const kb::library::LibraryDeprecation deprecation{
+        .message = "test-only deprecation",
+        .replacementCanonicalName = "Tests.NewFunction",
+        .sinceVersion = kb::library::LibraryApiVersion{ 9U, 9U, 9U },
+    };
+    const std::string expectedWarning = kb::library::FormatDeprecationWarning("Tests.OldFunction", deprecation);
+
+    const std::vector<kb::library::LibraryModuleDesc> modules{
+        kb::library::LibraryModuleDesc{
+            .name = "Tests",
+            .Register = [](kb::script::ScriptRuntimeHost&) { return true; }, // both functions already registered above
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Tests.OldFunction", .deprecation = deprecation } },
+        },
+    };
+    const kb::library::EngineLibraryModuleResult installResult = kb::library::EngineLibraryModule::InstallModules(host, modules);
+    kb::tests::Require(installResult.succeeded, "Engine21kbLibrary deprecation wiring test install must succeed");
+
+    // --- Native call: the raw ScriptFunctionCallResult already carries it.
+    const kb::script::ScriptFunctionCallResult nativeResult =
+        host.Functions().Call("Tests.OldFunction", {}, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(nativeResult.Succeeded(), "Engine21kbLibrary deprecation wiring test native call must still succeed - a deprecation warning is not an error");
+    kb::tests::Require(nativeResult.warnings.size() == 1U && nativeResult.warnings.front() == expectedWarning,
+        "Engine21kbLibrary deprecation wiring test native call must carry the exact deprecation warning");
+
+    // --- Negative control: a non-deprecated function must never warn.
+    const kb::script::ScriptFunctionCallResult freshResult =
+        host.Functions().Call("Tests.NewFunction", {}, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+    kb::tests::Require(freshResult.warnings.empty(), "Engine21kbLibrary deprecation wiring test: a non-deprecated function must never warn");
+
+    // --- Real Lua call through the generic CallFunction global, proving
+    // the warning reaches a REAL running Lua script, not just the native
+    // struct a C++ caller happens to inspect.
+    constexpr kb::assets::AssetId kDeprecationTestAsset{ 700601U };
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kDeprecationTestAsset,
+        "function Tick(self, dt)\n"
+        "    CallFunction(\"Tests.OldFunction\", {})\n"
+        "end\n");
+    kb::tests::Require(loadedLua.succeeded, "Engine21kbLibrary deprecation wiring test Lua script did not load");
+
+    const kb::scene::SceneObject deprecationObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DeprecationCaller" });
+    scene.Components().Behaviours().Set(deprecationObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kDeprecationTestAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tickResult = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tickResult.diagnostics.empty(), "Engine21kbLibrary deprecation wiring test Tick produced script diagnostics");
+    kb::tests::Require(!capturedLogs.empty() && capturedLogs.front() == expectedWarning,
+        "Engine21kbLibrary deprecation wiring test: a real Lua CallFunction call must surface the exact deprecation warning through Log");
+
+    // --- Catalog integrity: a LibraryFunctionDesc declaring deprecation for
+    // a function that does not actually exist must fail installation, not
+    // silently no-op (mirrors LIB-020's own "don't silently ignore a
+    // catalog/registry mismatch" standard).
+    const std::vector<kb::library::LibraryModuleDesc> danglingDeprecation{
+        kb::library::LibraryModuleDesc{
+            .name = "Tests",
+            .Register = [](kb::script::ScriptRuntimeHost&) { return true; },
+            .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Tests.DoesNotExist", .deprecation = deprecation } },
+        },
+    };
+    const kb::library::EngineLibraryModuleResult danglingResult = kb::library::EngineLibraryModule::InstallModules(host, danglingDeprecation);
+    kb::tests::Require(!danglingResult.succeeded, "Engine21kbLibrary deprecation wiring test must reject a deprecation declared for a nonexistent function");
 }
 
 // LIB-026: a function's id must depend only on its canonical name, not on
@@ -2026,7 +2505,7 @@ void RunEngineLibraryComponentRegistryTest() {
 // absent rather than fabricating an entry.
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 8U, "Engine21kbLibrary event schema registry must catalog exactly the 8 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed)");
+    kb::tests::Require(catalog.size() == 16U, "Engine21kbLibrary event schema registry must catalog exactly the 16 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed + 6 OnCollision*/OnTrigger* + OnAudioMarker + OnPrefabInstantiated)");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
         kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
@@ -2038,7 +2517,8 @@ void RunEngineLibraryEventSchemaRegistryTest() {
         kb::tests::Require(found == &desc, "Find() must return a pointer into the SAME catalog storage Catalog() returns, not a copy");
     }
 
-    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed" };
+    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -2050,6 +2530,31 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     const kb::library::LibraryEventDesc* timerFired = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
     kb::tests::Require(timerFired != nullptr && timerFired->arguments.size() == 1U && timerFired->arguments[0].name == "timer" && timerFired->arguments[0].type == kb::script::ScriptValueType::Hash,
         "TimerFired's cataloged schema must match its real dispatch shape (timer: Hash) — see ScriptRuntimeSceneSystem.cpp::DispatchFiredTimers");
+
+    // LIB-108: the newly-cataloged engine events must match their REAL dispatch
+    // shapes (ScriptRuntimeSceneSystem.cpp) — the exact arguments a script
+    // subscribing to them receives, so the versioned schema is a true contract.
+    const kb::library::LibraryEventDesc* onCollisionEnter = kb::library::EngineLibraryEventRegistry::Find("OnCollisionEnter");
+    kb::tests::Require(
+        onCollisionEnter != nullptr && onCollisionEnter->arguments.size() == 7U &&
+            onCollisionEnter->arguments[0].name == "other" && onCollisionEnter->arguments[0].type == kb::script::ScriptValueType::Entity &&
+            onCollisionEnter->arguments[1].name == "pointX" && onCollisionEnter->arguments[1].type == kb::script::ScriptValueType::Float &&
+            onCollisionEnter->arguments[4].name == "normalX" && onCollisionEnter->arguments[4].type == kb::script::ScriptValueType::Float &&
+            onCollisionEnter->arguments[6].name == "normalZ",
+        "OnCollisionEnter's cataloged schema must match its real dispatch shape (other: Entity, point/normal X/Y/Z: Float) — see DispatchPendingCollisionEvents");
+    const kb::library::LibraryEventDesc* onAudioMarker = kb::library::EngineLibraryEventRegistry::Find("OnAudioMarker");
+    kb::tests::Require(
+        onAudioMarker != nullptr && onAudioMarker->arguments.size() == 3U &&
+            onAudioMarker->arguments[0].name == "voice" && onAudioMarker->arguments[0].type == kb::script::ScriptValueType::Int &&
+            onAudioMarker->arguments[1].name == "marker" && onAudioMarker->arguments[1].type == kb::script::ScriptValueType::String &&
+            onAudioMarker->arguments[2].name == "positionSeconds" && onAudioMarker->arguments[2].type == kb::script::ScriptValueType::Float,
+        "OnAudioMarker's cataloged schema must match its real dispatch shape (voice: Int, marker: String, positionSeconds: Float) — see DispatchPendingAudioMarkerEvents");
+    const kb::library::LibraryEventDesc* onPrefabInstantiated = kb::library::EngineLibraryEventRegistry::Find("OnPrefabInstantiated");
+    kb::tests::Require(
+        onPrefabInstantiated != nullptr && onPrefabInstantiated->arguments.size() == 2U &&
+            onPrefabInstantiated->arguments[0].name == "root" && onPrefabInstantiated->arguments[0].type == kb::script::ScriptValueType::Entity &&
+            onPrefabInstantiated->arguments[1].name == "count" && onPrefabInstantiated->arguments[1].type == kb::script::ScriptValueType::Int,
+        "OnPrefabInstantiated's cataloged schema must match its real dispatch shape (root: Entity, count: Int) — see DispatchPendingPrefabInstantiatedEvents");
 }
 
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
@@ -2184,8 +2689,8 @@ void RunLibraryQueryFilterAndOrderTest() {
     scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
     scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
     scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
-    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
-    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{});
+    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{ .intensity = 2.0F });
+    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
     scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
     scene.Components().Behaviours().Set(objectD.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 2U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
     scene.Entities().SetActive(objectC.Entity(), false);
@@ -2263,6 +2768,72 @@ void RunLibraryQueryFilterAndOrderTest() {
     const bool visibilityIterated = kb::library::Query<kb::scene::VisibilityComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
         [&](kb::library::EntityHandle, const kb::scene::VisibilityComponent&) { ++visibilityVisited; });
     kb::tests::Require(visibilityIterated && visibilityVisited == 4, "Engine21kbLibrary Query<VisibilityComponent> must now work (LIB-079 regression fix) — every entity has a Visibility component from creation");
+
+    // LIB-078: a MULTI-component Query<Camera, Light> must iterate exactly the
+    // entities that have BOTH components (A and D — not B, which has only a
+    // Camera, and not C, which has no Light), and hand the visitor each
+    // component's live data in pack order. Reading light.intensity per entity
+    // (A=2, D=3) proves the SECOND component's column is really threaded
+    // through, not just the first — the exact gap the 2026-07-17 audit found
+    // (only the one-component variant existed).
+    std::vector<kb::scene::SceneEntity> multiResult;
+    float intensitySum = 0.0F;
+    float fovSum = 0.0F;
+    const bool multiIterated = kb::library::Query<kb::scene::CameraComponent, kb::scene::LightComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent& camera, const kb::scene::LightComponent& light) {
+            multiResult.push_back(entity.Entity());
+            intensitySum += light.intensity;
+            fovSum += camera.verticalFovDegrees;
+        });
+    kb::tests::Require(multiIterated, "Engine21kbLibrary multi-component Query must iterate during an allowed phase");
+    kb::tests::Require(namesOf(multiResult) == std::vector<std::string>{ "FilterA", "FilterD" }, "Engine21kbLibrary Query<Camera,Light> must iterate exactly the entities that have BOTH components");
+    kb::tests::Require(std::abs(intensitySum - 5.0F) < 0.0001F, "Engine21kbLibrary multi-component Query must thread the SECOND component's live data (light.intensity 2 + 3 = 5) through the visitor, not just the first");
+    kb::tests::Require(std::abs(fovSum - 120.0F) < 0.0001F, "Engine21kbLibrary multi-component Query must also thread the first component's data (two default 60-degree cameras = 120)");
+}
+
+// LIB-079 (audit gap closed 2026-07-18): ChangedSince needs a real reference
+// point. The static Query rebuilds its change-tracking state every call, so a
+// ChangedSince query reports every match forever. PersistentQuery keeps its
+// kb::ecs::Query across runs, so ChangedSince means "changed since THIS query
+// last ran": run it twice with nothing modified between and the second run
+// must report NOTHING — the exact behaviour the static query cannot express.
+void RunLibraryPersistentQueryChangedSinceTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject objectA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangedA" });
+    const kb::scene::SceneObject objectB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ChangedB" });
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
+
+    kb::library::QueryFilterOptions changedOptions;
+    changedOptions.ChangedSince<kb::scene::CameraComponent>();
+    kb::library::PersistentQuery<kb::scene::CameraComponent> query{ scene, changedOptions };
+
+    // First run: both cameras were just Set(), so both are "changed since
+    // never observed" — the persistent query reports them and commits their
+    // observed versions.
+    int firstRunCount = 0;
+    kb::tests::Require(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+                           [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++firstRunCount; }),
+        "Engine21kbLibrary PersistentQuery must iterate during an allowed phase");
+    kb::tests::Require(firstRunCount == 2, "Engine21kbLibrary PersistentQuery ChangedSince first run must report both freshly-Set cameras");
+
+    // Second run with NOTHING modified in between: the observed versions now
+    // match the live ones, so a persistent ChangedSince reports NOTHING. This
+    // is the reference point the 2026-07-17 audit found missing — a fresh
+    // per-call query would report both cameras again here.
+    int unchangedRunCount = 0;
+    static_cast<void>(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++unchangedRunCount; }));
+    kb::tests::Require(unchangedRunCount == 0, "Engine21kbLibrary PersistentQuery ChangedSince must report NOTHING on a second run when nothing changed between the two — proving it tracks a real 'since when' reference point, not 'always changed'");
+
+    // Modify a camera, then run again: the change must be observed (the
+    // modified archetype's cameras are reported).
+    scene.Components().Cameras().Set(objectA.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 33.0F });
+    int afterChangeCount = 0;
+    static_cast<void>(query.ForEach(kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle, const kb::scene::CameraComponent&) { ++afterChangeCount; }));
+    kb::tests::Require(afterChangeCount >= 1, "Engine21kbLibrary PersistentQuery ChangedSince must report a camera after its component is modified between runs");
 }
 
 // LIB-080: kb::library::CommandBatch — proves Spawn/Destroy/Add<T>/
@@ -2358,6 +2929,53 @@ void RunLibraryCommandBatchTest() {
             }
         }));
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+
+    // LIB-080 (audit gap closed 2026-07-18): tag assignments COALESCE per
+    // target within one batch (read-your-own-writes) instead of the old
+    // last-write-wins, and a BatchEntity spawned in the same batch can now
+    // be tagged.
+    {
+        // Two AddTag calls for the SAME live entity in one batch must BOTH
+        // survive — the second must build on the first's pending state, not
+        // independently re-read the live (still empty) tag set and overwrite.
+        const kb::scene::SceneObject coalesceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchCoalesce" });
+        const kb::library::EntityHandle coalesceHandle{ coalesceObject.Entity(), scene.Id() };
+        kb::library::CommandBatch coalesceBatch{ scene };
+        kb::tests::Require(coalesceBatch.AddTag(coalesceHandle, "Alpha"), "Engine21kbLibrary CommandBatch::AddTag first tag must record");
+        kb::tests::Require(coalesceBatch.AddTag(coalesceHandle, "Beta"), "Engine21kbLibrary CommandBatch::AddTag second tag must record");
+        static_cast<void>(coalesceBatch.Flush());
+        const kb::scene::TagsComponent* coalesced = scene.Components().Tags().TryGet(coalesceObject.Entity());
+        kb::tests::Require(coalesced != nullptr && kb::scene::TagsText(*coalesced) == "Alpha, Beta",
+            "Engine21kbLibrary CommandBatch must COALESCE two AddTag calls on one entity into BOTH tags (Alpha, Beta), not last-write-wins");
+
+        // AddTag then RemoveTag of a DIFFERENT tag on the same entity in one
+        // batch: the RemoveTag must see the batch's pending "Gamma", leaving
+        // only "Delta".
+        kb::library::CommandBatch mixedBatch{ scene };
+        kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Gamma"), "Engine21kbLibrary CommandBatch::AddTag Gamma must record");
+        kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Delta"), "Engine21kbLibrary CommandBatch::AddTag Delta must record");
+        kb::tests::Require(mixedBatch.RemoveTag(coalesceHandle, "Alpha"), "Engine21kbLibrary CommandBatch::RemoveTag Alpha must record");
+        static_cast<void>(mixedBatch.Flush());
+        const kb::scene::TagsComponent* mixed = scene.Components().Tags().TryGet(coalesceObject.Entity());
+        kb::tests::Require(mixed != nullptr && kb::scene::TagsText(*mixed) == "Beta, Gamma, Delta",
+            "Engine21kbLibrary CommandBatch mixed AddTag/RemoveTag in one batch must read-your-own-writes over the seeded live tags (Alpha,Beta -> +Gamma +Delta -Alpha = Beta, Gamma, Delta)");
+
+        // A BatchEntity spawned in the SAME batch can be tagged — the tag
+        // command is queued against the deferred entity and resolved by the
+        // same Flush() that creates it. This closes LIB-080's original
+        // documented BatchEntity gap.
+        kb::library::CommandBatch spawnTagBatch{ scene };
+        const kb::library::BatchEntity spawnedTagged = spawnTagBatch.Spawn("CommandBatchSpawnedTagged");
+        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshOne"), "Engine21kbLibrary CommandBatch::AddTag on a BatchEntity must record");
+        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshTwo"), "Engine21kbLibrary CommandBatch::AddTag second tag on a BatchEntity must coalesce too");
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> spawnTagResult = spawnTagBatch.Flush();
+        kb::tests::Require(spawnTagResult.has_value(), "Engine21kbLibrary CommandBatch Flush with a tagged spawn must succeed");
+        const kb::ecs::Entity resolvedTagged = spawnTagResult->Resolve(spawnedTagged.Raw());
+        kb::tests::Require(resolvedTagged.IsValid() && scene.Entities().IsAlive(resolvedTagged), "Engine21kbLibrary tagged BatchEntity must resolve to a live entity");
+        const kb::scene::TagsComponent* spawnedTags = scene.Components().Tags().TryGet(resolvedTagged);
+        kb::tests::Require(spawnedTags != nullptr && kb::scene::TagsText(*spawnedTags) == "FreshOne, FreshTwo",
+            "Engine21kbLibrary CommandBatch::AddTag on a spawned-this-batch BatchEntity must apply BOTH coalesced tags to the resolved entity after Flush()");
+    }
 }
 
 // LIB-012 audit gap closed 2026-07-17: RunLibraryCommandBatchTest above only
@@ -2816,6 +3434,30 @@ void RunNoPointersCrossScriptBoundaryTest() {
         "kb::script::ScriptValue::Storage must never hold a raw pointer or reference type");
     static_assert(std::is_same_v<std::variant_alternative_t<0, Storage>, std::monostate>, "ScriptValue::Storage alternative 0 must stay std::monostate (the Void representation)");
     kb::tests::Require(true, "kb::script::ScriptValue::Storage shape is verified at compile time above");
+
+    // LIB-032, second half: the 2026-07-17 audit flagged that
+    // LibraryContextBase::Raw() still returned a call-scoped C++ reference
+    // and the context types were copyable, leaving a reference smuggleable
+    // past the callback boundary that constructed it. Re-reading
+    // EngineLibraryContext.hpp fresh shows that gap was ALREADY closed by
+    // LIB-007's own fix earlier this session (Raw() removed entirely, copy/
+    // move deleted) - the audit note was stale, not a real remaining gap -
+    // but nothing regression-locked that fact until now. A SFINAE-based
+    // static_assert that Raw() specifically does not exist was tried for
+    // LIB-007 and abandoned (MSVC's requires-expression is not
+    // SFINAE-friendly enough for a genuinely nonexistent member in this
+    // non-template context - see EngineLibraryContext.hpp's own history);
+    // the copy/move deletion below is the real, provable guard: even a
+    // hypothetical future reference-returning accessor could not be
+    // smuggled out by copying the context that produced it.
+    static_assert(!std::is_copy_constructible_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-copy-constructible");
+    static_assert(!std::is_copy_assignable_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-copy-assignable");
+    static_assert(!std::is_move_constructible_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-move-constructible");
+    static_assert(!std::is_move_assignable_v<kb::library::LibraryContextBase>, "kb::library::LibraryContextBase must stay non-move-assignable");
+    static_assert(!std::is_copy_constructible_v<kb::library::BehaviourContext>, "kb::library::BehaviourContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::FixedContext>, "kb::library::FixedContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::FrameContext>, "kb::library::FrameContext must inherit LibraryContextBase's deleted copy");
+    static_assert(!std::is_copy_constructible_v<kb::library::RenderContext>, "kb::library::RenderContext must inherit LibraryContextBase's deleted copy");
 }
 
 // LIB-035: every LibraryErrorCode must format to a stable, distinct name,
@@ -2858,9 +3500,34 @@ void RunErrorCodeTest() {
 // ScriptFunctionRegistry.cpp), and maxGraphRecursionDepth must match
 // ScriptRuntimeDispatchOptions' already-enforced default.
 void RunInputLimitsTest() {
+    // LIB-037: all four documented input limits must be a SINGLE source of
+    // truth, provably tied to their real enforcement site so the two can
+    // never silently drift. maxGraphRecursionDepth and maxEventPayloadArguments
+    // are enforced in kb::script (which must never depend on kb::library —
+    // see ScriptEvent.hpp), so their enforcement constants are duplicated
+    // there as plain locals; these assertions are the guard that keeps the
+    // duplicates equal to the kb::library policy values.
     kb::tests::Require(
         kb::library::kDefaultLibraryInputLimits.maxGraphRecursionDepth == kb::script::ScriptRuntimeDispatchOptions{}.maxEventDepth,
         "Engine21kbLibrary maxGraphRecursionDepth must match ScriptRuntimeDispatchOptions::maxEventDepth's default");
+
+    // maxEventPayloadArguments (kb::library policy) == kMaxScriptEventArguments
+    // (kb::script enforcement constant, checked in ScriptEventBus::Emit /
+    // EmitDeferred and ScriptRuntime::DispatchEvent — real runtime rejection
+    // is proven by ScriptRuntimeTests.cpp::RunScriptEventPayloadSizeLimitTest).
+    kb::tests::Require(
+        kb::library::kDefaultLibraryInputLimits.maxEventPayloadArguments == kb::script::kMaxScriptEventArguments,
+        "Engine21kbLibrary maxEventPayloadArguments must match kb::script::kMaxScriptEventArguments, the constant actually enforced at every event dispatch entry point");
+
+    // maxCollectionSize (kb::library policy) must be the value every
+    // kb::library collection clamps a capacity request down to — the
+    // enforcement here lives in the same library, so this is a direct check
+    // rather than a cross-module duplicate (full mutation/refusal contract is
+    // proven by RunCollectionsScalarTest).
+    kb::library::Array<int> clampedCapacity{ kb::library::kDefaultLibraryInputLimits.maxCollectionSize + 1U };
+    kb::tests::Require(
+        clampedCapacity.Capacity() == kb::library::kDefaultLibraryInputLimits.maxCollectionSize,
+        "Engine21kbLibrary a collection capacity request above maxCollectionSize must be clamped to exactly maxCollectionSize");
 
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -3075,14 +3742,17 @@ void RunEngineLibraryTests() {
     RunModuleInstallSkipsUnavailableCapabilityTest();
     RunModuleInstallStartupReportTest();
     RunFunctionDescCatalogResolvesTest();
+    RunFunctionDescMatchesCatalogRejectsMismatchTest();
     RunModuleCatalogValidatesTest();
     RunModuleValidationDuplicateNameTest();
     RunModuleValidationUnknownDependencyTest();
     RunModuleValidationCycleTest();
     RunModuleValidationDuplicateFunctionTest();
+    RunModuleValidationFunctionSignatureChangedTest();
     RunModuleValidationFunctionPrefixMismatchTest();
     RunModuleInstallFailsFastOnInvalidCatalogTest();
     RunTypeDescTest();
+    RunTypeDescLuaRoundTripTest();
     RunPropertyDescTest();
     RunLifecycleContextClassificationTest();
     RunExecutionOrderContractTest();
@@ -3109,12 +3779,14 @@ void RunEngineLibraryTests() {
     RunApiManifestTest();
     RunApiCompatibilityComparisonTest();
     RunDeprecationTest();
+    RunFunctionDeprecationWiringTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
     RunLibraryQueryFilterAndOrderTest();
+    RunLibraryPersistentQueryChangedSinceTest();
     RunLibraryCommandBatchTest();
     RunLibraryCommandBatchCancelsStaleTargetOnFlushTest();
     RunComponentChangeTrackerTest();

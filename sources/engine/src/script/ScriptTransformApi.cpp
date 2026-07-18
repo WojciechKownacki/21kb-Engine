@@ -371,11 +371,13 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
 
     kb::math::Vec3 worldPositionBeforeReparent{};
     kb::math::Quat worldRotationBeforeReparent{};
+    kb::math::Vec3 worldScaleBeforeReparent{ 1.0F, 1.0F, 1.0F };
     if (keepWorld) {
         context.scene->Runtime().SynchronizeTransforms();
         const kb::scene::TransformComponent beforeTransform = context.scene->Transforms().Get(entity);
         worldPositionBeforeReparent = beforeTransform.worldPosition;
         worldRotationBeforeReparent = beforeTransform.worldRotation;
+        worldScaleBeforeReparent = beforeTransform.worldScale;
     }
 
     if (!context.scene->Hierarchy().SetParent(entity, newParent)) {
@@ -390,11 +392,25 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
             const LocalPose localPose = WorldPoseToLocal(parentTransform, worldPositionBeforeReparent, worldRotationBeforeReparent);
             transform.localPosition = localPose.position;
             transform.localRotation = localPose.rotation;
+            // LIB-086: keepWorld must preserve the FULL world transform, not
+            // just position+rotation. kb::scene composes world scale
+            // component-wise (worldScale = parentWorldScale * localScale — the
+            // same model WorldPoseToLocal's SafeDivide-by-worldScale relies
+            // on), so the localScale that keeps the pre-reparent worldScale
+            // under a differently-scaled parent is worldScaleBefore /
+            // parentWorldScale, component-wise. Without this, reparenting onto
+            // a scaled parent silently rescales the entity.
+            transform.localScale = kb::scene::Vec3{
+                SafeDivide(worldScaleBeforeReparent.x, parentTransform.worldScale.x),
+                SafeDivide(worldScaleBeforeReparent.y, parentTransform.worldScale.y),
+                SafeDivide(worldScaleBeforeReparent.z, parentTransform.worldScale.z),
+            };
         } else {
             // New parent is root (none) — local IS world directly, same as
             // Transform.SetWorldPose's own root case.
             transform.localPosition = worldPositionBeforeReparent;
             transform.localRotation = worldRotationBeforeReparent;
+            transform.localScale = worldScaleBeforeReparent;
         }
         context.scene->Transforms().Set(entity, transform);
         context.scene->Runtime().SynchronizeTransforms();
@@ -538,6 +554,14 @@ ScriptFunctionCallResult LookAt(const ScriptFunctionCallContext& context, std::s
     if (!Alive(context, entity)) {
         return BoolResult("moved", false);
     }
+    // LIB-088: force a sync BEFORE reading worldPosition — for EVERY entity,
+    // not just parented ones. LookAt computes the look direction from the
+    // entity's own world position, and a SetPosition earlier this same frame
+    // only writes localPosition (worldPosition is recomposed lazily). The old
+    // code synced only when the entity had a parent, so a ROOT entity used a
+    // stale worldPosition and aimed from its previous location. One upfront
+    // sync makes the read fresh for root and parented entities alike.
+    context.scene->Runtime().SynchronizeTransforms();
     kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
     const kb::math::Vec3 target{
         FloatArg(arguments, "targetX", transform.worldPosition.x),
@@ -551,10 +575,6 @@ ScriptFunctionCallResult LookAt(const ScriptFunctionCallContext& context, std::s
     };
 
     const kb::scene::SceneEntity parent = context.scene->Hierarchy().Parent(entity);
-    if (parent.IsValid()) {
-        context.scene->Runtime().SynchronizeTransforms();
-        transform = context.scene->Transforms().Get(entity);
-    }
     const kb::math::Vec3 forward = kb::math::Normalize(target - transform.worldPosition);
     const kb::math::Quat desiredWorldRotation = kb::math::LookRotation(forward, up);
 

@@ -25,7 +25,7 @@ bool ScenePrefabVariantRefreshService::Materialize(const ScenePrefabRecordStore&
         return false;
     }
 
-    return ScenePrefabVariantMaterializer::Materialize(base->prefab, record.variantOverrides, record.prefab);
+    return ScenePrefabVariantMaterializer::Materialize(base->prefab, record.variantOverrides, record.variantAddedChildren, record.prefab);
 }
 
 void ScenePrefabVariantRefreshService::RefreshDerived(ScenePrefabRecordStore& records, ScenePrefabHandle baseHandle) {

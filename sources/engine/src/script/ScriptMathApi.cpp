@@ -177,6 +177,159 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return lhs;
 }
 
+[[nodiscard]] ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ value } } },
+        .errors = {},
+    };
+}
+
+[[nodiscard]] ScriptFunctionCallResult IntResult(std::string_view pin, int value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ value } } },
+        .errors = {},
+    };
+}
+
+// LIB-042: the Vec2/IVec2/Rect/Plane/Ray value types decompose into named
+// scalar pins exactly like Vec3/Quat above — the sanctioned convention for
+// carrying a composite math value across the (scalar-only, LIB-032) script
+// boundary. The callbacks below construct the real kb::math type from those
+// pins and call the kb::math geometry operation, so those types have a
+// genuine Native/Lua/Visual Graph consumer.
+[[nodiscard]] kb::math::Vec2 Vec2Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Vec2{
+        FloatArg(arguments, std::string{ prefix } + "X"),
+        FloatArg(arguments, std::string{ prefix } + "Y"),
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> Vec2Pins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Y", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] kb::math::IVec2 IVec2Arg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::IVec2{
+        IntArg(arguments, std::string{ prefix } + "X"),
+        IntArg(arguments, std::string{ prefix } + "Y"),
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> IVec2Pins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Int, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Y", ScriptValueType::Int, true },
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> IVec2OutputPins() {
+    return {
+        ScriptFunctionPin{ "x", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "y", ScriptValueType::Int, true },
+    };
+}
+
+[[nodiscard]] kb::math::Rect RectArg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Rect{
+        FloatArg(arguments, std::string{ prefix } + "X"),
+        FloatArg(arguments, std::string{ prefix } + "Y"),
+        FloatArg(arguments, std::string{ prefix } + "Width"),
+        FloatArg(arguments, std::string{ prefix } + "Height"),
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> RectPins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "X", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Y", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Width", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Height", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] kb::math::Plane PlaneArg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Plane{
+        kb::math::Vec3{
+            FloatArg(arguments, std::string{ prefix } + "NormalX"),
+            FloatArg(arguments, std::string{ prefix } + "NormalY"),
+            FloatArg(arguments, std::string{ prefix } + "NormalZ"),
+        },
+        FloatArg(arguments, std::string{ prefix } + "Distance"),
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> PlanePins(std::string_view prefix) {
+    return {
+        ScriptFunctionPin{ std::string{ prefix } + "NormalX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "NormalY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "NormalZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ std::string{ prefix } + "Distance", ScriptValueType::Float, true },
+    };
+}
+
+[[nodiscard]] kb::math::Ray RayArg(std::span<const ScriptFunctionArgument> arguments, std::string_view prefix) noexcept {
+    return kb::math::Ray{
+        Vec3Arg(arguments, std::string{ prefix } + "Origin"),
+        Vec3Arg(arguments, std::string{ prefix } + "Direction"),
+    };
+}
+
+[[nodiscard]] std::vector<ScriptFunctionPin> RayPins(std::string_view prefix) {
+    return ConcatPins(Vec3Pins(std::string{ prefix } + "Origin"), Vec3Pins(std::string{ prefix } + "Direction"));
+}
+
+ScriptFunctionCallResult RectContains(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return BoolResult("result", kb::math::Contains(RectArg(arguments, "rect"), Vec2Arg(arguments, "point")));
+}
+
+ScriptFunctionCallResult RectIntersects(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return BoolResult("result", kb::math::Intersects(RectArg(arguments, "a"), RectArg(arguments, "b")));
+}
+
+ScriptFunctionCallResult PlaneSignedDistance(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return FloatResult("result", kb::math::SignedDistance(PlaneArg(arguments, "plane"), Vec3Arg(arguments, "point")));
+}
+
+ScriptFunctionCallResult RayPointAt(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return Vec3Result(kb::math::PointAt(RayArg(arguments, "ray"), FloatArg(arguments, "t")));
+}
+
+ScriptFunctionCallResult RayPlaneIntersect(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::RayPlaneIntersection hit = kb::math::Intersect(RayArg(arguments, "ray"), PlaneArg(arguments, "plane"));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "hit", ScriptValue{ hit.hit } },
+            ScriptFunctionArgument{ "t", ScriptValue{ hit.t } },
+            ScriptFunctionArgument{ "x", ScriptValue{ hit.point.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ hit.point.y } },
+            ScriptFunctionArgument{ "z", ScriptValue{ hit.point.z } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult IVec2Add(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    const kb::math::IVec2 sum = IVec2Arg(arguments, "a") + IVec2Arg(arguments, "b");
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "x", ScriptValue{ sum.x } },
+            ScriptFunctionArgument{ "y", ScriptValue{ sum.y } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult IVec2ManhattanDistance(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+    return IntResult("result", kb::math::ManhattanDistance(IVec2Arg(arguments, "a"), IVec2Arg(arguments, "b")));
+}
+
 ScriptFunctionCallResult Clamp(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     return FloatResult("result", kb::math::Clamp(FloatArg(arguments, "value"), FloatArg(arguments, "min"), FloatArg(arguments, "max")));
 }
@@ -307,18 +460,30 @@ ScriptFunctionCallResult Tan(const ScriptFunctionCallContext&, std::span<const S
 // script graph, where it could reach e.g. Transform.SetRotation many
 // nodes later with no indication of where the invalid value came from —
 // exactly what "zdefiniowana domena błędu" (LIB-047) requires.
+//
+// The domain test is written as !(value in [-1,1]) rather than
+// (value < -1 || value > 1) precisely so a NaN input is ALSO rejected: a
+// NaN fails every ordered comparison, so `value < -1 || value > 1` is
+// false for NaN and would let it through as a fabricated success — the
+// exact hole the 2026-07-17 audit found. `!(value >= -1 && value <= 1)`
+// is true for NaN (both inner comparisons are false), so NaN is caught by
+// the same single check as a finite out-of-range value.
+[[nodiscard]] bool InAsinAcosDomain(float value) noexcept {
+    return value >= -1.0F && value <= 1.0F;
+}
+
 ScriptFunctionCallResult Asin(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     const float value = FloatArg(arguments, "value");
-    if (value < -1.0F || value > 1.0F) {
-        return DomainError("Math.Asin", "value must be in [-1, 1]");
+    if (!InAsinAcosDomain(value)) {
+        return DomainError("Math.Asin", "value must be a real number in [-1, 1]");
     }
     return FloatResult("result", kb::math::Asin(value).Value());
 }
 
 ScriptFunctionCallResult Acos(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
     const float value = FloatArg(arguments, "value");
-    if (value < -1.0F || value > 1.0F) {
-        return DomainError("Math.Acos", "value must be in [-1, 1]");
+    if (!InAsinAcosDomain(value)) {
+        return DomainError("Math.Acos", "value must be a real number in [-1, 1]");
     }
     return FloatResult("result", kb::math::Acos(value).Value());
 }
@@ -743,6 +908,44 @@ bool ScriptMathApi::Register(ScriptRuntimeHost& host) {
         },
         { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
         &Ease) && ok;
+
+    // LIB-042: geometry queries over the Rect/Plane/Ray/IVec2 value types.
+    // Each decomposes its composite arguments into named scalar pins and is
+    // a real script consumer of the matching kb::math operation.
+    ok = RegisterFunction(host, "Math.RectContains",
+        ConcatPins(RectPins("rect"), Vec2Pins("point")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Bool, true } },
+        &RectContains) && ok;
+    ok = RegisterFunction(host, "Math.RectIntersects",
+        ConcatPins(RectPins("a"), RectPins("b")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Bool, true } },
+        &RectIntersects) && ok;
+    ok = RegisterFunction(host, "Math.PlaneSignedDistance",
+        ConcatPins(PlanePins("plane"), Vec3Pins("point")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Float, true } },
+        &PlaneSignedDistance) && ok;
+    ok = RegisterFunction(host, "Math.RayPointAt",
+        ConcatPins(RayPins("ray"), std::vector<ScriptFunctionPin>{ ScriptFunctionPin{ "t", ScriptValueType::Float, true } }),
+        Vec3OutputPins(),
+        &RayPointAt) && ok;
+    ok = RegisterFunction(host, "Math.RayPlaneIntersect",
+        ConcatPins(RayPins("ray"), PlanePins("plane")),
+        {
+            ScriptFunctionPin{ "hit", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "t", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, true },
+        },
+        &RayPlaneIntersect) && ok;
+    ok = RegisterFunction(host, "Math.IVec2Add",
+        ConcatPins(IVec2Pins("a"), IVec2Pins("b")),
+        IVec2OutputPins(),
+        &IVec2Add) && ok;
+    ok = RegisterFunction(host, "Math.IVec2ManhattanDistance",
+        ConcatPins(IVec2Pins("a"), IVec2Pins("b")),
+        { ScriptFunctionPin{ "result", ScriptValueType::Int, true } },
+        &IVec2ManhattanDistance) && ok;
     return ok;
 }
 

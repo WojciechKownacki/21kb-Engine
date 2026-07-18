@@ -37,6 +37,30 @@ bool DetectCycle(
     return false;
 }
 
+[[nodiscard]] bool PinsMatch(const std::vector<kb::script::ScriptApiPin>& left, const std::vector<kb::script::ScriptApiPin>& right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (left[i].name != right[i].name || left[i].type != right[i].type || left[i].required != right[i].required) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// LIB-020 "zmian sygnatur" (signature changes): two LibraryFunctionDesc
+// entries for the SAME canonicalName that disagree on anything a caller
+// would actually rely on — a copy-pasted entry edited in one place but not
+// the other. Cross-module duplicates are already caught as an ownership
+// collision below regardless of content; this catches the narrower,
+// easy-to-miss case of the SAME module describing its own function twice
+// with drifted content.
+[[nodiscard]] bool SignaturesMatch(const LibraryFunctionDesc& left, const LibraryFunctionDesc& right) {
+    return left.threadAffinity == right.threadAffinity && left.determinism == right.determinism && left.canFail == right.canFail &&
+           PinsMatch(left.inputs, right.inputs) && PinsMatch(left.outputs, right.outputs);
+}
+
 } // namespace
 
 ModuleCatalogValidationResult ValidateModuleCatalog(std::span<const LibraryModuleDesc> modules) {
@@ -79,6 +103,7 @@ ModuleCatalogValidationResult ValidateModuleCatalog(std::span<const LibraryModul
     }
 
     std::unordered_map<std::string, std::string> functionOwner;
+    std::unordered_map<std::string, const LibraryFunctionDesc*> functionDescriptions;
     for (const LibraryModuleDesc& module : modules) {
         const std::string expectedPrefix = module.name + ".";
         for (const LibraryFunctionDesc& function : module.functions) {
@@ -87,6 +112,13 @@ ModuleCatalogValidationResult ValidateModuleCatalog(std::span<const LibraryModul
                 result.succeeded = false;
                 result.errors.push_back(
                     "function '" + function.canonicalName + "' is audited by both module '" + iter->second + "' and '" + module.name + "'");
+            }
+            const auto [descriptionIter, descriptionInserted] = functionDescriptions.emplace(function.canonicalName, &function);
+            if (!descriptionInserted && !SignaturesMatch(*descriptionIter->second, function)) {
+                result.succeeded = false;
+                result.errors.push_back(
+                    "function '" + function.canonicalName + "' is described more than once with conflicting thread affinity, determinism, "
+                    "canFail, inputs, or outputs (signature changed without updating every entry)");
             }
             // A LibraryFunctionDesc lives inside the module that audited it,
             // but nothing about std::vector membership actually ties its

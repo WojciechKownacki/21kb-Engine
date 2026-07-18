@@ -10,6 +10,8 @@
 #include "engine/input/InputPollingSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/library/EngineLibraryAsyncResult.hpp"
+#include "engine/library/EngineLibraryEntityHandle.hpp"
+#include "engine/library/EngineLibraryError.hpp"
 #include "engine/library/EngineLibraryEventSchema.hpp"
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
@@ -46,6 +48,8 @@
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/script/ScriptEventTaxonomy.hpp"
@@ -69,6 +73,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -2267,6 +2272,103 @@ end
     }
     const std::vector<std::string> expected{ "Native", "Lua", "Graph" };
     kb::tests::Require(who == expected, "Cross-backend lifecycle dispatch must respect BehaviourExecutionOrderLess regardless of backend");
+}
+
+// LIB-013 audit gap closed 2026-07-17: RunPlayerControllerTemplateTests
+// (KbCliTests.cpp) proves the shipped PlayerController.lua template runs
+// cleanly headless through kb_cli's real Play Mode surface, but kb_cli run
+// exposes no channel to observe Transform state (CliRunCommand.cpp only
+// prints Log/event/diagnostic text) and that test never supplied non-zero
+// input — so it only proved lifecycle callbacks fired, not that steering
+// actually moves the entity. This drives the SAME real, shipped template —
+// written by ScriptAgentProjectFiles::Write, the exact function `kb_cli
+// init-agent` calls, not a second hardcoded copy of the Lua text — through
+// a real "Move" Axis2D input composite with an actual key held down, and
+// reads the entity's Transform back directly to prove real movement.
+void RunPlayerControllerTemplateMovesTransformWithRealInputTest() {
+    kb::scene::Scene scene;
+
+    // Real "Move" Axis2D action + WASD composite (D/A -> x, W/S -> y),
+    // mirroring the InputCompositeBinding pattern InputMappingContextAsset.hpp
+    // documents for exactly this shape ("D -> +x, A -> -x, W -> +y, S -> -y").
+    auto moveAction = std::make_shared<kb::input::InputActionAsset>();
+    moveAction->name = "Move";
+    moveAction->valueType = kb::input::InputActionValueType::Axis2D;
+    auto moveContext = std::make_shared<kb::input::InputMappingContextAsset>();
+    moveContext->composites.push_back(kb::input::InputCompositeBinding{
+        .actionId = 1U,
+        .slots = {
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::D, .axis = 0U, .scale = 1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::A, .axis = 0U, .scale = -1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::W, .axis = 1U, .scale = 1.0F },
+            kb::input::InputCompositeSlot{ .key = kb::input::InputKey::S, .axis = 1U, .scale = -1.0F },
+        },
+    });
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputActionAsset>> actions{ { 1U, moveAction } };
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputMappingContextAsset>> contexts{ { 60U, moveContext } };
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "Player controller template movement test mapping context could not be added");
+    scene.Input().MutableDeviceState().SetKeyDown(kb::input::InputKey::D, true);
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Player controller template movement test host setup failed");
+
+    // Produce the REAL, shipped template file through the exact production
+    // path `kb_cli init-agent` uses.
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_engine_player_controller_template_movement_test";
+    std::error_code errorCode;
+    std::filesystem::remove_all(projectRoot, errorCode);
+    std::filesystem::create_directories(projectRoot, errorCode);
+    kb::tests::Require(!errorCode, "Player controller template movement test project root could not be created");
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    const kb::script::ScriptAgentProjectFilesResult written = kb::script::ScriptAgentProjectFiles::Write(projectRoot, catalog);
+    kb::tests::Require(written.succeeded, "Player controller template movement test could not write project files");
+    const std::filesystem::path templatePath = projectRoot / "Assets" / "Logic" / "PlayerController.lua";
+    kb::tests::Require(std::filesystem::exists(templatePath), "ScriptAgentProjectFiles::Write did not write the PlayerController.lua template");
+    std::ifstream templateStream{ templatePath, std::ios::binary };
+    const std::string templateSource{ std::istreambuf_iterator<char>{ templateStream }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(!templateSource.empty(), "PlayerController.lua template file is empty");
+
+    constexpr kb::assets::AssetId kPlayerAsset{ 5601U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kPlayerAsset, templateSource, "PlayerController.lua");
+    kb::tests::Require(loaded.succeeded, "Real PlayerController.lua template did not load");
+
+    const kb::scene::SceneObject player = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" });
+    scene.Components().Behaviours().Set(player.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kPlayerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    constexpr float kDeltaSeconds = 1.0F / 60.0F;
+    scene.EvaluateAllLocalUserInput(kDeltaSeconds);
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    static_cast<void>(system.ExecuteFrame(scene, kDeltaSeconds));
+    kb::tests::Require(system.LastResult().Succeeded(), "Real PlayerController.lua template Tick produced diagnostics");
+
+    bool sawPlayerMoved = false;
+    for (const kb::script::ScriptEvent& event : system.LastResult().emittedEvents) {
+        sawPlayerMoved = sawPlayerMoved || event.name == "PlayerMoved";
+    }
+    kb::tests::Require(sawPlayerMoved, "Real PlayerController.lua template did not emit PlayerMoved");
+
+    constexpr float kSpeed = 2.0F; // must match PlayerController.lua's own `local speed = 2.0`
+    const float expectedDeltaX = kSpeed * kDeltaSeconds; // D held, composite scale +1, unit key magnitude
+    const kb::scene::TransformComponent& transform = scene.Transforms().Get(player.Entity());
+    kb::tests::Require(
+        kb::tests::NearlyEqual(transform.localPosition.x, expectedDeltaX),
+        "Real PlayerController.lua template must move Transform.localPosition.x by speed*dt for a real, non-zero Move.x input - proves ACTUAL steering, not just that lifecycle callbacks fired");
+    kb::tests::Require(
+        kb::tests::NearlyEqual(transform.localPosition.y, 0.0F),
+        "Real PlayerController.lua template must not move along Y when only the +x key (D) is held");
 }
 
 void RunScriptAudioApiTest() {
@@ -5957,6 +6059,37 @@ void RunTransformApiParentAndHierarchyTest() {
     kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
         "Transform.SetParent WITH keepWorld must back-solve a genuinely different LOCAL pose to compensate for the new parent, not just copy the old local value");
 
+    // LIB-086 (audit gap closed 2026-07-18): keepWorld must preserve the FULL
+    // world transform including SCALE, not just position+rotation. Reparent a
+    // unit-scale root under a parent scaled 2x with keepWorld=true: the
+    // entity's WORLD scale must stay 1 (its localScale back-solved to 0.5 to
+    // compensate), not silently double. Uses fresh, distinctly-scaled
+    // entities because the grandparent/parent chain above is unit-scaled, so
+    // the bug (localScale left untouched) is invisible there.
+    const kb::scene::SceneObject scaledParentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldScaledParent" });
+    const kb::scene::SceneObject scaledChildObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldScaledChild" });
+    {
+        kb::scene::TransformComponent parentTransform = scene.Transforms().Get(scaledParentObject.Entity());
+        parentTransform.localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F };
+        scene.Transforms().Set(scaledParentObject.Entity(), parentTransform);
+    }
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::math::Vec3 scaledChildWorldScaleBefore = scene.Transforms().Get(scaledChildObject.Entity()).worldScale;
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildWorldScaleBefore.x, 1.0F), "KeepWorld scale fixture: the child must start at world scale 1");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reparentScaledArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ scaledChildObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ scaledParentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult reparentScaled = host.Functions().Call("Transform.SetParent", reparentScaledArgs, context);
+    kb::tests::Require(reparentScaled.Succeeded() && reparentScaled.Output("moved")->AsBool(), "Transform.SetParent (keepWorld, scaled parent) direct call failed");
+    const kb::scene::TransformComponent scaledChildAfter = scene.Transforms().Get(scaledChildObject.Entity());
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildAfter.worldScale.x, 1.0F) && kb::tests::NearlyEqual(scaledChildAfter.worldScale.y, 1.0F) && kb::tests::NearlyEqual(scaledChildAfter.worldScale.z, 1.0F),
+        "Transform.SetParent WITH keepWorld must preserve WORLD SCALE across a reparent onto a differently-scaled parent (audit gap: localScale was left untouched, doubling worldScale)");
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildAfter.localScale.x, 0.5F),
+        "Transform.SetParent WITH keepWorld must back-solve localScale to 0.5 under a 2x parent to keep world scale at 1");
+
     // Cycle detection: attempting to parent grandparent (an ANCESTOR of
     // child, now child's parent again after the keepWorld reparent) under
     // child (its own DESCENDANT) must be rejected — inherited unchanged
@@ -6148,6 +6281,35 @@ void RunTransformApiRotateLookAtAndPointConversionTest() {
     kb::tests::Require(kb::tests::NearlyEqual(rootForwardAfterLookAt.x, 1.0F) && std::fabs(rootForwardAfterLookAt.y) < 0.001F && std::fabs(rootForwardAfterLookAt.z) < 0.001F,
         "Transform.LookAt (root) must produce a rotation whose forward vector points toward the requested target");
 
+    // LIB-088 (audit gap closed 2026-07-18): LookAt on a ROOT must aim from
+    // the entity's CURRENT position even after a SetPosition earlier the same
+    // frame. SetPosition writes localPosition but does not resync worldPosition
+    // (it recomposes lazily), and the old LookAt only synced for parented
+    // entities — so a root aimed from its stale previous position. Move a root
+    // to (0,0,5), then immediately LookAt (0,0,0) with NO Update in between:
+    // the forward must point -Z (from 5 back to the origin), which is only
+    // possible if LookAt reads the fresh world position.
+    const kb::scene::SceneObject lookAtMovedRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtMovedRoot" });
+    const kb::script::ScriptFunctionArgument movedRootEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtMovedRoot.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::script::ScriptFunctionCallResult movedRootSet = host.Functions().Call("Transform.SetPosition",
+        std::vector<kb::script::ScriptFunctionArgument>{ movedRootEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 5.0F } } },
+        context);
+    kb::tests::Require(movedRootSet.Succeeded() && movedRootSet.Output("moved")->AsBool(), "Transform.SetPosition on the moved root failed");
+    const kb::script::ScriptFunctionCallResult movedRootLookAt = host.Functions().Call("Transform.LookAt",
+        std::vector<kb::script::ScriptFunctionArgument>{ movedRootEntityArg,
+            kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } } },
+        context);
+    kb::tests::Require(movedRootLookAt.Succeeded() && movedRootLookAt.Output("moved")->AsBool(), "Transform.LookAt on the moved root failed");
+    const kb::scene::Quat movedRootRotation = scene.Transforms().Get(lookAtMovedRoot.Entity()).localRotation;
+    const kb::math::Vec3 movedRootForward = kb::math::Rotate(movedRootRotation, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(kb::tests::NearlyEqual(movedRootForward.z, -1.0F) && std::fabs(movedRootForward.x) < 0.001F && std::fabs(movedRootForward.y) < 0.001F,
+        "Transform.LookAt on a ROOT moved earlier this frame must aim from the CURRENT position (forward -Z from (0,0,5) toward the origin), not the stale pre-move position");
+
     // (3) LookAt on a CHILD of a non-trivially transformed (translated AND
     // rotated) parent: the resulting WORLD rotation's forward vector must
     // STILL point at the target — proving the back-solve through
@@ -6278,6 +6440,7 @@ void RunTransformHierarchyEdgeCaseTest() {
         scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
         static_cast<void>(scene.Runtime().Update(0.0F));
         const kb::scene::Vec3 entityWorldPosBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+        const kb::scene::Vec3 entityWorldScaleBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldScale;
 
         const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
             kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
@@ -6287,9 +6450,20 @@ void RunTransformHierarchyEdgeCaseTest() {
         const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
         kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) under a non-uniform-scale parent failed");
 
-        const kb::scene::Vec3 entityWorldPosAfter = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
-        kb::tests::Require(kb::tests::NearlyEqual(entityWorldPosAfter.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityWorldPosAfter.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityWorldPosAfter.z, entityWorldPosBefore.z),
+        const kb::scene::TransformComponent entityAfter = scene.Transforms().Get(reparentedEntity.Entity());
+        kb::tests::Require(kb::tests::NearlyEqual(entityAfter.worldPosition.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityAfter.worldPosition.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityAfter.worldPosition.z, entityWorldPosBefore.z),
             "LIB-091 keepWorld must preserve the exact world position under a NON-UNIFORM (2,3,4) parent scale, not just uniform scale");
+        // The audit gap: the keepWorld test only checked world position, so it
+        // could not detect LIB-086's defect (localScale left untouched, so
+        // worldScale changed). Assert per-axis WORLD SCALE preservation under
+        // the non-uniform (2,3,4) parent — only true if localScale is
+        // back-solved to (1/2, 1/3, 1/4).
+        kb::tests::Require(
+            kb::tests::NearlyEqual(entityAfter.worldScale.x, entityWorldScaleBefore.x) && kb::tests::NearlyEqual(entityAfter.worldScale.y, entityWorldScaleBefore.y) && kb::tests::NearlyEqual(entityAfter.worldScale.z, entityWorldScaleBefore.z),
+            "LIB-091 keepWorld must preserve WORLD SCALE per-axis under a NON-UNIFORM (2,3,4) parent scale — the exact defect the original keepWorld test could not detect because it only checked position");
+        kb::tests::Require(
+            kb::tests::NearlyEqual(entityAfter.localScale.x, 0.5F) && kb::tests::NearlyEqual(entityAfter.localScale.y, 1.0F / 3.0F) && kb::tests::NearlyEqual(entityAfter.localScale.z, 0.25F),
+            "LIB-091 keepWorld must back-solve localScale per-axis (1/2, 1/3, 1/4) under a (2,3,4) parent to keep world scale unchanged");
     }
 
     // (1b) keepWorld reparenting an entity that itself has a child — proves
@@ -7076,6 +7250,30 @@ void RunSceneLoadedContentApiTest() {
     const kb::script::ScriptFunctionCallResult getActiveAfterA = host.Functions().Call("Scene.GetActive", {}, context);
     kb::tests::Require(getActiveAfterA.Succeeded() && getActiveAfterA.Output("id")->AsUInt64() == idA, "Scene.GetActive must report the just-loaded scene as active");
 
+    // LIB-071 (audit gap closed 2026-07-18): with SceneA active, World.Spawn
+    // WITHOUT an explicit parent must land INSIDE the active scene — parented
+    // under its root (RootA) — so Scene.SetActive genuinely STEERS where new
+    // content is created rather than being a purely observable flag. An
+    // explicit parent still wins. (These spawns are children of RootA, so they
+    // do not change any root count the later assertions in this test check,
+    // and the next non-additive Scene.Load clears them with RootA.)
+    const kb::scene::SceneEntity activeRootA = scene.Hierarchy().RootEntities().front();
+    kb::tests::Require(scene.Entities().Name(activeRootA) == "RootA", "LIB-071 fixture: SceneA's sole root must be RootA");
+    const kb::script::ScriptFunctionCallResult spawnIntoActive = host.Functions().Call("World.Spawn",
+        std::vector<kb::script::ScriptFunctionArgument>{ kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SpawnedIntoActive" } } } }, context);
+    kb::tests::Require(spawnIntoActive.Succeeded(), "LIB-071 World.Spawn into the active scene failed");
+    const kb::scene::SceneEntity spawnedIntoActive{ spawnIntoActive.Output("entity")->AsUInt64() };
+    kb::tests::Require(scene.Hierarchy().Parent(spawnedIntoActive).Id() == activeRootA.Id(),
+        "LIB-071 World.Spawn with no explicit parent must parent the new entity under the ACTIVE loaded scene's root, not create a detached root");
+    const kb::script::ScriptFunctionCallResult spawnExplicitParent = host.Functions().Call("World.Spawn",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SpawnedUnderExplicit" } } },
+            kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ spawnedIntoActive.Id(), kb::script::ScriptValueType::Entity } } },
+        context);
+    kb::tests::Require(spawnExplicitParent.Succeeded(), "LIB-071 World.Spawn with an explicit parent failed");
+    kb::tests::Require(scene.Hierarchy().Parent(kb::scene::SceneEntity{ spawnExplicitParent.Output("entity")->AsUInt64() }).Id() == spawnedIntoActive.Id(),
+        "LIB-071 an explicit parent argument must still win over the active-scene default");
+
     const std::vector<kb::script::ScriptFunctionArgument> findAArgs{
         kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SceneA" } } },
     };
@@ -7386,6 +7584,8 @@ void RunScriptMathApiTest() {
              "Math.Random01", "Math.Noise1D", "Math.Noise2D", "Math.Noise3D",
              "Math.RandomSeed", "Math.RandomNextUInt32", "Math.RandomNextFloat01", "Math.RandomRange", "Math.RandomRangeInt",
              "Math.Ease",
+             "Math.RectContains", "Math.RectIntersects", "Math.PlaneSignedDistance", "Math.RayPointAt", "Math.RayPlaneIntersect",
+             "Math.IVec2Add", "Math.IVec2ManhattanDistance",
          }) {
         const std::string message = std::string{ "Script math API function '" } + name + "' was not registered";
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
@@ -7530,6 +7730,28 @@ void RunScriptMathApiTest() {
         context);
     kb::tests::Require(asinInDomain.Succeeded() && asinInDomain.Output("result").has_value() && kb::tests::NearlyEqual(asinInDomain.Output("result")->AsFloat(), kb::math::kPi / 2.0F), "Math.Asin with a boundary-valid value (1.0) must succeed, not be rejected as out of domain");
 
+    // LIB-047 (2026-07-17 audit gap): a NaN input must ALSO be rejected as a
+    // domain error, not slip through `value < -1 || value > 1` (false for
+    // NaN) and fabricate a "successful" NaN result into the graph. Same for
+    // +/-infinity. Covers both Asin and Acos, since they share the domain
+    // check.
+    const float quietNaN = std::numeric_limits<float>::quiet_NaN();
+    const float positiveInfinity = std::numeric_limits<float>::infinity();
+    for (const char* function : { "Math.Asin", "Math.Acos" }) {
+        const kb::script::ScriptFunctionCallResult nanResult = host.Functions().Call(
+            function,
+            std::vector<kb::script::ScriptFunctionArgument>{ { .name = "value", .value = kb::script::ScriptValue{ quietNaN } } },
+            context);
+        kb::tests::Require(!nanResult.Succeeded() && !nanResult.errors.empty(),
+            "Math.Asin/Acos with a NaN input must report a real domain error, never succeed and pass NaN into the graph");
+        const kb::script::ScriptFunctionCallResult infResult = host.Functions().Call(
+            function,
+            std::vector<kb::script::ScriptFunctionArgument>{ { .name = "value", .value = kb::script::ScriptValue{ positiveInfinity } } },
+            context);
+        kb::tests::Require(!infResult.Succeeded() && !infResult.errors.empty(),
+            "Math.Asin/Acos with an infinite input must report a real domain error");
+    }
+
     // LIB-048: Vec3 is not a script pin type — every Vec3-shaped Math.*
     // function decomposes into named-prefix Float pins (aX/aY/aZ, ...),
     // the same convention Physics.Raycast already uses.
@@ -7632,6 +7854,70 @@ void RunScriptMathApiTest() {
         context);
     kb::tests::Require(noised.Succeeded() && noised.Output("result").has_value() && noised.Output("result")->AsFloat() == 0.0F, "Math.Noise3D direct call at an integer lattice point must be exactly zero");
 
+    // LIB-050 (2026-07-17 audit gap): a UInt32 seed/index pin must accept an
+    // Int argument, because the Lua bridge infers a small non-negative
+    // integer literal as Int, not UInt32 — without the Int->UInt32 coercion
+    // this call fails validation as a type mismatch and the whole
+    // Random/Noise API is uncallable from Lua despite being registered.
+    const kb::script::ScriptFunctionCallResult randomedFromInt = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ 42 } },
+            { .name = "index", .value = kb::script::ScriptValue{ 7 } },
+        },
+        context);
+    kb::tests::Require(randomedFromInt.Succeeded() && randomedFromInt.Output("result").has_value(),
+        "Math.Random01 must accept Int seed/index (the type the Lua bridge produces) via Int->UInt32 coercion, not reject it as a type mismatch");
+    // Same seed value, whether it arrives as Int or UInt32, must produce the
+    // identical deterministic result — the coercion must be value-preserving,
+    // not a reinterpretation.
+    kb::tests::Require(randomedFromInt.Output("result")->AsFloat() == randomed.Output("result")->AsFloat(),
+        "Math.Random01 must be deterministic regardless of whether the seed arrived as Int or UInt32");
+
+    // A negative Int must NOT silently wrap to a huge UInt32 seed — it stays
+    // incompatible and fails loudly.
+    const kb::script::ScriptFunctionCallResult randomedFromNegative = host.Functions().Call(
+        "Math.Random01",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "seed", .value = kb::script::ScriptValue{ -1 } },
+            { .name = "index", .value = kb::script::ScriptValue{ 7 } },
+        },
+        context);
+    kb::tests::Require(!randomedFromNegative.Succeeded(),
+        "Math.Random01 must reject a negative Int seed rather than silently wrapping it to a huge UInt32");
+
+    // Full end-to-end proof through a REAL Lua script: a behaviour that
+    // calls Math.Random01 with plain Lua integer literals (which the bridge
+    // marshals as Int) and stores the result. Before the coercion fix this
+    // raised a type-mismatch error inside CallFunction; now it runs cleanly.
+    {
+        kb::scene::Scene luaScene;
+        kb::script::ScriptRuntimeHost luaHost{ luaScene };
+        kb::tests::Require(luaHost.Succeeded(), "LIB-050 Lua Random test host setup failed");
+        constexpr kb::assets::AssetId kRandomLuaAsset{ 700701U };
+        // Math.* has no Lua sugar table (LIB-045) — scripts reach it via the
+        // generic CallFunction(name, {named args}), which marshals the
+        // integer literals through PucLuaValueBridge::FromLua as Int, the
+        // exact path the 2026-07-17 audit reported failing on type.
+        const kb::script::PucLuaLoadResult loaded = luaHost.LuaRuntime().LoadScript(kRandomLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local r = CallFunction(\"Math.Random01\", { seed = 123, index = 4 })\n"
+            "    SetShared(\"luaRandomOk\", r ~= nil and r >= 0.0 and r <= 1.0)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-050 Lua Random test script did not load");
+        const kb::scene::SceneObject caller = luaScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RandomCaller" });
+        luaScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kRandomLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = luaHost.Runtime().ExecuteLifecycle(luaScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-050 real Lua Math.Random01 call must run without a type-mismatch diagnostic");
+        const std::optional<kb::script::ScriptValue> luaRandomOk = luaHost.SharedState().Get("luaRandomOk");
+        kb::tests::Require(luaRandomOk.has_value() && luaRandomOk->AsBool(),
+            "LIB-050 a real Lua script must be able to call Math.Random01 with integer literals and get a value in [0,1]");
+    }
+
     // LIB-051: RandomStream's state (streamSeed/streamCounter, both
     // UInt32) must round-trip through Math.RandomSeed and then thread
     // correctly through Math.RandomRangeInt — proving the {value,
@@ -7662,6 +7948,39 @@ void RunScriptMathApiTest() {
             rangedInt.Output("streamCounter").has_value() && rangedInt.Output("streamCounter")->AsUInt32() == 1U,
         "Math.RandomRangeInt direct call must return a value in [0,10) and advance streamCounter by exactly one");
 
+    // LIB-051 (2026-07-17 audit gap): the RandomStream API shares LIB-050's
+    // root cause — its streamSeed/streamCounter pins are UInt32, so before
+    // the Int->UInt32 coercion a Lua caller (whose integer literals marshal
+    // as Int) could not call any stream function at all. This proves the
+    // whole stream surface is now reachable from a REAL Lua script, not
+    // just via native hand-built ScriptValues: the script seeds a stream
+    // and draws a value in one CallFunction chain, all through the public
+    // Lua boundary.
+    {
+        kb::scene::Scene streamScene;
+        kb::script::ScriptRuntimeHost streamHost{ streamScene };
+        kb::tests::Require(streamHost.Succeeded(), "LIB-051 Lua RandomStream test host setup failed");
+        constexpr kb::assets::AssetId kStreamLuaAsset{ 700702U };
+        const kb::script::PucLuaLoadResult loaded = streamHost.LuaRuntime().LoadScript(kStreamLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local stream = CallFunction(\"Math.RandomSeed\", { seed = 123 })\n"
+            "    local r = CallFunction(\"Math.RandomNextFloat01\", { streamSeed = stream.streamSeed, streamCounter = stream.streamCounter })\n"
+            "    SetShared(\"streamOk\", r ~= nil and r.value ~= nil and r.value >= 0.0 and r.value <= 1.0 and r.streamCounter == 1)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-051 Lua RandomStream test script did not load");
+        const kb::scene::SceneObject caller = streamScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "StreamCaller" });
+        streamScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kStreamLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = streamHost.Runtime().ExecuteLifecycle(streamScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-051 real Lua RandomStream chain must run without a type-mismatch diagnostic");
+        const std::optional<kb::script::ScriptValue> streamOk = streamHost.SharedState().Get("streamOk");
+        kb::tests::Require(streamOk.has_value() && streamOk->AsBool(),
+            "LIB-051 a real Lua script must be able to seed a RandomStream and draw a value in [0,1] with the counter advanced to 1");
+    }
+
     // LIB-052: Easing is exposed as an Int ordinal (no dedicated enum
     // ScriptValueType), with an out-of-range ordinal rejected as a real
     // domain error (same pattern as LIB-047's Asin/Acos) rather than an
@@ -7683,6 +8002,132 @@ void RunScriptMathApiTest() {
         },
         context);
     kb::tests::Require(!easedOutOfRange.Succeeded() && !easedOutOfRange.errors.empty(), "Math.Ease with an out-of-range easing ordinal must report a real error, not cast into undefined enum territory");
+
+    // LIB-042: geometry queries over Rect/Plane/Ray/IVec2 — a real
+    // end-to-end call through the registry for each, on known values, so the
+    // kb::math geometry ops have a proven Native consumer (not orphaned API).
+    const kb::script::ScriptFunctionCallResult rectInside = host.Functions().Call(
+        "Math.RectContains",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rectX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectWidth", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "rectHeight", .value = kb::script::ScriptValue{ 2.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(rectInside.Succeeded() && rectInside.Output("result").has_value() && rectInside.Output("result")->AsBool(), "Math.RectContains must report a point inside the rect as contained");
+
+    const kb::script::ScriptFunctionCallResult rectOutside = host.Functions().Call(
+        "Math.RectContains",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rectX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectY", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rectWidth", .value = kb::script::ScriptValue{ 4.0F } },
+            { .name = "rectHeight", .value = kb::script::ScriptValue{ 2.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 1.0F } },
+        },
+        context);
+    kb::tests::Require(rectOutside.Succeeded() && rectOutside.Output("result").has_value() && !rectOutside.Output("result")->AsBool(), "Math.RectContains must report a point outside the rect as not contained");
+
+    const kb::script::ScriptFunctionCallResult planeDist = host.Functions().Call(
+        "Math.PlaneSignedDistance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "pointX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "pointY", .value = kb::script::ScriptValue{ 3.0F } },
+            { .name = "pointZ", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(planeDist.Succeeded() && planeDist.Output("result").has_value() && kb::tests::NearlyEqual(planeDist.Output("result")->AsFloat(), 3.0F), "Math.PlaneSignedDistance of a point 3 above the ground plane must be +3");
+
+    // A ray from (0,5,0) pointing straight down at the y=0 ground plane must
+    // hit at (0,0,0) after t=5.
+    const kb::script::ScriptFunctionCallResult rayHit = host.Functions().Call(
+        "Math.RayPlaneIntersect",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rayOriginX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayOriginY", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "rayOriginZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionY", .value = kb::script::ScriptValue{ -1.0F } },
+            { .name = "rayDirectionZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(
+        rayHit.Succeeded() && rayHit.Output("hit").has_value() && rayHit.Output("hit")->AsBool() &&
+            kb::tests::NearlyEqual(rayHit.Output("t")->AsFloat(), 5.0F) &&
+            kb::tests::NearlyEqual(rayHit.Output("y")->AsFloat(), 0.0F),
+        "Math.RayPlaneIntersect of a downward ray from y=5 against the ground plane must hit at t=5, y=0");
+
+    // A ray pointing AWAY from the plane must report a miss, not a
+    // behind-the-origin solution.
+    const kb::script::ScriptFunctionCallResult rayMiss = host.Functions().Call(
+        "Math.RayPlaneIntersect",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "rayOriginX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayOriginY", .value = kb::script::ScriptValue{ 5.0F } },
+            { .name = "rayOriginZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "rayDirectionY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "rayDirectionZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalX", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeNormalY", .value = kb::script::ScriptValue{ 1.0F } },
+            { .name = "planeNormalZ", .value = kb::script::ScriptValue{ 0.0F } },
+            { .name = "planeDistance", .value = kb::script::ScriptValue{ 0.0F } },
+        },
+        context);
+    kb::tests::Require(rayMiss.Succeeded() && rayMiss.Output("hit").has_value() && !rayMiss.Output("hit")->AsBool(), "Math.RayPlaneIntersect of a ray pointing away from the plane must report a miss");
+
+    const kb::script::ScriptFunctionCallResult manhattan = host.Functions().Call(
+        "Math.IVec2ManhattanDistance",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = "aX", .value = kb::script::ScriptValue{ 1 } },
+            { .name = "aY", .value = kb::script::ScriptValue{ 2 } },
+            { .name = "bX", .value = kb::script::ScriptValue{ 4 } },
+            { .name = "bY", .value = kb::script::ScriptValue{ 6 } },
+        },
+        context);
+    kb::tests::Require(manhattan.Succeeded() && manhattan.Output("result").has_value() && manhattan.Output("result")->AsInt() == 7, "Math.IVec2ManhattanDistance of (1,2)->(4,6) must be |3|+|4| = 7");
+
+    // LIB-042: a REAL Lua script must be able to call the geometry bindings
+    // and get the right answer back — proving the Rect/Plane types reach the
+    // Lua frontend, not just the Native registry.
+    {
+        kb::scene::Scene luaScene;
+        kb::script::ScriptRuntimeHost luaHost{ luaScene };
+        kb::tests::Require(luaHost.Succeeded(), "LIB-042 geometry Lua host did not initialize");
+        constexpr kb::assets::AssetId kGeometryLuaAsset{ 700742U };
+        const kb::script::PucLuaLoadResult loaded = luaHost.LuaRuntime().LoadScript(kGeometryLuaAsset,
+            "function Tick(self, dt)\n"
+            "    local inside = CallFunction(\"Math.RectContains\", { rectX = 0.0, rectY = 0.0, rectWidth = 4.0, rectHeight = 2.0, pointX = 1.0, pointY = 1.0 })\n"
+            "    local hit = CallFunction(\"Math.RayPlaneIntersect\", {\n"
+            "        rayOriginX = 0.0, rayOriginY = 5.0, rayOriginZ = 0.0,\n"
+            "        rayDirectionX = 0.0, rayDirectionY = -1.0, rayDirectionZ = 0.0,\n"
+            "        planeNormalX = 0.0, planeNormalY = 1.0, planeNormalZ = 0.0, planeDistance = 0.0 })\n"
+            "    SetShared(\"luaGeometryOk\", inside == true and hit.hit == true and hit.t == 5.0 and hit.y == 0.0)\n"
+            "end\n");
+        kb::tests::Require(loaded.succeeded, "LIB-042 geometry Lua test script did not load");
+        const kb::scene::SceneObject caller = luaScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "GeometryCaller" });
+        luaScene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kGeometryLuaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+        const kb::script::ScriptRuntimeExecutionResult tick = luaHost.Runtime().ExecuteLifecycle(luaScene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+        kb::tests::Require(tick.diagnostics.empty(), "LIB-042 geometry Lua Tick produced script diagnostics");
+        const std::optional<kb::script::ScriptValue> geometryOk = luaHost.SharedState().Get("luaGeometryOk");
+        kb::tests::Require(geometryOk.has_value() && geometryOk->AsBool(), "LIB-042 a real Lua script must call Math.RectContains and Math.RayPlaneIntersect and get correct results");
+    }
 }
 
 // LIB-056: Math.Clamp is a single ScriptFunctionRegistry-registered
@@ -7837,6 +8282,148 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(graphResult->AsFloat(), kExpected), "Visual Graph Math.Clamp result does not match the expected value");
     kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), luaResult->AsFloat()), "Native and Lua Math.Clamp results must match within float tolerance");
     kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.Clamp results must match within float tolerance");
+}
+
+// LIB-056 (2026-07-17 audit gap): RunMathFunctionCrossBackendParityTest
+// above only exercises a Float-pinned function (Math.Clamp). The audit
+// found the parity harness never covered UInt32 pins — the exact type on
+// the Random/RandomStream path that did not work from Lua at all until the
+// Int->UInt32 coercion (LIB-050/051). This second parity test drives a
+// UInt32-INPUT function, Math.RandomNextFloat01(streamSeed, streamCounter)
+// -> Float, through the SAME three backends (Native / Lua / Visual Graph),
+// proving the UInt32 argument marshalling agrees across all of them:
+//   - Native passes ScriptValue{uint32};
+//   - Lua passes integer literals (marshalled as Int, coerced to UInt32);
+//   - Visual Graph reads UInt32 pins through the CallNative binding.
+// The Float result is compared (there is deliberately no Shared.Set.UInt32
+// binding yet — LIB-041's documented cut — so a UInt32 RESULT could not be
+// stored from a graph; a UInt32-in / Float-out function proves the input
+// marshalling that was actually broken, without inventing an unused
+// binding).
+void RunMathUInt32CrossBackendParityTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Math UInt32 cross-backend parity host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Math.RandomNextFloat01") != nullptr, "Math.RandomNextFloat01 must already be registered (LIB-051) before this parity test runs");
+
+    constexpr std::uint32_t kSeed = 123U;
+    constexpr std::uint32_t kCounter = 0U;
+
+    constexpr kb::assets::AssetId kNativeAsset{ 5023U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5024U };
+    constexpr kb::assets::AssetId kVisualAsset{ 5025U };
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native UInt32 Caller" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua UInt32 Caller" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visual UInt32 Caller" });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kNativeAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true, .executionOrder = 0 });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kLuaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true, .executionOrder = 10 });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVisualAsset.value, .backend = kb::scene::BehaviourBackend::VisualGraph, .enabled = true, .executionOrder = 20 });
+
+    // Native: pass genuine UInt32 ScriptValues.
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+                           const std::vector<kb::script::ScriptFunctionArgument> arguments{
+                               kb::script::ScriptFunctionArgument{ .name = "streamSeed", .value = kb::script::ScriptValue{ std::uint32_t{ kSeed } } },
+                               kb::script::ScriptFunctionArgument{ .name = "streamCounter", .value = kb::script::ScriptValue{ std::uint32_t{ kCounter } } },
+                           };
+                           const kb::script::ScriptFunctionCallResult result = context.CallFunction("Math.RandomNextFloat01", arguments);
+                           kb::tests::Require(result.Succeeded(), "Native Math.RandomNextFloat01 call failed");
+                           const std::optional<kb::script::ScriptValue> value = result.Output("value");
+                           kb::tests::Require(value.has_value(), "Native Math.RandomNextFloat01 did not return a value");
+                           kb::tests::Require(context.SetSharedValue("nativeRandomResult", *value), "Native Math.RandomNextFloat01 could not store shared result");
+                       }),
+        "Native UInt32 caller did not register");
+
+    // Lua: pass integer literals — marshalled as Int, coerced to UInt32
+    // (LIB-050). This is the path the audit reported as not working at all.
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local r = CallFunction("Math.RandomNextFloat01", { streamSeed = 123, streamCounter = 0 })
+    SetShared("luaRandomResult", r.value)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Lua UInt32 caller did not load");
+
+    // Visual Graph: read UInt32 input pins through the CallNative binding.
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "VisualUInt32Caller";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "RandomInputs" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "GraphRandomResultKey" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Math.RandomNextFloat01" },
+        kb::visual::VisualGraphNode{ .id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        // Math.RandomNextFloat01 also returns the advanced stream; the
+        // CallNative binding requires every declared output pin to be
+        // present on the node even when the graph does not consume them.
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "streamSeed", .toNode = 4U, .toPin = "streamSeed", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "streamCounter", .toNode = 4U, .toPin = "streamCounter", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "value", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Visual UInt32 caller graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kVisualAsset, .graphName = graph.name, .module = compiled.module });
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "RandomInputs",
+                           .outputs = {
+                               kb::visual::VisualGraphPinSignature{ .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+                               kb::visual::VisualGraphPinSignature{ .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+                           },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "streamSeed", kb::visual::VisualGraphRuntimeValue{ static_cast<std::uint64_t>(kSeed), kb::visual::VisualGraphValueType::UInt32 });
+                               context.Store(instruction.sourceNodeId, "streamCounter", kb::visual::VisualGraphRuntimeValue{ static_cast<std::uint64_t>(kCounter), kb::visual::VisualGraphValueType::UInt32 });
+                           },
+                       }),
+        "Visual UInt32 random-inputs binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "GraphRandomResultKey",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "graphRandomResult" } });
+                           },
+                       }),
+        "Visual UInt32 random-result-key binding did not register");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Math UInt32 cross-backend parity runtime produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> nativeResult = host.SharedState().Get("nativeRandomResult");
+    const std::optional<kb::script::ScriptValue> luaResult = host.SharedState().Get("luaRandomResult");
+    const std::optional<kb::script::ScriptValue> graphResult = host.SharedState().Get("graphRandomResult");
+    kb::tests::Require(nativeResult.has_value(), "Native backend did not store a Math.RandomNextFloat01 result (UInt32 args must marshal)");
+    kb::tests::Require(luaResult.has_value(), "Lua backend did not store a Math.RandomNextFloat01 result (Int->UInt32 coercion must work)");
+    kb::tests::Require(graphResult.has_value(), "Visual Graph backend did not store a Math.RandomNextFloat01 result (UInt32 pins must marshal)");
+
+    // Parity: RandomNextFloat01 is deterministic in (seed, counter), so all
+    // three backends — having passed the SAME UInt32 seed/counter through
+    // three different marshalling paths — must produce the identical Float.
+    kb::tests::Require(nativeResult->AsFloat() >= 0.0F && nativeResult->AsFloat() < 1.0F, "Math.RandomNextFloat01 must return a value in [0,1)");
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), luaResult->AsFloat()), "Native and Lua Math.RandomNextFloat01 results must match — proves Int->UInt32 coercion is value-identical to a native UInt32 arg");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.RandomNextFloat01 results must match — proves all three backends marshal the UInt32 seed/counter identically");
 }
 
 void RunScriptInputApiTest() {
@@ -8762,6 +9349,12 @@ void RunScriptRuntimeSceneSystemFixedStepSafetyTest() {
     static_cast<void>(system.ExecuteFrame(scene, -1.0F));
     kb::tests::Require(fixedTicks == 0U, "Fixed step safety accepted a negative delta for FixedTick");
     kb::tests::Require(!tickDeltas.empty() && kb::tests::NearlyEqual(tickDeltas.back(), 0.0F), "Fixed step safety did not clamp negative Tick delta");
+    // LIB-093: ExecuteFrame (via PrepareScene) must stamp the scene with THIS
+    // system's script FixedTick delta (0.1) so Time.FixedDelta reports it —
+    // the production half of the fix whose read half RunScriptTimeApiElapsed
+    // AndAliasingTest checks.
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().ScriptFixedDeltaSeconds(), 0.1F),
+        "LIB-093 ScriptRuntimeSceneSystem::ExecuteFrame must stamp the scene's script fixed delta from its frame settings (0.1)");
 
     static_cast<void>(system.ExecuteFrame(scene, 1.0F));
     kb::tests::Require(fixedTicks == 2U, "Fixed step safety did not respect max fixed steps per frame");
@@ -9771,8 +10364,17 @@ void RunScriptTimeApiElapsedAndAliasingTest() {
     const kb::script::ScriptFunctionCallResult unscaledResult = host.Functions().Call("Time.UnscaledDelta", {}, context);
     kb::tests::Require(unscaledResult.Succeeded() && kb::tests::NearlyEqual(unscaledResult.Output("delta")->AsFloat(), 0.25F), "Time.UnscaledDelta must equal Time.Delta today (no time-scale mechanism exists yet)");
 
+    // LIB-093 (audit gap closed 2026-07-18): Time.FixedDelta must report the
+    // SCRIPT FixedTick step, not the independently-configured PHYSICS fixed
+    // step. Configure them to DIFFER (physics 0.02, script 0.01) and prove
+    // Time.FixedDelta returns the script one.
+    scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{ .fixedDeltaSeconds = 0.02F });
+    scene.Runtime().SetScriptFixedDeltaSeconds(0.01F);
     const kb::script::ScriptFunctionCallResult fixedDeltaResult = host.Functions().Call("Time.FixedDelta", {}, context);
-    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), scene.Runtime().FixedStepSettings().fixedDeltaSeconds), "Time.FixedDelta must reflect SceneRuntime::FixedStepSettings().fixedDeltaSeconds");
+    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), 0.01F),
+        "Time.FixedDelta must report the SCRIPT FixedTick delta (0.01), the step a script's FixedTick actually runs at");
+    kb::tests::Require(!kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), 0.02F),
+        "Time.FixedDelta must NOT return the physics SceneRuntimeFixedStepSettings step (0.02) when it differs from the script step");
 
     const kb::script::ScriptFunctionCallResult elapsedBeforeUpdate = host.Functions().Call("Time.Elapsed", {}, context);
     kb::tests::Require(elapsedBeforeUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedBeforeUpdate.Output("elapsed")->AsFloat(), 0.0F), "Time.Elapsed must start at 0 before any Update()");
@@ -10274,6 +10876,198 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
 // Completed for a loadable asset, genuinely Failed (not silently swallowed)
 // for one whose type has no registered loader — through a real
 // scene.Tasks().Advance.
+// LIB-058: the five script-facing controlled collections (Array/Set/Map/
+// Queue/Stack) must be genuinely creatable, mutable, and readable from the
+// real ScriptFunctionRegistry, and — because the whole point of the audit
+// gap was "cannot use from Lua" — actually reachable from a real Lua script,
+// not just native hand-built calls. Native coverage below exercises every
+// operation of every structure; the Lua block proves the handle + operations
+// survive the Lua bridge end to end.
+void RunScriptCollectionsApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Collections API test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const auto call = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> args) {
+        return host.Functions().Call(name, args, context);
+    };
+    const auto createHandle = [&](std::string_view createFn) -> std::uint64_t {
+        const kb::script::ScriptFunctionCallResult r = call(createFn, {});
+        kb::tests::Require(r.Succeeded() && r.Output("handle").has_value(), "Collection Create must return a handle");
+        return r.Output("handle")->AsUInt64();
+    };
+    const auto hArg = [](std::uint64_t h) { return kb::script::ScriptFunctionArgument{ .name = "handle", .value = kb::script::ScriptValue{ h, kb::script::ScriptValueType::Hash } }; };
+    const auto fArg = [](std::string name, float v) { return kb::script::ScriptFunctionArgument{ .name = std::move(name), .value = kb::script::ScriptValue{ v } }; };
+    const auto iArg = [](std::string name, int v) { return kb::script::ScriptFunctionArgument{ .name = std::move(name), .value = kb::script::ScriptValue{ v } }; };
+
+    // --- Array ---
+    const std::uint64_t arr = createHandle("Array.Create");
+    kb::tests::Require(arr != 0U, "Array.Create must return a nonzero handle");
+    kb::tests::Require(call("Array.Push", { hArg(arr), fArg("value", 10.0F) }).Output("pushed")->AsBool(), "Array.Push must succeed");
+    static_cast<void>(call("Array.Push", { hArg(arr), fArg("value", 20.0F) }));
+    static_cast<void>(call("Array.Push", { hArg(arr), fArg("value", 30.0F) }));
+    kb::tests::Require(call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 3, "Array.Length must report the 3 pushed elements");
+    const kb::script::ScriptFunctionCallResult got1 = call("Array.Get", { hArg(arr), iArg("index", 1) });
+    kb::tests::Require(got1.Output("found")->AsBool() && kb::tests::NearlyEqual(got1.Output("value")->AsFloat(), 20.0F), "Array.Get(1) must return the second element");
+    kb::tests::Require(!call("Array.Get", { hArg(arr), iArg("index", 9) }).Output("found")->AsBool(), "Array.Get out of range must report found=false, not a fabricated value");
+    kb::tests::Require(call("Array.Set", { hArg(arr), iArg("index", 0), fArg("value", 99.0F) }).Output("set")->AsBool(), "Array.Set must succeed in range");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Array.Get", { hArg(arr), iArg("index", 0) }).Output("value")->AsFloat(), 99.0F), "Array.Set must change the element");
+    kb::tests::Require(call("Array.RemoveAt", { hArg(arr), iArg("index", 0) }).Output("removed")->AsBool(), "Array.RemoveAt must succeed in range");
+    kb::tests::Require(call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 2, "Array.RemoveAt must shrink the array");
+    kb::tests::Require(call("Array.Clear", { hArg(arr) }).Output("cleared")->AsBool() && call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 0, "Array.Clear must empty the array");
+    // Invalid handle: honest no-op, never a crash.
+    kb::tests::Require(call("Array.Length", { hArg(999999U) }).Output("count")->AsInt() == 0, "Array.Length on an unknown handle must be 0, not a crash");
+    kb::tests::Require(!call("Array.Push", { hArg(999999U), fArg("value", 1.0F) }).Output("pushed")->AsBool(), "Array.Push on an unknown handle must fail cleanly");
+
+    // --- Set (unique membership) ---
+    const std::uint64_t set = createHandle("Set.Create");
+    kb::tests::Require(set != arr, "collection handles must be globally unique across types");
+    kb::tests::Require(call("Set.Add", { hArg(set), fArg("value", 5.0F) }).Output("added")->AsBool(), "Set.Add must succeed");
+    kb::tests::Require(call("Set.Add", { hArg(set), fArg("value", 5.0F) }).Output("added")->AsBool(), "Set.Add of an existing member is an idempotent success");
+    kb::tests::Require(call("Set.Count", { hArg(set) }).Output("count")->AsInt() == 1, "Set must not store a duplicate");
+    kb::tests::Require(call("Set.Contains", { hArg(set), fArg("value", 5.0F) }).Output("contains")->AsBool(), "Set.Contains must find a member");
+    kb::tests::Require(!call("Set.Contains", { hArg(set), fArg("value", 6.0F) }).Output("contains")->AsBool(), "Set.Contains must reject a non-member");
+    kb::tests::Require(call("Set.Remove", { hArg(set), fArg("value", 5.0F) }).Output("removed")->AsBool() && call("Set.Count", { hArg(set) }).Output("count")->AsInt() == 0, "Set.Remove must remove the member");
+
+    // --- Map (key -> value) ---
+    const std::uint64_t map = createHandle("Map.Create");
+    kb::tests::Require(call("Map.Set", { hArg(map), fArg("key", 1.0F), fArg("value", 10.0F) }).Output("set")->AsBool(), "Map.Set must succeed");
+    kb::tests::Require(call("Map.ContainsKey", { hArg(map), fArg("key", 1.0F) }).Output("contains")->AsBool(), "Map.ContainsKey must find the key");
+    const kb::script::ScriptFunctionCallResult mget = call("Map.Get", { hArg(map), fArg("key", 1.0F) });
+    kb::tests::Require(mget.Output("found")->AsBool() && kb::tests::NearlyEqual(mget.Output("value")->AsFloat(), 10.0F), "Map.Get must return the stored value");
+    kb::tests::Require(call("Map.Set", { hArg(map), fArg("key", 1.0F), fArg("value", 20.0F) }).Output("set")->AsBool() && kb::tests::NearlyEqual(call("Map.Get", { hArg(map), fArg("key", 1.0F) }).Output("value")->AsFloat(), 20.0F), "Map.Set must update an existing key");
+    kb::tests::Require(call("Map.Count", { hArg(map) }).Output("count")->AsInt() == 1, "Map updating a key must not grow the map");
+    kb::tests::Require(!call("Map.Get", { hArg(map), fArg("key", 2.0F) }).Output("found")->AsBool(), "Map.Get on an absent key must report found=false");
+    kb::tests::Require(call("Map.Remove", { hArg(map), fArg("key", 1.0F) }).Output("removed")->AsBool() && !call("Map.ContainsKey", { hArg(map), fArg("key", 1.0F) }).Output("contains")->AsBool(), "Map.Remove must remove the key");
+
+    // --- Queue (FIFO) ---
+    const std::uint64_t queue = createHandle("Queue.Create");
+    static_cast<void>(call("Queue.Enqueue", { hArg(queue), fArg("value", 1.0F) }));
+    static_cast<void>(call("Queue.Enqueue", { hArg(queue), fArg("value", 2.0F) }));
+    kb::tests::Require(call("Queue.Count", { hArg(queue) }).Output("count")->AsInt() == 2, "Queue.Count must reflect enqueued items");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Peek", { hArg(queue) }).Output("value")->AsFloat(), 1.0F), "Queue.Peek must return the oldest item");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Dequeue", { hArg(queue) }).Output("value")->AsFloat(), 1.0F), "Queue.Dequeue must return items FIFO (oldest first)");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Dequeue", { hArg(queue) }).Output("value")->AsFloat(), 2.0F), "Queue.Dequeue must continue FIFO");
+    kb::tests::Require(!call("Queue.Dequeue", { hArg(queue) }).Output("found")->AsBool(), "Queue.Dequeue on an empty queue must report found=false");
+
+    // --- Stack (LIFO) ---
+    const std::uint64_t stack = createHandle("Stack.Create");
+    static_cast<void>(call("Stack.Push", { hArg(stack), fArg("value", 1.0F) }));
+    static_cast<void>(call("Stack.Push", { hArg(stack), fArg("value", 2.0F) }));
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Top", { hArg(stack) }).Output("value")->AsFloat(), 2.0F), "Stack.Top must return the most recently pushed item");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Pop", { hArg(stack) }).Output("value")->AsFloat(), 2.0F), "Stack.Pop must return items LIFO (newest first)");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Pop", { hArg(stack) }).Output("value")->AsFloat(), 1.0F), "Stack.Pop must continue LIFO");
+    kb::tests::Require(!call("Stack.Pop", { hArg(stack) }).Output("found")->AsBool(), "Stack.Pop on an empty stack must report found=false");
+
+    // --- Real Lua end-to-end: the audit's core gap was "cannot use from
+    // Lua." A behaviour creates an Array, pushes two values, reads its
+    // length and an element back, all through the generic CallFunction
+    // bridge, and stores the observations for the test to verify. This is
+    // the proof the whole handle+operation surface actually works from a
+    // running script, not just native hand-built ScriptValues.
+    constexpr kb::assets::AssetId kCollectionsLuaAsset{ 700801U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kCollectionsLuaAsset, R"(
+function Tick(self, dt)
+    -- Array.Create / Array.Length each return a SINGLE output, so the
+    -- generic CallFunction hands back the bare value (handle / count), not
+    -- a table. Array.Get returns TWO outputs, so it comes back as a table.
+    local h = CallFunction("Array.Create", {})
+    CallFunction("Array.Push", { handle = h, value = 7.0 })
+    CallFunction("Array.Push", { handle = h, value = 8.0 })
+    local count = CallFunction("Array.Length", { handle = h })
+    local got = CallFunction("Array.Get", { handle = h, index = 1 })
+    SetShared("luaCollectionOk", count == 2 and got.found == true and got.value == 8.0)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Collections Lua test script did not load");
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CollectionsCaller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kCollectionsLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tick.diagnostics.empty(), "Collections Lua test Tick produced script diagnostics");
+    const std::optional<kb::script::ScriptValue> luaOk = host.SharedState().Get("luaCollectionOk");
+    kb::tests::Require(luaOk.has_value() && luaOk->AsBool(),
+        "LIB-058 a real Lua script must be able to create an Array, push values, and read length/element back through the handle");
+}
+
+// LIB-063: the Text.Parse* script surface must forward to the locale-
+// invariant kb::library::TryParse* helpers and report success/failure
+// honestly through an `ok` Bool — proving those parsing helpers have a real
+// Native/Lua/Visual Graph consumer, not orphaned API.
+void RunScriptTextApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script text API host did not initialize");
+    for (const char* name : { "Text.ParseInt", "Text.ParseUInt", "Text.ParseFloat", "Text.IsGuid", "Text.ParseColor", "Text.ParseDate" }) {
+        const std::string message = std::string{ "Script text API function '" } + name + "' was not registered";
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
+    }
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto call = [&](const char* fn, std::string text) {
+        return host.Functions().Call(fn, std::vector<kb::script::ScriptFunctionArgument>{ { .name = "text", .value = kb::script::ScriptValue{ std::move(text) } } }, context);
+    };
+
+    const kb::script::ScriptFunctionCallResult intOk = call("Text.ParseInt", "-42");
+    kb::tests::Require(intOk.Succeeded() && intOk.Output("ok")->AsBool() && intOk.Output("value")->AsInt64() == -42, "Text.ParseInt of \"-42\" must parse to -42");
+    const kb::script::ScriptFunctionCallResult intBad = call("Text.ParseInt", "12x");
+    kb::tests::Require(intBad.Succeeded() && !intBad.Output("ok")->AsBool(), "Text.ParseInt of \"12x\" must report ok=false (trailing garbage rejected)");
+
+    const kb::script::ScriptFunctionCallResult uintOk = call("Text.ParseUInt", "18446744073709551615");
+    kb::tests::Require(uintOk.Succeeded() && uintOk.Output("ok")->AsBool() && uintOk.Output("value")->AsUInt64() == 18446744073709551615ULL, "Text.ParseUInt must parse the full uint64 range losslessly through the Hash slot");
+
+    const kb::script::ScriptFunctionCallResult floatOk = call("Text.ParseFloat", "3.5");
+    kb::tests::Require(floatOk.Succeeded() && floatOk.Output("ok")->AsBool() && floatOk.Output("value")->AsDouble() == 3.5, "Text.ParseFloat of \"3.5\" must parse to 3.5");
+    const kb::script::ScriptFunctionCallResult floatComma = call("Text.ParseFloat", "3,5");
+    kb::tests::Require(floatComma.Succeeded() && !floatComma.Output("ok")->AsBool(), "Text.ParseFloat must be locale-invariant: a comma decimal \"3,5\" must be rejected, never parsed as 3.5");
+
+    const kb::script::ScriptFunctionCallResult guidOk = call("Text.IsGuid", "3F2504E0-4F89-11D3-9A0C-0305E82C3301");
+    kb::tests::Require(guidOk.Succeeded() && guidOk.Output("result")->AsBool(), "Text.IsGuid must accept a canonical 8-4-4-4-12 GUID");
+    const kb::script::ScriptFunctionCallResult guidBad = call("Text.IsGuid", "not-a-guid");
+    kb::tests::Require(guidBad.Succeeded() && !guidBad.Output("result")->AsBool(), "Text.IsGuid must reject a malformed GUID");
+
+    const kb::script::ScriptFunctionCallResult colorOk = call("Text.ParseColor", "#FF8000");
+    kb::tests::Require(
+        colorOk.Succeeded() && colorOk.Output("ok")->AsBool() &&
+            colorOk.Output("r")->AsFloat() == 1.0F && std::abs(colorOk.Output("g")->AsFloat() - 128.0F / 255.0F) < 0.0001F &&
+            colorOk.Output("b")->AsFloat() == 0.0F && colorOk.Output("a")->AsFloat() == 1.0F,
+        "Text.ParseColor of \"#FF8000\" must decode to (1, 0.502, 0, 1)");
+
+    const kb::script::ScriptFunctionCallResult leap = call("Text.ParseDate", "2024-02-29");
+    kb::tests::Require(
+        leap.Succeeded() && leap.Output("ok")->AsBool() && leap.Output("year")->AsInt() == 2024 && leap.Output("month")->AsInt() == 2 && leap.Output("day")->AsInt() == 29,
+        "Text.ParseDate must accept a real leap day 2024-02-29 and decompose it");
+    const kb::script::ScriptFunctionCallResult notLeap = call("Text.ParseDate", "2023-02-29");
+    kb::tests::Require(notLeap.Succeeded() && !notLeap.Output("ok")->AsBool(), "Text.ParseDate must reject 2023-02-29 (not a leap year) via real calendar validation");
+
+    // Real Lua end-to-end: a behaviour parses an int and a color through the
+    // generic CallFunction bridge and stores the observations.
+    constexpr kb::assets::AssetId kTextLuaAsset{ 700821U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kTextLuaAsset, R"(
+function Tick(self, dt)
+    local n = CallFunction("Text.ParseInt", { text = "100" })
+    local bad = CallFunction("Text.ParseFloat", { text = "3,5" })
+    local col = CallFunction("Text.ParseColor", { text = "#00FF00" })
+    SetShared("luaTextOk", n.ok == true and n.value == 100 and bad.ok == false and col.ok == true and col.g == 1.0 and col.r == 0.0)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Text Lua test script did not load");
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TextCaller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kTextLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tick.diagnostics.empty(), "Text Lua test Tick produced script diagnostics");
+    const std::optional<kb::script::ScriptValue> luaOk = host.SharedState().Get("luaTextOk");
+    kb::tests::Require(luaOk.has_value() && luaOk->AsBool(), "LIB-063 a real Lua script must parse an int/float/color through Text.* with locale-invariant, honest ok flags");
+}
+
 void RunScriptAssetsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
@@ -10878,6 +11672,46 @@ void RunEngineLibraryAsyncResultTest() {
     const std::function<kb::scene::TaskPollResult(float)> bridgedCancelledPoll = kb::library::MakeTaskPollFromAsyncResult(bridgedCancelled);
     static_cast<void>(bridgedCancelled.Cancel());
     kb::tests::Require(bridgedCancelledPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must also report Failed for AsyncState::Cancelled (TaskPollResult has no distinct Cancelled state)");
+}
+
+// LIB-100 (audit gap closed 2026-07-18): the completion callback must run on
+// the OWNER thread even when the terminal transition happens on a different
+// thread — an ENFORCED guarantee, not an assumption from "the engine has no
+// threads today". This simulates a future off-thread completer with a real
+// std::thread and proves the callback is NOT invoked on it, but deferred to
+// the owner's Poll(), where it runs on the owner thread. (The owner-thread
+// path stays synchronous — checked at the end.)
+void RunEngineLibraryAsyncResultThreadAffinityTest() {
+    const std::thread::id ownerThreadId = std::this_thread::get_id();
+    kb::library::AsyncResult<int> crossThread;
+    int callbackFires = 0;
+    std::thread::id callbackThreadId{};
+    crossThread.OnComplete([&callbackFires, &callbackThreadId](const kb::library::AsyncResult<int>&) {
+        callbackThreadId = std::this_thread::get_id();
+        ++callbackFires;
+    });
+
+    // Complete it from a DIFFERENT (worker) thread.
+    std::thread worker([&crossThread]() { static_cast<void>(crossThread.SetCompleted(123)); });
+    worker.join();
+
+    kb::tests::Require(crossThread.Succeeded() && crossThread.Value() == 123, "An off-thread SetCompleted must still record the terminal state and value");
+    kb::tests::Require(callbackFires == 0, "AsyncResult must NOT invoke its completion callback on a foreign thread — it must defer it to the owner thread");
+
+    // Drain on the owner thread: the callback now fires, ON the owner thread.
+    crossThread.Poll();
+    kb::tests::Require(callbackFires == 1, "AsyncResult::Poll() on the owner thread must invoke the deferred callback exactly once");
+    kb::tests::Require(callbackThreadId == ownerThreadId, "The deferred completion callback must run on the OWNER thread (the one that constructed the AsyncResult), never on the foreign thread that completed it");
+
+    crossThread.Poll();
+    kb::tests::Require(callbackFires == 1, "A second Poll() with nothing pending must be a harmless no-op");
+
+    // The common single-thread path still fires synchronously — no Poll needed.
+    kb::library::AsyncResult<int> sameThread;
+    int sameThreadFires = 0;
+    sameThread.OnComplete([&sameThreadFires](const kb::library::AsyncResult<int>&) { ++sameThreadFires; });
+    static_cast<void>(sameThread.SetCompleted(1));
+    kb::tests::Require(sameThreadFires == 1, "An owner-thread SetCompleted must still fire the callback synchronously, with no Poll() required");
 }
 
 // LIB-100: end-to-end proof that MakeTaskPollFromAsyncResult genuinely
@@ -11639,6 +12473,45 @@ void RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest() {
     kb::tests::Require(!scene.Timers().Cancel(timer), "Explicit Cancel on a timer already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
     kb::tests::Require(!scene.Tasks().Cancel(task), "Explicit Cancel on a task already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
     kb::tests::Require(!bus.Unsubscribe(subscription), "Explicit Unsubscribe on a subscription already auto-removed by Scene.Unload's owner-death propagation must report false, not crash");
+
+    // LIB-040 "błąd po unloadzie sceny" (error after scene unload): the
+    // fire-and-forget cancellation handles above correctly stay idempotent
+    // bool — a redundant Cancel/Unsubscribe is not an error, it is the
+    // documented contract. The REQUIRED error for USING a scene resource
+    // after unload is surfaced where it belongs: the resource's owning
+    // entity. Every one of those timers/tasks/subscriptions was owned by
+    // `owner`, which Scene.Unload genuinely destroyed — so an EntityHandle
+    // to it, run through the real LIB-035 error path (CheckError, the
+    // non-throwing counterpart of Validate), reports a concrete
+    // ScriptError, not a silent false. This is the diagnostic the
+    // 2026-07-17 audit found missing: proof that a scene resource used
+    // after unload is a reported error, not just a no-op.
+    const kb::library::EntityHandle ownerHandle{ owner, scene.Id() };
+    const std::optional<kb::library::ScriptError> afterUnloadError = ownerHandle.CheckError(scene, "Timer.Cancel");
+    kb::tests::Require(afterUnloadError.has_value(), "Using a scene resource's owning entity after Scene.Unload must report a ScriptError, not a silent no-op");
+    kb::tests::Require(afterUnloadError->code == kb::library::LibraryErrorCode::InvalidHandle,
+        "The after-unload error must be classified InvalidHandle (the owning entity was destroyed by unload)");
+    kb::tests::Require(!afterUnloadError->message.empty() && afterUnloadError->operation == "Timer.Cancel",
+        "The after-unload error must name the operation that touched the unloaded resource");
+
+    // The throwing counterpart (Validate) must also fail loudly for the
+    // same unloaded owner — callers that must hard-fail on a stale scene
+    // resource get an exception, not a silently-ignored operation.
+    bool validateThrew = false;
+    try {
+        ownerHandle.Validate(scene, "Timer.Cancel");
+    } catch (const std::exception&) {
+        validateThrew = true;
+    }
+    kb::tests::Require(validateThrew, "Validate() on an entity destroyed by Scene.Unload must throw, not silently pass");
+
+    // Negative control: a still-live entity in the same scene reports NO
+    // error, so the after-unload error above is specific to the unloaded
+    // resource's owner, not a blanket failure of every handle.
+    const kb::scene::SceneObject liveEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "PostUnloadLiveEntity" });
+    const kb::library::EntityHandle liveHandle{ liveEntity.Entity(), scene.Id() };
+    kb::tests::Require(!liveHandle.CheckError(scene, "Timer.Cancel").has_value(),
+        "A live entity created after Scene.Unload must report no error — the after-unload error is specific to the destroyed owner");
 }
 
 // LIB-106: proves Emit/Broadcast's new recipient filters (tag/component/
@@ -12370,6 +13243,7 @@ void RunScriptRuntimeTests() {
     RunPucLuaFullLifecycleOrderTest();
     RunVisualGraphFullLifecycleOrderTest();
     RunCrossBackendLifecycleOrderParityTest();
+    RunPlayerControllerTemplateMovesTransformWithRealInputTest();
     RunScriptAudioApiTest();
     RunScriptMeshRendererApiTest();
     RunScriptMeshRendererMaterialSlotApiTest();
@@ -12402,12 +13276,15 @@ void RunScriptRuntimeTests() {
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunScriptCollectionsApiTest();
+    RunScriptTextApiTest();
     RunScriptAssetsApiTest();
     RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();
     RunEngineLibraryAsyncResultTest();
+    RunEngineLibraryAsyncResultThreadAffinityTest();
     RunAsyncResultDrivenTaskEndToEndTest();
     RunTimerAndTaskCreatorDiagnosticsTest();
     RunScriptTimerAndTaskCreatorApiTest();
@@ -12447,6 +13324,7 @@ void RunScriptRuntimeTests() {
     RunSceneLifecycleEventsReachBehaviourTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
+    RunMathUInt32CrossBackendParityTest();
     RunScriptInputApiTest();
     RunScriptInputApiPerPlayerTest();
     RunScriptPointerApiTest();

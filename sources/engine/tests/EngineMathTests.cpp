@@ -170,6 +170,41 @@ void RunQuatAndMatrixMathTest() {
     const Quat zeroInverse = kb::math::Inverse(Quat{ 0.0F, 0.0F, 0.0F, 0.0F });
     kb::tests::Require(zeroInverse.x == 0.0F && zeroInverse.y == 0.0F && zeroInverse.z == 0.0F && zeroInverse.w == 1.0F,
         "Inverse of a zero-length quaternion must return identity, not divide by zero");
+
+    // LIB-043: Mat3 operator*/Determinant/InverseTranspose — the ops the
+    // renderer's glTF normal transform (RenderMeshGltfTransforms) now
+    // consumes instead of hand-expanding cofactors.
+    const Vec3 identityTimesVec = identityMat3 * Vec3{ 3.0F, 4.0F, 5.0F };
+    kb::tests::Require(identityTimesVec.x == 3.0F && identityTimesVec.y == 4.0F && identityTimesVec.z == 5.0F, "Mat3 identity * v must return v unchanged");
+
+    // A non-uniform scale matrix: columns are the scaled basis vectors.
+    const Mat3 scaleMat3{ { Vec3{ 2.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 4.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 8.0F } } };
+    kb::tests::Require(kb::math::Determinant(scaleMat3) == 64.0F, "Mat3 Determinant of diag(2,4,8) must be 64");
+    const Vec3 scaledVec = scaleMat3 * Vec3{ 1.0F, 1.0F, 1.0F };
+    kb::tests::Require(scaledVec.x == 2.0F && scaledVec.y == 4.0F && scaledVec.z == 8.0F, "Mat3 diag scale must scale each axis");
+
+    // The inverse-transpose of a non-uniform scale is diag(1/2,1/4,1/8) — a
+    // normal along +X under a 2x X-scale must come back along +X (a normal
+    // transformed by the plain matrix would instead be stretched). Direction,
+    // not magnitude, is what the normal matrix must preserve.
+    const Mat3 normalMatrix = kb::math::InverseTranspose(scaleMat3);
+    const Vec3 transformedNormal = normalMatrix * Vec3{ 1.0F, 0.0F, 0.0F };
+    kb::tests::Require(std::abs(transformedNormal.x - 0.5F) < 0.0001F && transformedNormal.y == 0.0F && transformedNormal.z == 0.0F, "Mat3 InverseTranspose of diag(2,4,8) applied to +X must be (0.5,0,0)");
+
+    // A shear must transform normals off the naive direction: for the shear
+    // that maps X-basis to (1, s, 0), the surface with +Y normal tilts, so
+    // the normal matrix must rotate the +Y normal toward -X.
+    const Mat3 shear{ { Vec3{ 1.0F, 0.5F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F } } };
+    const Vec3 shearedNormal = kb::math::InverseTranspose(shear) * Vec3{ 0.0F, 1.0F, 0.0F };
+    kb::tests::Require(std::abs(shearedNormal.x - (-0.5F)) < 0.0001F && std::abs(shearedNormal.y - 1.0F) < 0.0001F, "Mat3 InverseTranspose must tilt a +Y normal to (-0.5,1,0) under an X->(1,0.5,0) shear");
+
+    // A singular (zero-determinant) matrix has no normal matrix — must return
+    // identity, not divide by zero.
+    const Mat3 singular{ { Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F } } };
+    const Mat3 singularNormalMatrix = kb::math::InverseTranspose(singular);
+    kb::tests::Require(
+        singularNormalMatrix.columns[0].x == 1.0F && singularNormalMatrix.columns[1].y == 1.0F && singularNormalMatrix.columns[2].z == 1.0F,
+        "Mat3 InverseTranspose of a singular matrix must return identity, not divide by zero");
 }
 
 // LIB-044: Radians/Degrees must convert correctly against known values,
@@ -413,6 +448,30 @@ void RunNoiseAndRandomTest() {
 
     kb::tests::Require(kb::math::Noise1D(0.37F, 42U) == kb::math::Noise2D(0.37F, 0.0F, 42U), "Noise1D must exactly match Noise2D/Noise3D with the unused axes pinned to 0 (same underlying implementation, not a second one)");
     kb::tests::Require(kb::math::Noise2D(0.37F, 0.61F, 42U) == kb::math::Noise3D(0.37F, 0.61F, 0.0F, 42U), "Noise2D must exactly match Noise3D with the unused axis pinned to 0");
+
+    // LIB-054 (2026-07-17 audit gap): a NaN or infinite coordinate must not
+    // reach the `static_cast<int32_t>(Floor(coord))` lattice conversion,
+    // which is undefined behaviour for a non-finite (or out-of-int32-range)
+    // float. Noise3D screens them out and returns the neutral 0.0F. Every
+    // non-finite input on every axis is exercised.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    kb::tests::Require(kb::math::Noise3D(nan, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 (not UB) for a NaN x coordinate");
+    kb::tests::Require(kb::math::Noise3D(0.5F, nan, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a NaN y coordinate");
+    kb::tests::Require(kb::math::Noise3D(0.5F, 0.5F, nan, 42U) == 0.0F, "Noise3D must return 0 for a NaN z coordinate");
+    kb::tests::Require(kb::math::Noise3D(inf, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a +infinity coordinate");
+    kb::tests::Require(kb::math::Noise3D(-inf, 0.5F, 0.5F, 42U) == 0.0F, "Noise3D must return 0 for a -infinity coordinate");
+    kb::tests::Require(kb::math::Noise1D(nan, 42U) == 0.0F, "Noise1D must inherit Noise3D's non-finite guard (returns 0 for NaN)");
+    kb::tests::Require(kb::math::Noise2D(inf, inf, 42U) == 0.0F, "Noise2D must inherit Noise3D's non-finite guard (returns 0 for infinity)");
+
+    // A finite coordinate larger in magnitude than INT32_MAX must produce a
+    // defined result via the lattice clamp, not UB from an out-of-range
+    // float->int32 cast. The value only needs to be finite and in range —
+    // the point is that it does not crash or trap.
+    const float huge = 5.0e9F; // > INT32_MAX (~2.147e9)
+    const float hugeNoise = kb::math::Noise3D(huge, -huge, huge, 42U);
+    kb::tests::Require(std::isfinite(hugeNoise) && hugeNoise > -2.0F && hugeNoise < 2.0F,
+        "Noise3D must return a defined, in-amplitude value for a finite coordinate beyond int32 range, not trigger UB");
 }
 
 // LIB-051: RandomStream's whole point is that its state IS a plain value
@@ -605,6 +664,38 @@ void RunCurveAndGradientTest() {
     // not just "however many bytes happen to be there".
     Gradient crossParsed;
     kb::tests::Require(!kb::math::Deserialize(curveBytes, crossParsed), "Curve bytes must not be misinterpreted as a valid Gradient");
+
+    // LIB-053 (2026-07-17 audit gap): a few-byte payload that declares a
+    // huge element count must be rejected BEFORE reserve(count) tries to
+    // allocate for it — otherwise a hostile 8-byte file (magic + count =
+    // 0xFFFFFFFF) forces a multi-gigabyte allocation / OOM. Build a valid
+    // header with a fabricated count and NO element bytes and require
+    // Deserialize to fail cleanly rather than allocate.
+    {
+        // Curve: magic (KCRV) + count = 0xFFFFFFFF, no keyframe bytes.
+        std::vector<std::uint8_t> hostileCurve{ curveBytes.begin(), curveBytes.begin() + 4 }; // valid magic
+        hostileCurve.insert(hostileCurve.end(), { 0xFFU, 0xFFU, 0xFFU, 0xFFU }); // count = 4294967295
+        Curve hostileCurveResult;
+        kb::tests::Require(!kb::math::Deserialize(hostileCurve, hostileCurveResult),
+            "Deserialize must reject a Curve whose declared count the payload cannot possibly hold, before reserving for it");
+
+        // A count the payload ALMOST backs (off by one element) must also be
+        // rejected — the guard is a real byte-count check, not just a
+        // huge-number sniff.
+        std::vector<std::uint8_t> oneShortCurve = kb::math::Serialize(curve);
+        // Bump the serialized count by one without adding an element's bytes.
+        oneShortCurve[4] = static_cast<std::uint8_t>(oneShortCurve[4] + 1U);
+        Curve oneShortResult;
+        kb::tests::Require(!kb::math::Deserialize(oneShortCurve, oneShortResult),
+            "Deserialize must reject a Curve whose count is one element more than the payload provides");
+
+        // Gradient: magic (KGRD) + count = 0xFFFFFFFF, no stop bytes.
+        std::vector<std::uint8_t> hostileGradient{ gradientBytes.begin(), gradientBytes.begin() + 4 };
+        hostileGradient.insert(hostileGradient.end(), { 0xFFU, 0xFFU, 0xFFU, 0xFFU });
+        Gradient hostileGradientResult;
+        kb::tests::Require(!kb::math::Deserialize(hostileGradient, hostileGradientResult),
+            "Deserialize must reject a Gradient whose declared count the payload cannot possibly hold, before reserving for it");
+    }
 }
 
 // LIB-054: NaN/infinity/zero-length contract audit — proves the
@@ -856,12 +947,140 @@ void RunSerializationPropertyTest() {
     }
 }
 
+// LIB-055 (2026-07-17 audit gap): RunSerializationPropertyTest above only
+// ever feeds Deserialize bytes that Serialize itself produced, so it never
+// exercises the DESERIALIZATION boundary against hostile or corrupt input —
+// it cannot detect an unbounded count/reserve. This fuzzes that boundary
+// with deterministic pseudo-random bytes and, critically, with valid-magic
+// headers carrying a fabricated huge count. The universal property: every
+// call must RETURN (true or false) in bounded time — never crash, hang, or
+// allocate proportionally to a declared-but-unbacked count. This whole test
+// would hang (multi-gigabyte reserve) without LIB-053's payload-size guard,
+// so it is the running proof of that guard, not just a unit check.
+void RunSerializationFuzzTest() {
+    using kb::math::Curve;
+    using kb::math::Gradient;
+
+    kb::math::RandomStream stream = kb::math::MakeRandomStream(24601U);
+    const auto nextByte = [&stream]() -> std::uint8_t {
+        const kb::math::RandomStreamUInt32Result r = kb::math::NextUInt32(stream);
+        stream = r.stream;
+        return static_cast<std::uint8_t>(r.value & 0xFFU);
+    };
+
+    // Valid magic prefixes, harvested from Serialize's own output (the magic
+    // constants are private to EngineMath.cpp) so the fuzzer can build
+    // headers that pass the magic check and reach the count/reserve path.
+    Curve seedCurve;
+    seedCurve.keyframes.push_back(kb::math::CurveKeyframe{ .time = 0.0F, .value = 0.0F, .easing = kb::math::Easing::Linear });
+    const std::vector<std::uint8_t> seedCurveBytes = kb::math::Serialize(seedCurve);
+    const std::vector<std::uint8_t> curveMagic{ seedCurveBytes.begin(), seedCurveBytes.begin() + 4 };
+    Gradient seedGradient;
+    seedGradient.stops.push_back(kb::math::GradientStop{ .time = 0.0F, .color = kb::math::Color{} });
+    const std::vector<std::uint8_t> seedGradientBytes = kb::math::Serialize(seedGradient);
+    const std::vector<std::uint8_t> gradientMagic{ seedGradientBytes.begin(), seedGradientBytes.begin() + 4 };
+
+    constexpr int kIterations = 2000;
+    for (int i = 0; i < kIterations; ++i) {
+        // (a) A fully random, random-length payload (0..48 bytes).
+        const std::size_t length = static_cast<std::size_t>(nextByte()) % 49U;
+        std::vector<std::uint8_t> payload;
+        payload.reserve(length);
+        for (std::size_t b = 0; b < length; ++b) {
+            payload.push_back(nextByte());
+        }
+        Curve curveResult;
+        Gradient gradientResult;
+        // The ONLY property that must hold: these return without crashing,
+        // hanging, or over-allocating. The bool value itself is unconstrained
+        // (random bytes may occasionally form a technically-valid document).
+        static_cast<void>(kb::math::Deserialize(std::span<const std::uint8_t>{ payload }, curveResult));
+        static_cast<void>(kb::math::Deserialize(std::span<const std::uint8_t>{ payload }, gradientResult));
+
+        // (b) Valid magic + a fabricated 32-bit count + NO element bytes.
+        // This is the exact shape a hostile file uses to try to force a huge
+        // reserve; it must always be rejected (false), never allocate.
+        std::vector<std::uint8_t> hostileCurve = curveMagic;
+        std::vector<std::uint8_t> hostileGradient = gradientMagic;
+        for (int b = 0; b < 4; ++b) {
+            const std::uint8_t countByte = nextByte();
+            hostileCurve.push_back(countByte);
+            hostileGradient.push_back(countByte);
+        }
+        // Force the high byte non-zero so the declared count is always far
+        // larger than the (zero) element payload can back.
+        hostileCurve.back() = 0xFFU;
+        hostileGradient.back() = 0xFFU;
+        Curve hostileCurveResult;
+        Gradient hostileGradientResult;
+        kb::tests::Require(!kb::math::Deserialize(std::span<const std::uint8_t>{ hostileCurve }, hostileCurveResult),
+            "Property violated: a valid-magic Curve header with a huge count and no element bytes must be rejected without allocating");
+        kb::tests::Require(!kb::math::Deserialize(std::span<const std::uint8_t>{ hostileGradient }, hostileGradientResult),
+            "Property violated: a valid-magic Gradient header with a huge count and no element bytes must be rejected without allocating");
+    }
+}
+
+// LIB-042: the Vec2/IVec2/Rect/Plane/Ray operations must be arithmetically
+// correct on known values — these are the native ops the Math.* geometry
+// bindings (ScriptMathApi) call, so their correctness is the correctness of
+// the script-facing geometry surface.
+void RunGeometryTypesTest() {
+    using kb::math::IVec2;
+    using kb::math::Plane;
+    using kb::math::Ray;
+    using kb::math::Rect;
+    using kb::math::Vec2;
+    using kb::math::Vec3;
+
+    // Vec2
+    const Vec2 sum2 = Vec2{ 1.0F, 2.0F } + Vec2{ 3.0F, -1.0F };
+    kb::tests::Require(sum2.x == 4.0F && sum2.y == 1.0F, "Vec2 operator+ must add component-wise");
+    kb::tests::Require(kb::math::Dot(Vec2{ 1.0F, 2.0F }, Vec2{ 3.0F, 4.0F }) == 11.0F, "Vec2 Dot must compute the 2D dot product");
+    kb::tests::Require(std::abs(kb::math::Length(Vec2{ 3.0F, 4.0F }) - 5.0F) < 0.0001F, "Vec2 Length must compute the 2D Euclidean norm (3-4-5)");
+
+    // IVec2
+    const IVec2 isum = IVec2{ 2, 3 } + IVec2{ 5, 7 };
+    kb::tests::Require(isum == IVec2{ 7, 10 }, "IVec2 operator+ and operator== must work on integer lattice points");
+    kb::tests::Require(IVec2{ 1, 2 } != IVec2{ 1, 3 }, "IVec2 operator!= must distinguish differing y");
+    kb::tests::Require(kb::math::ManhattanDistance(IVec2{ 1, 2 }, IVec2{ 4, 6 }) == 7, "IVec2 ManhattanDistance must be |dx| + |dy|");
+
+    // Rect (half-open contains; touching-edge intersects convention)
+    const Rect rect{ 0.0F, 0.0F, 4.0F, 2.0F };
+    kb::tests::Require(kb::math::Contains(rect, Vec2{ 1.0F, 1.0F }), "Rect Contains must include an interior point");
+    kb::tests::Require(kb::math::Contains(rect, Vec2{ 0.0F, 0.0F }), "Rect Contains must include the min corner (half-open low edge)");
+    kb::tests::Require(!kb::math::Contains(rect, Vec2{ 4.0F, 1.0F }), "Rect Contains must exclude the max edge (half-open high edge)");
+    kb::tests::Require(!kb::math::Contains(rect, Vec2{ -1.0F, 1.0F }), "Rect Contains must exclude a point left of the rect");
+    kb::tests::Require(kb::math::Intersects(rect, Rect{ 2.0F, 1.0F, 4.0F, 4.0F }), "Rect Intersects must detect an overlapping rect");
+    kb::tests::Require(!kb::math::Intersects(rect, Rect{ 4.0F, 0.0F, 1.0F, 1.0F }), "Rect Intersects must treat edge-only touching as no overlap");
+
+    // Plane (ground plane y=0)
+    const Plane ground{ Vec3{ 0.0F, 1.0F, 0.0F }, 0.0F };
+    kb::tests::Require(kb::math::SignedDistance(ground, Vec3{ 0.0F, 3.0F, 0.0F }) == 3.0F, "Plane SignedDistance above must be positive height");
+    kb::tests::Require(kb::math::SignedDistance(ground, Vec3{ 0.0F, -2.0F, 0.0F }) == -2.0F, "Plane SignedDistance below must be negative");
+
+    // Ray
+    const Ray down{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 0.0F, -1.0F, 0.0F } };
+    const Vec3 at = kb::math::PointAt(down, 5.0F);
+    kb::tests::Require(at.x == 0.0F && at.y == 0.0F && at.z == 0.0F, "Ray PointAt(t=5) from y=5 heading down must reach the origin");
+
+    // Ray-Plane intersection
+    const kb::math::RayPlaneIntersection hit = kb::math::Intersect(down, ground);
+    kb::tests::Require(hit.hit && std::abs(hit.t - 5.0F) < 0.0001F && std::abs(hit.point.y) < 0.0001F, "Intersect(down ray, ground plane) must hit at t=5 on y=0");
+
+    const Ray up{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F } };
+    kb::tests::Require(!kb::math::Intersect(up, ground).hit, "Intersect of a ray pointing away from the plane must report a miss, not a behind-origin solution");
+
+    const Ray parallel{ Vec3{ 0.0F, 5.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F } };
+    kb::tests::Require(!kb::math::Intersect(parallel, ground).hit, "Intersect of a ray parallel to the plane must report a miss, not divide by zero");
+}
+
 } // namespace
 
 void RunEngineMathTests() {
     RunSceneAliasIdentityTest();
     RunDefaultValueConventionsTest();
     RunVec3MathTest();
+    RunGeometryTypesTest();
     RunQuatAndMatrixMathTest();
     RunAngleUnitsTest();
     RunScalarMathFunctionsTest();
@@ -878,6 +1097,7 @@ void RunEngineMathTests() {
     RunQuaternionPropertyTest();
     RunInterpolationPropertyTest();
     RunSerializationPropertyTest();
+    RunSerializationFuzzTest();
 }
 
 } // namespace kb::tests

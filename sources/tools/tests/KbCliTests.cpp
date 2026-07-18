@@ -52,7 +52,7 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     return text.find(needle) != std::string::npos;
 }
 
-constexpr std::array<std::string_view, 2> kFlagNames{ "--disabled", "--quiet" };
+constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
 
 struct CommandRun {
     int exitCode = 0;
@@ -201,25 +201,21 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 }
 
+// LIB-013: PlayerController.lua is no longer duplicated as a hardcoded
+// string in this test fixture — it is written by the REAL production path
+// a game author actually gets it through, `kb_cli init-agent`
+// (ScriptAgentProjectFiles::Write), the exact same file AGENTS.md's own
+// worked example already references. This closes the "no shipped template,
+// only a test fixture" audit gap: what this test exercises below IS the
+// file init-agent produces, not a second, driftable copy of similar text.
 void PreparePlayerControllerTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
-    WriteTextFile(root / "Assets" / "Logic" / "PlayerController.lua", R"(
-local speed = 2.0
 
-function Ready(self, dt)
-    Log("player ready")
-end
-
-function Tick(self, dt)
-    local move = Input.Vector2("Move")
-    local dx = (move.x or 0.0) * speed * dt
-    local dy = (move.y or 0.0) * speed * dt
-    Transform.Translate(self.entity, dx, dy, 0.0)
-    Log("player tick")
-    Emit("PlayerMoved", {})
-end
-)");
+    const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
+    Require(initAgent.exitCode == 0, "player controller template project init-agent failed");
+    Require(std::filesystem::exists(root / "Assets" / "Logic" / "PlayerController.lua"),
+        "kb_cli init-agent did not write the real PlayerController.lua template");
 
     kb::scene::Scene scene;
     static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Player" }));
@@ -237,9 +233,16 @@ end
 // project + scene and drives a real ScriptRuntimeHost/ScriptRuntimeSceneSystem
 // frame loop headless, with zero bgfx/window/editor involvement. This test
 // exercises the exact workflow ScriptAgentProjectFiles' generated AGENTS.md
-// documents (scene-attach -> validate -> run) against a PlayerController.lua
-// that reads Input.Vector2 and drives Transform.Translate, then runs several
-// simulated frames through the real CLI commands, in-process.
+// documents (init-agent -> scene-attach -> validate -> run) against the REAL,
+// shipped PlayerController.lua template (LIB-013 — written by init-agent
+// itself, not a second hardcoded copy of similar text) that reads
+// Input.Vector2 and drives Transform.Translate, then runs several simulated
+// frames through the real CLI commands, in-process. Proves lifecycle
+// callbacks/events fire correctly headless; RunPlayerControllerTemplateMoves
+// TransformWithRealInputTest (ScriptRuntimeTests.cpp) proves the SAME
+// shipped file actually moves the entity for real, non-zero input — this
+// harness has no channel to observe Transform state (see that test's own
+// comment for why).
 void RunPlayerControllerTemplateTests() {
     PreparePlayerControllerTemplateProject();
     const std::string root = TestRoot().string();
@@ -279,38 +282,24 @@ void RunPlayerControllerTemplateTests() {
     Require(tickCount == static_cast<std::size_t>(kFrames), "player controller template did not tick exactly once per simulated frame");
 }
 
+// LIB-014: Projectile.lua (and its Assets/Prefabs/Projectile.kbprefab
+// companion) is no longer duplicated as a hardcoded string in this test
+// fixture — same fix as LIB-013's PlayerController, same reasoning: it is
+// written by the REAL production path a game author actually gets it
+// through, `kb_cli init-agent` (ScriptAgentProjectFiles::Write). This closes
+// the "no shipped template, only a test fixture" gap for the script itself;
+// the shipped prefab artifact is asserted below and proven under real Jolt
+// physics in PhysicsSceneSystemTests.cpp's LIB-014 section.
 void PrepareProjectileTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
-    WriteTextFile(root / "Assets" / "Logic" / "Projectile.lua", R"(
-local launched = false
 
-function Ready(self, dt)
-    Log("projectile ready")
-end
-
--- The launch retries every Tick (not a one-shot in Ready) because a
--- freshly-spawned entity's Rigidbody/Collider is not guaranteed to have a
--- live physics body yet by the time Ready fires - the physics and script
--- scene systems' relative execution order is not guaranteed (see LIB-127's
--- notes; LIB-128 is where that gets formalized). Retrying until
--- Physics.SetVelocity actually reports applied=true is the robust,
--- production-shape way to write this, not merely a test workaround.
-function Tick(self, dt)
-    if not launched then
-        local applied = Physics.SetVelocity(self.entity, 5.0, 0.0, 0.0)
-        if applied then
-            launched = true
-            Emit("ProjectileLaunched", {})
-        end
-    end
-end
-
-function OnCollisionEnter(self, event)
-    Emit("ProjectileHit", {})
-    World.Destroy(self.entity)
-end
-)");
+    const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
+    Require(initAgent.exitCode == 0, "projectile template project init-agent failed");
+    Require(std::filesystem::exists(root / "Assets" / "Logic" / "Projectile.lua"),
+        "kb_cli init-agent did not write the real Projectile.lua template");
+    Require(std::filesystem::exists(root / "Assets" / "Prefabs" / "Projectile.kbprefab"),
+        "kb_cli init-agent did not write the real Projectile.kbprefab artifact");
 
     kb::scene::Scene scene;
     static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" }));
@@ -365,7 +354,7 @@ void RunProjectileTemplateTests() {
     });
     Require(run.exitCode == 0, "projectile template run reported diagnostics");
     Require(Contains(run.output, "[log] projectile ready"), "projectile template did not run Ready");
-    Require(!Contains(run.output, "ProjectileLaunched"),
+    Require(!Contains(run.output, "[log] projectile launched"),
         "projectile template must NOT report a launch when kb_cli run has no physics backend loaded - Physics.SetVelocity must keep honestly failing, never fabricate success");
     Require(Contains(run.output, "0 diagnostics"), "projectile template run was not clean even though Physics.SetVelocity fails every frame");
 }
@@ -383,6 +372,24 @@ void RunApiCommandTests() {
     Require(std::filesystem::exists(TestRoot() / "AGENTS.md"), "init-agent did not write AGENTS.md");
     Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "kb.lua"), "init-agent did not write Lua stubs");
     Require(std::filesystem::exists(TestRoot() / ".luarc.json"), "init-agent did not write .luarc.json");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Logic" / "PlayerController.lua"),
+        "init-agent did not write the PlayerController.lua template (LIB-013)");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Logic" / "Projectile.lua"),
+        "init-agent did not write the Projectile.lua template (LIB-014)");
+    Require(std::filesystem::exists(TestRoot() / "Assets" / "Prefabs" / "Projectile.kbprefab"),
+        "init-agent did not write the Projectile.kbprefab artifact (LIB-014)");
+
+    // LIB-013 regression: init-agent internally rebuilds its catalog and
+    // calls ScriptAgentProjectFiles::Write() a second time whenever the
+    // first call created a new project asset (PlayerController.lua, on a
+    // project's first-ever run) — a bug once made that second call's
+    // report silently replace the first's, so a genuinely first-time
+    // AGENTS.md/.luarc.json/PlayerController.lua write was wrongly printed
+    // as "kept ... (already exists)" even though this SAME invocation had
+    // just created it moments earlier.
+    Require(Contains(initAgent.output, "wrote") && Contains(initAgent.output, "AGENTS.md"), "init-agent's own first-ever run must report AGENTS.md as written, not kept");
+    Require(!Contains(initAgent.output, "kept") && !Contains(initAgent.output, "already exists"),
+        "init-agent must not report a file it just created in THIS SAME first-ever invocation as already existing");
 
     // LIB-023: init-agent must also write a manifest with an API hash, and
     // that hash must be stable across two builds of the identical project
@@ -399,6 +406,96 @@ void RunApiCommandTests() {
     std::ifstream manifestStreamAgain{ manifestPath, std::ios::binary };
     const std::string manifestContentAgain{ std::istreambuf_iterator<char>{ manifestStreamAgain }, std::istreambuf_iterator<char>{} };
     Require(manifestContent == manifestContentAgain, "manifest.json hash must be stable across repeated builds of an unchanged project");
+}
+
+// LIB-024: api-check must generate a baseline, pass an identical surface,
+// flag a breaking change (removed function / changed pin contract) with a
+// non-zero exit, and treat a purely-additive difference as compatible.
+// Exercised through the real RunApiCheckCommand against the real,
+// project-agnostic engine catalog (no --project) — the same path CI runs.
+void RunApiCheckCommandTests() {
+    ResetTestRoot();
+    const std::string baseline = (TestRoot() / "baseline.json").string();
+
+    // A missing baseline is an honest error, not a silent pass.
+    const CommandRun missing = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline });
+    Require(missing.exitCode == 1, "api-check must fail when the baseline file is missing");
+
+    // --update-baseline writes the current surface as the new baseline.
+    const CommandRun update = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline, "--update-baseline" });
+    Require(update.exitCode == 0, "api-check --update-baseline must succeed");
+    Require(std::filesystem::exists(TestRoot() / "baseline.json"), "api-check --update-baseline must write the baseline file");
+
+    // An unchanged surface is compatible.
+    const CommandRun identical = Run(&kb::cli::RunApiCheckCommand, { "--baseline", baseline });
+    Require(identical.exitCode == 0, "api-check must pass an identical API surface");
+    Require(Contains(identical.output, "compatible"), "api-check must report compatibility for an identical surface");
+
+    // Read the generated baseline so the breaking/additive fixtures below
+    // are edits of the REAL catalog, not hand-invented shapes that might
+    // not match what the engine actually registers.
+    std::ifstream baselineStream{ TestRoot() / "baseline.json", std::ios::binary };
+    const std::string baselineText{ std::istreambuf_iterator<char>{ baselineStream }, std::istreambuf_iterator<char>{} };
+    Require(Contains(baselineText, "\"World.Exists\""), "api-check baseline is missing the expected World.Exists function");
+
+    // BREAKING (removed function): a baseline claiming a function the
+    // current surface does not have.
+    {
+        std::string breaking = baselineText;
+        const std::string anchor = "\"functions\":[";
+        const std::size_t pos = breaking.find(anchor);
+        Require(pos != std::string::npos, "api-check baseline has no functions array");
+        breaking.insert(pos + anchor.size(), R"({"name":"Ghost.Removed","inputs":[],"outputs":[]},)");
+        const std::string breakingPath = (TestRoot() / "breaking.json").string();
+        WriteTextFile(breakingPath, breaking);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", breakingPath });
+        Require(run.exitCode == 1, "api-check must fail on a removed function");
+        Require(Contains(run.output, "BREAKING") && Contains(run.output, "Ghost.Removed"), "api-check must name the removed function as breaking");
+    }
+
+    // BREAKING (changed output contract): World.Exists's "exists" output
+    // retyped Bool -> Int.
+    {
+        std::string pinChange = baselineText;
+        const std::string needle = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool")";
+        const std::size_t pos = pinChange.find(needle);
+        Require(pos != std::string::npos, "api-check baseline World.Exists shape changed unexpectedly");
+        const std::string replacement = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Int")";
+        pinChange.replace(pos, needle.size(), replacement);
+        const std::string pinChangePath = (TestRoot() / "pinchange.json").string();
+        WriteTextFile(pinChangePath, pinChange);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", pinChangePath });
+        Require(run.exitCode == 1, "api-check must fail on a changed output contract");
+        Require(Contains(run.output, "BREAKING") && Contains(run.output, "World.Exists"), "api-check must name the changed function as breaking");
+    }
+
+    // ADDITIVE (baseline lacks a function the current surface has): the
+    // current-only function is additive, never breaking. Removing the
+    // known World.Exists object (rather than trying to empty the whole
+    // functions array, whose nested inputs/outputs brackets make naive
+    // bracket-matching unsafe) is the minimal, robust way to construct this.
+    {
+        std::string additive = baselineText;
+        const std::string worldExists = R"({"name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool","required":true}]})";
+        const std::size_t pos = additive.find(worldExists);
+        Require(pos != std::string::npos, "api-check baseline World.Exists object shape changed unexpectedly");
+        // Remove the object plus one adjacent comma so the array stays valid
+        // JSON whether World.Exists was first, middle, or last.
+        std::size_t removeStart = pos;
+        std::size_t removeLength = worldExists.size();
+        if (pos + worldExists.size() < additive.size() && additive[pos + worldExists.size()] == ',') {
+            removeLength += 1; // trailing comma
+        } else if (pos > 0 && additive[pos - 1] == ',') {
+            removeStart -= 1; // leading comma (World.Exists was the last entry)
+            removeLength += 1;
+        }
+        additive.erase(removeStart, removeLength);
+        const std::string additivePath = (TestRoot() / "additive.json").string();
+        WriteTextFile(additivePath, additive);
+        const CommandRun run = Run(&kb::cli::RunApiCheckCommand, { "--baseline", additivePath });
+        Require(run.exitCode == 0, "api-check must treat a purely-additive difference as compatible");
+        Require(Contains(run.output, "additive") && Contains(run.output, "World.Exists"), "api-check must report the added function as additive");
+    }
 }
 
 void RunMcpCommandTests() {
@@ -458,6 +555,7 @@ int main() {
     RunPlayerControllerTemplateTests();
     RunProjectileTemplateTests();
     RunApiCommandTests();
+    RunApiCheckCommandTests();
     RunMcpCommandTests();
     return EXIT_SUCCESS;
 }

@@ -10,6 +10,31 @@ float Length(Vec3 value) noexcept {
     return std::sqrt(Dot(value, value));
 }
 
+// LIB-042: Vec2 magnitude, same definition as Length(Vec3) one dimension
+// down — a finite result for every input, 0 for the zero vector.
+float Length(Vec2 value) noexcept {
+    return std::sqrt(Dot(value, value));
+}
+
+// LIB-042: ray-vs-plane. denom = Dot(rayDir, planeNormal) is the rate the
+// ray approaches the plane; when it is ~0 the ray is parallel and never
+// meets the plane (hit = false). Otherwise t = -SignedDistance(origin) /
+// denom is the parameter of the intersection; a negative t means the plane
+// is behind the ray origin, which we report as a miss (hit = false) rather
+// than returning a point "behind" the ray — the same defined-degenerate
+// -result rule the header documents.
+RayPlaneIntersection Intersect(const Ray& ray, const Plane& plane) noexcept {
+    const float denom = Dot(ray.direction, plane.normal);
+    if (denom <= 0.000001F && denom >= -0.000001F) {
+        return {};
+    }
+    const float t = -SignedDistance(plane, ray.origin) / denom;
+    if (t < 0.0F) {
+        return {};
+    }
+    return RayPlaneIntersection{ .hit = true, .t = t, .point = PointAt(ray, t) };
+}
+
 Vec3 Normalize(Vec3 value) noexcept {
     const float length = Length(value);
     if (length <= 0.000001F) {
@@ -187,6 +212,18 @@ Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept {
     } };
 }
 
+Mat3 InverseTranspose(const Mat3& m) noexcept {
+    const Vec3 col0 = Cross(m.columns[1], m.columns[2]);
+    const Vec3 col1 = Cross(m.columns[2], m.columns[0]);
+    const Vec3 col2 = Cross(m.columns[0], m.columns[1]);
+    const float det = Dot(m.columns[0], col0);
+    if (det <= 0.000001F && det >= -0.000001F) {
+        return Mat3{};
+    }
+    const float inv = 1.0F / det;
+    return Mat3{ { col0 * inv, col1 * inv, col2 * inv } };
+}
+
 DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept {
     // Guard against smoothTime <= 0 the same way Unity's Mathf.SmoothDamp
     // does: rather than dividing by zero, clamp to a tiny positive value so
@@ -286,6 +323,22 @@ Radians Atan2(float y, float x) noexcept {
 
 namespace {
 
+// LIB-054: a lattice coordinate is `static_cast<int32_t>(Floor(coord))`.
+// Casting a float that is NaN, +/-infinity, or simply larger in magnitude
+// than INT32_MAX to int32_t is undefined behaviour. Non-finite inputs are
+// screened out before this is ever called (Noise3D returns 0 for them);
+// this additionally clamps a finite but out-of-int32-range floored value
+// to the representable range (leaving headroom for the `+ 1` neighbour
+// lattice index) so the cast is always defined. A coordinate past
+// +/-2.1e9 is astronomically far from any real sampling; saturating there
+// is a defined, benign result rather than UB.
+[[nodiscard]] std::int32_t FloorToLatticeInt(float flooredCoord) noexcept {
+    constexpr float kMaxLattice = 2147483646.0F; // INT32_MAX - 1, exactly representable as float
+    constexpr float kMinLattice = -2147483648.0F; // INT32_MIN, exactly representable as float
+    const float clamped = flooredCoord > kMaxLattice ? kMaxLattice : (flooredCoord < kMinLattice ? kMinLattice : flooredCoord);
+    return static_cast<std::int32_t>(clamped);
+}
+
 [[nodiscard]] constexpr std::uint32_t CornerHash(std::int32_t x, std::int32_t y, std::int32_t z, std::uint32_t seed) noexcept {
     std::uint32_t h = Hash32(x, seed);
     h = Hash32(y, h);
@@ -316,12 +369,19 @@ float Random01(std::uint32_t seed, std::uint32_t index) noexcept {
 }
 
 float Noise3D(float x, float y, float z, std::uint32_t seed) noexcept {
+    // LIB-054: gradient noise has no defined meaning at a NaN or infinite
+    // coordinate, and flooring-then-casting one to int32 (below) would be
+    // UB. Return the neutral 0.0F (the same value the noise takes at every
+    // integer lattice point) instead of computing on undefined data.
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        return 0.0F;
+    }
     const float floorX = Floor(x);
     const float floorY = Floor(y);
     const float floorZ = Floor(z);
-    const std::int32_t xi = static_cast<std::int32_t>(floorX);
-    const std::int32_t yi = static_cast<std::int32_t>(floorY);
-    const std::int32_t zi = static_cast<std::int32_t>(floorZ);
+    const std::int32_t xi = FloorToLatticeInt(floorX);
+    const std::int32_t yi = FloorToLatticeInt(floorY);
+    const std::int32_t zi = FloorToLatticeInt(floorZ);
     const float fx = x - floorX;
     const float fy = y - floorY;
     const float fz = z - floorZ;
@@ -641,6 +701,23 @@ namespace {
 constexpr std::uint32_t kCurveMagic = 0x4B435256U; // "KCRV"
 constexpr std::uint32_t kGradientMagic = 0x4B475244U; // "KGRD"
 
+// LIB-053: the exact on-disk size of one element, used to reject a
+// data-controlled element count that the remaining payload cannot possibly
+// contain BEFORE reserving for it — a few-byte file declaring count =
+// 0xFFFFFFFF must never force a multi-gigabyte allocation. A CurveKeyframe
+// serializes as time(4) + value(4) + easing(1); a GradientStop as time(4) +
+// rgba(4*4).
+constexpr std::size_t kCurveKeyframeBytes = 9U;
+constexpr std::size_t kGradientStopBytes = 20U;
+
+// True when `bytes[offset..]` is large enough to hold `count` elements of
+// `elementBytes` each. Uses division (not count*elementBytes) so it cannot
+// itself overflow for a hostile count near 2^32.
+[[nodiscard]] bool PayloadHoldsElements(std::span<const std::uint8_t> bytes, std::size_t offset, std::uint32_t count, std::size_t elementBytes) noexcept {
+    const std::size_t remaining = bytes.size() - offset;
+    return count <= remaining / elementBytes;
+}
+
 void AppendUInt32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     std::uint8_t buffer[4];
     std::memcpy(buffer, &value, sizeof(buffer));
@@ -701,6 +778,14 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Curve& outCurve) {
     if (!ReadUInt32(bytes, offset, magic) || magic != kCurveMagic || !ReadUInt32(bytes, offset, count)) {
         return false;
     }
+    // LIB-053: reject a count the payload cannot back BEFORE reserving, so a
+    // tiny hostile file cannot force a huge allocation. The per-element
+    // reads in the loop below already catch a truncated payload, but only
+    // after reserve(count) has already tried to allocate for the fabricated
+    // count — this guard is what makes the reserve safe.
+    if (!PayloadHoldsElements(bytes, offset, count, kCurveKeyframeBytes)) {
+        return false;
+    }
     std::vector<CurveKeyframe> keyframes;
     keyframes.reserve(count);
     for (std::uint32_t i = 0U; i < count; ++i) {
@@ -736,6 +821,12 @@ bool Deserialize(std::span<const std::uint8_t> bytes, Gradient& outGradient) {
     std::uint32_t magic = 0U;
     std::uint32_t count = 0U;
     if (!ReadUInt32(bytes, offset, magic) || magic != kGradientMagic || !ReadUInt32(bytes, offset, count)) {
+        return false;
+    }
+    // LIB-053: see the Curve Deserialize above — reject an unbackable count
+    // before reserving so a few-byte hostile file cannot force a huge
+    // allocation.
+    if (!PayloadHoldsElements(bytes, offset, count, kGradientStopBytes)) {
         return false;
     }
     std::vector<GradientStop> stops;
