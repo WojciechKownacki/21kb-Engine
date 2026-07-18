@@ -44,6 +44,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptEvent.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptApiExport.hpp"
@@ -3360,9 +3361,34 @@ void RunErrorCodeTest() {
 // ScriptFunctionRegistry.cpp), and maxGraphRecursionDepth must match
 // ScriptRuntimeDispatchOptions' already-enforced default.
 void RunInputLimitsTest() {
+    // LIB-037: all four documented input limits must be a SINGLE source of
+    // truth, provably tied to their real enforcement site so the two can
+    // never silently drift. maxGraphRecursionDepth and maxEventPayloadArguments
+    // are enforced in kb::script (which must never depend on kb::library —
+    // see ScriptEvent.hpp), so their enforcement constants are duplicated
+    // there as plain locals; these assertions are the guard that keeps the
+    // duplicates equal to the kb::library policy values.
     kb::tests::Require(
         kb::library::kDefaultLibraryInputLimits.maxGraphRecursionDepth == kb::script::ScriptRuntimeDispatchOptions{}.maxEventDepth,
         "Engine21kbLibrary maxGraphRecursionDepth must match ScriptRuntimeDispatchOptions::maxEventDepth's default");
+
+    // maxEventPayloadArguments (kb::library policy) == kMaxScriptEventArguments
+    // (kb::script enforcement constant, checked in ScriptEventBus::Emit /
+    // EmitDeferred and ScriptRuntime::DispatchEvent — real runtime rejection
+    // is proven by ScriptRuntimeTests.cpp::RunScriptEventPayloadSizeLimitTest).
+    kb::tests::Require(
+        kb::library::kDefaultLibraryInputLimits.maxEventPayloadArguments == kb::script::kMaxScriptEventArguments,
+        "Engine21kbLibrary maxEventPayloadArguments must match kb::script::kMaxScriptEventArguments, the constant actually enforced at every event dispatch entry point");
+
+    // maxCollectionSize (kb::library policy) must be the value every
+    // kb::library collection clamps a capacity request down to — the
+    // enforcement here lives in the same library, so this is a direct check
+    // rather than a cross-module duplicate (full mutation/refusal contract is
+    // proven by RunCollectionsScalarTest).
+    kb::library::Array<int> clampedCapacity{ kb::library::kDefaultLibraryInputLimits.maxCollectionSize + 1U };
+    kb::tests::Require(
+        clampedCapacity.Capacity() == kb::library::kDefaultLibraryInputLimits.maxCollectionSize,
+        "Engine21kbLibrary a collection capacity request above maxCollectionSize must be clamped to exactly maxCollectionSize");
 
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };

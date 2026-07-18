@@ -16,11 +16,17 @@ namespace kb::library {
 //     reports a diagnostic instead of looping forever — matches
 //     kb::script::ScriptRuntimeDispatchOptions::maxEventDepth's default,
 //     already enforced today.
-//   - maxCollectionSize, maxEventPayloadArguments: reserved policy values.
-//     kb::library has no collection type to bound yet (LIB-058 introduces
-//     Array<T>/Map<K,V>); nothing enforces these two today. They exist so
-//     LIB-058 and future event-payload work start from an agreed number
-//     instead of each picking their own.
+//   - maxCollectionSize: the largest capacity any kb::library collection
+//     (Array/Set/Map/Queue/Stack — EngineLibraryCollections.hpp) will honor;
+//     every collection constructor clamps a larger request down to this
+//     value (LIB-058), so a script cannot grow an unbounded collection by
+//     asking for more per call.
+//   - maxEventPayloadArguments: the largest number of arguments a single
+//     ScriptEvent may carry, enforced at every event dispatch entry point
+//     (ScriptEventBus::Emit/EmitDeferred and ScriptRuntime::DispatchEvent)
+//     via the duplicated kb::script::kMaxScriptEventArguments constant — kb::
+//     script must never depend on kb::library, so the value is mirrored there
+//     and kept in lockstep by a consistency assertion in RunInputLimitsTest.
 struct LibraryInputLimits {
     std::size_t maxStringLength = 65536U;
     std::size_t maxCollectionSize = 4096U;
