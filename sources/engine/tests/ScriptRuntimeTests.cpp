@@ -11650,6 +11650,46 @@ void RunEngineLibraryAsyncResultTest() {
     kb::tests::Require(bridgedCancelledPoll(0.1F) == kb::scene::TaskPollResult::Failed, "MakeTaskPollFromAsyncResult must also report Failed for AsyncState::Cancelled (TaskPollResult has no distinct Cancelled state)");
 }
 
+// LIB-100 (audit gap closed 2026-07-18): the completion callback must run on
+// the OWNER thread even when the terminal transition happens on a different
+// thread — an ENFORCED guarantee, not an assumption from "the engine has no
+// threads today". This simulates a future off-thread completer with a real
+// std::thread and proves the callback is NOT invoked on it, but deferred to
+// the owner's Poll(), where it runs on the owner thread. (The owner-thread
+// path stays synchronous — checked at the end.)
+void RunEngineLibraryAsyncResultThreadAffinityTest() {
+    const std::thread::id ownerThreadId = std::this_thread::get_id();
+    kb::library::AsyncResult<int> crossThread;
+    int callbackFires = 0;
+    std::thread::id callbackThreadId{};
+    crossThread.OnComplete([&callbackFires, &callbackThreadId](const kb::library::AsyncResult<int>&) {
+        callbackThreadId = std::this_thread::get_id();
+        ++callbackFires;
+    });
+
+    // Complete it from a DIFFERENT (worker) thread.
+    std::thread worker([&crossThread]() { static_cast<void>(crossThread.SetCompleted(123)); });
+    worker.join();
+
+    kb::tests::Require(crossThread.Succeeded() && crossThread.Value() == 123, "An off-thread SetCompleted must still record the terminal state and value");
+    kb::tests::Require(callbackFires == 0, "AsyncResult must NOT invoke its completion callback on a foreign thread — it must defer it to the owner thread");
+
+    // Drain on the owner thread: the callback now fires, ON the owner thread.
+    crossThread.Poll();
+    kb::tests::Require(callbackFires == 1, "AsyncResult::Poll() on the owner thread must invoke the deferred callback exactly once");
+    kb::tests::Require(callbackThreadId == ownerThreadId, "The deferred completion callback must run on the OWNER thread (the one that constructed the AsyncResult), never on the foreign thread that completed it");
+
+    crossThread.Poll();
+    kb::tests::Require(callbackFires == 1, "A second Poll() with nothing pending must be a harmless no-op");
+
+    // The common single-thread path still fires synchronously — no Poll needed.
+    kb::library::AsyncResult<int> sameThread;
+    int sameThreadFires = 0;
+    sameThread.OnComplete([&sameThreadFires](const kb::library::AsyncResult<int>&) { ++sameThreadFires; });
+    static_cast<void>(sameThread.SetCompleted(1));
+    kb::tests::Require(sameThreadFires == 1, "An owner-thread SetCompleted must still fire the callback synchronously, with no Poll() required");
+}
+
 // LIB-100: end-to-end proof that MakeTaskPollFromAsyncResult genuinely
 // drives a real SceneTasks task through ScriptRuntimeSceneSystem — an
 // AsyncResult<T> completed by native code (simulating, e.g., a plugin
@@ -13220,6 +13260,7 @@ void RunScriptRuntimeTests() {
     RunSceneTaskFixedStepDomainTest();
     RunTimerAndTaskCancellationPropagationTest();
     RunEngineLibraryAsyncResultTest();
+    RunEngineLibraryAsyncResultThreadAffinityTest();
     RunAsyncResultDrivenTaskEndToEndTest();
     RunTimerAndTaskCreatorDiagnosticsTest();
     RunScriptTimerAndTaskCreatorApiTest();
