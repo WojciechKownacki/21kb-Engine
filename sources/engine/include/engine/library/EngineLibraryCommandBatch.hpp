@@ -61,20 +61,19 @@ private:
 //    RemoveTag<T> is a completely different, TYPE-based ECS tag mechanism
 //    scripts have never touched; the tag concept scripts actually use
 //    (World.SetTag/HasTag/FindByTag, since LIB-065..069) is a STRING stored
-//    in kb::scene::TagsComponent. AddTag/RemoveTag here queue a
-//    Set<TagsComponent> command built the same way World.SetTag already
-//    computes it (read current tags, add/remove one, rejoin) — real,
-//    working code, not a stub. Scoped HONESTLY to EntityHandle (already-
-//    real entities) only, not BatchEntity (freshly spawned within the same
-//    batch): a fresh CommandEntity has no live TagsComponent to read from
-//    yet, and correctly accumulating multiple AddTag calls for the same
-//    not-yet-real entity before Playback resolves it is meaningfully more
-//    machinery (a second pending-state map, keyed by the deferred entity's
-//    worker/local index, applied in a second pass after Playback) than
-//    this task's proportionate scope — a real, documented gap, not a
-//    silent one: AddTag/RemoveTag simply do not accept a BatchEntity at
-//    the type level, so a caller who tries gets a compile error, never a
-//    dropped tag at runtime.
+//    in kb::scene::TagsComponent. AddTag/RemoveTag COALESCE per target: the
+//    first touch of an existing entity seeds a pending tag set from its live
+//    tags, every later AddTag/RemoveTag in this batch mutates that same
+//    pending set (read-your-own-writes, so "add A then add B" keeps BOTH,
+//    not last-write-wins), and Flush() materializes exactly one
+//    Set<TagsComponent> (or Remove, if the set ends empty) per target. A
+//    BatchEntity spawned in this same batch is a first-class tag target too:
+//    its pending set starts empty and its final Set<TagsComponent> is queued
+//    against the deferred CommandEntity, which Playback resolves to the
+//    just-created entity in the same pass (the same mechanism Add<T>(
+//    BatchEntity) already uses). This closes the audit's two LIB-080 tag
+//    gaps (last-write-wins across calls; no tags on a spawned-this-batch
+//    entity).
 //
 // Flush() applies every recorded command via kb::ecs::CommandBuffer::
 // Playback(world) — the SAME World::CreateEntity/SetComponent/etc. every
@@ -163,20 +162,50 @@ public:
         return true;
     }
 
-    // Queues a Set<TagsComponent> command that adds `tag` to the entity's
-    // CURRENT tag set (read now, at record time — a plain scene read, not
-    // a structural change, so it is safe to call from inside an open
-    // Query<T>::ForEach). Calling this more than once for the SAME entity
-    // within the same batch (before Flush()) is an honestly-documented
-    // last-write-wins: each call independently reads the LIVE entity's
-    // current tags, not any earlier queued-but-not-yet-applied command
-    // from this same batch. False (no command queued) for a dead handle.
+    // Accumulates `tag` into a per-target pending tag set that is materialized
+    // into a single Set<TagsComponent> (or Remove, if the set ends empty) at
+    // Flush(). Calling AddTag/RemoveTag repeatedly for the SAME target within
+    // one batch reads-your-own-writes: the second call sees the first call's
+    // effect (it mutates the same pending set), so a batch that adds "A" then
+    // "B" ends with BOTH, not last-write-wins. An existing entity's pending
+    // set is seeded ONCE from its live tags the first time it is touched;
+    // every later op in this batch builds on that snapshot. False (no change
+    // recorded) for a dead handle or an empty/whitespace tag.
     [[nodiscard]] bool AddTag(EntityHandle entity, std::string_view tag) {
-        return QueueTagChange(entity, tag, true);
+        if (!entity.IsAlive(*scene_)) {
+            return false;
+        }
+        return ApplyPendingTag(ResolveExistingPendingTags(entity), tag, true);
     }
 
     [[nodiscard]] bool RemoveTag(EntityHandle entity, std::string_view tag) {
-        return QueueTagChange(entity, tag, false);
+        if (!entity.IsAlive(*scene_)) {
+            return false;
+        }
+        return ApplyPendingTag(ResolveExistingPendingTags(entity), tag, false);
+    }
+
+    // LIB-080: tags for an entity SPAWNED in this same batch. A fresh
+    // CommandEntity has no live tags to read, so its pending set starts
+    // empty and accumulates purely from this batch's AddTag/RemoveTag calls;
+    // Flush() materializes the Set<TagsComponent> against the deferred entity,
+    // which kb::ecs::CommandBuffer::Playback resolves to the just-created
+    // entity in the same pass (the same "spawn X then Set component on X"
+    // pattern Add<T>(BatchEntity) already relies on). This closes LIB-080's
+    // originally-documented BatchEntity gap. False for an invalid handle or
+    // an empty/whitespace tag.
+    [[nodiscard]] bool AddTag(BatchEntity entity, std::string_view tag) {
+        if (!entity.IsValid()) {
+            return false;
+        }
+        return ApplyPendingTag(ResolveDeferredPendingTags(entity), tag, true);
+    }
+
+    [[nodiscard]] bool RemoveTag(BatchEntity entity, std::string_view tag) {
+        if (!entity.IsValid()) {
+            return false;
+        }
+        return ApplyPendingTag(ResolveDeferredPendingTags(entity), tag, false);
     }
 
     // LIB-012: nullopt — not a crash, not a partial/silent apply — if any
@@ -200,44 +229,105 @@ public:
                 return std::nullopt;
             }
         }
+        // LIB-080: an existing-entity tag target that went stale between its
+        // AddTag/RemoveTag call and now is the same honest "nothing applied"
+        // race as trackedTargets_ above — checked before any tag command is
+        // queued so a stale target never reaches Playback.
+        for (const PendingTagState& pending : pendingTags_) {
+            if (pending.existing && !pending.handle.IsAlive(*scene_)) {
+                return std::nullopt;
+            }
+        }
+        // Materialize the coalesced tag sets LAST (after every other recorded
+        // command): one Set<TagsComponent> per target holding the batch's
+        // final accumulated tags, or Remove<TagsComponent> for a target whose
+        // set ended empty. A spawned-this-batch target with no tags never had
+        // the component, so nothing is queued for it.
+        for (const PendingTagState& pending : pendingTags_) {
+            if (pending.tags.empty()) {
+                if (pending.existing) {
+                    commandBuffer_.Worker(0).Remove<kb::scene::TagsComponent>(pending.entity);
+                }
+                continue;
+            }
+            kb::scene::TagsComponent tagsComponent;
+            kb::scene::SetTagsText(tagsComponent, JoinTagList(pending.tags));
+            commandBuffer_.Worker(0).Set<kb::scene::TagsComponent>(pending.entity, tagsComponent);
+        }
         return commandBuffer_.Playback(scene_->Runtime().EcsWorld());
     }
 
 private:
-    [[nodiscard]] bool QueueTagChange(EntityHandle entity, std::string_view tag, bool add) {
-        if (!entity.IsAlive(*scene_)) {
+    // LIB-080: the coalesced pending tag state for one target within this
+    // batch. `entity` is the CommandEntity every tag command for this target
+    // is queued against at Flush(); `existing` distinguishes an already-live
+    // EntityHandle target (whose `handle` must be re-checked for liveness at
+    // Flush, and whose initial `tags` were seeded from its live tags) from a
+    // spawned-this-batch BatchEntity (empty seed, no liveness concept).
+    struct PendingTagState {
+        kb::ecs::CommandEntity entity{};
+        bool existing = false;
+        EntityHandle handle{};
+        std::vector<std::string> tags;
+    };
+
+    [[nodiscard]] static bool SameCommandEntity(kb::ecs::CommandEntity lhs, kb::ecs::CommandEntity rhs) noexcept {
+        if (lhs.IsDeferred() != rhs.IsDeferred()) {
             return false;
         }
+        if (lhs.IsDeferred()) {
+            return lhs.WorkerIndex() == rhs.WorkerIndex() && lhs.LocalIndex() == rhs.LocalIndex();
+        }
+        return lhs.ExistingEntity().Id() == rhs.ExistingEntity().Id();
+    }
+
+    [[nodiscard]] PendingTagState* FindPendingTags(kb::ecs::CommandEntity entity) noexcept {
+        for (PendingTagState& pending : pendingTags_) {
+            if (SameCommandEntity(pending.entity, entity)) {
+                return &pending;
+            }
+        }
+        return nullptr;
+    }
+
+    // Seeds the pending set from the existing entity's LIVE tags exactly once
+    // (the first time it is touched this batch); later calls reuse the same
+    // accumulating set, which is what makes repeated AddTag/RemoveTag on one
+    // entity read-your-own-writes instead of last-write-wins.
+    [[nodiscard]] PendingTagState& ResolveExistingPendingTags(EntityHandle entity) {
+        const kb::ecs::CommandEntity commandEntity = kb::ecs::CommandEntity::Existing(entity.Entity());
+        if (PendingTagState* pending = FindPendingTags(commandEntity)) {
+            return *pending;
+        }
+        std::vector<std::string> initialTags;
+        if (const kb::scene::TagsComponent* current = scene_->Components().Tags().TryGet(entity.Entity())) {
+            initialTags = ParseTagList(kb::scene::TagsText(*current));
+        }
+        pendingTags_.push_back(PendingTagState{ commandEntity, true, entity, std::move(initialTags) });
+        return pendingTags_.back();
+    }
+
+    [[nodiscard]] PendingTagState& ResolveDeferredPendingTags(BatchEntity entity) {
+        if (PendingTagState* pending = FindPendingTags(entity.Raw())) {
+            return *pending;
+        }
+        pendingTags_.push_back(PendingTagState{ entity.Raw(), false, EntityHandle{}, {} });
+        return pendingTags_.back();
+    }
+
+    [[nodiscard]] static bool ApplyPendingTag(PendingTagState& pending, std::string_view tag, bool add) {
         const std::string normalizedTag = TrimTag(tag);
         if (normalizedTag.empty()) {
             return false;
         }
-
-        std::vector<std::string> tags;
-        if (const kb::scene::TagsComponent* current = scene_->Components().Tags().TryGet(entity.Entity())) {
-            tags = ParseTagList(kb::scene::TagsText(*current));
-        }
-        const auto existing = std::ranges::find(tags, normalizedTag);
+        const auto existing = std::ranges::find(pending.tags, normalizedTag);
         if (add) {
-            if (existing == tags.end()) {
-                tags.push_back(normalizedTag);
+            if (existing == pending.tags.end()) {
+                pending.tags.push_back(normalizedTag);
             }
-        } else if (existing != tags.end()) {
-            tags.erase(existing);
+        } else if (existing != pending.tags.end()) {
+            pending.tags.erase(existing);
         }
-
-        // Matches World.SetTag's existing convention exactly (ScriptWorldApi.cpp):
-        // an empty tag list removes the component entirely rather than
-        // queuing a Set with an empty string — the same "no tags" state
-        // TryGet(entity) == nullptr already represents everywhere else.
-        if (tags.empty()) {
-            commandBuffer_.Worker(0).Remove<kb::scene::TagsComponent>(entity.Entity());
-        } else {
-            kb::scene::TagsComponent tagsComponent;
-            kb::scene::SetTagsText(tagsComponent, JoinTagList(tags));
-            commandBuffer_.Worker(0).Set<kb::scene::TagsComponent>(entity.Entity(), tagsComponent);
-        }
-        trackedTargets_.push_back(entity);
         return true;
     }
 
@@ -289,6 +379,10 @@ private:
     // Query loop's worth of entities), and re-checking the same entity
     // twice is harmless.
     std::vector<EntityHandle> trackedTargets_;
+    // LIB-080: one entry per target that received an AddTag/RemoveTag this
+    // batch, holding its coalesced final tag set — materialized into a single
+    // tag command per target at Flush().
+    std::vector<PendingTagState> pendingTags_;
 };
 
 } // namespace kb::library

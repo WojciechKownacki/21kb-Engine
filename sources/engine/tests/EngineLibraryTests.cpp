@@ -2859,6 +2859,53 @@ void RunLibraryCommandBatchTest() {
             }
         }));
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
+
+    // LIB-080 (audit gap closed 2026-07-18): tag assignments COALESCE per
+    // target within one batch (read-your-own-writes) instead of the old
+    // last-write-wins, and a BatchEntity spawned in the same batch can now
+    // be tagged.
+    {
+        // Two AddTag calls for the SAME live entity in one batch must BOTH
+        // survive — the second must build on the first's pending state, not
+        // independently re-read the live (still empty) tag set and overwrite.
+        const kb::scene::SceneObject coalesceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchCoalesce" });
+        const kb::library::EntityHandle coalesceHandle{ coalesceObject.Entity(), scene.Id() };
+        kb::library::CommandBatch coalesceBatch{ scene };
+        kb::tests::Require(coalesceBatch.AddTag(coalesceHandle, "Alpha"), "Engine21kbLibrary CommandBatch::AddTag first tag must record");
+        kb::tests::Require(coalesceBatch.AddTag(coalesceHandle, "Beta"), "Engine21kbLibrary CommandBatch::AddTag second tag must record");
+        static_cast<void>(coalesceBatch.Flush());
+        const kb::scene::TagsComponent* coalesced = scene.Components().Tags().TryGet(coalesceObject.Entity());
+        kb::tests::Require(coalesced != nullptr && kb::scene::TagsText(*coalesced) == "Alpha, Beta",
+            "Engine21kbLibrary CommandBatch must COALESCE two AddTag calls on one entity into BOTH tags (Alpha, Beta), not last-write-wins");
+
+        // AddTag then RemoveTag of a DIFFERENT tag on the same entity in one
+        // batch: the RemoveTag must see the batch's pending "Gamma", leaving
+        // only "Delta".
+        kb::library::CommandBatch mixedBatch{ scene };
+        kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Gamma"), "Engine21kbLibrary CommandBatch::AddTag Gamma must record");
+        kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Delta"), "Engine21kbLibrary CommandBatch::AddTag Delta must record");
+        kb::tests::Require(mixedBatch.RemoveTag(coalesceHandle, "Alpha"), "Engine21kbLibrary CommandBatch::RemoveTag Alpha must record");
+        static_cast<void>(mixedBatch.Flush());
+        const kb::scene::TagsComponent* mixed = scene.Components().Tags().TryGet(coalesceObject.Entity());
+        kb::tests::Require(mixed != nullptr && kb::scene::TagsText(*mixed) == "Beta, Gamma, Delta",
+            "Engine21kbLibrary CommandBatch mixed AddTag/RemoveTag in one batch must read-your-own-writes over the seeded live tags (Alpha,Beta -> +Gamma +Delta -Alpha = Beta, Gamma, Delta)");
+
+        // A BatchEntity spawned in the SAME batch can be tagged — the tag
+        // command is queued against the deferred entity and resolved by the
+        // same Flush() that creates it. This closes LIB-080's original
+        // documented BatchEntity gap.
+        kb::library::CommandBatch spawnTagBatch{ scene };
+        const kb::library::BatchEntity spawnedTagged = spawnTagBatch.Spawn("CommandBatchSpawnedTagged");
+        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshOne"), "Engine21kbLibrary CommandBatch::AddTag on a BatchEntity must record");
+        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshTwo"), "Engine21kbLibrary CommandBatch::AddTag second tag on a BatchEntity must coalesce too");
+        const std::optional<kb::ecs::CommandBufferPlaybackResult> spawnTagResult = spawnTagBatch.Flush();
+        kb::tests::Require(spawnTagResult.has_value(), "Engine21kbLibrary CommandBatch Flush with a tagged spawn must succeed");
+        const kb::ecs::Entity resolvedTagged = spawnTagResult->Resolve(spawnedTagged.Raw());
+        kb::tests::Require(resolvedTagged.IsValid() && scene.Entities().IsAlive(resolvedTagged), "Engine21kbLibrary tagged BatchEntity must resolve to a live entity");
+        const kb::scene::TagsComponent* spawnedTags = scene.Components().Tags().TryGet(resolvedTagged);
+        kb::tests::Require(spawnedTags != nullptr && kb::scene::TagsText(*spawnedTags) == "FreshOne, FreshTwo",
+            "Engine21kbLibrary CommandBatch::AddTag on a spawned-this-batch BatchEntity must apply BOTH coalesced tags to the resolved entity after Flush()");
+    }
 }
 
 // LIB-012 audit gap closed 2026-07-17: RunLibraryCommandBatchTest above only
