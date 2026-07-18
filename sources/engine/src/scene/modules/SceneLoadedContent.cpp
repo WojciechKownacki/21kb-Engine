@@ -58,6 +58,10 @@ std::uint64_t SceneLoadedContent::ActiveScene() const noexcept {
     return SceneLoadedContentService::ActiveScene(scene_);
 }
 
+SceneEntity SceneLoadedContent::ActiveSceneRoot() const noexcept {
+    return SceneLoadedContentService::ActiveSceneRoot(scene_);
+}
+
 std::uint64_t SceneLoadedContent::OwningScene(SceneEntity entity) const noexcept {
     return SceneLoadedContentService::OwningScene(scene_, entity);
 }

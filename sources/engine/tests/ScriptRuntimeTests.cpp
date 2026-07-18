@@ -7250,6 +7250,30 @@ void RunSceneLoadedContentApiTest() {
     const kb::script::ScriptFunctionCallResult getActiveAfterA = host.Functions().Call("Scene.GetActive", {}, context);
     kb::tests::Require(getActiveAfterA.Succeeded() && getActiveAfterA.Output("id")->AsUInt64() == idA, "Scene.GetActive must report the just-loaded scene as active");
 
+    // LIB-071 (audit gap closed 2026-07-18): with SceneA active, World.Spawn
+    // WITHOUT an explicit parent must land INSIDE the active scene — parented
+    // under its root (RootA) — so Scene.SetActive genuinely STEERS where new
+    // content is created rather than being a purely observable flag. An
+    // explicit parent still wins. (These spawns are children of RootA, so they
+    // do not change any root count the later assertions in this test check,
+    // and the next non-additive Scene.Load clears them with RootA.)
+    const kb::scene::SceneEntity activeRootA = scene.Hierarchy().RootEntities().front();
+    kb::tests::Require(scene.Entities().Name(activeRootA) == "RootA", "LIB-071 fixture: SceneA's sole root must be RootA");
+    const kb::script::ScriptFunctionCallResult spawnIntoActive = host.Functions().Call("World.Spawn",
+        std::vector<kb::script::ScriptFunctionArgument>{ kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SpawnedIntoActive" } } } }, context);
+    kb::tests::Require(spawnIntoActive.Succeeded(), "LIB-071 World.Spawn into the active scene failed");
+    const kb::scene::SceneEntity spawnedIntoActive{ spawnIntoActive.Output("entity")->AsUInt64() };
+    kb::tests::Require(scene.Hierarchy().Parent(spawnedIntoActive).Id() == activeRootA.Id(),
+        "LIB-071 World.Spawn with no explicit parent must parent the new entity under the ACTIVE loaded scene's root, not create a detached root");
+    const kb::script::ScriptFunctionCallResult spawnExplicitParent = host.Functions().Call("World.Spawn",
+        std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SpawnedUnderExplicit" } } },
+            kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ spawnedIntoActive.Id(), kb::script::ScriptValueType::Entity } } },
+        context);
+    kb::tests::Require(spawnExplicitParent.Succeeded(), "LIB-071 World.Spawn with an explicit parent failed");
+    kb::tests::Require(scene.Hierarchy().Parent(kb::scene::SceneEntity{ spawnExplicitParent.Output("entity")->AsUInt64() }).Id() == spawnedIntoActive.Id(),
+        "LIB-071 an explicit parent argument must still win over the active-scene default");
+
     const std::vector<kb::script::ScriptFunctionArgument> findAArgs{
         kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "SceneA" } } },
     };
