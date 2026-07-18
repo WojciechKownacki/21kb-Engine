@@ -18,6 +18,20 @@ using kb::script::ScriptValueType;
     };
 }
 
+// LIB-108: all six OnCollision*/OnTrigger* events carry the identical shape —
+// see ScriptRuntimeSceneSystem.cpp::DispatchPendingCollisionEvents.
+[[nodiscard]] std::vector<LibraryEventArgumentDesc> CollisionArguments() {
+    return {
+        ScriptFunctionPin{ "other", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "pointX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "pointZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalX", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalY", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "normalZ", ScriptValueType::Float, true },
+    };
+}
+
 } // namespace
 
 const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
@@ -67,6 +81,59 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
             .name = "TaskFailed",
             .id = kb::script::ComputeEventId("TaskFailed"),
             .arguments = { ScriptFunctionPin{ "task", ScriptValueType::Hash, true } },
+        },
+        // LIB-108 (audit gap closed 2026-07-18): the physics collision/trigger,
+        // audio-marker, and prefab-instantiation events the engine ALSO emits
+        // from ScriptRuntimeSceneSystem (DispatchPendingCollisionEvents/
+        // DispatchPendingAudioMarkerEvents/DispatchPendingPrefabInstantiated
+        // Events) — previously missing from this schema, so scripts had no
+        // versioned contract for them despite the engine emitting them.
+        LibraryEventDesc{
+            .name = "OnCollisionEnter",
+            .id = kb::script::ComputeEventId("OnCollisionEnter"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnCollisionStay",
+            .id = kb::script::ComputeEventId("OnCollisionStay"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnCollisionExit",
+            .id = kb::script::ComputeEventId("OnCollisionExit"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnTriggerEnter",
+            .id = kb::script::ComputeEventId("OnTriggerEnter"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnTriggerStay",
+            .id = kb::script::ComputeEventId("OnTriggerStay"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnTriggerExit",
+            .id = kb::script::ComputeEventId("OnTriggerExit"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
+            .name = "OnAudioMarker",
+            .id = kb::script::ComputeEventId("OnAudioMarker"),
+            .arguments = {
+                ScriptFunctionPin{ "voice", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "marker", ScriptValueType::String, true },
+                ScriptFunctionPin{ "positionSeconds", ScriptValueType::Float, true },
+            },
+        },
+        LibraryEventDesc{
+            .name = "OnPrefabInstantiated",
+            .id = kb::script::ComputeEventId("OnPrefabInstantiated"),
+            .arguments = {
+                ScriptFunctionPin{ "root", ScriptValueType::Entity, true },
+                ScriptFunctionPin{ "count", ScriptValueType::Int, true },
+            },
         },
     };
     return kCatalog;
