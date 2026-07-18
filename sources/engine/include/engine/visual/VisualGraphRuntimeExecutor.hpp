@@ -65,7 +65,15 @@ private:
         NodeSet& executing,
         NodeSet& evaluatedNodes,
         bool followExecution,
-        std::size_t& stepBudget) const;
+        std::size_t& stepBudget,
+        // LIB-101: C++ recursion depth of the DATA-INPUT resolution chain
+        // (incremented only on the input-dependency recursion, NOT on the
+        // iterative forward-flow walk). Bounds a pathologically deep data DAG
+        // to a real stack budget so it fails with a diagnostic instead of a
+        // STATUS_STACK_OVERFLOW — the gap stepBudget (a plain step COUNT)
+        // cannot close, since 4096 nested frames overflow the stack long
+        // before the count runs out.
+        std::size_t depth) const;
 
     [[nodiscard]] const VisualGraphRuntimeBinding* FindBinding(const VisualGraphIrInstruction& instruction) const noexcept;
     [[nodiscard]] static bool TryExecuteBuiltInInstruction(const VisualGraphIrInstruction& instruction, VisualGraphRuntimeExecutionContext& context);
