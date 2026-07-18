@@ -2505,7 +2505,7 @@ void RunEngineLibraryComponentRegistryTest() {
 // absent rather than fabricating an entry.
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 8U, "Engine21kbLibrary event schema registry must catalog exactly the 8 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed)");
+    kb::tests::Require(catalog.size() == 16U, "Engine21kbLibrary event schema registry must catalog exactly the 16 built-in events this engine emits today (5 scene lifecycle + TimerFired + TaskCompleted + TaskFailed + 6 OnCollision*/OnTrigger* + OnAudioMarker + OnPrefabInstantiated)");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
         kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
@@ -2517,7 +2517,8 @@ void RunEngineLibraryEventSchemaRegistryTest() {
         kb::tests::Require(found == &desc, "Find() must return a pointer into the SAME catalog storage Catalog() returns, not a copy");
     }
 
-    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed" };
+    const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -2529,6 +2530,31 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     const kb::library::LibraryEventDesc* timerFired = kb::library::EngineLibraryEventRegistry::Find("TimerFired");
     kb::tests::Require(timerFired != nullptr && timerFired->arguments.size() == 1U && timerFired->arguments[0].name == "timer" && timerFired->arguments[0].type == kb::script::ScriptValueType::Hash,
         "TimerFired's cataloged schema must match its real dispatch shape (timer: Hash) — see ScriptRuntimeSceneSystem.cpp::DispatchFiredTimers");
+
+    // LIB-108: the newly-cataloged engine events must match their REAL dispatch
+    // shapes (ScriptRuntimeSceneSystem.cpp) — the exact arguments a script
+    // subscribing to them receives, so the versioned schema is a true contract.
+    const kb::library::LibraryEventDesc* onCollisionEnter = kb::library::EngineLibraryEventRegistry::Find("OnCollisionEnter");
+    kb::tests::Require(
+        onCollisionEnter != nullptr && onCollisionEnter->arguments.size() == 7U &&
+            onCollisionEnter->arguments[0].name == "other" && onCollisionEnter->arguments[0].type == kb::script::ScriptValueType::Entity &&
+            onCollisionEnter->arguments[1].name == "pointX" && onCollisionEnter->arguments[1].type == kb::script::ScriptValueType::Float &&
+            onCollisionEnter->arguments[4].name == "normalX" && onCollisionEnter->arguments[4].type == kb::script::ScriptValueType::Float &&
+            onCollisionEnter->arguments[6].name == "normalZ",
+        "OnCollisionEnter's cataloged schema must match its real dispatch shape (other: Entity, point/normal X/Y/Z: Float) — see DispatchPendingCollisionEvents");
+    const kb::library::LibraryEventDesc* onAudioMarker = kb::library::EngineLibraryEventRegistry::Find("OnAudioMarker");
+    kb::tests::Require(
+        onAudioMarker != nullptr && onAudioMarker->arguments.size() == 3U &&
+            onAudioMarker->arguments[0].name == "voice" && onAudioMarker->arguments[0].type == kb::script::ScriptValueType::Int &&
+            onAudioMarker->arguments[1].name == "marker" && onAudioMarker->arguments[1].type == kb::script::ScriptValueType::String &&
+            onAudioMarker->arguments[2].name == "positionSeconds" && onAudioMarker->arguments[2].type == kb::script::ScriptValueType::Float,
+        "OnAudioMarker's cataloged schema must match its real dispatch shape (voice: Int, marker: String, positionSeconds: Float) — see DispatchPendingAudioMarkerEvents");
+    const kb::library::LibraryEventDesc* onPrefabInstantiated = kb::library::EngineLibraryEventRegistry::Find("OnPrefabInstantiated");
+    kb::tests::Require(
+        onPrefabInstantiated != nullptr && onPrefabInstantiated->arguments.size() == 2U &&
+            onPrefabInstantiated->arguments[0].name == "root" && onPrefabInstantiated->arguments[0].type == kb::script::ScriptValueType::Entity &&
+            onPrefabInstantiated->arguments[1].name == "count" && onPrefabInstantiated->arguments[1].type == kb::script::ScriptValueType::Int,
+        "OnPrefabInstantiated's cataloged schema must match its real dispatch shape (root: Entity, count: Int) — see DispatchPendingPrefabInstantiatedEvents");
 }
 
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
