@@ -18,6 +18,18 @@ namespace {
 // this codebase, not independently derived.
 constexpr std::size_t kMaxVisualGraphExecutionSteps = 4096U;
 
+// LIB-101: the maximum C++ recursion DEPTH of the data-input resolution
+// chain (see ExecuteNode's `depth` parameter). Deliberately FAR below
+// kMaxVisualGraphExecutionSteps: the step budget is a plain invocation
+// COUNT, but each level of data-input recursion is a real C++ stack frame
+// (a VisualGraphRuntimeExecutionResult plus locals), and a few thousand of
+// them overflow a default 1 MB stack — the exact STATUS_STACK_OVERFLOW the
+// step-count watchdog alone could not prevent. 256 is a generous ceiling
+// for any legitimately-authored data DAG (the acyclic-edge validator keeps
+// real graphs shallow) while sitting safely under the frame count that
+// would actually blow the stack.
+constexpr std::size_t kMaxVisualGraphInputDepth = 256U;
+
 void AppendErrors(VisualGraphRuntimeExecutionResult& target, VisualGraphRuntimeExecutionResult source) {
     target.errors.insert(target.errors.end(), source.errors.begin(), source.errors.end());
     target.diagnostics.insert(target.diagnostics.end(), source.diagnostics.begin(), source.diagnostics.end());
@@ -94,7 +106,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(co
     NodeSet executing;
     NodeSet evaluatedNodes;
     std::size_t stepBudget = kMaxVisualGraphExecutionSteps;
-    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, function->entryNodeId, context, executing, evaluatedNodes, true, stepBudget);
+    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, function->entryNodeId, context, executing, evaluatedNodes, true, stepBudget, 0U);
     executed.executed = true;
     return executed;
 }
@@ -106,8 +118,20 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
     NodeSet& executing,
     NodeSet& evaluatedNodes,
     bool followExecution,
-    std::size_t& stepBudget) const {
+    std::size_t& stepBudget,
+    std::size_t depth) const {
     VisualGraphRuntimeExecutionResult result{};
+
+    // LIB-101: a data-input chain deeper than kMaxVisualGraphInputDepth would
+    // recurse deep enough into C++ to overflow the stack — fail with a
+    // diagnostic here, BEFORE the recursive call below adds another frame,
+    // rather than crashing the whole process with STATUS_STACK_OVERFLOW. The
+    // iterative forward-flow walk never increases depth, so this only ever
+    // trips on a genuinely deep data DAG, never on a long control-flow chain.
+    if (depth > kMaxVisualGraphInputDepth) {
+        AddRuntimeError(result, nodeId, "visual graph runtime exceeded its maximum data-input recursion depth (kMaxVisualGraphInputDepth=" + std::to_string(kMaxVisualGraphInputDepth) + ") — a pathologically deep chain of data-dependency nodes, refused before it can overflow the stack");
+        return result;
+    }
 
     // LIB-101: forward execution flow (Branch/CallNative/plain fall-through,
     // all gated on followExecution==true below) is walked ITERATIVELY here,
@@ -175,7 +199,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                         continue;
                     }
                 }
-                AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget));
+                AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, depth + 1U));
                 if (!nodeResult.Succeeded()) {
                     executing.erase(nodeId);
                     AppendErrors(result, std::move(nodeResult));
