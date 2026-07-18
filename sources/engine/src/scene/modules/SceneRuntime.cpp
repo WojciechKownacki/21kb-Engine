@@ -98,6 +98,10 @@ void SceneRuntime::AddSceneSystem(std::unique_ptr<SceneSystem> system) {
     SceneRuntimeService::AddSceneSystem(scene_, std::move(system));
 }
 
+std::vector<std::string> SceneRuntime::DrainSceneSystemErrors() {
+    return SceneRuntimeService::DrainSceneSystemErrors(scene_);
+}
+
 void SceneRuntime::SynchronizeTransforms() {
     SceneRuntimeService::SynchronizeTransforms(scene_);
 }

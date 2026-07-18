@@ -1177,10 +1177,32 @@ void EditorSceneContext::EnsureScriptRuntime() {
     auto scriptModule = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModuleView = scriptModule.get();
     scriptModule_ = scriptModuleView;
-    scriptModuleHost_ = std::make_unique<kb::modules::EngineModuleHost>(project_);
+    // The scene's own EngineModuleHost (Scene.cpp) already loaded AND attached the
+    // project's DLL plugins (physics/audio/rendering) for this scene. This play-mode
+    // host exists only to add the editor's script module (Log -> Console). Loading
+    // the project's plugins a SECOND time here re-shadow-copies the exact same DLLs
+    // to the same temp files the scene host still holds mapped — a guaranteed
+    // sharing violation, and a redundant second plugin instance. Strip the plugins
+    // so this host carries only the script module.
+    kb::project::ProjectDescriptor scriptRuntimeProject = project_;
+    scriptRuntimeProject.plugins.clear();
+    scriptModuleHost_ = std::make_unique<kb::modules::EngineModuleHost>(scriptRuntimeProject);
     scriptModuleHost_->Add(std::move(scriptModule));
-    scriptModuleHost_->Load(scene_->Runtime().EcsWorld());
-    scriptModuleHost_->AttachScene(*scene_);
+    // Loading/attaching the project's engine plugins (physics, audio, rendering,
+    // …) must not silently abort play. A throw here previously unwound before
+    // the script scene system ran, leaving Play engaged but no behaviour ticking
+    // and no message. Catch it, and surface any plugin-load diagnostics.
+    try {
+        scriptModuleHost_->Load(scene_->Runtime().EcsWorld());
+        scriptModuleHost_->AttachScene(*scene_);
+    } catch (const std::exception& error) {
+        console_.Error("Plugins", std::string{ "A plugin faulted while starting play mode: " } + error.what());
+    } catch (...) {
+        console_.Error("Plugins", "A plugin faulted while starting play mode (unknown error).");
+    }
+    for (const std::string& diagnostic : scriptModuleHost_->Diagnostics()) {
+        console_.Warning("Plugins", diagnostic);
+    }
 
     if (!scriptModuleHost_->IsActive("Script")) {
         console_.Warning("Scripts", "Script module is disabled for this project; behaviours will not run.");
@@ -1205,6 +1227,15 @@ void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
     host.LuaRuntime().Clear();
     host.VisualGraphInstances().Clear();
     host.SharedState().Clear();
+}
+
+void EditorSceneContext::SurfaceScriptDiagnostics() {
+    if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) {
+        return;
+    }
+    for (const std::string& diagnostic : scriptModule_->Host()->DrainSceneSystemDiagnostics()) {
+        console_.Error("Scripts", diagnostic);
+    }
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
