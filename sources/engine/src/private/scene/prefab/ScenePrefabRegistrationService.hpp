@@ -3,6 +3,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/ScenePrefabRecordStore.hpp"
 
 #include <string>
@@ -17,7 +18,7 @@ public:
     [[nodiscard]] static ScenePrefabHandle Register(ScenePrefabRecordStore& records, std::string name, ScenePrefab prefab);
     [[nodiscard]] static ScenePrefabHandle RegisterLoaded(ScenePrefabRecordStore& records, std::string guid, std::string name, ScenePrefab prefab);
     [[nodiscard]] static ScenePrefabHandle RegisterVariant(ScenePrefabRecordStore& records, std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides);
-    [[nodiscard]] static ScenePrefabHandle RegisterLoadedVariant(ScenePrefabRecordStore& records, std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides);
+    [[nodiscard]] static ScenePrefabHandle RegisterLoadedVariant(ScenePrefabRecordStore& records, std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides, std::vector<ScenePrefabVariantAddedSubtree> addedChildren = {});
 };
 
 } // namespace kb::scene

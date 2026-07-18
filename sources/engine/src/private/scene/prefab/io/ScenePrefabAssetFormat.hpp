@@ -34,6 +34,16 @@ struct ScenePrefabAssetFormat {
     // debugging/back-compat, never read back).
     static constexpr std::string_view OverrideObjectReferenceNodeIdKey = "objectReferenceNodeId";
     static constexpr std::string_view OverrideFlagKey = "flag";
+    // LIB-092: a variant's added-child subtrees (ScenePrefabVariantAddedSubtree)
+    // — the structural counterpart to the property override list. Each subtree
+    // is a whole captured node list nested under a base node identified by its
+    // stable id. The count key is optional and absent from variant files
+    // written before this feature, so its absence reads as "zero added
+    // subtrees" (a clean back-compat boundary), never a parse error.
+    static constexpr std::string_view AddedChildrenKey = "addedChildren";
+    static constexpr std::string_view AddedChildMarker = "addedchild";
+    static constexpr std::string_view EndAddedChildMarker = "endaddedchild";
+    static constexpr std::string_view AddedChildHostNodeIdKey = "hostNodeId";
     static constexpr std::string_view NestedPrefabGuidKey = "nestedPrefabGuid";
     static constexpr std::string_view NestedOverrideCountKey = "nestedOverrideCount";
     static constexpr std::string_view NestedOverridePrefix = "nestedOverride.";
