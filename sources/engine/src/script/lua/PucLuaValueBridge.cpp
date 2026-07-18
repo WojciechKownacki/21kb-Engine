@@ -108,7 +108,16 @@ bool PucLuaValueBridge::IsCompatible(ScriptValue value, ScriptValueType expected
            (expected == ScriptValueType::Float && value.Type() == ScriptValueType::Int) ||
            ((expected == ScriptValueType::Entity || expected == ScriptValueType::Component) &&
                value.Type() == ScriptValueType::Int &&
-               value.AsInt() >= 0);
+               value.AsInt() >= 0) ||
+           // LIB-041: an exposed variable typed as one of the expanded value
+           // types accepts the Int/Float/String a Lua assignment produces —
+           // same coercions the function-call gate (ScriptFunctionRegistry)
+           // applies, so Self.Set(...) on such a variable is not rejected.
+           ((expected == ScriptValueType::UInt32 || expected == ScriptValueType::Hash) &&
+               value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
+           (expected == ScriptValueType::Int64 && value.Type() == ScriptValueType::Int) ||
+           (expected == ScriptValueType::Double && (value.Type() == ScriptValueType::Int || value.Type() == ScriptValueType::Float)) ||
+           ((expected == ScriptValueType::Name || expected == ScriptValueType::Guid) && value.Type() == ScriptValueType::String);
 }
 
 ScriptValue PucLuaValueBridge::Coerce(ScriptValue value, ScriptValueType expected) {
@@ -117,6 +126,25 @@ ScriptValue PucLuaValueBridge::Coerce(ScriptValue value, ScriptValueType expecte
     }
     if ((expected == ScriptValueType::Entity || expected == ScriptValueType::Component) && value.Type() == ScriptValueType::Int) {
         return ScriptValue{ static_cast<std::uint64_t>(value.AsInt()), expected };
+    }
+    // LIB-041: mirror the expanded-type coercions (see IsCompatible above).
+    if (expected == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int) {
+        return ScriptValue{ static_cast<std::uint32_t>(value.AsInt()) };
+    }
+    if (expected == ScriptValueType::Hash && value.Type() == ScriptValueType::Int) {
+        return ScriptValue{ static_cast<std::uint64_t>(value.AsInt()), ScriptValueType::Hash };
+    }
+    if (expected == ScriptValueType::Int64 && value.Type() == ScriptValueType::Int) {
+        return ScriptValue{ static_cast<std::int64_t>(value.AsInt()) };
+    }
+    if (expected == ScriptValueType::Double && value.Type() == ScriptValueType::Int) {
+        return ScriptValue{ static_cast<double>(value.AsInt()) };
+    }
+    if (expected == ScriptValueType::Double && value.Type() == ScriptValueType::Float) {
+        return ScriptValue{ static_cast<double>(value.AsFloat()) };
+    }
+    if ((expected == ScriptValueType::Name || expected == ScriptValueType::Guid) && value.Type() == ScriptValueType::String) {
+        return ScriptValue{ value.AsString(), expected };
     }
     return value;
 }
