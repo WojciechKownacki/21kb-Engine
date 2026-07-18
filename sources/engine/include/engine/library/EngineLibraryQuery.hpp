@@ -152,9 +152,24 @@ private:
 // (the guard is an atomic counter, not an exclusive lock — nested entry
 // is fine), kept for defense-in-depth and because it must still cover the
 // filter-resolution step that runs before the query itself exists.
-template <typename Component>
+// LIB-078: the component list is a TYPE PACK, so a script may iterate every
+// entity that has ALL of several components in one query and receive each
+// component's data in the visitor: Query<TransformComponent,
+// LightComponent>::ForEach(scene, event, [](EntityHandle e, const
+// TransformComponent& t, const LightComponent& l){ ... }). A single-type
+// Query<Transform> is just the one-element pack, so every existing caller
+// keeps working unchanged. The multi-component match itself is not
+// re-implemented here — kb::ecs::World::CreateQuery<Components...>(filter)
+// already builds a real archetype-intersecting query (the same primitive
+// kb::ecs::QuerySystem uses), and QueryBatch<Components...> already exposes
+// each component column via Components<N>(); this wrapper only adds the
+// script-facing phase gate, filter options, and per-entity Any/Enabled
+// predicates on top of it.
+template <typename... Components>
 class Query final {
 public:
+    static_assert(sizeof...(Components) >= 1, "kb::library::Query needs at least one component type to iterate");
+
     Query() = delete;
 
     template <typename Visitor>
@@ -182,33 +197,50 @@ public:
             filter.Changed(resolve(world));
         }
 
-        const kb::ecs::Query<Component> query = world.CreateQuery<Component>(filter);
+        const kb::ecs::Query<Components...> query = world.CreateQuery<Components...>(filter);
         const kb::ecs::QueryExecutionSettings settings{
             .iterationOrder = options.StableOrderRequested() ? kb::ecs::QueryIterationOrder::Deterministic : kb::ecs::QueryIterationOrder::StorageOrder,
             .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
         };
 
-        query.ForEachBatchKernel(settings, [&](const typename kb::ecs::Query<Component>::Batch& batch) {
-            const Component* components = batch.template Components<0>();
-            for (std::size_t index = 0; index < batch.Count(); ++index) {
-                const kb::ecs::Entity entity = batch.EntityAt(index);
-                if (options.EnabledOnlyRequested() && !scene.Entities().IsActive(entity)) {
-                    continue;
-                }
-                bool matchesEveryAnyGroup = true;
-                for (const QueryFilterOptions::AnyPredicate predicate : options.AnyPredicates()) {
-                    if (!predicate(world, entity)) {
-                        matchesEveryAnyGroup = false;
-                        break;
-                    }
-                }
-                if (!matchesEveryAnyGroup) {
-                    continue;
-                }
-                visitor(EntityHandle{ entity, scene.Id() }, components[index]);
-            }
+        query.ForEachBatchKernel(settings, [&](const typename kb::ecs::Query<Components...>::Batch& batch) {
+            VisitBatch(batch, scene, world, options, visitor, std::index_sequence_for<Components...>{});
         });
         return true;
+    }
+
+private:
+    // Expands the component-column pack: for each surviving entity in the
+    // batch it passes one const reference per queried component to the
+    // visitor, in the same order as the type pack. Components<Is>() is the
+    // Is-th component's contiguous column for this batch (kb::ecs guarantees
+    // one column per queried type), so Components<Is>()[index] is that
+    // entity's data for the Is-th component.
+    template <typename Visitor, std::size_t... Is>
+    static void VisitBatch(
+        const typename kb::ecs::Query<Components...>::Batch& batch,
+        kb::scene::Scene& scene,
+        const kb::ecs::World& world,
+        const QueryFilterOptions& options,
+        Visitor& visitor,
+        std::index_sequence<Is...>) {
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            const kb::ecs::Entity entity = batch.EntityAt(index);
+            if (options.EnabledOnlyRequested() && !scene.Entities().IsActive(entity)) {
+                continue;
+            }
+            bool matchesEveryAnyGroup = true;
+            for (const QueryFilterOptions::AnyPredicate predicate : options.AnyPredicates()) {
+                if (!predicate(world, entity)) {
+                    matchesEveryAnyGroup = false;
+                    break;
+                }
+            }
+            if (!matchesEveryAnyGroup) {
+                continue;
+            }
+            visitor(EntityHandle{ entity, scene.Id() }, batch.template Components<Is>()[index]...);
+        }
     }
 };
 
