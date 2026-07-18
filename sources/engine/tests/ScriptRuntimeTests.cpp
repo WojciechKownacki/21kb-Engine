@@ -10637,6 +10637,124 @@ void RunScriptTaskApiCompletionOwnerAndPauseTest() {
 // Completed for a loadable asset, genuinely Failed (not silently swallowed)
 // for one whose type has no registered loader — through a real
 // scene.Tasks().Advance.
+// LIB-058: the five script-facing controlled collections (Array/Set/Map/
+// Queue/Stack) must be genuinely creatable, mutable, and readable from the
+// real ScriptFunctionRegistry, and — because the whole point of the audit
+// gap was "cannot use from Lua" — actually reachable from a real Lua script,
+// not just native hand-built calls. Native coverage below exercises every
+// operation of every structure; the Lua block proves the handle + operations
+// survive the Lua bridge end to end.
+void RunScriptCollectionsApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Collections API test host setup failed");
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+
+    const auto call = [&](std::string_view name, std::vector<kb::script::ScriptFunctionArgument> args) {
+        return host.Functions().Call(name, args, context);
+    };
+    const auto createHandle = [&](std::string_view createFn) -> std::uint64_t {
+        const kb::script::ScriptFunctionCallResult r = call(createFn, {});
+        kb::tests::Require(r.Succeeded() && r.Output("handle").has_value(), "Collection Create must return a handle");
+        return r.Output("handle")->AsUInt64();
+    };
+    const auto hArg = [](std::uint64_t h) { return kb::script::ScriptFunctionArgument{ .name = "handle", .value = kb::script::ScriptValue{ h, kb::script::ScriptValueType::Hash } }; };
+    const auto fArg = [](std::string name, float v) { return kb::script::ScriptFunctionArgument{ .name = std::move(name), .value = kb::script::ScriptValue{ v } }; };
+    const auto iArg = [](std::string name, int v) { return kb::script::ScriptFunctionArgument{ .name = std::move(name), .value = kb::script::ScriptValue{ v } }; };
+
+    // --- Array ---
+    const std::uint64_t arr = createHandle("Array.Create");
+    kb::tests::Require(arr != 0U, "Array.Create must return a nonzero handle");
+    kb::tests::Require(call("Array.Push", { hArg(arr), fArg("value", 10.0F) }).Output("pushed")->AsBool(), "Array.Push must succeed");
+    static_cast<void>(call("Array.Push", { hArg(arr), fArg("value", 20.0F) }));
+    static_cast<void>(call("Array.Push", { hArg(arr), fArg("value", 30.0F) }));
+    kb::tests::Require(call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 3, "Array.Length must report the 3 pushed elements");
+    const kb::script::ScriptFunctionCallResult got1 = call("Array.Get", { hArg(arr), iArg("index", 1) });
+    kb::tests::Require(got1.Output("found")->AsBool() && kb::tests::NearlyEqual(got1.Output("value")->AsFloat(), 20.0F), "Array.Get(1) must return the second element");
+    kb::tests::Require(!call("Array.Get", { hArg(arr), iArg("index", 9) }).Output("found")->AsBool(), "Array.Get out of range must report found=false, not a fabricated value");
+    kb::tests::Require(call("Array.Set", { hArg(arr), iArg("index", 0), fArg("value", 99.0F) }).Output("set")->AsBool(), "Array.Set must succeed in range");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Array.Get", { hArg(arr), iArg("index", 0) }).Output("value")->AsFloat(), 99.0F), "Array.Set must change the element");
+    kb::tests::Require(call("Array.RemoveAt", { hArg(arr), iArg("index", 0) }).Output("removed")->AsBool(), "Array.RemoveAt must succeed in range");
+    kb::tests::Require(call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 2, "Array.RemoveAt must shrink the array");
+    kb::tests::Require(call("Array.Clear", { hArg(arr) }).Output("cleared")->AsBool() && call("Array.Length", { hArg(arr) }).Output("count")->AsInt() == 0, "Array.Clear must empty the array");
+    // Invalid handle: honest no-op, never a crash.
+    kb::tests::Require(call("Array.Length", { hArg(999999U) }).Output("count")->AsInt() == 0, "Array.Length on an unknown handle must be 0, not a crash");
+    kb::tests::Require(!call("Array.Push", { hArg(999999U), fArg("value", 1.0F) }).Output("pushed")->AsBool(), "Array.Push on an unknown handle must fail cleanly");
+
+    // --- Set (unique membership) ---
+    const std::uint64_t set = createHandle("Set.Create");
+    kb::tests::Require(set != arr, "collection handles must be globally unique across types");
+    kb::tests::Require(call("Set.Add", { hArg(set), fArg("value", 5.0F) }).Output("added")->AsBool(), "Set.Add must succeed");
+    kb::tests::Require(call("Set.Add", { hArg(set), fArg("value", 5.0F) }).Output("added")->AsBool(), "Set.Add of an existing member is an idempotent success");
+    kb::tests::Require(call("Set.Count", { hArg(set) }).Output("count")->AsInt() == 1, "Set must not store a duplicate");
+    kb::tests::Require(call("Set.Contains", { hArg(set), fArg("value", 5.0F) }).Output("contains")->AsBool(), "Set.Contains must find a member");
+    kb::tests::Require(!call("Set.Contains", { hArg(set), fArg("value", 6.0F) }).Output("contains")->AsBool(), "Set.Contains must reject a non-member");
+    kb::tests::Require(call("Set.Remove", { hArg(set), fArg("value", 5.0F) }).Output("removed")->AsBool() && call("Set.Count", { hArg(set) }).Output("count")->AsInt() == 0, "Set.Remove must remove the member");
+
+    // --- Map (key -> value) ---
+    const std::uint64_t map = createHandle("Map.Create");
+    kb::tests::Require(call("Map.Set", { hArg(map), fArg("key", 1.0F), fArg("value", 10.0F) }).Output("set")->AsBool(), "Map.Set must succeed");
+    kb::tests::Require(call("Map.ContainsKey", { hArg(map), fArg("key", 1.0F) }).Output("contains")->AsBool(), "Map.ContainsKey must find the key");
+    const kb::script::ScriptFunctionCallResult mget = call("Map.Get", { hArg(map), fArg("key", 1.0F) });
+    kb::tests::Require(mget.Output("found")->AsBool() && kb::tests::NearlyEqual(mget.Output("value")->AsFloat(), 10.0F), "Map.Get must return the stored value");
+    kb::tests::Require(call("Map.Set", { hArg(map), fArg("key", 1.0F), fArg("value", 20.0F) }).Output("set")->AsBool() && kb::tests::NearlyEqual(call("Map.Get", { hArg(map), fArg("key", 1.0F) }).Output("value")->AsFloat(), 20.0F), "Map.Set must update an existing key");
+    kb::tests::Require(call("Map.Count", { hArg(map) }).Output("count")->AsInt() == 1, "Map updating a key must not grow the map");
+    kb::tests::Require(!call("Map.Get", { hArg(map), fArg("key", 2.0F) }).Output("found")->AsBool(), "Map.Get on an absent key must report found=false");
+    kb::tests::Require(call("Map.Remove", { hArg(map), fArg("key", 1.0F) }).Output("removed")->AsBool() && !call("Map.ContainsKey", { hArg(map), fArg("key", 1.0F) }).Output("contains")->AsBool(), "Map.Remove must remove the key");
+
+    // --- Queue (FIFO) ---
+    const std::uint64_t queue = createHandle("Queue.Create");
+    static_cast<void>(call("Queue.Enqueue", { hArg(queue), fArg("value", 1.0F) }));
+    static_cast<void>(call("Queue.Enqueue", { hArg(queue), fArg("value", 2.0F) }));
+    kb::tests::Require(call("Queue.Count", { hArg(queue) }).Output("count")->AsInt() == 2, "Queue.Count must reflect enqueued items");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Peek", { hArg(queue) }).Output("value")->AsFloat(), 1.0F), "Queue.Peek must return the oldest item");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Dequeue", { hArg(queue) }).Output("value")->AsFloat(), 1.0F), "Queue.Dequeue must return items FIFO (oldest first)");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Queue.Dequeue", { hArg(queue) }).Output("value")->AsFloat(), 2.0F), "Queue.Dequeue must continue FIFO");
+    kb::tests::Require(!call("Queue.Dequeue", { hArg(queue) }).Output("found")->AsBool(), "Queue.Dequeue on an empty queue must report found=false");
+
+    // --- Stack (LIFO) ---
+    const std::uint64_t stack = createHandle("Stack.Create");
+    static_cast<void>(call("Stack.Push", { hArg(stack), fArg("value", 1.0F) }));
+    static_cast<void>(call("Stack.Push", { hArg(stack), fArg("value", 2.0F) }));
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Top", { hArg(stack) }).Output("value")->AsFloat(), 2.0F), "Stack.Top must return the most recently pushed item");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Pop", { hArg(stack) }).Output("value")->AsFloat(), 2.0F), "Stack.Pop must return items LIFO (newest first)");
+    kb::tests::Require(kb::tests::NearlyEqual(call("Stack.Pop", { hArg(stack) }).Output("value")->AsFloat(), 1.0F), "Stack.Pop must continue LIFO");
+    kb::tests::Require(!call("Stack.Pop", { hArg(stack) }).Output("found")->AsBool(), "Stack.Pop on an empty stack must report found=false");
+
+    // --- Real Lua end-to-end: the audit's core gap was "cannot use from
+    // Lua." A behaviour creates an Array, pushes two values, reads its
+    // length and an element back, all through the generic CallFunction
+    // bridge, and stores the observations for the test to verify. This is
+    // the proof the whole handle+operation surface actually works from a
+    // running script, not just native hand-built ScriptValues.
+    constexpr kb::assets::AssetId kCollectionsLuaAsset{ 700801U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kCollectionsLuaAsset, R"(
+function Tick(self, dt)
+    -- Array.Create / Array.Length each return a SINGLE output, so the
+    -- generic CallFunction hands back the bare value (handle / count), not
+    -- a table. Array.Get returns TWO outputs, so it comes back as a table.
+    local h = CallFunction("Array.Create", {})
+    CallFunction("Array.Push", { handle = h, value = 7.0 })
+    CallFunction("Array.Push", { handle = h, value = 8.0 })
+    local count = CallFunction("Array.Length", { handle = h })
+    local got = CallFunction("Array.Get", { handle = h, index = 1 })
+    SetShared("luaCollectionOk", count == 2 and got.found == true and got.value == 8.0)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Collections Lua test script did not load");
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CollectionsCaller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kCollectionsLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tick.diagnostics.empty(), "Collections Lua test Tick produced script diagnostics");
+    const std::optional<kb::script::ScriptValue> luaOk = host.SharedState().Get("luaCollectionOk");
+    kb::tests::Require(luaOk.has_value() && luaOk->AsBool(),
+        "LIB-058 a real Lua script must be able to create an Array, push values, and read length/element back through the handle");
+}
+
 void RunScriptAssetsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
@@ -12805,6 +12923,7 @@ void RunScriptRuntimeTests() {
     RunSceneTimerAdvanceOrderingAndCatchUpTest();
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
+    RunScriptCollectionsApiTest();
     RunScriptAssetsApiTest();
     RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();

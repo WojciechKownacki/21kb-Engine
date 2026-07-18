@@ -3,6 +3,7 @@
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptCollectionsApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
@@ -239,6 +240,18 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Save",
             .ownerRuntime = "kb::save::SaveGameService",
             .Register = &kb::script::ScriptSaveApi::Register,
+        },
+        // LIB-058: script-facing controlled collections (Array/Set/Map/Queue/
+        // Stack). Each collection lives in a per-host store owned by the
+        // registered callbacks (captured shared_ptr, so its lifetime is the
+        // ScriptFunctionRegistry's); a script holds only an opaque Hash
+        // handle, exactly like Assets/Timer/Task. No Lua sugar table
+        // (generic CallFunction, mirrors Assets/Save/Task/Timer). ownerRuntime
+        // names the kb::library collection templates the handles stand in for.
+        LibraryModuleDesc{
+            .name = "Collections",
+            .ownerRuntime = "kb::library::Array/Set/Map/Queue/Stack",
+            .Register = &kb::script::ScriptCollectionsApi::Register,
         },
     };
     return kCatalog;
