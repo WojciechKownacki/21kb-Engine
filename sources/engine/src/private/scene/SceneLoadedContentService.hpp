@@ -41,6 +41,8 @@ public:
     [[nodiscard]] static float Progress(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static bool SetActive(Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::uint64_t ActiveScene(const Scene& scene) noexcept;
+    // LIB-071: hierarchy root of the active loaded scene (invalid if none).
+    [[nodiscard]] static SceneEntity ActiveSceneRoot(const Scene& scene) noexcept;
     // LIB-106: which loaded-scene record (Scene.Load's own id) `entity`'s
     // hierarchy root belongs to; 0 if none (invalid/dead entity, or one
     // never part of any Scene.Load'ed content).
