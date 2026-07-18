@@ -5,11 +5,15 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
+#include <span>
+#include <string_view>
 
 namespace kb::editor {
 namespace {
@@ -34,22 +38,22 @@ namespace {
     return active ? RGB(203, 248, 223) : RGB(158, 166, 176);
 }
 
-void DrawCenteredChipText(HDC dc, RECT rect, const char* label, COLORREF color) {
+void DrawCenteredChipText(HDC dc, RECT rect, std::string_view label, COLORREF color) {
     ScopedFont font(10, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, font.handle);
     const int previousBkMode = SetBkMode(dc, TRANSPARENT);
     const COLORREF previousTextColor = SetTextColor(dc, color);
-    DrawTextA(dc, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     SetTextColor(dc, previousTextColor);
     SetBkMode(dc, previousBkMode);
 }
 
-void DrawStatusChip(HDC dc, RECT rect, const char* label, bool active) {
+void DrawStatusChip(HDC dc, RECT rect, std::string_view label, bool active) {
     SceneViewportToolbarDrawing::FillRound(dc, rect, StatusFill(active), StatusBorder(active), 4);
     DrawCenteredChipText(dc, rect, label, StatusText(active));
 }
 
-void DrawMetricChip(HDC dc, RECT rect, const char* label, COLORREF fill, COLORREF border, COLORREF text) {
+void DrawMetricChip(HDC dc, RECT rect, std::string_view label, COLORREF fill, COLORREF border, COLORREF text) {
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, 4);
     DrawCenteredChipText(dc, rect, label, text);
 }
@@ -176,19 +180,14 @@ void SceneViewportToolbarInfoRenderer::PaintFpsCounter(HDC dc, RECT rect, const 
     const COLORREF border = SceneViewportToolbarDrawing::Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, SceneViewportToolbarMetrics::ButtonRadius);
 
-    char text[16]{};
-    const int fps = SceneViewportToolbarState::CurrentPresentedFps();
-    if (fps > 0) {
-        std::snprintf(text, sizeof(text), "FPS %d", fps);
-    } else {
-        std::snprintf(text, sizeof(text), "FPS --");
-    }
+    std::array<char, 16> text{};
+    const std::string_view label = SceneViewportToolbarLabelFormat::Fps(std::span<char>{ text }, SceneViewportToolbarState::CurrentPresentedFps());
 
     ScopedFont font(11, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, font.handle);
     const int previousBkMode = SetBkMode(dc, TRANSPARENT);
     const COLORREF previousTextColor = SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
-    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     SetTextColor(dc, previousTextColor);
     SetBkMode(dc, previousBkMode);
 }
@@ -201,12 +200,12 @@ void SceneViewportToolbarInfoRenderer::PaintRenderStats(HDC dc, RECT rect, const
     const SceneViewportToolbarRenderStats stats = SceneViewportToolbarState::RenderStats();
     RECT inner = GdiDrawing::Inset(rect, 4);
     int cursor = inner.left;
-    char drawCalls[16]{};
-    char meshes[16]{};
-    std::snprintf(drawCalls, sizeof(drawCalls), "DC %u", stats.submittedDrawCalls);
-    std::snprintf(meshes, sizeof(meshes), "M %u", stats.submittedMeshes);
-    DrawMetricChip(dc, InfoChipRect(inner, cursor, 42), drawCalls, RGB(35, 45, 60), RGB(61, 78, 102), RGB(198, 214, 234));
-    DrawMetricChip(dc, InfoChipRect(inner, cursor, 36), meshes, RGB(36, 48, 45), RGB(65, 88, 78), RGB(201, 228, 214));
+    std::array<char, 16> drawCalls{};
+    std::array<char, 16> meshes{};
+    const std::string_view drawCallsLabel = SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ drawCalls }, stats.submittedDrawCalls);
+    const std::string_view meshesLabel = SceneViewportToolbarLabelFormat::Meshes(std::span<char>{ meshes }, stats.submittedMeshes);
+    DrawMetricChip(dc, InfoChipRect(inner, cursor, 42), drawCallsLabel, RGB(35, 45, 60), RGB(61, 78, 102), RGB(198, 214, 234));
+    DrawMetricChip(dc, InfoChipRect(inner, cursor, 36), meshesLabel, RGB(36, 48, 45), RGB(65, 88, 78), RGB(201, 228, 214));
     DrawStatusChip(dc, InfoChipRect(inner, cursor, std::max<int>(38, static_cast<int>(inner.right - cursor))), "GPU", stats.gpuDrivenActive || stats.gpuDispatches != 0U);
 }
 
@@ -216,14 +215,11 @@ void SceneViewportToolbarInfoRenderer::PaintEcsStats(HDC dc, RECT rect, const Ed
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, SceneViewportToolbarMetrics::ButtonRadius);
 
     const SceneViewportToolbarEcsStats& stats = SceneViewportToolbarState::EcsStats();
-    char text[32]{};
-    if (stats.valid) {
-        std::snprintf(text, sizeof(text), "ECS %.2f ms", Milliseconds(stats.frameDurationNanoseconds));
-    } else {
-        std::snprintf(text, sizeof(text), "ECS --");
-    }
+    std::array<char, 32> text{};
+    const std::string_view label = SceneViewportToolbarLabelFormat::EcsMilliseconds(
+        std::span<char>{ text }, stats.valid, Milliseconds(stats.frameDurationNanoseconds));
 
-    DrawCenteredChipText(dc, rect, text, stats.valid ? RGB(205, 224, 248) : GdiDrawing::ToColorRef(theme.textSecondary));
+    DrawCenteredChipText(dc, rect, label, stats.valid ? RGB(205, 224, 248) : GdiDrawing::ToColorRef(theme.textSecondary));
 }
 
 void SceneViewportToolbarInfoRenderer::PaintPipelineStats(HDC dc, RECT rect, const EditorTheme& theme) {

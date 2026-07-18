@@ -11,10 +11,13 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
+#include <array>
 #include <cmath>
+#include <span>
 #include <string_view>
 
 namespace {
@@ -439,11 +442,37 @@ void RunPlayModeStateTest() {
     kb::editor::tests::Require(playMode.Generation() == 4U, "Stopping play mode should bump generation");
 }
 
+// LIB-062: the scene-viewport toolbar's per-frame numeric HUD labels are
+// now formatted through kb::library::TextFormatBuffer (via
+// SceneViewportToolbarLabelFormat) instead of std::snprintf. Prove the
+// formatter — the actual production code path that builds the on-screen
+// FPS/draw-call/mesh/ECS strings each frame — produces the exact bytes,
+// including the no-value fallbacks, entirely without heap allocation.
+void RunToolbarHudLabelFormatTest() {
+    using kb::editor::SceneViewportToolbarLabelFormat;
+
+    std::array<char, 16> fpsBuffer{};
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
+
+    std::array<char, 16> dcBuffer{};
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 1234U) == "DC 1234", "Draw-call label must format as \"DC 1234\"");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 0U) == "DC 0", "Draw-call label must format zero as \"DC 0\"");
+
+    std::array<char, 16> meshBuffer{};
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Meshes(std::span<char>{ meshBuffer }, 57U) == "M 57", "Mesh label must format as \"M 57\"");
+
+    std::array<char, 32> ecsBuffer{};
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, true, 3.14159) == "ECS 3.14 ms", "ECS label must format a valid frame time to two decimals as \"ECS 3.14 ms\"");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, false, 0.0) == "ECS --", "ECS label must fall back to \"ECS --\" when no ECS frame is present");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunToolbarHudLabelFormatTest();
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
     RunRenderProfileCycleTest();
