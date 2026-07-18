@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -358,6 +359,21 @@ ScriptFunctionCallResult FixedStepIndex(const ScriptFunctionCallContext& context
 // state an in-flight Tick() elsewhere in the same frame depends on (a
 // physics raycast run later in the same Tick started hitting the wrong
 // collider once every Spawn — even unparented ones — force-synced).
+// LIB-071: the parent a World.Spawn should use. An explicit `parent`
+// argument is honored exactly as before (a dead one falls through to a
+// detached root, unchanged). ONLY when the caller passes no `parent` at all
+// does the spawn default into the ACTIVE loaded scene's root (Scene.SetActive
+// / SceneLoadedContent::ActiveSceneRoot) — so Scene.SetActive genuinely
+// steers where new content lands, instead of being a purely observable flag.
+// With no loaded/active scene, ActiveSceneRoot() is invalid and the spawn is
+// a root, identical to the pre-LIB-071 default.
+[[nodiscard]] kb::scene::SceneEntity ResolveSpawnParent(kb::scene::Scene& scene, std::span<const ScriptFunctionArgument> arguments) {
+    if (HasArg(arguments, "parent")) {
+        return EntityArg(arguments, "parent");
+    }
+    return scene.LoadedContent().ActiveSceneRoot();
+}
+
 ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -370,7 +386,7 @@ ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::sp
         desc.name = StringArg(arguments, "name", "Entity");
         ApplyPositionArgs(desc.transform, arguments);
         ApplyRotationArgs(desc.transform, arguments);
-        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        const kb::scene::SceneEntity parent = ResolveSpawnParent(*context.scene, arguments);
         parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
         if (parented) {
             desc.parent = context.scene->Entities().Object(parent);
@@ -393,7 +409,7 @@ ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::sp
             ApplyRotationArgs(transform, arguments);
             context.scene->Transforms().Set(entity, transform);
         }
-        const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
+        const kb::scene::SceneEntity parent = ResolveSpawnParent(*context.scene, arguments);
         parented = parent.IsValid() && context.scene->Entities().IsAlive(parent);
         if (parented) {
             // Matches the blank-entity path above, which also has no

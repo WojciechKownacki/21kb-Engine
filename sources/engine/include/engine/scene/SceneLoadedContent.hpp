@@ -67,13 +67,20 @@ public:
     [[nodiscard]] std::uint64_t Find(std::string_view name) const noexcept;
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
     [[nodiscard]] float Progress(std::uint64_t id) const noexcept;
-    // Purely a tracked, queryable selection among currently-loaded records
-    // today — it does NOT redirect World.Spawn/InstantiatePrefab/etc.
-    // (those always target the Scene the calling ScriptRuntimeHost was
-    // constructed with; rewiring every registered function's target scene
-    // dynamically is a much larger, separate change, not attempted here).
+    // LIB-071: selects which loaded-scene record is active AND steers content
+    // CREATION into it: World.Spawn/InstantiatePrefab, when given no explicit
+    // parent, parent the new root under ActiveSceneRoot() so a spawned entity
+    // belongs to (and later Unloads with) the active scene. Operations that
+    // act on an explicit entity id (World.Destroy/SetProperty/etc.) need no
+    // retargeting — they already address a specific entity regardless of which
+    // scene is active. An explicit `parent` argument always wins over the
+    // active-scene default.
     [[nodiscard]] bool SetActive(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t ActiveScene() const noexcept;
+    // LIB-071: hierarchy root of the active loaded scene, or an invalid
+    // SceneEntity when nothing is loaded/active — the parent World.Spawn uses
+    // to place a new entity into the active scene.
+    [[nodiscard]] SceneEntity ActiveSceneRoot() const noexcept;
     // LIB-106: which loaded-scene record `entity`'s hierarchy root belongs
     // to; 0 if none — see SceneLoadedContentService::OwningScene's own
     // doc comment for the full contract.
