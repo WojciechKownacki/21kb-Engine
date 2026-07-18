@@ -212,6 +212,18 @@ Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept {
     } };
 }
 
+Mat3 InverseTranspose(const Mat3& m) noexcept {
+    const Vec3 col0 = Cross(m.columns[1], m.columns[2]);
+    const Vec3 col1 = Cross(m.columns[2], m.columns[0]);
+    const Vec3 col2 = Cross(m.columns[0], m.columns[1]);
+    const float det = Dot(m.columns[0], col0);
+    if (det <= 0.000001F && det >= -0.000001F) {
+        return Mat3{};
+    }
+    const float inv = 1.0F / det;
+    return Mat3{ { col0 * inv, col1 * inv, col2 * inv } };
+}
+
 DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept {
     // Guard against smoothTime <= 0 the same way Unity's Mathf.SmoothDamp
     // does: rather than dividing by zero, clamp to a tiny positive value so

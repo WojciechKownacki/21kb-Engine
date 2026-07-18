@@ -439,6 +439,30 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // position/rotation/scale fields already imply.
 [[nodiscard]] Mat4 FromTRS(Vec3 translation, Quat rotation, Vec3 scale) noexcept;
 
+// LIB-043: Mat3 operations. columns[] are the transformed basis vectors, so
+// m * v is the linear combination of the columns weighted by v — the same
+// column-major convention Mat4's operator* above uses.
+[[nodiscard]] constexpr Vec3 operator*(const Mat3& lhs, Vec3 rhs) noexcept {
+    return lhs.columns[0] * rhs.x + lhs.columns[1] * rhs.y + lhs.columns[2] * rhs.z;
+}
+
+// Determinant as the scalar triple product of the columns — det = c0 · (c1 ×
+// c2). Built on the Dot/Cross this file already defines, not a separately
+// transcribed expansion.
+[[nodiscard]] constexpr float Determinant(const Mat3& m) noexcept {
+    return Dot(m.columns[0], Cross(m.columns[1], m.columns[2]));
+}
+
+// The inverse-transpose (M^-1)^T — the "normal matrix" that transforms
+// surface normals correctly under a non-uniform scale/shear, where the plain
+// matrix would skew them off the surface. For a column matrix [c0 c1 c2],
+// (M^-1)^T has columns (c1×c2, c2×c0, c0×c1)/det — derived once from Cross/
+// Dot rather than hand-expanding nine cofactors. A singular matrix (|det| ~
+// 0) has no well-defined normal matrix, so this returns identity (leaving
+// normals unchanged) instead of dividing by zero — the same defined-
+// degenerate-result rule Normalize/Intersect follow (LIB-054).
+[[nodiscard]] Mat3 InverseTranspose(const Mat3& m) noexcept;
+
 // LIB-045: scalar math foundation — the plain-Float functions LIB-046
 // through LIB-049's Vec3/Quat-level operations (Dot, Cross, Slerp, ...)
 // build on. These are the same functions `sources/script/ScriptMathApi`
