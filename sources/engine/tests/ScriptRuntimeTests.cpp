@@ -9325,6 +9325,12 @@ void RunScriptRuntimeSceneSystemFixedStepSafetyTest() {
     static_cast<void>(system.ExecuteFrame(scene, -1.0F));
     kb::tests::Require(fixedTicks == 0U, "Fixed step safety accepted a negative delta for FixedTick");
     kb::tests::Require(!tickDeltas.empty() && kb::tests::NearlyEqual(tickDeltas.back(), 0.0F), "Fixed step safety did not clamp negative Tick delta");
+    // LIB-093: ExecuteFrame (via PrepareScene) must stamp the scene with THIS
+    // system's script FixedTick delta (0.1) so Time.FixedDelta reports it —
+    // the production half of the fix whose read half RunScriptTimeApiElapsed
+    // AndAliasingTest checks.
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().ScriptFixedDeltaSeconds(), 0.1F),
+        "LIB-093 ScriptRuntimeSceneSystem::ExecuteFrame must stamp the scene's script fixed delta from its frame settings (0.1)");
 
     static_cast<void>(system.ExecuteFrame(scene, 1.0F));
     kb::tests::Require(fixedTicks == 2U, "Fixed step safety did not respect max fixed steps per frame");
@@ -10334,8 +10340,17 @@ void RunScriptTimeApiElapsedAndAliasingTest() {
     const kb::script::ScriptFunctionCallResult unscaledResult = host.Functions().Call("Time.UnscaledDelta", {}, context);
     kb::tests::Require(unscaledResult.Succeeded() && kb::tests::NearlyEqual(unscaledResult.Output("delta")->AsFloat(), 0.25F), "Time.UnscaledDelta must equal Time.Delta today (no time-scale mechanism exists yet)");
 
+    // LIB-093 (audit gap closed 2026-07-18): Time.FixedDelta must report the
+    // SCRIPT FixedTick step, not the independently-configured PHYSICS fixed
+    // step. Configure them to DIFFER (physics 0.02, script 0.01) and prove
+    // Time.FixedDelta returns the script one.
+    scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{ .fixedDeltaSeconds = 0.02F });
+    scene.Runtime().SetScriptFixedDeltaSeconds(0.01F);
     const kb::script::ScriptFunctionCallResult fixedDeltaResult = host.Functions().Call("Time.FixedDelta", {}, context);
-    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), scene.Runtime().FixedStepSettings().fixedDeltaSeconds), "Time.FixedDelta must reflect SceneRuntime::FixedStepSettings().fixedDeltaSeconds");
+    kb::tests::Require(fixedDeltaResult.Succeeded() && kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), 0.01F),
+        "Time.FixedDelta must report the SCRIPT FixedTick delta (0.01), the step a script's FixedTick actually runs at");
+    kb::tests::Require(!kb::tests::NearlyEqual(fixedDeltaResult.Output("delta")->AsFloat(), 0.02F),
+        "Time.FixedDelta must NOT return the physics SceneRuntimeFixedStepSettings step (0.02) when it differs from the script step");
 
     const kb::script::ScriptFunctionCallResult elapsedBeforeUpdate = host.Functions().Call("Time.Elapsed", {}, context);
     kb::tests::Require(elapsedBeforeUpdate.Succeeded() && kb::tests::NearlyEqual(elapsedBeforeUpdate.Output("elapsed")->AsFloat(), 0.0F), "Time.Elapsed must start at 0 before any Update()");

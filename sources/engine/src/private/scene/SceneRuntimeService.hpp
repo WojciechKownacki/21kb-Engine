@@ -24,8 +24,11 @@ public:
     static void AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
     static void SynchronizeTransforms(Scene& scene);
     static void SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept;
+    // LIB-093: the script FixedTick delta (see SceneState::scriptFixedDeltaSeconds).
+    static void SetScriptFixedDeltaSeconds(Scene& scene, float seconds) noexcept;
     static void SetTransformPropagationBudget(Scene& scene, SceneTransformPropagationBudget budget) noexcept;
     [[nodiscard]] static SceneRuntimeFixedStepSettings FixedStepSettings(const Scene& scene) noexcept;
+    [[nodiscard]] static float ScriptFixedDeltaSeconds(const Scene& scene) noexcept;
     [[nodiscard]] static SceneTransformPropagationBudget TransformPropagationBudget(const Scene& scene) noexcept;
     [[nodiscard]] static float FixedInterpolationAlpha(const Scene& scene) noexcept;
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;

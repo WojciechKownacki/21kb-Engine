@@ -23,6 +23,10 @@ SceneRuntimeFixedStepSettings SceneRuntimeQueries::FixedStepSettings() const noe
     return SceneRuntimeService::FixedStepSettings(scene_);
 }
 
+float SceneRuntimeQueries::ScriptFixedDeltaSeconds() const noexcept {
+    return SceneRuntimeService::ScriptFixedDeltaSeconds(scene_);
+}
+
 SceneTransformPropagationBudget SceneRuntimeQueries::TransformPropagationBudget() const noexcept {
     return SceneRuntimeService::TransformPropagationBudget(scene_);
 }
@@ -102,12 +106,20 @@ void SceneRuntime::SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) 
     SceneRuntimeService::SetFixedStepSettings(scene_, settings);
 }
 
+void SceneRuntime::SetScriptFixedDeltaSeconds(float seconds) noexcept {
+    SceneRuntimeService::SetScriptFixedDeltaSeconds(scene_, seconds);
+}
+
 void SceneRuntime::SetTransformPropagationBudget(SceneTransformPropagationBudget budget) noexcept {
     SceneRuntimeService::SetTransformPropagationBudget(scene_, budget);
 }
 
 SceneRuntimeFixedStepSettings SceneRuntime::FixedStepSettings() const noexcept {
     return SceneRuntimeService::FixedStepSettings(scene_);
+}
+
+float SceneRuntime::ScriptFixedDeltaSeconds() const noexcept {
+    return SceneRuntimeService::ScriptFixedDeltaSeconds(scene_);
 }
 
 SceneTransformPropagationBudget SceneRuntime::TransformPropagationBudget() const noexcept {

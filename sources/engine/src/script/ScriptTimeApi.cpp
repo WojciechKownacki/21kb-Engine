@@ -59,9 +59,14 @@ ScriptFunctionCallResult FixedDelta(const ScriptFunctionCallContext& context, st
     if (context.scene == nullptr) {
         return NoScene();
     }
+    // LIB-093: report the delta a script's FixedTick ACTUALLY runs at — the
+    // ScriptRuntimeSceneSystem's own frame-settings step, which it stamps onto
+    // the scene each frame (SceneRuntime::ScriptFixedDeltaSeconds) — NOT the
+    // physics SceneRuntimeFixedStepSettings step, which is configured
+    // independently and can differ (e.g. 0.01 script vs 0.02 physics).
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ context.scene->Runtime().FixedStepSettings().fixedDeltaSeconds } } },
+        .outputs = { ScriptFunctionArgument{ "delta", ScriptValue{ context.scene->Runtime().ScriptFixedDeltaSeconds() } } },
         .errors = {},
     };
 }
