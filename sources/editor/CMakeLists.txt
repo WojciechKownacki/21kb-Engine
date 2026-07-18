@@ -492,6 +492,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp
