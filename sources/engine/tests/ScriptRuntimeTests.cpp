@@ -6790,22 +6790,48 @@ void RunWorldDestroyDeferredFlagTest() {
     const kb::script::ScriptFunctionCallResult thirdDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
     kb::tests::Require(thirdDestroy.Succeeded() && !thirdDestroy.Output("destroyed")->AsBool(), "World.Destroy must remain idempotent across more than two repeat calls");
 
-    const kb::scene::SceneEntity liveEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "StillAlive" });
+    // LIB-067: deferred=true no longer rejects — it queues the destroy for the
+    // frame playback point. The entity stays alive until the scene system
+    // drains the queue (ScriptRuntimeSceneSystem::ExecuteFrame).
+    const kb::scene::SceneEntity deferredTarget = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "DeferredTarget" });
     const std::vector<kb::script::ScriptFunctionArgument> deferredDestroyArgs{
-        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ deferredTarget.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ true } },
     };
     const kb::script::ScriptFunctionCallResult deferredDestroy = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
-    kb::tests::Require(!deferredDestroy.Succeeded(), "World.Destroy(deferred=true) must be rejected today, not silently treated as immediate");
-    kb::tests::Require(scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=true) must not have destroyed the entity when the call itself failed");
+    kb::tests::Require(deferredDestroy.Succeeded() && deferredDestroy.Output("destroyed")->AsBool(),
+        "World.Destroy(deferred=true) must succeed and report destroyed=true for a live entity (it was queued)");
+    kb::tests::Require(scene.Entities().IsAlive(deferredTarget),
+        "World.Destroy(deferred=true) must NOT destroy the entity inline — it is deferred to the frame playback point");
 
+    // A repeated deferred call on the same still-alive entity is idempotent
+    // (the queue de-duplicates) and neither errors nor destroys early.
+    const kb::script::ScriptFunctionCallResult deferredAgain = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(deferredAgain.Succeeded() && scene.Entities().IsAlive(deferredTarget),
+        "A repeated World.Destroy(deferred=true) before the drain must stay queued, not error or destroy early");
+
+    // Driving one scene-system frame reaches the LIB-067 playback point and
+    // applies the queued destroy — proving the drain is actually wired in.
+    kb::script::ScriptRuntimeSceneSystem deferredSystem{ host.Runtime() };
+    static_cast<void>(deferredSystem.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(!scene.Entities().IsAlive(deferredTarget),
+        "A scene-system frame must drain the deferred-destroy queue and actually destroy the entity");
+
+    // Deferring a destroy of an already-dead entity is a harmless no-op: it
+    // reports destroyed=false and queues nothing, so a later frame stays clean.
+    const kb::script::ScriptFunctionCallResult deferredDead = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(deferredDead.Succeeded() && !deferredDead.Output("destroyed")->AsBool(),
+        "World.Destroy(deferred=true) on an already-dead entity must report destroyed=false and queue nothing");
+
+    // deferred=false still behaves exactly like the default immediate call.
+    const kb::scene::SceneEntity immediateTarget = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "ImmediateTarget" });
     const std::vector<kb::script::ScriptFunctionArgument> explicitImmediateArgs{
-        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ immediateTarget.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ false } },
     };
     const kb::script::ScriptFunctionCallResult explicitImmediateDestroy = host.Functions().Call("World.Destroy", explicitImmediateArgs, context);
     kb::tests::Require(explicitImmediateDestroy.Succeeded() && explicitImmediateDestroy.Output("destroyed")->AsBool(), "World.Destroy(deferred=false) must behave exactly like the default (immediate) call");
-    kb::tests::Require(!scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=false) must have actually destroyed the entity");
+    kb::tests::Require(!scene.Entities().IsAlive(immediateTarget), "World.Destroy(deferred=false) must have actually destroyed the entity");
 }
 
 // LIB-068: World.IsActive/SetActive — an entity's own fresh Scene/host,
