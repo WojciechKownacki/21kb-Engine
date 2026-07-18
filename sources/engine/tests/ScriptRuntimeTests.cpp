@@ -1716,6 +1716,77 @@ end
     kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
 }
 
+// LIB-041: a Lua caller marshals numeric literals as Int/Float and text as
+// String (PucLuaValueBridge::FromLua); this proves a function pinned to the
+// expanded value types (UInt32/Int64/Double/Name/Guid) is actually callable
+// from Lua — the ScriptFunctionRegistry gate now coerces those Lua inputs
+// instead of rejecting them as a type mismatch (the prior residual gap).
+void RunLuaCallExpandedTypeInputsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua expanded-type-inputs host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{
+                               .name = "Tests.ExpandedTypeInputs",
+                               .inputs = {
+                                   kb::script::ScriptFunctionPin{ .name = "u32", .type = kb::script::ScriptValueType::UInt32 },
+                                   kb::script::ScriptFunctionPin{ .name = "big", .type = kb::script::ScriptValueType::Int64 },
+                                   kb::script::ScriptFunctionPin{ .name = "dbl", .type = kb::script::ScriptValueType::Double },
+                                   kb::script::ScriptFunctionPin{ .name = "nm", .type = kb::script::ScriptValueType::Name },
+                                   kb::script::ScriptFunctionPin{ .name = "gid", .type = kb::script::ScriptValueType::Guid },
+                               },
+                               .outputs = { kb::script::ScriptFunctionPin{ .name = "ok", .type = kb::script::ScriptValueType::Bool } },
+                           },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> args) {
+                               const auto find = [args](std::string_view name) -> const kb::script::ScriptValue* {
+                                   for (const kb::script::ScriptFunctionArgument& arg : args) {
+                                       if (arg.name == name) {
+                                           return &arg.value;
+                                       }
+                                   }
+                                   return nullptr;
+                               };
+                               const kb::script::ScriptValue* u32 = find("u32");
+                               const kb::script::ScriptValue* big = find("big");
+                               const kb::script::ScriptValue* dbl = find("dbl");
+                               const kb::script::ScriptValue* nm = find("nm");
+                               const kb::script::ScriptValue* gid = find("gid");
+                               const bool matched =
+                                   u32 != nullptr && u32->Type() == kb::script::ScriptValueType::UInt32 && u32->AsUInt64() == 7U &&
+                                   big != nullptr && big->Type() == kb::script::ScriptValueType::Int64 && big->AsInt64() == 123 &&
+                                   dbl != nullptr && dbl->Type() == kb::script::ScriptValueType::Double && dbl->AsDouble() == 3.0 &&
+                                   nm != nullptr && nm->Type() == kb::script::ScriptValueType::Name && nm->AsString() == "hero" &&
+                                   gid != nullptr && gid->Type() == kb::script::ScriptValueType::Guid && gid->AsString() == "abc-123";
+                               return kb::script::ScriptFunctionCallResult{
+                                   .executed = true,
+                                   .outputs = { kb::script::ScriptFunctionArgument{ .name = "ok", .value = kb::script::ScriptValue{ matched } } },
+                               };
+                           },
+                       }),
+        "Lua expanded-type-inputs did not register Tests.ExpandedTypeInputs");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5041U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaExpandedTypeInputs" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local ok = CallFunction("Tests.ExpandedTypeInputs", { u32 = 7, big = 123, dbl = 3, nm = "hero", gid = "abc-123" })
+    SetShared("expandedOk", ok)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua expanded-type-inputs script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Lua call to a UInt32/Int64/Double/Name/Guid-pinned function must not produce a type-mismatch diagnostic");
+    const std::optional<kb::script::ScriptValue> ok = host.SharedState().Get("expandedOk");
+    kb::tests::Require(ok.has_value() && ok->AsBool(), "Lua-supplied Int/String inputs must reach a UInt32/Int64/Double/Name/Guid-pinned function coerced to those exact types");
+}
+
 // LIB-010 audit gap closed 2026-07-17: every existing Lua adapter test
 // (RunLuaCallFunctionResultAdapterTest above) only covered a registered
 // callback RETURNING a failed ScriptFunctionCallResult — never one that
@@ -13233,6 +13304,7 @@ void RunScriptRuntimeTests() {
     RunScriptFunctionRegistryCrossBackendTest();
     RunVisualGraphCallNativeFailureBranchTest();
     RunLuaCallFunctionResultAdapterTest();
+    RunLuaCallExpandedTypeInputsTest();
     RunLuaCallFunctionThrowingCallbackSafetyTest();
     RunScriptFunctionRegistryExceptionSafetyTest();
     RunNativeScriptBackendExceptionSafetyTest();

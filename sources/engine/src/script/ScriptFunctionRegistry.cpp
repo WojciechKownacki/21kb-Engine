@@ -245,6 +245,28 @@ ScriptFunctionArgument ScriptFunctionRegistry::CoerceArgument(const ScriptFuncti
             .value = ScriptValue{ static_cast<std::uint64_t>(argument.value.AsInt()), ScriptValueType::Hash },
         };
     }
+    // LIB-041: complete the coercions for the remaining expanded value types
+    // so a Lua caller can actually reach functions pinned to them. The Lua
+    // bridge marshals numeric literals as Int/Float and text as String
+    // (PucLuaValueBridge::FromLua), so without these an Int64/Double/Name/Guid
+    // pin was registered but uncallable from Lua. Every widening is lossless
+    // (int->int64, int/float->double); String->Name/Guid re-tags the same text
+    // as its intended semantic type.
+    if (expectedType == ScriptValueType::Int64 && argument.value.Type() == ScriptValueType::Int) {
+        return ScriptFunctionArgument{ .name = argument.name, .value = ScriptValue{ static_cast<std::int64_t>(argument.value.AsInt()) } };
+    }
+    if (expectedType == ScriptValueType::Double && argument.value.Type() == ScriptValueType::Int) {
+        return ScriptFunctionArgument{ .name = argument.name, .value = ScriptValue{ static_cast<double>(argument.value.AsInt()) } };
+    }
+    if (expectedType == ScriptValueType::Double && argument.value.Type() == ScriptValueType::Float) {
+        return ScriptFunctionArgument{ .name = argument.name, .value = ScriptValue{ static_cast<double>(argument.value.AsFloat()) } };
+    }
+    if (expectedType == ScriptValueType::Name && argument.value.Type() == ScriptValueType::String) {
+        return ScriptFunctionArgument{ .name = argument.name, .value = ScriptValue{ argument.value.AsString(), ScriptValueType::Name } };
+    }
+    if (expectedType == ScriptValueType::Guid && argument.value.Type() == ScriptValueType::String) {
+        return ScriptFunctionArgument{ .name = argument.name, .value = ScriptValue{ argument.value.AsString(), ScriptValueType::Guid } };
+    }
     return argument;
 }
 
@@ -260,7 +282,14 @@ bool ScriptFunctionRegistry::IsCompatible(ScriptValue value, ScriptValueType exp
            (expectedType == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
            // LIB-058: a non-negative Int satisfies a Hash pin (an opaque
            // collection handle marshalled from Lua as Int).
-           (expectedType == ScriptValueType::Hash && value.Type() == ScriptValueType::Int && value.AsInt() >= 0);
+           (expectedType == ScriptValueType::Hash && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
+           // LIB-041: the remaining expanded value types accept the Int/Float/
+           // String a Lua caller actually produces (see CoerceArgument). All
+           // lossless widenings; String->Name/Guid re-tags the text.
+           (expectedType == ScriptValueType::Int64 && value.Type() == ScriptValueType::Int) ||
+           (expectedType == ScriptValueType::Double && (value.Type() == ScriptValueType::Int || value.Type() == ScriptValueType::Float)) ||
+           (expectedType == ScriptValueType::Name && value.Type() == ScriptValueType::String) ||
+           (expectedType == ScriptValueType::Guid && value.Type() == ScriptValueType::String);
 }
 
 void ScriptFunctionRegistry::ValidateInputs(
