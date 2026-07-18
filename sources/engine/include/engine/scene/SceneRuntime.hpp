@@ -86,6 +86,8 @@ public:
     [[nodiscard]] bool ShouldQuit() const noexcept;
     [[nodiscard]] const kb::ecs::World& EcsWorld() const noexcept;
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
+    // LIB-093: the script FixedTick delta (see SceneState::scriptFixedDeltaSeconds).
+    [[nodiscard]] float ScriptFixedDeltaSeconds() const noexcept;
     [[nodiscard]] SceneTransformPropagationBudget TransformPropagationBudget() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
@@ -170,8 +172,13 @@ public:
     //    syncing first only avoids that extra resolve cost.
     void SynchronizeTransforms();
     void SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept;
+    // LIB-093: stamped each frame by ScriptRuntimeSceneSystem so Time.FixedDelta
+    // reports the SCRIPT FixedTick step (see SceneState::scriptFixedDeltaSeconds).
+    void SetScriptFixedDeltaSeconds(float seconds) noexcept;
     void SetTransformPropagationBudget(SceneTransformPropagationBudget budget) noexcept;
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
+    // LIB-093: the script FixedTick delta (see SceneState::scriptFixedDeltaSeconds).
+    [[nodiscard]] float ScriptFixedDeltaSeconds() const noexcept;
     [[nodiscard]] SceneTransformPropagationBudget TransformPropagationBudget() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
