@@ -170,6 +170,41 @@ void RunQuatAndMatrixMathTest() {
     const Quat zeroInverse = kb::math::Inverse(Quat{ 0.0F, 0.0F, 0.0F, 0.0F });
     kb::tests::Require(zeroInverse.x == 0.0F && zeroInverse.y == 0.0F && zeroInverse.z == 0.0F && zeroInverse.w == 1.0F,
         "Inverse of a zero-length quaternion must return identity, not divide by zero");
+
+    // LIB-043: Mat3 operator*/Determinant/InverseTranspose — the ops the
+    // renderer's glTF normal transform (RenderMeshGltfTransforms) now
+    // consumes instead of hand-expanding cofactors.
+    const Vec3 identityTimesVec = identityMat3 * Vec3{ 3.0F, 4.0F, 5.0F };
+    kb::tests::Require(identityTimesVec.x == 3.0F && identityTimesVec.y == 4.0F && identityTimesVec.z == 5.0F, "Mat3 identity * v must return v unchanged");
+
+    // A non-uniform scale matrix: columns are the scaled basis vectors.
+    const Mat3 scaleMat3{ { Vec3{ 2.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 4.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 8.0F } } };
+    kb::tests::Require(kb::math::Determinant(scaleMat3) == 64.0F, "Mat3 Determinant of diag(2,4,8) must be 64");
+    const Vec3 scaledVec = scaleMat3 * Vec3{ 1.0F, 1.0F, 1.0F };
+    kb::tests::Require(scaledVec.x == 2.0F && scaledVec.y == 4.0F && scaledVec.z == 8.0F, "Mat3 diag scale must scale each axis");
+
+    // The inverse-transpose of a non-uniform scale is diag(1/2,1/4,1/8) — a
+    // normal along +X under a 2x X-scale must come back along +X (a normal
+    // transformed by the plain matrix would instead be stretched). Direction,
+    // not magnitude, is what the normal matrix must preserve.
+    const Mat3 normalMatrix = kb::math::InverseTranspose(scaleMat3);
+    const Vec3 transformedNormal = normalMatrix * Vec3{ 1.0F, 0.0F, 0.0F };
+    kb::tests::Require(std::abs(transformedNormal.x - 0.5F) < 0.0001F && transformedNormal.y == 0.0F && transformedNormal.z == 0.0F, "Mat3 InverseTranspose of diag(2,4,8) applied to +X must be (0.5,0,0)");
+
+    // A shear must transform normals off the naive direction: for the shear
+    // that maps X-basis to (1, s, 0), the surface with +Y normal tilts, so
+    // the normal matrix must rotate the +Y normal toward -X.
+    const Mat3 shear{ { Vec3{ 1.0F, 0.5F, 0.0F }, Vec3{ 0.0F, 1.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F } } };
+    const Vec3 shearedNormal = kb::math::InverseTranspose(shear) * Vec3{ 0.0F, 1.0F, 0.0F };
+    kb::tests::Require(std::abs(shearedNormal.x - (-0.5F)) < 0.0001F && std::abs(shearedNormal.y - 1.0F) < 0.0001F, "Mat3 InverseTranspose must tilt a +Y normal to (-0.5,1,0) under an X->(1,0.5,0) shear");
+
+    // A singular (zero-determinant) matrix has no normal matrix — must return
+    // identity, not divide by zero.
+    const Mat3 singular{ { Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 1.0F, 0.0F, 0.0F }, Vec3{ 0.0F, 0.0F, 1.0F } } };
+    const Mat3 singularNormalMatrix = kb::math::InverseTranspose(singular);
+    kb::tests::Require(
+        singularNormalMatrix.columns[0].x == 1.0F && singularNormalMatrix.columns[1].y == 1.0F && singularNormalMatrix.columns[2].z == 1.0F,
+        "Mat3 InverseTranspose of a singular matrix must return identity, not divide by zero");
 }
 
 // LIB-044: Radians/Degrees must convert correctly against known values,

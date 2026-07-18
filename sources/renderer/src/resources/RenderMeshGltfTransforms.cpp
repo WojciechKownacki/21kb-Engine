@@ -1,5 +1,7 @@
 #include "resources/RenderMeshGltfTransforms.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <cmath>
 
 namespace kb::render {
@@ -37,30 +39,24 @@ std::array<float, 3> RenderMeshGltfTransforms::TransformDirection(const float ma
 }
 
 std::array<float, 3> RenderMeshGltfTransforms::TransformSurfaceNormal(const float matrix[16], float x, float y, float z) noexcept {
-    const float a = matrix[0];
-    const float b = matrix[4];
-    const float c = matrix[8];
-    const float d = matrix[1];
-    const float e = matrix[5];
-    const float f = matrix[9];
-    const float g = matrix[2];
-    const float h = matrix[6];
-    const float i = matrix[10];
+    // LIB-043: the surface-normal transform is the inverse-transpose (normal
+    // matrix) of the model transform's upper-left 3x3 — extract that 3x3 from
+    // the column-major float[16] and delegate the math to kb::math::Mat3
+    // (InverseTranspose/Determinant) instead of re-expanding nine cofactors by
+    // hand here. Behaviour is preserved exactly, including the singular-matrix
+    // fallback to +Y and the final renormalization.
+    const kb::math::Mat3 upperLeft{ {
+        kb::math::Vec3{ matrix[0], matrix[1], matrix[2] },
+        kb::math::Vec3{ matrix[4], matrix[5], matrix[6] },
+        kb::math::Vec3{ matrix[8], matrix[9], matrix[10] },
+    } };
 
-    const float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-    if (std::fabs(determinant) <= 0.0001F) {
+    if (std::fabs(kb::math::Determinant(upperLeft)) <= 0.0001F) {
         return { 0.0F, 1.0F, 0.0F };
     }
 
-    std::array<float, 3> normal{
-        (e * i - f * h) * x + (f * g - d * i) * y + (d * h - e * g) * z,
-        (c * h - b * i) * x + (a * i - c * g) * y + (b * g - a * h) * z,
-        (b * f - c * e) * x + (c * d - a * f) * y + (a * e - b * d) * z,
-    };
-    normal[0] /= determinant;
-    normal[1] /= determinant;
-    normal[2] /= determinant;
-    return NormalizeVector(normal, std::array<float, 3>{ 0.0F, 1.0F, 0.0F });
+    const kb::math::Vec3 transformed = kb::math::InverseTranspose(upperLeft) * kb::math::Vec3{ x, y, z };
+    return NormalizeVector(std::array<float, 3>{ transformed.x, transformed.y, transformed.z }, std::array<float, 3>{ 0.0F, 1.0F, 0.0F });
 }
 
 } // namespace kb::render
