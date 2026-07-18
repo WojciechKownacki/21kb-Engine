@@ -51,6 +51,12 @@ public:
     void Destroy(SceneObject object) noexcept;
     void Destroy(SceneEntity entity) noexcept;
     void Destroy(std::span<const SceneObject> objects) noexcept;
+    // LIB-067: queue an entity for destruction at the next frame playback
+    // point (World.Destroy(deferred=true)); drained by DrainDeferredDestroys.
+    void QueueDeferredDestroy(SceneEntity entity) noexcept;
+    // LIB-067: destroy every still-alive queued entity, clear the queue, and
+    // return the count destroyed. Called once per frame by the scene system.
+    [[nodiscard]] std::size_t DrainDeferredDestroys() noexcept;
     [[nodiscard]] bool SetParent(std::span<const SceneObject> objects, SceneObject parent) noexcept;
 
     [[nodiscard]] bool IsAlive(SceneObject object) const noexcept;

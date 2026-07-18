@@ -16,6 +16,14 @@ void SceneEntities::Destroy(std::span<const SceneObject> objects) noexcept {
     SceneEntityService::DestroyObjects(scene_, objects);
 }
 
+void SceneEntities::QueueDeferredDestroy(SceneEntity entity) noexcept {
+    SceneEntityService::QueueDeferredDestroy(scene_, entity);
+}
+
+std::size_t SceneEntities::DrainDeferredDestroys() noexcept {
+    return SceneEntityService::DrainDeferredDestroys(scene_);
+}
+
 bool SceneEntities::SetParent(std::span<const SceneObject> objects, SceneObject parent) noexcept {
     return SceneEntityService::SetParent(scene_, objects, parent);
 }
