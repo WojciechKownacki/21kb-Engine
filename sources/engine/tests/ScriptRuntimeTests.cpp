@@ -6059,6 +6059,37 @@ void RunTransformApiParentAndHierarchyTest() {
     kb::tests::Require(!kb::tests::NearlyEqual(scene.Transforms().Get(childObject.Entity()).localPosition.x, 1.0F),
         "Transform.SetParent WITH keepWorld must back-solve a genuinely different LOCAL pose to compensate for the new parent, not just copy the old local value");
 
+    // LIB-086 (audit gap closed 2026-07-18): keepWorld must preserve the FULL
+    // world transform including SCALE, not just position+rotation. Reparent a
+    // unit-scale root under a parent scaled 2x with keepWorld=true: the
+    // entity's WORLD scale must stay 1 (its localScale back-solved to 0.5 to
+    // compensate), not silently double. Uses fresh, distinctly-scaled
+    // entities because the grandparent/parent chain above is unit-scaled, so
+    // the bug (localScale left untouched) is invisible there.
+    const kb::scene::SceneObject scaledParentObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldScaledParent" });
+    const kb::scene::SceneObject scaledChildObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "KeepWorldScaledChild" });
+    {
+        kb::scene::TransformComponent parentTransform = scene.Transforms().Get(scaledParentObject.Entity());
+        parentTransform.localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F };
+        scene.Transforms().Set(scaledParentObject.Entity(), parentTransform);
+    }
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const kb::math::Vec3 scaledChildWorldScaleBefore = scene.Transforms().Get(scaledChildObject.Entity()).worldScale;
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildWorldScaleBefore.x, 1.0F), "KeepWorld scale fixture: the child must start at world scale 1");
+
+    const std::vector<kb::script::ScriptFunctionArgument> reparentScaledArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ scaledChildObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "parent", kb::script::ScriptValue{ scaledParentObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ "keepWorld", kb::script::ScriptValue{ true } },
+    };
+    const kb::script::ScriptFunctionCallResult reparentScaled = host.Functions().Call("Transform.SetParent", reparentScaledArgs, context);
+    kb::tests::Require(reparentScaled.Succeeded() && reparentScaled.Output("moved")->AsBool(), "Transform.SetParent (keepWorld, scaled parent) direct call failed");
+    const kb::scene::TransformComponent scaledChildAfter = scene.Transforms().Get(scaledChildObject.Entity());
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildAfter.worldScale.x, 1.0F) && kb::tests::NearlyEqual(scaledChildAfter.worldScale.y, 1.0F) && kb::tests::NearlyEqual(scaledChildAfter.worldScale.z, 1.0F),
+        "Transform.SetParent WITH keepWorld must preserve WORLD SCALE across a reparent onto a differently-scaled parent (audit gap: localScale was left untouched, doubling worldScale)");
+    kb::tests::Require(kb::tests::NearlyEqual(scaledChildAfter.localScale.x, 0.5F),
+        "Transform.SetParent WITH keepWorld must back-solve localScale to 0.5 under a 2x parent to keep world scale at 1");
+
     // Cycle detection: attempting to parent grandparent (an ANCESTOR of
     // child, now child's parent again after the keepWorld reparent) under
     // child (its own DESCENDANT) must be rejected — inherited unchanged
