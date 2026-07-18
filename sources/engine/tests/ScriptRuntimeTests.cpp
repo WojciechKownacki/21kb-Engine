@@ -6440,6 +6440,7 @@ void RunTransformHierarchyEdgeCaseTest() {
         scene.Transforms().Set(reparentedEntity.Entity(), reparentedTransform);
         static_cast<void>(scene.Runtime().Update(0.0F));
         const kb::scene::Vec3 entityWorldPosBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
+        const kb::scene::Vec3 entityWorldScaleBefore = scene.Transforms().Get(reparentedEntity.Entity()).worldScale;
 
         const std::vector<kb::script::ScriptFunctionArgument> keepWorldArgs{
             kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ reparentedEntity.Entity().Id(), kb::script::ScriptValueType::Entity } },
@@ -6449,9 +6450,20 @@ void RunTransformHierarchyEdgeCaseTest() {
         const kb::script::ScriptFunctionCallResult keepWorldResult = host.Functions().Call("Transform.SetParent", keepWorldArgs, context);
         kb::tests::Require(keepWorldResult.Succeeded() && keepWorldResult.Output("moved")->AsBool(), "LIB-091 Transform.SetParent(keepWorld=true) under a non-uniform-scale parent failed");
 
-        const kb::scene::Vec3 entityWorldPosAfter = scene.Transforms().Get(reparentedEntity.Entity()).worldPosition;
-        kb::tests::Require(kb::tests::NearlyEqual(entityWorldPosAfter.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityWorldPosAfter.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityWorldPosAfter.z, entityWorldPosBefore.z),
+        const kb::scene::TransformComponent entityAfter = scene.Transforms().Get(reparentedEntity.Entity());
+        kb::tests::Require(kb::tests::NearlyEqual(entityAfter.worldPosition.x, entityWorldPosBefore.x) && kb::tests::NearlyEqual(entityAfter.worldPosition.y, entityWorldPosBefore.y) && kb::tests::NearlyEqual(entityAfter.worldPosition.z, entityWorldPosBefore.z),
             "LIB-091 keepWorld must preserve the exact world position under a NON-UNIFORM (2,3,4) parent scale, not just uniform scale");
+        // The audit gap: the keepWorld test only checked world position, so it
+        // could not detect LIB-086's defect (localScale left untouched, so
+        // worldScale changed). Assert per-axis WORLD SCALE preservation under
+        // the non-uniform (2,3,4) parent — only true if localScale is
+        // back-solved to (1/2, 1/3, 1/4).
+        kb::tests::Require(
+            kb::tests::NearlyEqual(entityAfter.worldScale.x, entityWorldScaleBefore.x) && kb::tests::NearlyEqual(entityAfter.worldScale.y, entityWorldScaleBefore.y) && kb::tests::NearlyEqual(entityAfter.worldScale.z, entityWorldScaleBefore.z),
+            "LIB-091 keepWorld must preserve WORLD SCALE per-axis under a NON-UNIFORM (2,3,4) parent scale — the exact defect the original keepWorld test could not detect because it only checked position");
+        kb::tests::Require(
+            kb::tests::NearlyEqual(entityAfter.localScale.x, 0.5F) && kb::tests::NearlyEqual(entityAfter.localScale.y, 1.0F / 3.0F) && kb::tests::NearlyEqual(entityAfter.localScale.z, 0.25F),
+            "LIB-091 keepWorld must back-solve localScale per-axis (1/2, 1/3, 1/4) under a (2,3,4) parent to keep world scale unchanged");
     }
 
     // (1b) keepWorld reparenting an entity that itself has a child — proves
