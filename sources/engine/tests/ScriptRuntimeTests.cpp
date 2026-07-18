@@ -8060,6 +8060,148 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.Clamp results must match within float tolerance");
 }
 
+// LIB-056 (2026-07-17 audit gap): RunMathFunctionCrossBackendParityTest
+// above only exercises a Float-pinned function (Math.Clamp). The audit
+// found the parity harness never covered UInt32 pins — the exact type on
+// the Random/RandomStream path that did not work from Lua at all until the
+// Int->UInt32 coercion (LIB-050/051). This second parity test drives a
+// UInt32-INPUT function, Math.RandomNextFloat01(streamSeed, streamCounter)
+// -> Float, through the SAME three backends (Native / Lua / Visual Graph),
+// proving the UInt32 argument marshalling agrees across all of them:
+//   - Native passes ScriptValue{uint32};
+//   - Lua passes integer literals (marshalled as Int, coerced to UInt32);
+//   - Visual Graph reads UInt32 pins through the CallNative binding.
+// The Float result is compared (there is deliberately no Shared.Set.UInt32
+// binding yet — LIB-041's documented cut — so a UInt32 RESULT could not be
+// stored from a graph; a UInt32-in / Float-out function proves the input
+// marshalling that was actually broken, without inventing an unused
+// binding).
+void RunMathUInt32CrossBackendParityTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Math UInt32 cross-backend parity host setup failed");
+    kb::tests::Require(host.Functions().FindSignature("Math.RandomNextFloat01") != nullptr, "Math.RandomNextFloat01 must already be registered (LIB-051) before this parity test runs");
+
+    constexpr std::uint32_t kSeed = 123U;
+    constexpr std::uint32_t kCounter = 0U;
+
+    constexpr kb::assets::AssetId kNativeAsset{ 5023U };
+    constexpr kb::assets::AssetId kLuaAsset{ 5024U };
+    constexpr kb::assets::AssetId kVisualAsset{ 5025U };
+    const kb::scene::SceneObject nativeObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native UInt32 Caller" });
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua UInt32 Caller" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visual UInt32 Caller" });
+    scene.Components().Behaviours().Set(nativeObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kNativeAsset.value, .backend = kb::scene::BehaviourBackend::Native, .enabled = true, .executionOrder = 0 });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kLuaAsset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true, .executionOrder = 10 });
+    scene.Components().Behaviours().Set(graphObject.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = kVisualAsset.value, .backend = kb::scene::BehaviourBackend::VisualGraph, .enabled = true, .executionOrder = 20 });
+
+    // Native: pass genuine UInt32 ScriptValues.
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kNativeAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+                           const std::vector<kb::script::ScriptFunctionArgument> arguments{
+                               kb::script::ScriptFunctionArgument{ .name = "streamSeed", .value = kb::script::ScriptValue{ std::uint32_t{ kSeed } } },
+                               kb::script::ScriptFunctionArgument{ .name = "streamCounter", .value = kb::script::ScriptValue{ std::uint32_t{ kCounter } } },
+                           };
+                           const kb::script::ScriptFunctionCallResult result = context.CallFunction("Math.RandomNextFloat01", arguments);
+                           kb::tests::Require(result.Succeeded(), "Native Math.RandomNextFloat01 call failed");
+                           const std::optional<kb::script::ScriptValue> value = result.Output("value");
+                           kb::tests::Require(value.has_value(), "Native Math.RandomNextFloat01 did not return a value");
+                           kb::tests::Require(context.SetSharedValue("nativeRandomResult", *value), "Native Math.RandomNextFloat01 could not store shared result");
+                       }),
+        "Native UInt32 caller did not register");
+
+    // Lua: pass integer literals — marshalled as Int, coerced to UInt32
+    // (LIB-050). This is the path the audit reported as not working at all.
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local r = CallFunction("Math.RandomNextFloat01", { streamSeed = 123, streamCounter = 0 })
+    SetShared("luaRandomResult", r.value)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Lua UInt32 caller did not load");
+
+    // Visual Graph: read UInt32 input pins through the CallNative binding.
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "VisualUInt32Caller";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "RandomInputs" },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "GraphRandomResultKey" },
+        kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Math.RandomNextFloat01" },
+        kb::visual::VisualGraphNode{ .id = 5U, .kind = kb::visual::VisualGraphNodeKind::SetProperty, .symbol = "Shared.Set.Float" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        // Math.RandomNextFloat01 also returns the advanced stream; the
+        // CallNative binding requires every declared output pin to be
+        // present on the node even when the graph does not consume them.
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "key", .type = kb::visual::VisualGraphValueType::String },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 4U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "streamSeed", .toNode = 4U, .toPin = "streamSeed", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "streamCounter", .toNode = 4U, .toPin = "streamCounter", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 3U, .fromPin = "value", .toNode = 5U, .toPin = "key", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "value", .toNode = 5U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+    };
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Visual UInt32 caller graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kVisualAsset, .graphName = graph.name, .module = compiled.module });
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "RandomInputs",
+                           .outputs = {
+                               kb::visual::VisualGraphPinSignature{ .name = "streamSeed", .type = kb::visual::VisualGraphValueType::UInt32 },
+                               kb::visual::VisualGraphPinSignature{ .name = "streamCounter", .type = kb::visual::VisualGraphValueType::UInt32 },
+                           },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "streamSeed", kb::visual::VisualGraphRuntimeValue{ static_cast<std::uint64_t>(kSeed), kb::visual::VisualGraphValueType::UInt32 });
+                               context.Store(instruction.sourceNodeId, "streamCounter", kb::visual::VisualGraphRuntimeValue{ static_cast<std::uint64_t>(kCounter), kb::visual::VisualGraphValueType::UInt32 });
+                           },
+                       }),
+        "Visual UInt32 random-inputs binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "GraphRandomResultKey",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "graphRandomResult" } });
+                           },
+                       }),
+        "Visual UInt32 random-result-key binding did not register");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Math UInt32 cross-backend parity runtime produced diagnostics");
+
+    const std::optional<kb::script::ScriptValue> nativeResult = host.SharedState().Get("nativeRandomResult");
+    const std::optional<kb::script::ScriptValue> luaResult = host.SharedState().Get("luaRandomResult");
+    const std::optional<kb::script::ScriptValue> graphResult = host.SharedState().Get("graphRandomResult");
+    kb::tests::Require(nativeResult.has_value(), "Native backend did not store a Math.RandomNextFloat01 result (UInt32 args must marshal)");
+    kb::tests::Require(luaResult.has_value(), "Lua backend did not store a Math.RandomNextFloat01 result (Int->UInt32 coercion must work)");
+    kb::tests::Require(graphResult.has_value(), "Visual Graph backend did not store a Math.RandomNextFloat01 result (UInt32 pins must marshal)");
+
+    // Parity: RandomNextFloat01 is deterministic in (seed, counter), so all
+    // three backends — having passed the SAME UInt32 seed/counter through
+    // three different marshalling paths — must produce the identical Float.
+    kb::tests::Require(nativeResult->AsFloat() >= 0.0F && nativeResult->AsFloat() < 1.0F, "Math.RandomNextFloat01 must return a value in [0,1)");
+    kb::tests::Require(kb::tests::NearlyEqual(nativeResult->AsFloat(), luaResult->AsFloat()), "Native and Lua Math.RandomNextFloat01 results must match — proves Int->UInt32 coercion is value-identical to a native UInt32 arg");
+    kb::tests::Require(kb::tests::NearlyEqual(luaResult->AsFloat(), graphResult->AsFloat()), "Lua and Visual Graph Math.RandomNextFloat01 results must match — proves all three backends marshal the UInt32 seed/counter identically");
+}
+
 void RunScriptInputApiTest() {
     using namespace kb::input;
 
@@ -12708,6 +12850,7 @@ void RunScriptRuntimeTests() {
     RunSceneLifecycleEventsReachBehaviourTest();
     RunScriptMathApiTest();
     RunMathFunctionCrossBackendParityTest();
+    RunMathUInt32CrossBackendParityTest();
     RunScriptInputApiTest();
     RunScriptInputApiPerPlayerTest();
     RunScriptPointerApiTest();
