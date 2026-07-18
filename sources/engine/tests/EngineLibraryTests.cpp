@@ -2663,8 +2663,8 @@ void RunLibraryQueryFilterAndOrderTest() {
     scene.Components().Cameras().Set(objectB.Entity(), kb::scene::CameraComponent{});
     scene.Components().Cameras().Set(objectC.Entity(), kb::scene::CameraComponent{});
     scene.Components().Cameras().Set(objectD.Entity(), kb::scene::CameraComponent{});
-    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{});
-    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{});
+    scene.Components().Lights().Set(objectA.Entity(), kb::scene::LightComponent{ .intensity = 2.0F });
+    scene.Components().Lights().Set(objectD.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
     scene.Components().Behaviours().Set(objectC.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 1U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
     scene.Components().Behaviours().Set(objectD.Entity(), kb::scene::BehaviourComponent{ .behaviourAssetId = 2U, .backend = kb::scene::BehaviourBackend::Native, .enabled = true });
     scene.Entities().SetActive(objectC.Entity(), false);
@@ -2742,6 +2742,28 @@ void RunLibraryQueryFilterAndOrderTest() {
     const bool visibilityIterated = kb::library::Query<kb::scene::VisibilityComponent>::ForEach(scene, kb::script::ScriptLifecycleEvent::Tick,
         [&](kb::library::EntityHandle, const kb::scene::VisibilityComponent&) { ++visibilityVisited; });
     kb::tests::Require(visibilityIterated && visibilityVisited == 4, "Engine21kbLibrary Query<VisibilityComponent> must now work (LIB-079 regression fix) — every entity has a Visibility component from creation");
+
+    // LIB-078: a MULTI-component Query<Camera, Light> must iterate exactly the
+    // entities that have BOTH components (A and D — not B, which has only a
+    // Camera, and not C, which has no Light), and hand the visitor each
+    // component's live data in pack order. Reading light.intensity per entity
+    // (A=2, D=3) proves the SECOND component's column is really threaded
+    // through, not just the first — the exact gap the 2026-07-17 audit found
+    // (only the one-component variant existed).
+    std::vector<kb::scene::SceneEntity> multiResult;
+    float intensitySum = 0.0F;
+    float fovSum = 0.0F;
+    const bool multiIterated = kb::library::Query<kb::scene::CameraComponent, kb::scene::LightComponent>::ForEach(
+        scene, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::library::EntityHandle entity, const kb::scene::CameraComponent& camera, const kb::scene::LightComponent& light) {
+            multiResult.push_back(entity.Entity());
+            intensitySum += light.intensity;
+            fovSum += camera.verticalFovDegrees;
+        });
+    kb::tests::Require(multiIterated, "Engine21kbLibrary multi-component Query must iterate during an allowed phase");
+    kb::tests::Require(namesOf(multiResult) == std::vector<std::string>{ "FilterA", "FilterD" }, "Engine21kbLibrary Query<Camera,Light> must iterate exactly the entities that have BOTH components");
+    kb::tests::Require(std::abs(intensitySum - 5.0F) < 0.0001F, "Engine21kbLibrary multi-component Query must thread the SECOND component's live data (light.intensity 2 + 3 = 5) through the visitor, not just the first");
+    kb::tests::Require(std::abs(fovSum - 120.0F) < 0.0001F, "Engine21kbLibrary multi-component Query must also thread the first component's data (two default 60-degree cameras = 120)");
 }
 
 // LIB-080: kb::library::CommandBatch — proves Spawn/Destroy/Add<T>/
