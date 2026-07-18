@@ -287,6 +287,14 @@ public:
         std::string sceneName;
     };
     std::vector<PendingSceneLifecycleEvent> pendingSceneLifecycleEvents;
+    // LIB-067: entities queued by World.Destroy(deferred=true), destroyed at
+    // the next frame playback point (drained once per frame by
+    // ScriptRuntimeSceneSystem via SceneEntities::DrainDeferredDestroys).
+    // Deferring keeps a script from destroying an entity mid-behaviour-
+    // iteration; the full SceneEntity (id+generation) is stored so each id is
+    // re-checked for liveness at drain — a racing immediate destroy, a stale
+    // generation, or a duplicate deferred request is a harmless no-op.
+    std::vector<SceneEntity> pendingDeferredDestroys;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::vector<std::uint64_t> denseHierarchyOrder;
     std::vector<SceneEntity> hierarchyRoots;
