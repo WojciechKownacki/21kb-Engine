@@ -10,6 +10,31 @@ float Length(Vec3 value) noexcept {
     return std::sqrt(Dot(value, value));
 }
 
+// LIB-042: Vec2 magnitude, same definition as Length(Vec3) one dimension
+// down — a finite result for every input, 0 for the zero vector.
+float Length(Vec2 value) noexcept {
+    return std::sqrt(Dot(value, value));
+}
+
+// LIB-042: ray-vs-plane. denom = Dot(rayDir, planeNormal) is the rate the
+// ray approaches the plane; when it is ~0 the ray is parallel and never
+// meets the plane (hit = false). Otherwise t = -SignedDistance(origin) /
+// denom is the parameter of the intersection; a negative t means the plane
+// is behind the ray origin, which we report as a miss (hit = false) rather
+// than returning a point "behind" the ray — the same defined-degenerate
+// -result rule the header documents.
+RayPlaneIntersection Intersect(const Ray& ray, const Plane& plane) noexcept {
+    const float denom = Dot(ray.direction, plane.normal);
+    if (denom <= 0.000001F && denom >= -0.000001F) {
+        return {};
+    }
+    const float t = -SignedDistance(plane, ray.origin) / denom;
+    if (t < 0.0F) {
+        return {};
+    }
+    return RayPlaneIntersection{ .hit = true, .t = t, .point = PointAt(ray, t) };
+}
+
 Vec3 Normalize(Vec3 value) noexcept {
     const float length = Length(value);
     if (length <= 0.000001F) {
