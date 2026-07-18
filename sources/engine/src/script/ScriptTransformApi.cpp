@@ -554,6 +554,14 @@ ScriptFunctionCallResult LookAt(const ScriptFunctionCallContext& context, std::s
     if (!Alive(context, entity)) {
         return BoolResult("moved", false);
     }
+    // LIB-088: force a sync BEFORE reading worldPosition — for EVERY entity,
+    // not just parented ones. LookAt computes the look direction from the
+    // entity's own world position, and a SetPosition earlier this same frame
+    // only writes localPosition (worldPosition is recomposed lazily). The old
+    // code synced only when the entity had a parent, so a ROOT entity used a
+    // stale worldPosition and aimed from its previous location. One upfront
+    // sync makes the read fresh for root and parented entities alike.
+    context.scene->Runtime().SynchronizeTransforms();
     kb::scene::TransformComponent transform = context.scene->Transforms().Get(entity);
     const kb::math::Vec3 target{
         FloatArg(arguments, "targetX", transform.worldPosition.x),
@@ -567,10 +575,6 @@ ScriptFunctionCallResult LookAt(const ScriptFunctionCallContext& context, std::s
     };
 
     const kb::scene::SceneEntity parent = context.scene->Hierarchy().Parent(entity);
-    if (parent.IsValid()) {
-        context.scene->Runtime().SynchronizeTransforms();
-        transform = context.scene->Transforms().Get(entity);
-    }
     const kb::math::Vec3 forward = kb::math::Normalize(target - transform.worldPosition);
     const kb::math::Quat desiredWorldRotation = kb::math::LookRotation(forward, up);
 

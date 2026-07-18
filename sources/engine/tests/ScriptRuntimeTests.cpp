@@ -6281,6 +6281,35 @@ void RunTransformApiRotateLookAtAndPointConversionTest() {
     kb::tests::Require(kb::tests::NearlyEqual(rootForwardAfterLookAt.x, 1.0F) && std::fabs(rootForwardAfterLookAt.y) < 0.001F && std::fabs(rootForwardAfterLookAt.z) < 0.001F,
         "Transform.LookAt (root) must produce a rotation whose forward vector points toward the requested target");
 
+    // LIB-088 (audit gap closed 2026-07-18): LookAt on a ROOT must aim from
+    // the entity's CURRENT position even after a SetPosition earlier the same
+    // frame. SetPosition writes localPosition but does not resync worldPosition
+    // (it recomposes lazily), and the old LookAt only synced for parented
+    // entities — so a root aimed from its stale previous position. Move a root
+    // to (0,0,5), then immediately LookAt (0,0,0) with NO Update in between:
+    // the forward must point -Z (from 5 back to the origin), which is only
+    // possible if LookAt reads the fresh world position.
+    const kb::scene::SceneObject lookAtMovedRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LookAtMovedRoot" });
+    const kb::script::ScriptFunctionArgument movedRootEntityArg{ .name = "entity", .value = kb::script::ScriptValue{ lookAtMovedRoot.Entity().Id(), kb::script::ScriptValueType::Entity } };
+    const kb::script::ScriptFunctionCallResult movedRootSet = host.Functions().Call("Transform.SetPosition",
+        std::vector<kb::script::ScriptFunctionArgument>{ movedRootEntityArg,
+            kb::script::ScriptFunctionArgument{ "x", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "y", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "z", kb::script::ScriptValue{ 5.0F } } },
+        context);
+    kb::tests::Require(movedRootSet.Succeeded() && movedRootSet.Output("moved")->AsBool(), "Transform.SetPosition on the moved root failed");
+    const kb::script::ScriptFunctionCallResult movedRootLookAt = host.Functions().Call("Transform.LookAt",
+        std::vector<kb::script::ScriptFunctionArgument>{ movedRootEntityArg,
+            kb::script::ScriptFunctionArgument{ "targetX", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "targetY", kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ "targetZ", kb::script::ScriptValue{ 0.0F } } },
+        context);
+    kb::tests::Require(movedRootLookAt.Succeeded() && movedRootLookAt.Output("moved")->AsBool(), "Transform.LookAt on the moved root failed");
+    const kb::scene::Quat movedRootRotation = scene.Transforms().Get(lookAtMovedRoot.Entity()).localRotation;
+    const kb::math::Vec3 movedRootForward = kb::math::Rotate(movedRootRotation, kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::tests::Require(kb::tests::NearlyEqual(movedRootForward.z, -1.0F) && std::fabs(movedRootForward.x) < 0.001F && std::fabs(movedRootForward.y) < 0.001F,
+        "Transform.LookAt on a ROOT moved earlier this frame must aim from the CURRENT position (forward -Z from (0,0,5) toward the origin), not the stale pre-move position");
+
     // (3) LookAt on a CHILD of a non-trivially transformed (translated AND
     // rotated) parent: the resulting WORLD rotation's forward vector must
     // STILL point at the target — proving the back-solve through
