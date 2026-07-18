@@ -4,6 +4,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
+#include "engine/script/ScriptTextApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
@@ -252,6 +253,16 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Collections",
             .ownerRuntime = "kb::library::Array/Set/Map/Queue/Stack",
             .Register = &kb::script::ScriptCollectionsApi::Register,
+        },
+        // LIB-063: script-facing locale-invariant parsing (Text.ParseInt/
+        // ParseUInt/ParseFloat/IsGuid/ParseColor/ParseDate). Each function
+        // forwards to a kb::library::TryParse* helper (std::from_chars-backed,
+        // culture-invariant) and reports success via an `ok` Bool output.
+        // Generic CallFunction, no Lua sugar table (mirrors Collections/Save).
+        LibraryModuleDesc{
+            .name = "Text",
+            .ownerRuntime = "kb::library::TryParse* (EngineLibraryParsing)",
+            .Register = &kb::script::ScriptTextApi::Register,
         },
     };
     return kCatalog;
