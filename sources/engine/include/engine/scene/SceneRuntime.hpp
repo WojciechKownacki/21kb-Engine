@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 #include <optional>
 #include <span>
 
@@ -124,6 +126,10 @@ public:
 
     void AddSystem(std::unique_ptr<kb::ecs::System> system);
     void AddSceneSystem(std::unique_ptr<SceneSystem> system);
+    // Drains errors thrown by scene systems during the last Update/FixedUpdate/
+    // Add (e.g. a plugin's system faulting) so the host can surface them; the
+    // scheduler isolates such faults so later systems (scripts) still run.
+    [[nodiscard]] std::vector<std::string> DrainSceneSystemErrors();
     // LIB-089: the world-matrix update timing contract — WHEN
     // TransformComponent::worldPosition/worldRotation/worldScale are
     // recomputed after a local or parent change, and what each consumer can

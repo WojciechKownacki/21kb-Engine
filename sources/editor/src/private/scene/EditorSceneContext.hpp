@@ -170,6 +170,10 @@ public:
     void DiscardDirtySceneDocument(std::string_view reason);
     [[nodiscard]] bool PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution);
     [[nodiscard]] bool BeginPlayModeSceneSession();
+    // Push any per-frame script diagnostics (compile/behaviour errors) the
+    // installed scene system produced to the Console, so a behaviour that
+    // silently fails to run during play surfaces a reason instead of nothing.
+    void SurfaceScriptDiagnostics();
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();

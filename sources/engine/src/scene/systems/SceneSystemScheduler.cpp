@@ -3,11 +3,25 @@
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
+#include <exception>
 #include <utility>
 
 namespace kb::scene {
 
 SceneSystemScheduler::~SceneSystemScheduler() = default;
+
+void SceneSystemScheduler::RecordSystemError(std::string phase, const char* what) {
+    std::string line = "scene system threw in " + std::move(phase) + ": " + (what != nullptr ? what : "unknown error");
+    if (reportedSystemErrors_.insert(line).second) {
+        systemErrors_.push_back(std::move(line));
+    }
+}
+
+std::vector<std::string> SceneSystemScheduler::DrainSystemErrors() {
+    std::vector<std::string> drained;
+    drained.swap(systemErrors_);
+    return drained;
+}
 
 void SceneSystemScheduler::Add(std::unique_ptr<SceneSystem> system, Scene& scene) {
     if (system == nullptr) {
@@ -15,21 +29,39 @@ void SceneSystemScheduler::Add(std::unique_ptr<SceneSystem> system, Scene& scene
     }
 
     SceneSystemContext context{ scene, 0.0F };
-    system->OnCreate(context);
+    try {
+        system->OnCreate(context);
+    } catch (const std::exception& error) {
+        RecordSystemError("OnCreate", error.what());
+    } catch (...) {
+        RecordSystemError("OnCreate", nullptr);
+    }
     systems_.push_back(std::move(system));
 }
 
 void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds) {
     SceneSystemContext context{ scene, deltaSeconds };
     for (const auto& system : systems_) {
-        system->OnUpdate(context);
+        try {
+            system->OnUpdate(context);
+        } catch (const std::exception& error) {
+            RecordSystemError("OnUpdate", error.what());
+        } catch (...) {
+            RecordSystemError("OnUpdate", nullptr);
+        }
     }
 }
 
 void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds) {
     SceneSystemContext context{ scene, fixedDeltaSeconds };
     for (const auto& system : systems_) {
-        system->OnFixedUpdate(context);
+        try {
+            system->OnFixedUpdate(context);
+        } catch (const std::exception& error) {
+            RecordSystemError("OnFixedUpdate", error.what());
+        } catch (...) {
+            RecordSystemError("OnFixedUpdate", nullptr);
+        }
     }
 }
 

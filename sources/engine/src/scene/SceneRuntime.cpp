@@ -114,6 +114,10 @@ void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSyst
     state.sceneSystemScheduler.Add(std::move(system), scene);
 }
 
+std::vector<std::string> SceneRuntimeService::DrainSceneSystemErrors(Scene& scene) {
+    return SceneAccess::State(scene).sceneSystemScheduler.DrainSystemErrors();
+}
+
 void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     SynchronizeTransformHierarchy(state);
