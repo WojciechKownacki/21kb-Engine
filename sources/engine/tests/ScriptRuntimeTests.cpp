@@ -10883,6 +10883,80 @@ end
         "LIB-058 a real Lua script must be able to create an Array, push values, and read length/element back through the handle");
 }
 
+// LIB-063: the Text.Parse* script surface must forward to the locale-
+// invariant kb::library::TryParse* helpers and report success/failure
+// honestly through an `ok` Bool — proving those parsing helpers have a real
+// Native/Lua/Visual Graph consumer, not orphaned API.
+void RunScriptTextApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script text API host did not initialize");
+    for (const char* name : { "Text.ParseInt", "Text.ParseUInt", "Text.ParseFloat", "Text.IsGuid", "Text.ParseColor", "Text.ParseDate" }) {
+        const std::string message = std::string{ "Script text API function '" } + name + "' was not registered";
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
+    }
+
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+    const auto call = [&](const char* fn, std::string text) {
+        return host.Functions().Call(fn, std::vector<kb::script::ScriptFunctionArgument>{ { .name = "text", .value = kb::script::ScriptValue{ std::move(text) } } }, context);
+    };
+
+    const kb::script::ScriptFunctionCallResult intOk = call("Text.ParseInt", "-42");
+    kb::tests::Require(intOk.Succeeded() && intOk.Output("ok")->AsBool() && intOk.Output("value")->AsInt64() == -42, "Text.ParseInt of \"-42\" must parse to -42");
+    const kb::script::ScriptFunctionCallResult intBad = call("Text.ParseInt", "12x");
+    kb::tests::Require(intBad.Succeeded() && !intBad.Output("ok")->AsBool(), "Text.ParseInt of \"12x\" must report ok=false (trailing garbage rejected)");
+
+    const kb::script::ScriptFunctionCallResult uintOk = call("Text.ParseUInt", "18446744073709551615");
+    kb::tests::Require(uintOk.Succeeded() && uintOk.Output("ok")->AsBool() && uintOk.Output("value")->AsUInt64() == 18446744073709551615ULL, "Text.ParseUInt must parse the full uint64 range losslessly through the Hash slot");
+
+    const kb::script::ScriptFunctionCallResult floatOk = call("Text.ParseFloat", "3.5");
+    kb::tests::Require(floatOk.Succeeded() && floatOk.Output("ok")->AsBool() && floatOk.Output("value")->AsDouble() == 3.5, "Text.ParseFloat of \"3.5\" must parse to 3.5");
+    const kb::script::ScriptFunctionCallResult floatComma = call("Text.ParseFloat", "3,5");
+    kb::tests::Require(floatComma.Succeeded() && !floatComma.Output("ok")->AsBool(), "Text.ParseFloat must be locale-invariant: a comma decimal \"3,5\" must be rejected, never parsed as 3.5");
+
+    const kb::script::ScriptFunctionCallResult guidOk = call("Text.IsGuid", "3F2504E0-4F89-11D3-9A0C-0305E82C3301");
+    kb::tests::Require(guidOk.Succeeded() && guidOk.Output("result")->AsBool(), "Text.IsGuid must accept a canonical 8-4-4-4-12 GUID");
+    const kb::script::ScriptFunctionCallResult guidBad = call("Text.IsGuid", "not-a-guid");
+    kb::tests::Require(guidBad.Succeeded() && !guidBad.Output("result")->AsBool(), "Text.IsGuid must reject a malformed GUID");
+
+    const kb::script::ScriptFunctionCallResult colorOk = call("Text.ParseColor", "#FF8000");
+    kb::tests::Require(
+        colorOk.Succeeded() && colorOk.Output("ok")->AsBool() &&
+            colorOk.Output("r")->AsFloat() == 1.0F && std::abs(colorOk.Output("g")->AsFloat() - 128.0F / 255.0F) < 0.0001F &&
+            colorOk.Output("b")->AsFloat() == 0.0F && colorOk.Output("a")->AsFloat() == 1.0F,
+        "Text.ParseColor of \"#FF8000\" must decode to (1, 0.502, 0, 1)");
+
+    const kb::script::ScriptFunctionCallResult leap = call("Text.ParseDate", "2024-02-29");
+    kb::tests::Require(
+        leap.Succeeded() && leap.Output("ok")->AsBool() && leap.Output("year")->AsInt() == 2024 && leap.Output("month")->AsInt() == 2 && leap.Output("day")->AsInt() == 29,
+        "Text.ParseDate must accept a real leap day 2024-02-29 and decompose it");
+    const kb::script::ScriptFunctionCallResult notLeap = call("Text.ParseDate", "2023-02-29");
+    kb::tests::Require(notLeap.Succeeded() && !notLeap.Output("ok")->AsBool(), "Text.ParseDate must reject 2023-02-29 (not a leap year) via real calendar validation");
+
+    // Real Lua end-to-end: a behaviour parses an int and a color through the
+    // generic CallFunction bridge and stores the observations.
+    constexpr kb::assets::AssetId kTextLuaAsset{ 700821U };
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kTextLuaAsset, R"(
+function Tick(self, dt)
+    local n = CallFunction("Text.ParseInt", { text = "100" })
+    local bad = CallFunction("Text.ParseFloat", { text = "3,5" })
+    local col = CallFunction("Text.ParseColor", { text = "#00FF00" })
+    SetShared("luaTextOk", n.ok == true and n.value == 100 and bad.ok == false and col.ok == true and col.g == 1.0 and col.r == 0.0)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Text Lua test script did not load");
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TextCaller" });
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kTextLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tick.diagnostics.empty(), "Text Lua test Tick produced script diagnostics");
+    const std::optional<kb::script::ScriptValue> luaOk = host.SharedState().Get("luaTextOk");
+    kb::tests::Require(luaOk.has_value() && luaOk->AsBool(), "LIB-063 a real Lua script must parse an int/float/color through Text.* with locale-invariant, honest ok flags");
+}
+
 void RunScriptAssetsApiTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "AssetsApiProject";
@@ -13052,6 +13126,7 @@ void RunScriptRuntimeTests() {
     RunScriptTaskApiTest();
     RunScriptTaskApiCompletionOwnerAndPauseTest();
     RunScriptCollectionsApiTest();
+    RunScriptTextApiTest();
     RunScriptAssetsApiTest();
     RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();
