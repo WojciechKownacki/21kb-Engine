@@ -990,7 +990,9 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
         sceneContext.Scene().Assets().Manager(),
         metadata.id,
         material.has_value() ? &*material : nullptr,
-        true);
+        true,
+        {},
+        sceneContext.GpuMaterialGraphCookAvailable());
 }
 
 [[nodiscard]] std::vector<MaterialDebugChannelRow> MaterialDebugChannelRowsFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
