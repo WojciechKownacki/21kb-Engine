@@ -54,6 +54,12 @@ public:
     [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
     [[nodiscard]] bool InstallSceneSystem();
+    // Drives the installed script scene system's shutdown lifecycle NOW — fires
+    // Deactivated + Destroyed on every tracked behaviour and clears tracking,
+    // without removing the system. The editor calls this when play stops so a
+    // behaviour gets its Destroyed (OnDestroy-equivalent) hook before the scene
+    // snapshot is restored. Returns false if no scene system is installed.
+    bool DispatchShutdownLifecycle(float deltaSeconds);
     [[nodiscard]] kb::visual::VisualGraphNodeCatalog CreateVisualGraphNodeCatalog() const;
 
     [[nodiscard]] ScriptRuntime& Runtime() noexcept;

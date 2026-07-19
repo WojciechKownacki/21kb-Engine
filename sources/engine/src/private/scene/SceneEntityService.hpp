@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -37,6 +38,11 @@ public:
     // safe: a queued handle that is no longer alive (already destroyed, or its
     // id recycled to a newer generation) is skipped, never mis-destroyed.
     static std::size_t DrainDeferredDestroys(Scene& scene) noexcept;
+    // Per-instance exposed-variable override deltas (see BehaviourVariableOverride).
+    [[nodiscard]] static std::span<const BehaviourVariableOverride> BehaviourVariableOverrides(const Scene& scene, SceneEntity entity) noexcept;
+    static void SetBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string name, kb::script::ScriptValue value);
+    static bool RemoveBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string_view name) noexcept;
+    static void ReplaceBehaviourVariableOverrides(Scene& scene, SceneEntity entity, std::vector<BehaviourVariableOverride> overrides);
     [[nodiscard]] static bool SetParent(Scene& scene, std::span<const SceneObject> objects, SceneObject parent) noexcept;
     [[nodiscard]] static bool IsAlive(const Scene& scene, SceneObject object) noexcept;
     [[nodiscard]] static bool IsAlive(const Scene& scene, SceneEntity entity) noexcept;

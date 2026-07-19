@@ -41,6 +41,21 @@ public:
         const ScriptEvent& event,
         EventId eventId,
         ScriptExecutionContext& context) = 0;
+
+    // Seed an editor-authored per-instance override of an exposed ("@expose")
+    // variable, creating the (entity,asset) instance record if needed and
+    // marking it overridden so the per-frame default re-sync preserves it.
+    // Default no-op so non-Puc test doubles need not implement it.
+    virtual void SetInstanceVariableOverride(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId assetId,
+        std::string_view name,
+        ScriptValue value) {
+        static_cast<void>(entity);
+        static_cast<void>(assetId);
+        static_cast<void>(name);
+        static_cast<void>(value);
+    }
 };
 
 class LuaScriptBackend final : public IScriptBackend {
@@ -50,6 +65,10 @@ public:
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;
+    void ApplyExposedVariableOverrides(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        std::span<const kb::scene::BehaviourVariableOverride> overrides) override;
 
 private:
     ILuaScriptRuntime& runtime_;

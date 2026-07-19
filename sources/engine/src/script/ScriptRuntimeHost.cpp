@@ -37,6 +37,7 @@ namespace {
 class ScriptRuntimeHostSceneSystem final : public kb::scene::SceneSystem {
 public:
     explicit ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state);
+    ~ScriptRuntimeHostSceneSystem() override;
 
     void OnCreate(kb::scene::SceneSystemContext& context) override;
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
@@ -70,6 +71,11 @@ struct ScriptRuntimeHostState final {
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
+    // Back-pointer to the scene system installed by InstallSceneSystem (owned by
+    // the scene runtime) so the host can drive its shutdown lifecycle (fire
+    // Destroyed) on demand — e.g. when the editor stops play — without tearing
+    // the system down. Set by the system's constructor, cleared by its destructor.
+    ScriptRuntimeSceneSystem* installedSceneSystem = nullptr;
     // Per-frame script diagnostics (compile/behaviour errors) that
     // ExecuteFrame/PrepareScene would otherwise drop; drained by the host so
     // the editor can surface why a behaviour is not running. De-duplicated so a
@@ -84,6 +90,13 @@ ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<Scrip
     : state_(std::move(state))
     , system_(state_->runtime, state_->assetPreparer) {
     system_.SetFrameSettings(state_->frameSettings);
+    state_->installedSceneSystem = &system_;
+}
+
+ScriptRuntimeHostSceneSystem::~ScriptRuntimeHostSceneSystem() {
+    if (state_ != nullptr && state_->installedSceneSystem == &system_) {
+        state_->installedSceneSystem = nullptr;
+    }
 }
 
 void ScriptRuntimeHostSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
@@ -107,10 +120,17 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
         }
     };
     for (const ScriptDiagnostic& diagnostic : system_.LastResult().diagnostics) {
-        push("behaviour error: " + diagnostic.message);
+        // Name the entity and the referenced script asset so a broken behaviour
+        // (e.g. a dangling reference to a deleted/renamed script — "lua script
+        // is not loaded") points at exactly which object's Script component to
+        // fix, instead of a bare, un-actionable message.
+        push("behaviour error: " + diagnostic.message
+            + " (entity #" + std::to_string(diagnostic.entity.Id())
+            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")");
     }
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
-        push("behaviour could not load/compile: " + diagnostic.message);
+        push("behaviour could not load/compile: " + diagnostic.message
+            + " (script asset #" + std::to_string(diagnostic.assetId.value) + ")");
     }
 }
 
@@ -159,6 +179,14 @@ bool ScriptRuntimeHost::InstallSceneSystem() {
     }
     state_->scene.Runtime().AddSceneSystem(std::make_unique<ScriptRuntimeHostSceneSystem>(state_));
     sceneSystemInstalled_ = true;
+    return true;
+}
+
+bool ScriptRuntimeHost::DispatchShutdownLifecycle(float deltaSeconds) {
+    if (state_->installedSceneSystem == nullptr) {
+        return false;
+    }
+    static_cast<void>(state_->installedSceneSystem->ExecuteShutdown(state_->scene, deltaSeconds));
     return true;
 }
 

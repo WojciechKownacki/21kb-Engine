@@ -1,11 +1,13 @@
 #pragma once
 
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/script/ScriptEvent.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptLifecycle.hpp"
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,20 @@ public:
         const ScriptEvent& event,
         EventId eventId,
         ScriptExecutionContext& context) = 0;
+
+    // Seed the editor-authored per-instance overrides of this behaviour's
+    // exposed ("@expose") variables into the backend's live instance state,
+    // called once just before the behaviour's Created lifecycle so GetVariable
+    // returns the authored value from the first frame. Default no-op: only the
+    // Lua backend supports exposed variables today (Native/VisualGraph ignore).
+    virtual void ApplyExposedVariableOverrides(
+        kb::scene::SceneEntity entity,
+        const kb::scene::BehaviourComponent& behaviour,
+        std::span<const kb::scene::BehaviourVariableOverride> overrides) {
+        static_cast<void>(entity);
+        static_cast<void>(behaviour);
+        static_cast<void>(overrides);
+    }
 };
 
 } // namespace kb::script

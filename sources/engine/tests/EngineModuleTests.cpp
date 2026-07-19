@@ -301,7 +301,12 @@ void RunEngineModuleLoaderShadowCopyTest() {
         .diagnosticLabel = "module loader test",
     });
     kb::tests::Require(first.Succeeded(), "EngineModuleLoader did not load a shadow-copied DLL");
-    kb::tests::Require(first.reloadSerial == 1U, "EngineModuleLoader did not assign the first reload serial");
+    // The shadow-copy serial is a PROCESS-GLOBAL monotonic counter (unique temp
+    // filenames across every loader and reload in the process, so a reload never
+    // collides with a still-mapped copy), so its absolute value depends on how
+    // many modules loaded earlier in this test process — assert it is assigned
+    // and advances, not a fixed 1/2.
+    kb::tests::Require(first.reloadSerial >= 1U, "EngineModuleLoader did not assign a reload serial");
     kb::tests::Require(first.loadedPath != first.originalPath, "EngineModuleLoader did not shadow-copy the DLL");
     kb::tests::Require(std::filesystem::is_regular_file(first.loadedPath), "EngineModuleLoader shadow copy file is missing");
 
@@ -319,7 +324,7 @@ void RunEngineModuleLoaderShadowCopyTest() {
         .diagnosticLabel = "module loader test",
     });
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
-    kb::tests::Require(second.reloadSerial == 2U, "EngineModuleLoader did not advance the reload serial");
+    kb::tests::Require(second.reloadSerial > first.reloadSerial, "EngineModuleLoader did not advance the reload serial");
     kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
 #endif
 }
