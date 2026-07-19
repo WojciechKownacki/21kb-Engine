@@ -21,7 +21,9 @@
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorPanelState.hpp"
+#include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
@@ -2089,11 +2091,121 @@ void RunMaterialEditorGraphNodeRenameTest() {
 }
 #endif
 
+void RunInspectorPhysicsModelTest() {
+    using kb::editor::InspectorPhysicsModel;
+    using kb::editor::PhysicsComponentKind;
+    using kb::editor::PhysicsFieldKind;
+
+    // Rigidbody: enum cycle, float apply/read, bool toggle, kind mismatch rejection.
+    kb::scene::RigidbodyComponent rb;
+    const std::vector<kb::editor::PhysicsField> rbFields = InspectorPhysicsModel::Fields(rb);
+    kb::editor::tests::Require(rbFields.size() == 12U, "Rigidbody exposes 12 inspector fields");
+    kb::editor::tests::Require(rbFields[0].kind == PhysicsFieldKind::Enum && rbFields[0].value == "Dynamic",
+        "Rigidbody field 0 is the Body Type enum defaulting to Dynamic");
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(rb, 0) && rb.bodyType == kb::scene::RigidbodyBodyType::Kinematic,
+        "Cycling Rigidbody body type Dynamic -> Kinematic");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(rb, 1, 7.5F) && rb.mass == 7.5F, "Applying the Rigidbody mass field writes mass");
+    float readMass = 0.0F;
+    kb::editor::tests::Require(InspectorPhysicsModel::ReadFloat(rb, 1, readMass) && readMass == 7.5F, "Reading the Rigidbody mass field returns mass");
+    kb::editor::tests::Require(rb.useGravity && InspectorPhysicsModel::ToggleBool(rb, 3) && !rb.useGravity, "Toggling Rigidbody Use Gravity flips it");
+    kb::editor::tests::Require(!InspectorPhysicsModel::ApplyFloat(rb, 3, 1.0F), "ApplyFloat rejects a Bool field index");
+    kb::editor::tests::Require(!InspectorPhysicsModel::ToggleBool(rb, 1), "ToggleBool rejects a Float field index");
+
+    // Collider: shape cycle, vec3 flattened into X/Y/Z floats, trigger toggle.
+    kb::scene::ColliderComponent col;
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(col, 0) && col.shape == kb::scene::ColliderShape::Sphere, "Cycling Collider shape Box -> Sphere");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(col, 4, 3.0F) && col.boxSize.x == 3.0F, "Collider Box Size X maps to boxSize.x");
+    kb::editor::tests::Require(!col.trigger && InspectorPhysicsModel::ToggleBool(col, 9) && col.trigger, "Toggling Collider Is Trigger flips it");
+
+    // Character Controller: no enum field; floats + one bool.
+    kb::scene::CharacterControllerComponent cc;
+    kb::editor::tests::Require(!InspectorPhysicsModel::CycleEnum(cc, 0), "Character Controller has no enum field");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(cc, 5, 42.0F) && cc.slopeLimitDegrees == 42.0F, "Character Controller Slope Limit writes slopeLimitDegrees");
+    kb::editor::tests::Require(cc.useGravity && InspectorPhysicsModel::ToggleBool(cc, 8) && !cc.useGravity, "Toggling Character Controller Use Gravity flips it");
+
+    // Joint: type cycle, float, enable-limit toggle.
+    kb::scene::JointComponent joint;
+    kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(joint, 0) && joint.type == kb::scene::JointType::Hinge, "Cycling Joint type Fixed -> Hinge");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 10, -1.5F) && joint.minLimit == -1.5F, "Joint Min Limit writes minLimit");
+    kb::editor::tests::Require(!joint.enableLimit && InspectorPhysicsModel::ToggleBool(joint, 12) && joint.enableLimit, "Toggling Joint Enable Limit flips it");
+
+    kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, 0) == PhysicsFieldKind::Enum, "KindOf reports the Joint type field as Enum");
+    kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Rigidbody, 99) == PhysicsFieldKind::Float, "KindOf returns Float for an out-of-range index");
+}
+
+// Collapse state is a set of section ids, so every section — including the physics
+// component sections added later — toggles independently. Guards the bug where
+// physics section headers refused to collapse (a hand-maintained switch omitted them).
+void RunInspectorSectionCollapseTest() {
+    kb::editor::InspectorPanelState state;
+    kb::editor::tests::Require(!state.IsCollapsed(kb::editor::InspectorSectionId::Collider), "Collider section starts expanded");
+    state.ToggleCollapsed(kb::editor::InspectorSectionId::Collider);
+    kb::editor::tests::Require(state.IsCollapsed(kb::editor::InspectorSectionId::Collider), "Toggling the Collider header collapses it");
+    kb::editor::tests::Require(!state.IsCollapsed(kb::editor::InspectorSectionId::Rigidbody), "Collapsing Collider does not affect other sections");
+    state.ToggleCollapsed(kb::editor::InspectorSectionId::Collider);
+    kb::editor::tests::Require(!state.IsCollapsed(kb::editor::InspectorSectionId::Collider), "Toggling again expands the Collider section");
+    for (const kb::editor::InspectorSectionId section : { kb::editor::InspectorSectionId::Rigidbody, kb::editor::InspectorSectionId::CharacterController, kb::editor::InspectorSectionId::Joint, kb::editor::InspectorSectionId::MeshRenderer, kb::editor::InspectorSectionId::Script }) {
+        state.ToggleCollapsed(section);
+        kb::editor::tests::Require(state.IsCollapsed(section), "Every section id collapses via the set-backed state");
+    }
+}
+
+// Hover is index-aware so only the physics/script row actually under the cursor
+// highlights — not every sibling row sharing the same property id. Guards the bug
+// where hovering one Collider field highlighted all of them.
+void RunInspectorHoverIndexTest() {
+    kb::editor::InspectorPanelState state;
+    static_cast<void>(state.SetHover(kb::editor::InspectorHitKind::FloatField, kb::editor::InspectorSectionId::Collider, kb::editor::InspectorPropertyId::ColliderField, 4));
+    kb::editor::tests::Require(state.HoveredIndex() == 4, "SetHover records the row index");
+    kb::editor::tests::Require(state.IsHovered(kb::editor::InspectorHitKind::FloatField, kb::editor::InspectorSectionId::Collider, kb::editor::InspectorPropertyId::ColliderField, 4),
+        "The hovered Collider row (index 4) reports hovered");
+    kb::editor::tests::Require(!state.IsHovered(kb::editor::InspectorHitKind::FloatField, kb::editor::InspectorSectionId::Collider, kb::editor::InspectorPropertyId::ColliderField, 5),
+        "A sibling Collider row (index 5) sharing the property id is NOT hovered");
+    kb::editor::tests::Require(state.IsHovered(kb::editor::InspectorHitKind::FloatField, kb::editor::InspectorSectionId::Collider, kb::editor::InspectorPropertyId::ColliderField, -1),
+        "An index-blind query still matches the hovered property");
+}
+
+// The Unity-style Add Component menu model: two-level rows (categories ->
+// components), search override, and the scroll/virtualization arithmetic.
+void RunAddComponentBrowserModelTest() {
+    using kb::editor::AddComponentRowKind;
+    using kb::editor::InspectorAddComponentBrowserModel;
+
+    const std::vector<kb::editor::AddComponentRow> categories = InspectorAddComponentBrowserModel::Rows("", "");
+    kb::editor::tests::Require(!categories.empty() && categories.front().kind == AddComponentRowKind::Category, "Top level lists category rows");
+    bool hasPhysics = false;
+    for (const kb::editor::AddComponentRow& row : categories) {
+        if (row.kind == AddComponentRowKind::Category && row.id == "Physics") {
+            hasPhysics = true;
+        }
+    }
+    kb::editor::tests::Require(hasPhysics, "The category list contains Physics");
+
+    const std::vector<kb::editor::AddComponentRow> physics = InspectorAddComponentBrowserModel::Rows("Physics", "");
+    kb::editor::tests::Require(physics.size() == 4U && physics.front().kind == AddComponentRowKind::Component, "A category lists its 4 components as Component rows");
+
+    const std::vector<kb::editor::AddComponentRow> search = InspectorAddComponentBrowserModel::Rows("Physics", "collid");
+    kb::editor::tests::Require(search.size() == 1U && search.front().id == "Collider", "A search query overrides the category and finds Collider");
+
+    kb::editor::tests::Require(InspectorAddComponentBrowserModel::TotalHeight(10, 26) == 260, "TotalHeight is rows * rowHeight");
+    kb::editor::tests::Require(InspectorAddComponentBrowserModel::MaxScroll(10, 26, 100) == 160, "MaxScroll is total minus the list height");
+    kb::editor::tests::Require(InspectorAddComponentBrowserModel::MaxScroll(3, 26, 100) == 0, "MaxScroll is 0 when every row fits");
+
+    const InspectorAddComponentBrowserModel::VisibleWindow window = InspectorAddComponentBrowserModel::Visible(20, 52, 26, 100);
+    kb::editor::tests::Require(window.first == 2, "Virtualization skips the fully scrolled-past rows");
+    kb::editor::tests::Require(window.first + window.count <= 20, "The visible window never runs past the row list");
+    kb::editor::tests::Require(window.count >= 4, "The visible window covers the list height plus partial rows");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorInspectorTests() {
+    RunInspectorPhysicsModelTest();
+    RunInspectorSectionCollapseTest();
+    RunInspectorHoverIndexTest();
+    RunAddComponentBrowserModelTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
     RunAudioInspectorTextTest();

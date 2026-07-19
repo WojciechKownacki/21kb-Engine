@@ -18,6 +18,16 @@ namespace {
     return std::min<std::uint32_t>(std::max(MeshSlotCount(mesh), overrideCount), kb::scene::kMaxMeshRendererMaterialSlotOverrides);
 }
 
+} // namespace
+
+std::uint32_t InspectorMeshRendererMaterialSlotModel::SlotRowCount(
+    const kb::scene::MeshRendererComponent& renderer,
+    const std::optional<kb::render::RenderMeshAssetData>& mesh) noexcept {
+    return RowCount(renderer, mesh);
+}
+
+namespace {
+
 [[nodiscard]] std::string SlotLabel(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
     std::string label = "Slot " + std::to_string(slotIndex + 1U) + " Override";
     if (mesh.has_value() && slotIndex < mesh->materialNames.size() && !mesh->materialNames[slotIndex].empty()) {

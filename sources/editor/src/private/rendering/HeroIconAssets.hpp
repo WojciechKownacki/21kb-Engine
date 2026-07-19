@@ -20,7 +20,9 @@ public:
     [[nodiscard]] static HeroIconGlyph Eye() noexcept;
     [[nodiscard]] static HeroIconGlyph MagnifyingGlass() noexcept;
     [[nodiscard]] static HeroIconGlyph ChevronRight() noexcept;
+    [[nodiscard]] static HeroIconGlyph ChevronLeft() noexcept;
     [[nodiscard]] static HeroIconGlyph ChevronDown() noexcept;
+    [[nodiscard]] static HeroIconGlyph SpeakerWave() noexcept;
     [[nodiscard]] static HeroIconGlyph Plus() noexcept;
     [[nodiscard]] static HeroIconGlyph EllipsisHorizontal() noexcept;
     [[nodiscard]] static HeroIconGlyph ListBullet() noexcept;

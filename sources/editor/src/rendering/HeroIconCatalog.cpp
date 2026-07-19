@@ -30,8 +30,12 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::MagnifyingGlass();
     case HeroIconKind::ChevronRight:
         return HeroIconAssets::ChevronRight();
+    case HeroIconKind::ChevronLeft:
+        return HeroIconAssets::ChevronLeft();
     case HeroIconKind::ChevronDown:
         return HeroIconAssets::ChevronDown();
+    case HeroIconKind::SpeakerWave:
+        return HeroIconAssets::SpeakerWave();
     case HeroIconKind::Plus:
         return HeroIconAssets::Plus();
     case HeroIconKind::EllipsisHorizontal:

@@ -8,11 +8,15 @@ namespace {
 
 [[nodiscard]] std::vector<InspectorComponentTile> BuildTiles() {
     std::vector<InspectorComponentTile> tiles{
-        InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera" },
-        InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light" },
-        InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer" },
-        InspectorComponentTile{ .id = "AudioSource", .category = "Audio", .label = "Audio Source" },
-        InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener" },
+        InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera", .icon = HeroIconKind::Eye },
+        InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light", .icon = HeroIconKind::Bolt },
+        InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "AudioSource", .category = "Audio", .label = "Audio Source", .icon = HeroIconKind::SpeakerWave },
+        InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener", .icon = HeroIconKind::SpeakerWave },
+        InspectorComponentTile{ .id = "Rigidbody", .category = "Physics", .label = "Rigidbody", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },
+        InspectorComponentTile{ .id = "Joint", .category = "Physics", .label = "Joint", .icon = HeroIconKind::RotationSnap },
     };
     std::ranges::sort(tiles, [](const InspectorComponentTile& lhs, const InspectorComponentTile& rhs) {
         if (lhs.category != rhs.category) {
@@ -47,6 +51,34 @@ namespace {
 std::span<const InspectorComponentTile> InspectorComponentCatalog::Tiles() {
     static const std::vector<InspectorComponentTile> kCachedTiles = BuildTiles();
     return kCachedTiles;
+}
+
+std::vector<InspectorComponentCategory> InspectorComponentCatalog::Categories() {
+    // A representative icon per category (HeroIconPainter, same source as tabs);
+    // falls back to the first tile's icon for any category not listed here.
+    const auto categoryIcon = [](std::string_view name, HeroIconKind fallback) {
+        if (name == "Rendering") return HeroIconKind::Eye;
+        if (name == "Physics") return HeroIconKind::Cube;
+        if (name == "Audio") return HeroIconKind::SpeakerWave;
+        return fallback;
+    };
+    std::vector<InspectorComponentCategory> categories;
+    for (const InspectorComponentTile& tile : Tiles()) {
+        if (categories.empty() || categories.back().name != tile.category) {
+            categories.push_back(InspectorComponentCategory{ .name = tile.category, .icon = categoryIcon(tile.category, tile.icon) });
+        }
+    }
+    return categories;
+}
+
+std::vector<const InspectorComponentTile*> InspectorComponentCatalog::InCategory(std::string_view category) {
+    std::vector<const InspectorComponentTile*> result;
+    for (const InspectorComponentTile& tile : Tiles()) {
+        if (tile.category == category) {
+            result.push_back(&tile);
+        }
+    }
+    return result;
 }
 
 std::vector<const InspectorComponentTile*> InspectorComponentCatalog::Search(std::string_view query) {

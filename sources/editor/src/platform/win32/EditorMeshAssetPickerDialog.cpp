@@ -4,6 +4,8 @@
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
+#include "rendering/EditorMeshPreviewTypes.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
@@ -44,6 +46,14 @@ constexpr int kTextureColumns = 4;
 constexpr int kTextureViewportHeight = kTextureDialogHeight - 62;
 constexpr int kTextureSearchHeight = 28;
 constexpr int kTextureButtonWidth = 82;
+// Mesh picker (tile grid with live 3D previews instead of a flat list).
+constexpr int kMeshDialogWidth = 588;
+constexpr int kMeshDialogHeight = 560;
+constexpr int kMeshTileWidth = 168;
+constexpr int kMeshTileHeight = 176;
+constexpr int kMeshTilePreviewHeight = 130;
+constexpr int kMeshTileGap = 12;
+constexpr int kMeshColumns = 3;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -216,6 +226,38 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return assetId.value != 0U;
 }
 
+// Blits a rendered mesh thumbnail (top-down BGRA) into a target rect, matching
+// the Project Files tile renderer's StretchDIBits path (HALFTONE downscale).
+void DrawMeshThumbnail(HDC dc, const RECT& target, const EditorMeshThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || RectWidth(target) <= 0 || RectHeight(target) <= 0) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height; // top-down
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const int oldMode = SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, nullptr);
+    static_cast<void>(StretchDIBits(
+        dc,
+        target.left,
+        target.top,
+        RectWidth(target),
+        RectHeight(target),
+        0,
+        0,
+        image.width,
+        image.height,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+    SetStretchBltMode(dc, oldMode);
+}
+
 [[nodiscard]] RECT CenteredWindowRect(HWND owner, int width, int height) {
     RECT base{};
     if (owner != nullptr && IsWindow(owner) != 0) {
@@ -239,7 +281,8 @@ public:
         std::string clearDescription,
         HeroIconKind icon,
         const kb::assets::AssetManager* assetManager = nullptr,
-        bool textureThumbnails = false)
+        bool textureThumbnails = false,
+        bool meshTiles = false)
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
@@ -249,7 +292,8 @@ public:
         , clearDescription_(std::move(clearDescription))
         , icon_(icon)
         , assetManager_(assetManager)
-        , textureThumbnails_(textureThumbnails) {}
+        , textureThumbnails_(textureThumbnails)
+        , meshTiles_(meshTiles) {}
 
     [[nodiscard]] AssetPickerResult Show(HWND owner) {
         owner_ = owner;
@@ -279,7 +323,7 @@ private:
     [[nodiscard]] bool EnsureWindow() {
         WNDCLASSEXW windowClass{};
         windowClass.cbSize = sizeof(windowClass);
-        windowClass.style = CS_HREDRAW | CS_VREDRAW;
+        windowClass.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
         windowClass.lpfnWndProc = &AssetPickerWindow::WindowProc;
         windowClass.hInstance = GetModuleHandleW(nullptr);
         windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
@@ -293,11 +337,17 @@ private:
     }
 
     [[nodiscard]] int DialogWidth() const noexcept {
-        return textureThumbnails_ ? kTextureDialogWidth : kListDialogWidth;
+        if (textureThumbnails_) {
+            return kTextureDialogWidth;
+        }
+        return meshTiles_ ? kMeshDialogWidth : kListDialogWidth;
     }
 
     [[nodiscard]] int DialogHeight() const noexcept {
-        return textureThumbnails_ ? kTextureDialogHeight : kListDialogHeight;
+        if (textureThumbnails_) {
+            return kTextureDialogHeight;
+        }
+        return meshTiles_ ? kMeshDialogHeight : kListDialogHeight;
     }
 
     void EnableOwner(bool enabled) const noexcept {
@@ -562,9 +612,155 @@ private:
         PaintTextureScrollbar(dc, viewport, contentHeight);
     }
 
+    // --- Mesh tile grid (live 3D previews; click a tile to assign, tile 0 = None) ---
+
+    [[nodiscard]] RECT MeshViewportRect() const noexcept {
+        const RECT client = Client();
+        return Rect(kPad, kListHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
+    }
+
+    [[nodiscard]] int MeshGridLeft(const RECT& viewport) const noexcept {
+        const int gridWidth = (kMeshColumns * kMeshTileWidth) + ((kMeshColumns - 1) * kMeshTileGap);
+        const int usableWidth = std::max(0, RectWidth(viewport) - kScrollbarWidth);
+        return viewport.left + std::max(0, (usableWidth - gridWidth) / 2);
+    }
+
+    [[nodiscard]] int MeshContentHeight() const noexcept {
+        const int count = RowCount();
+        const int gridRows = (count + kMeshColumns - 1) / kMeshColumns;
+        return gridRows <= 0 ? 0 : (gridRows * kMeshTileHeight) + ((gridRows - 1) * kMeshTileGap);
+    }
+
+    [[nodiscard]] int MaxMeshScroll() const noexcept {
+        return std::max(0, MeshContentHeight() - RectHeight(MeshViewportRect()));
+    }
+
+    [[nodiscard]] RECT MeshTileRect(const RECT& viewport, int index) const noexcept {
+        const int row = index / kMeshColumns;
+        const int column = index % kMeshColumns;
+        const int left = MeshGridLeft(viewport) + (column * (kMeshTileWidth + kMeshTileGap));
+        const int top = viewport.top + (row * (kMeshTileHeight + kMeshTileGap)) - scrollOffset_;
+        return Rect(left, top, left + kMeshTileWidth, top + kMeshTileHeight);
+    }
+
+    [[nodiscard]] int MeshTileAt(int x, int y) const noexcept {
+        const RECT viewport = MeshViewportRect();
+        if (!Contains(viewport, x, y)) {
+            return -1;
+        }
+        for (int index = 0; index < RowCount(); ++index) {
+            if (Contains(MeshTileRect(viewport, index), x, y)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    // The tile of the mesh currently assigned to the renderer (0 = None when
+    // nothing is assigned) — the default highlight before the user clicks.
+    [[nodiscard]] int CurrentMeshTile() const noexcept {
+        for (int index = 1; index < RowCount(); ++index) {
+            if (rows_[static_cast<std::size_t>(index - 1)].assetId.value == currentAsset_.value) {
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    // The highlighted tile: the user's click selection, or the current mesh.
+    [[nodiscard]] int SelectedMeshTile() const noexcept {
+        return meshSelectedTile_ >= 0 ? meshSelectedTile_ : CurrentMeshTile();
+    }
+
+    void PaintMeshTile(HDC dc, RECT rect, int tileIndex, bool selected, bool hovered) const {
+        const COLORREF fill = selected || hovered ? Rgb(51, 55, 65) : Rgb(19, 20, 24);
+        const COLORREF border = selected ? Color(theme_.accent) : Rgb(0, 0, 0);
+        GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+        if (selected) {
+            GdiDrawing::DrawSharpFrame(dc, GdiDrawing::Inset(rect, 1), fill, Color(theme_.accent));
+        }
+
+        const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 6 + kMeshTilePreviewHeight);
+        GdiDrawing::DrawSharpFrame(dc, image, Rgb(10, 11, 14), Rgb(0, 0, 0));
+
+        bool drewPreview = false;
+        if (tileIndex > 0 && assetManager_ != nullptr) {
+            const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(rows_[static_cast<std::size_t>(tileIndex - 1)].assetId);
+            if (metadata != nullptr) {
+                if (const EditorMeshThumbnailImage* preview = EditorMeshPreviewCache().PreviewFor(*assetManager_, *metadata, EditorMeshPreviewSettings{}); preview != nullptr) {
+                    DrawMeshThumbnail(dc, GdiDrawing::Inset(image, 1), *preview);
+                    drewPreview = true;
+                }
+            }
+        }
+        if (!drewPreview) {
+            // The "None" tile, or a mesh whose preview could not be rasterised.
+            const COLORREF iconColor = selected ? Color(theme_.accent) : Rgb(128, 133, 145);
+            HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 42), icon_, iconColor, 2);
+        }
+
+        const std::string name = tileIndex == 0 ? std::string{ "None" } : rows_[static_cast<std::size_t>(tileIndex - 1)].name;
+        RECT label = Rect(rect.left + 8, rect.top + kMeshTilePreviewHeight + 12, rect.right - 8, rect.bottom - 6);
+        ScopedFont labelFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, selected ? Color(theme_.textPrimary) : Rgb(209, 214, 224));
+        DrawTextA(dc, name.c_str(), static_cast<int>(name.size()), &label, DT_CENTER | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX | DT_SINGLELINE);
+    }
+
+    void PaintMeshScrollbar(HDC dc, RECT viewport) const {
+        const int maxScroll = MaxMeshScroll();
+        if (maxScroll <= 0) {
+            return;
+        }
+        const int contentHeight = MeshContentHeight();
+        const RECT track = Rect(viewport.right - kScrollbarWidth, viewport.top, viewport.right - 3, viewport.bottom);
+        GdiDrawing::FillRectColor(dc, track, Rgb(17, 18, 22));
+        const int thumbHeight = std::clamp((RectHeight(track) * RectHeight(viewport)) / std::max(1, contentHeight), 28, RectHeight(track));
+        const int travel = std::max(0, RectHeight(track) - thumbHeight);
+        const int thumbTop = track.top + (travel * std::clamp(scrollOffset_, 0, maxScroll)) / std::max(1, maxScroll);
+        GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
+    }
+
+    void PaintMeshBrowser(HDC dc) const {
+        const RECT client = Client();
+        GdiDrawing::FillRectColor(dc, client, Rgb(17, 19, 23));
+        GdiDrawing::DrawSharpFrame(dc, client, Rgb(17, 19, 23), Rgb(68, 76, 88));
+        {
+            ScopedFont titleFont(15, FW_SEMIBOLD);
+            const ScopedGdiObject selectedFont(dc, titleFont.handle);
+            Text(dc, Rect(kPad, 10, client.right - 58, 31), title_, Color(theme_.textPrimary));
+        }
+        Text(dc, Rect(kPad, 31, client.right - 58, 52), description_, Color(theme_.textSecondary));
+
+        const RECT close = CloseButton();
+        GdiDrawing::DrawSharpFrame(dc, close, hoveredRow_ == -2 ? Rgb(43, 48, 56) : Rgb(27, 30, 35), hoveredRow_ == -2 ? Color(theme_.accent) : Rgb(74, 82, 94));
+        Text(dc, close, "x", hoveredRow_ == -2 ? Color(theme_.textPrimary) : Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        const RECT viewport = MeshViewportRect();
+        const int selectedTile = SelectedMeshTile();
+        const int saved = SaveDC(dc);
+        IntersectClipRect(dc, viewport.left, viewport.top, viewport.right - kScrollbarWidth, viewport.bottom);
+        for (int index = 0; index < RowCount(); ++index) {
+            const RECT tile = MeshTileRect(viewport, index);
+            if (tile.bottom < viewport.top || tile.top > viewport.bottom) {
+                continue;
+            }
+            PaintMeshTile(dc, tile, index, index == selectedTile, hoveredRow_ == index);
+        }
+        RestoreDC(dc, saved);
+        PaintMeshScrollbar(dc, viewport);
+
+        Text(dc, Rect(kPad, client.bottom - 32, client.right - kPad, client.bottom - 10), "Click to select. Double-click or Enter to assign. Esc closes.", Color(theme_.textSecondary));
+    }
+
     void Paint(HDC dc) const {
         if (textureThumbnails_) {
             PaintTextureBrowser(dc);
+            return;
+        }
+        if (meshTiles_) {
+            PaintMeshBrowser(dc);
             return;
         }
 
@@ -652,6 +848,8 @@ private:
             } else {
                 next = TextureTileAt(x, y);
             }
+        } else if (meshTiles_) {
+            next = Contains(CloseButton(), x, y) ? -2 : MeshTileAt(x, y);
         } else {
             next = Contains(CloseButton(), x, y) ? -2 : RowAt(x, y);
         }
@@ -671,7 +869,8 @@ private:
             return;
         }
 
-        const int next = std::clamp(scrollOffset_ + delta, 0, MaxScroll());
+        const int maxScroll = meshTiles_ ? MaxMeshScroll() : MaxScroll();
+        const int next = std::clamp(scrollOffset_ + delta, 0, maxScroll);
         if (next != scrollOffset_) {
             scrollOffset_ = next;
             InvalidateRect(window_, nullptr, FALSE);
@@ -804,7 +1003,20 @@ private:
             PAINTSTRUCT paint{};
             HDC dc = BeginPaint(window, &paint);
             if (picker != nullptr) {
-                picker->Paint(dc);
+                // Double-buffer: render the whole dialog into an off-screen bitmap
+                // and blit once, so frequent hover repaints don't flicker.
+                RECT client{};
+                GetClientRect(window, &client);
+                const int width = client.right - client.left;
+                const int height = client.bottom - client.top;
+                HDC memDc = CreateCompatibleDC(dc);
+                HBITMAP memBitmap = CreateCompatibleBitmap(dc, width, height);
+                auto* oldBitmap = static_cast<HBITMAP>(SelectObject(memDc, memBitmap));
+                picker->Paint(memDc);
+                BitBlt(dc, 0, 0, width, height, memDc, 0, 0, SRCCOPY);
+                SelectObject(memDc, oldBitmap);
+                DeleteObject(memBitmap);
+                DeleteDC(memDc);
             }
             EndPaint(window, &paint);
             return 0;
@@ -828,7 +1040,26 @@ private:
                     DestroyWindow(window);
                     return 0;
                 }
+                if (picker->meshTiles_) {
+                    // Single click selects (highlights) a tile; a double click
+                    // (WM_LBUTTONDBLCLK) confirms the assignment.
+                    const int tile = picker->MeshTileAt(x, y);
+                    if (tile >= 0 && tile != picker->meshSelectedTile_) {
+                        picker->meshSelectedTile_ = tile;
+                        InvalidateRect(window, nullptr, FALSE);
+                    }
+                    return 0;
+                }
                 picker->AcceptRow(picker->RowAt(x, y));
+                return 0;
+            }
+            break;
+        case WM_LBUTTONDBLCLK:
+            if (picker != nullptr && picker->meshTiles_) {
+                const int tile = picker->MeshTileAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+                if (tile >= 0) {
+                    picker->AcceptRow(tile);
+                }
                 return 0;
             }
             break;
@@ -846,6 +1077,10 @@ private:
             break;
         case WM_KEYDOWN:
             if (picker != nullptr && picker->HandleTextureKeyDown(wparam)) {
+                return 0;
+            }
+            if (picker != nullptr && picker->meshTiles_ && wparam == VK_RETURN) {
+                picker->AcceptRow(picker->SelectedMeshTile());
                 return 0;
             }
             if (picker != nullptr && wparam == VK_ESCAPE) {
@@ -888,10 +1123,12 @@ private:
     HeroIconKind icon_ = HeroIconKind::Cube;
     const kb::assets::AssetManager* assetManager_ = nullptr;
     bool textureThumbnails_ = false;
+    bool meshTiles_ = false;
     AssetPickerResult result_{};
     bool running_ = true;
     int hoveredRow_ = -1;
     int scrollOffset_ = 0;
+    int meshSelectedTile_ = -1; // -1 = "use the currently-assigned mesh's tile"
     int pressedTextureTarget_ = -1;
     int textureScrollOffset_ = 0;
     bool textureSearchFocused_ = true;
@@ -905,6 +1142,7 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
     kb::assets::AssetId currentMesh) {
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
         BuildMeshRows(sceneContext),
@@ -913,6 +1151,9 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
         "Choose a mesh asset for the selected Mesh Renderer.",
         "Clear Mesh Renderer mesh",
         HeroIconKind::Cube,
+        &manager,
+        false, // textureThumbnails
+        true,  // meshTiles (grid of live previews)
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMeshAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };

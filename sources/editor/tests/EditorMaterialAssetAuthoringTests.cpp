@@ -624,6 +624,24 @@ void RunCreateMaterialFromGraphAndMaterialTypeThroughEditorAuthoringTest() {
             sourceBefore.graphProgram.graphSourceHash != sourceAfter.graphProgram.graphSourceHash,
         "P1.9: Runtime compiled the stale inline graph instead of the changed sourceGraph asset");
 
+    // Finding 1 (fail-safe fallback): when the authoritative external source graph is
+    // UNRESOLVABLE (renamed/deleted/re-imported) — as opposed to merely changed, covered
+    // above — the runtime must render the graph still embedded in the .kbmat rather than
+    // resolve to the error material and turn every mesh magenta.
+    kb::render::RenderMaterialAssetData orphanedSourceMaterial = *graphMaterial;
+    orphanedSourceMaterial.graphSourceAssetId = 0xFFFFFFFF00000001ULL; // an id no asset is registered under
+    orphanedSourceMaterial.graphSourceAssetPath = "/Game/Materials/DoesNotExist.kbmatgraph";
+    const kb::render::ResolvedRuntimeMaterialDesc orphanedResolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(scene.Assets().Manager(), *graphMaterialMetadata, orphanedSourceMaterial);
+    const bool orphanedHardFailed = std::ranges::any_of(
+        orphanedResolved.graphDiagnostics,
+        [](const kb::render::RenderMaterialGraphDiagnostic& diagnostic) {
+            return diagnostic.kind == kb::render::RenderMaterialGraphDiagnosticKind::MissingSourceGraph &&
+                diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+        });
+    kb::editor::tests::Require(!orphanedHardFailed && orphanedResolved.graphProgram.active,
+        "Finding 1: a missing external sourceGraph must fall back to the embedded inline graph (render it), not the error material");
+
     kb::render::RenderMaterialAssetData synchronizedMaterial = *graphMaterial;
     synchronizedMaterial.graph = changedSourceGraph;
     synchronizedMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{

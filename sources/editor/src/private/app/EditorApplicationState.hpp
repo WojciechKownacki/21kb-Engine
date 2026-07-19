@@ -17,6 +17,8 @@
 
 #include "kb/editor/theme/EditorTheme.hpp"
 
+#include <cstdint>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -45,6 +47,10 @@ struct EditorApplicationState {
     EditorPointerDragState pointerDrag;
     Win32InputCollector inputCollector;
     Win32InputDebugLogger inputDebugLogger;
+    // Last observed ScriptEditorWindow::SaveSerial() — a change means the user
+    // saved a script (Ctrl+S), so the open script's asset is reloaded and any
+    // Inspector showing its exposed variables is repainted.
+    std::uint64_t lastScriptSaveSerial = 0;
     bool running = false;
 #endif
 };
