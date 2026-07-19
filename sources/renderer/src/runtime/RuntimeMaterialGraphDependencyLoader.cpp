@@ -91,7 +91,24 @@ RuntimeMaterialSourceGraphLoadResult LoadRuntimeMaterialSourceGraph(
     }
     const kb::assets::AssetMetadata* metadata = ResolveMaterialSourceGraphMetadata(manager, material);
     if (metadata == nullptr) {
-        return {};
+        // Finding 1 (fail-safe fallback): the authoritative external source graph is no
+        // longer registered (renamed / deleted / re-imported). Rather than resolving to
+        // the error material and turning every mesh using it magenta, fall back to the
+        // complete graph still embedded in the .kbmat so the material keeps rendering,
+        // and surface the missing dependency as a warning. Because this branch is only
+        // reached when the external graph does NOT resolve, a *changed* (still-present)
+        // external graph remains authoritative — the P1.9 authoring invariant holds.
+        RuntimeMaterialSourceGraphLoadResult fallback{};
+        fallback.graph = material.graph;
+        fallback.usedInlineFallback = true;
+        fallback.path = material.graphSourceAssetPath;
+        fallback.parseResult.diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .code = RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
+            .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
+            .path = material.graphSourceAssetPath,
+            .message = "Authoritative source graph asset is missing; rendering the graph embedded in the material as a fallback.",
+        });
+        return fallback;
     }
     RuntimeMaterialSourceGraphLoadResult result{};
     result.assetId = metadata->id;
