@@ -332,6 +332,10 @@ public:
     // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
     [[nodiscard]] EditorMaterialGraphCookService& MaterialGraphCookService() noexcept;
+    // Whether the GPU material-graph toolchain can actually cook program binaries
+    // (shaderc present). When false, graph materials render the CPU PBR flatten, so
+    // telemetry must not claim a live GPU graph (Finding 3).
+    [[nodiscard]] bool GpuMaterialGraphCookAvailable() const noexcept;
     // Latest cook result for the material open in the editor (drives the preview status banner).
     [[nodiscard]] EditorMaterialGraphCookResult OpenMaterialGraphCookResult() const;
     // Apply freshly cooked graph programs to live render state (hot reload + status); returns the
