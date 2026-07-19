@@ -239,6 +239,12 @@ struct TransportClickResult {
     const TransportClickResult result = ExecuteTransportCommand(transport, playMode, sceneContext);
     if (result.invalidates) {
         InvalidateToolbar(mainWindow, layout);
+        // Transport commands write to the Console — snapshot capture/restore and,
+        // on Stop, every behaviour's Destroyed hook. The play loop only repaints
+        // panels WHILE playing, so once play ends nothing redraws the Console
+        // until the next input. Invalidate the whole window so those final log
+        // lines appear on the click itself, not on the next mouse move.
+        InvalidateRect(mainWindow, nullptr, FALSE);
     }
     return result.handled;
 }
@@ -261,6 +267,10 @@ struct TransportClickResult {
         sceneViewport.RequestPresent();
     }
     InvalidateToolbar(mainWindow, layout);
+    // Save writes a "Saved scene ..." line to the Console; like the transport
+    // commands, invalidate the whole window so it shows immediately (same
+    // one-shot-action-vs-panel-repaint issue).
+    InvalidateRect(mainWindow, nullptr, FALSE);
     return true;
 }
 

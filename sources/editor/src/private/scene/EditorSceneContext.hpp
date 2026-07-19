@@ -6,6 +6,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
@@ -68,6 +69,7 @@ class ScriptModule;
 
 namespace kb::editor {
 
+enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
@@ -138,6 +140,15 @@ public:
     [[nodiscard]] EditorViewportCameraState* ActiveViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState* ActiveViewportCamera() const noexcept;
     void EndViewportCameraNavigation() noexcept;
+    // Frames the current entity selection in the default scene viewport camera
+    // (the viewport "F" shortcut): recenters on the selection pivot and pulls
+    // back to fit its bounding sphere. Returns false when nothing framable is
+    // selected. Starts a short eased animation advanced by
+    // TickViewportFocusAnimations.
+    [[nodiscard]] bool FrameSelectedEntitiesInViewport() noexcept;
+    // Advances any in-progress "frame selected" camera animation; returns true
+    // while still animating so the frame loop keeps presenting.
+    [[nodiscard]] bool TickViewportFocusAnimations(float deltaSeconds) noexcept;
     [[nodiscard]] bool CloseViewportToolbarDropdowns() noexcept;
     [[nodiscard]] InspectorPanelState& Inspector() noexcept;
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
@@ -219,6 +230,14 @@ public:
     [[nodiscard]] bool IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept;
     [[nodiscard]] bool IsHierarchyRenameSelectingAll() const noexcept;
     [[nodiscard]] std::string_view HierarchyRenameBuffer() const noexcept;
+
+    // True while the user is typing into ANY inline text field: hierarchy
+    // rename or search, Project Files rename / new-folder / search, an
+    // inspector field, or a material-graph node rename / constant / find box.
+    // Global single-key viewport shortcuts (gizmo W/E/R, camera-frame F) must
+    // suppress themselves while this holds, so a typed letter reaches the text
+    // field instead of retargeting the tool.
+    [[nodiscard]] bool IsAnyInlineTextEditActive() const noexcept;
 
     void FocusHierarchySearch(bool focused) noexcept;
     void SetHierarchySearchQuery(std::string query);
@@ -619,7 +638,55 @@ public:
     [[nodiscard]] std::vector<std::pair<kb::assets::AssetId, std::string>> AvailableScriptAssets() const;
     [[nodiscard]] bool AttachScriptToEntity(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool RemoveScriptFromEntity(kb::scene::SceneEntity entity);
+    // Removes the Mesh Renderer component (the section-header "×"), mirroring the
+    // Script remove path. Undoable; false if the entity has no Mesh Renderer.
+    [[nodiscard]] bool RemoveMeshRendererFromEntity(kb::scene::SceneEntity entity);
+    // Removes one physics component (Rigidbody/Collider/CharacterController/Joint)
+    // via its section-header "×". Undoable; false if the entity lacks that one.
+    [[nodiscard]] bool RemovePhysicsComponent(kb::scene::SceneEntity entity, PhysicsComponentKind kind);
+    // Whether the green collider wireframes are drawn in the Scene Viewport (the
+    // Unity-style "Gizmos" toggle). Default on so colliders are visible.
+    [[nodiscard]] bool ArePhysicsGizmosVisible() const noexcept { return physicsGizmosVisible_; }
+    void SetPhysicsGizmosVisible(bool visible) noexcept { physicsGizmosVisible_ = visible; }
+    // Sizes the entity's Collider to enclose its Mesh Renderer mesh (Unity-style
+    // "Fit to Mesh"): center + radius/box-size/height from the mesh bounds.
+    // Undoable; false if the entity has no Collider or no loadable mesh.
+    [[nodiscard]] bool FitColliderToMesh(kb::scene::SceneEntity entity);
+    // True when the entity has both a Collider and a resolvable Mesh Renderer mesh
+    // (so the "Fit to Mesh" affordance is meaningful).
+    [[nodiscard]] bool CanFitColliderToMesh(kb::scene::SceneEntity entity) const;
+    // Non-transactional core of the collider fit: reads the entity's mesh bounds
+    // and writes them into its Collider in place. Returns false (and leaves the
+    // collider untouched) when no bounds are resolvable. Shared by the "Fit to
+    // Mesh" action, collider-add auto-fit, and mesh-change auto-refit — each of
+    // which supplies its own undoable transaction. `reason` receives a
+    // human-readable outcome for the Console.
+    bool ApplyColliderFitToMesh(kb::scene::SceneEntity entity, std::string& reason);
+    // The Lua behaviour asset bound to the entity (for the Script field's picker
+    // "reveal in Project Files"); invalid AssetId when no script is attached.
+    [[nodiscard]] kb::assets::AssetId EntityScriptAssetId(kb::scene::SceneEntity entity) const;
     [[nodiscard]] bool ToggleEntityScriptEnabled(kb::scene::SceneEntity entity);
+    // One exposed ("@expose") script variable as the Inspector shows it: the
+    // declared name/type, the EFFECTIVE value (the per-instance override if one
+    // is stored, else the script's declared default), and whether an override
+    // delta currently exists for it.
+    struct EntityScriptVariable {
+        std::string name;
+        kb::script::ScriptValueType type = kb::script::ScriptValueType::Void;
+        kb::script::ScriptValue value;
+        bool overridden = false;
+    };
+    [[nodiscard]] std::vector<EntityScriptVariable> EntityScriptExposedVariables(kb::scene::SceneEntity entity) const;
+    // Authors a per-instance override; if the value equals the script's declared
+    // default the override is dropped instead (store-only-non-default). Undoable.
+    [[nodiscard]] bool SetEntityScriptVariable(kb::scene::SceneEntity entity, std::string name, kb::script::ScriptValue value);
+    // Drops the override for one variable (revert to its @expose default). Undoable.
+    [[nodiscard]] bool RevertEntityScriptVariable(kb::scene::SceneEntity entity, std::string_view name);
+    // Drops the currently-open script's cached asset so its next load re-parses
+    // from disk — the exposed-variable schema then reflects edits the user just
+    // saved in the Script Editor. Returns true when an open script was unloaded
+    // (i.e. any Inspector showing it should repaint). Not undoable (pure cache).
+    [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
@@ -700,6 +767,7 @@ private:
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
+    bool physicsGizmosVisible_ = true;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;

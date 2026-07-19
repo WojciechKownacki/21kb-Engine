@@ -21,6 +21,20 @@ EditorInspectorPointerController::EditorInspectorPointerController(EditorSceneCo
 
 bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, int x, int y) {
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
+    // The Add Component menu's own scrollbar (section == AddComponent) is distinct
+    // from the whole-panel scrollbar (section == None).
+    if (hit.kind == InspectorHitKind::ScrollbarThumb && hit.section == InspectorSectionId::AddComponent) {
+        sceneContext_.Inspector().BeginAddComponentScrollbarDrag(y - static_cast<int>(hit.rect.top));
+        shouldCaptureMouse_ = true;
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::ScrollbarTrack && hit.section == InspectorSectionId::AddComponent) {
+        const InspectorPanelRenderer::AddComponentScrollInfo info = InspectorPanelRenderer::AddComponentScrollGeometry(content, sceneContext_);
+        static_cast<void>(sceneContext_.Inspector().SetAddComponentScroll(
+            sceneContext_.Inspector().AddComponentScroll() + (y < info.thumb.top ? -104 : 104), info.maxScroll));
+        shouldCaptureMouse_ = false;
+        return true;
+    }
     if (hit.kind == InspectorHitKind::ScrollbarThumb) {
         sceneContext_.Inspector().BeginScrollbarDrag(y);
         shouldCaptureMouse_ = true;
@@ -41,6 +55,22 @@ bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, in
 }
 
 bool EditorInspectorPointerController::HandlePointerDrag(const std::optional<RECT>& content, int x, int y) {
+    if (sceneContext_.Inspector().IsAddComponentScrollbarDragging()) {
+        if (!content.has_value()) {
+            sceneContext_.Inspector().EndAddComponentScrollbarDrag();
+            return true;
+        }
+        const InspectorPanelRenderer::AddComponentScrollInfo info = InspectorPanelRenderer::AddComponentScrollGeometry(*content, sceneContext_);
+        if (!info.active) {
+            sceneContext_.Inspector().EndAddComponentScrollbarDrag();
+            return true;
+        }
+        const int thumbHeight = std::max(1, static_cast<int>(info.thumb.bottom - info.thumb.top));
+        const int travel = std::max(1, static_cast<int>(info.track.bottom - info.track.top) - thumbHeight);
+        const int newThumbTop = y - sceneContext_.Inspector().AddComponentScrollbarGrabOffset();
+        static_cast<void>(sceneContext_.Inspector().SetAddComponentScroll((newThumbTop - static_cast<int>(info.track.top)) * info.maxScroll / travel, info.maxScroll));
+        return true;
+    }
     if (sceneContext_.Inspector().IsScrollbarDragging()) {
         if (!content.has_value()) {
             sceneContext_.Inspector().EndScrollbarDrag();
@@ -57,6 +87,10 @@ bool EditorInspectorPointerController::HandlePointerDrag(const std::optional<REC
 }
 
 bool EditorInspectorPointerController::HandlePointerUp() {
+    if (sceneContext_.Inspector().IsAddComponentScrollbarDragging()) {
+        sceneContext_.Inspector().EndAddComponentScrollbarDrag();
+        return true;
+    }
     if (sceneContext_.Inspector().IsScrollbarDragging()) {
         sceneContext_.Inspector().EndScrollbarDrag();
         return true;
@@ -72,6 +106,15 @@ bool EditorInspectorPointerController::UpdateHover(const RECT& content, int x, i
 bool EditorInspectorPointerController::HandleMouseWheel(const RECT& content, int x, int y, int wheelDelta) {
     if (!PointInRect(content, x, y)) {
         return false;
+    }
+    // Wheeling over the open Add Component list scrolls that list, not the panel.
+    if (InspectorPanelRenderer::AddComponentListContains(content, sceneContext_, x, y)) {
+        const InspectorPanelRenderer::AddComponentScrollInfo info = InspectorPanelRenderer::AddComponentScrollGeometry(content, sceneContext_);
+        if (info.active) {
+            const int direction = wheelDelta > 0 ? 1 : -1;
+            static_cast<void>(sceneContext_.Inspector().SetAddComponentScroll(sceneContext_.Inspector().AddComponentScroll() - direction * 52, info.maxScroll));
+            return true;
+        }
     }
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
     const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(content, sceneContext_);

@@ -36,6 +36,20 @@ public:
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static RECT ScrollbarTrackRect(const RECT& content) noexcept;
     [[nodiscard]] static RECT ScrollbarThumbRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
+
+    // Geometry of the Add Component menu's internal scrollbar, in window (event)
+    // space so the pointer controller can drag it. `active` is false when the menu
+    // is closed or its list fits without scrolling.
+    struct AddComponentScrollInfo {
+        bool active = false;
+        RECT track{};
+        RECT thumb{};
+        int maxScroll = 0;
+    };
+    [[nodiscard]] static AddComponentScrollInfo AddComponentScrollGeometry(const RECT& content, const EditorSceneContext& sceneContext);
+    // True when (x, y) is inside the open menu's scrollable list (so the wheel
+    // scrolls the menu instead of the whole inspector).
+    [[nodiscard]] static bool AddComponentListContains(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
 #endif
 };
 

@@ -804,7 +804,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);
     if (panelHit.inConsolePanel && consolePointer.HandlePointerDown(*panelHit.consoleContent, x, y)) {
-        sceneContext_.ClearHierarchySelection();
+        // The Console is an output/inspection panel, not a scene-selection
+        // surface: clicking it (Clear, Copy Line, Save Log, filter toggles, a log
+        // row) must NOT clear the current scene entity selection, so the Inspector
+        // keeps showing the selected object. This mirrors the Project Files panel
+        // above, and the "clicked nowhere" fallback below already excludes it.
         sceneContext_.AssetBrowser().FocusSelection(false);
         EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
         if (sceneContext_.Console().IsDetailResizeDragging() || sceneContext_.Console().IsDetailScrollbarDragging() || sceneContext_.Console().IsListScrollbarDragging()) {
@@ -893,11 +897,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         sceneContext_.AssetBrowser().FocusSelection(false);
         EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
     }
-    if (!panelHit.inHierarchyPanel && !panelHit.inConsolePanel) {
-        sceneContext_.ClearHierarchySelection();
-    }
-    if (dockController_.HandlePointerDown(messageWindow, x, y)) {
+    // Let the dock system consume the click first (switch/re-click a tab, drag a
+    // splitter). Switching tabs — e.g. Scene View ↔ Script Editor — is a layout
+    // action, not a scene action, so it must NOT clear the scene selection (the
+    // Inspector keeps showing the selected object). Only a click that hit no dock
+    // element and landed outside the Hierarchy/Console falls through to deselect.
+    const bool dockConsumed = dockController_.HandlePointerDown(messageWindow, x, y);
+    if (dockConsumed) {
         sceneViewport_.RequestPresent();
+    }
+    if (!dockConsumed && !panelHit.inHierarchyPanel && !panelHit.inConsolePanel) {
+        sceneContext_.ClearHierarchySelection();
     }
 }
 

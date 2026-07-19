@@ -11,8 +11,10 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
+#include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
 
@@ -33,16 +35,122 @@ namespace {
 
 [[nodiscard]] std::string FormatCompactFloat(float value);
 
+// The value text seeded into the edit box when a non-bool exposed-variable row
+// is clicked (bool rows toggle their checkbox instead).
+[[nodiscard]] std::string FormatScriptVariableEditText(const EditorSceneContext::EntityScriptVariable& variable) {
+    switch (variable.type) {
+    case kb::script::ScriptValueType::String:
+    case kb::script::ScriptValueType::Name:
+    case kb::script::ScriptValueType::Guid:
+        return variable.value.AsString();
+    case kb::script::ScriptValueType::Int:
+        return std::to_string(variable.value.AsInt());
+    case kb::script::ScriptValueType::Int64:
+        return std::to_string(variable.value.AsInt64());
+    case kb::script::ScriptValueType::UInt32:
+        return std::to_string(variable.value.AsUInt32());
+    case kb::script::ScriptValueType::Entity:
+    case kb::script::ScriptValueType::Component:
+    case kb::script::ScriptValueType::Hash:
+        return std::to_string(variable.value.AsUInt64());
+    case kb::script::ScriptValueType::Double: {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%g", variable.value.AsDouble());
+        return std::string{ buffer };
+    }
+    default: {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%g", static_cast<double>(variable.value.AsFloat()));
+        return std::string{ buffer };
+    }
+    }
+}
+
+// Parses the edited text into a ScriptValue of the variable's declared type.
+// Returns nullopt when a numeric field's text is not a number (edit is rejected,
+// the previous value stands).
+[[nodiscard]] std::optional<kb::script::ScriptValue> ParseScriptVariableEditText(
+    std::string_view text, const EditorSceneContext::EntityScriptVariable& variable) {
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+    switch (variable.type) {
+    case ScriptValueType::String:
+        return ScriptValue{ std::string{ text } };
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return ScriptValue{ std::string{ text }, variable.type };
+    case ScriptValueType::Bool:
+        return ScriptValue{ text == "true" || text == "1" || text == "yes" };
+    default:
+        break;
+    }
+    const std::string buffer{ text };
+    char* end = nullptr;
+    const double parsed = std::strtod(buffer.c_str(), &end);
+    if (end == buffer.c_str()) {
+        return std::nullopt;
+    }
+    switch (variable.type) {
+    case ScriptValueType::Double:
+        return ScriptValue{ parsed };
+    case ScriptValueType::Int:
+        return ScriptValue{ static_cast<int>(std::llround(parsed)) };
+    case ScriptValueType::Int64:
+        return ScriptValue{ static_cast<std::int64_t>(std::llround(parsed)) };
+    case ScriptValueType::UInt32:
+        return ScriptValue{ static_cast<std::uint32_t>(parsed < 0.0 ? 0LL : std::llround(parsed)) };
+    case ScriptValueType::Entity:
+    case ScriptValueType::Component:
+    case ScriptValueType::Hash:
+        return ScriptValue{ static_cast<std::uint64_t>(parsed < 0.0 ? 0LL : std::llround(parsed)), variable.type };
+    default:
+        return ScriptValue{ static_cast<float>(parsed) };
+    }
+}
+
+void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        return;
+    }
+    if (sceneContext.AssetBrowser().SelectAsset(assetId, sceneContext.Scene().Assets().Manager())) {
+        sceneContext.AssetBrowser().FocusSelection(true);
+    }
+}
+
 [[nodiscard]] bool HandleScriptClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     switch (hit.property) {
     case InspectorPropertyId::ScriptEnabled:
         static_cast<void>(sceneContext.ToggleEntityScriptEnabled(entity));
         return true;
+    case InspectorPropertyId::ScriptName:
+    case InspectorPropertyId::ScriptPicker:
+        // Reveal the bound Lua asset in Project Files (same affordance as the
+        // Mesh/Material asset-field pickers).
+        SelectAssetInProjectFiles(sceneContext, sceneContext.EntityScriptAssetId(entity));
+        return true;
     case InspectorPropertyId::ComponentRemove:
         static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
         sceneContext.Inspector().CloseComponentMenus();
         return true;
+    case InspectorPropertyId::ScriptVariable: {
+        const std::vector<EditorSceneContext::EntityScriptVariable> variables = sceneContext.EntityScriptExposedVariables(entity);
+        if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= variables.size()) {
+            return true;
+        }
+        const EditorSceneContext::EntityScriptVariable& variable = variables[static_cast<std::size_t>(hit.index)];
+        if (variable.type == kb::script::ScriptValueType::Bool) {
+            // A checkbox click flips the value immediately (undoable).
+            static_cast<void>(sceneContext.SetEntityScriptVariable(entity, variable.name, kb::script::ScriptValue{ !variable.value.AsBool() }));
+        } else {
+            // Other types open the inline text editor seeded with the current value.
+            // BeginTextEdit resets the edit index, so set it afterwards — the commit
+            // path reads EditIndex() to know which variable row is being edited.
+            sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::ScriptVariable, FormatScriptVariableEditText(variable));
+            sceneContext.Inspector().SetEditIndex(hit.index);
+        }
+        return true;
+    }
     default:
         return true;
     }
@@ -62,12 +170,26 @@ namespace {
         sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::AddComponentSearch, query);
         return true;
     }
+    if (hit.property == InspectorPropertyId::AddComponentBack) {
+        // Slide back to the category list, keeping the search box active + empty.
+        sceneContext.Inspector().CloseAddComponentCategory();
+        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::AddComponentSearch, {});
+        return true;
+    }
     if (hit.property == InspectorPropertyId::AddComponentOption) {
-        const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(query);
-        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < tiles.size()) {
-            static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles[static_cast<std::size_t>(hit.index)]->id));
+        const std::string& category = sceneContext.Inspector().AddComponentBrowserCategory();
+        const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
+            const AddComponentRow& row = rows[static_cast<std::size_t>(hit.index)];
+            if (row.kind == AddComponentRowKind::Category) {
+                // Enter the category (animated slide), keep search active + empty.
+                sceneContext.Inspector().OpenAddComponentCategory(row.id);
+                sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::AddComponentSearch, {});
+            } else {
+                static_cast<void>(sceneContext.AddComponentToEntity(entity, row.id));
+                sceneContext.Inspector().CloseAddComponentBrowser();
+            }
         }
-        sceneContext.Inspector().CloseAddComponentBrowser();
         return true;
     }
     return true;
@@ -346,15 +468,6 @@ namespace {
     }
 }
 
-void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::AssetId assetId) {
-    if (!assetId.IsValid()) {
-        return;
-    }
-    if (sceneContext.AssetBrowser().SelectAsset(assetId, sceneContext.Scene().Assets().Manager())) {
-        sceneContext.AssetBrowser().FocusSelection(true);
-    }
-}
-
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     if (hit.kind != InspectorHitKind::TextField) {
@@ -612,6 +725,225 @@ template <typename Mutator>
     return true;
 }
 
+// --- Physics component editing (index-addressed, via InspectorPhysicsModel) ----
+
+[[nodiscard]] std::optional<PhysicsComponentKind> PhysicsKindForSection(InspectorSectionId section) noexcept {
+    switch (section) {
+    case InspectorSectionId::Rigidbody: return PhysicsComponentKind::Rigidbody;
+    case InspectorSectionId::Collider: return PhysicsComponentKind::Collider;
+    case InspectorSectionId::CharacterController: return PhysicsComponentKind::CharacterController;
+    case InspectorSectionId::Joint: return PhysicsComponentKind::Joint;
+    default: return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<PhysicsComponentKind> PhysicsKindForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::RigidbodyField: return PhysicsComponentKind::Rigidbody;
+    case InspectorPropertyId::ColliderField: return PhysicsComponentKind::Collider;
+    case InspectorPropertyId::CharacterControllerField: return PhysicsComponentKind::CharacterController;
+    case InspectorPropertyId::JointField: return PhysicsComponentKind::Joint;
+    default: return std::nullopt;
+    }
+}
+
+[[nodiscard]] InspectorPropertyId PhysicsFieldProperty(PhysicsComponentKind kind) noexcept {
+    switch (kind) {
+    case PhysicsComponentKind::Rigidbody: return InspectorPropertyId::RigidbodyField;
+    case PhysicsComponentKind::Collider: return InspectorPropertyId::ColliderField;
+    case PhysicsComponentKind::CharacterController: return InspectorPropertyId::CharacterControllerField;
+    case PhysicsComponentKind::Joint: return InspectorPropertyId::JointField;
+    }
+    return InspectorPropertyId::RigidbodyField;
+}
+
+// Applies op(component) inside an undoable transaction, marking the component
+// modified and committing only when op reports a change.
+template <typename Store, typename Op>
+[[nodiscard]] bool EditPhysicsComponent(EditorSceneContext& sceneContext, Store store, kb::scene::SceneEntity entity, const char* label, Op op) {
+    if (!sceneContext.BeginSceneEditTransaction(label)) {
+        return false;
+    }
+    auto* component = store.TryGet(entity);
+    if (component == nullptr) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    const bool changed = op(*component);
+    if (changed) {
+        store.MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    } else {
+        sceneContext.CancelSceneEditTransaction();
+    }
+    return changed;
+}
+
+[[nodiscard]] bool CyclePhysicsEnum(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, PhysicsComponentKind kind, int index) {
+    switch (kind) {
+    case PhysicsComponentKind::Rigidbody:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Rigidbodies(), entity, "Edit Rigidbody",
+            [index](kb::scene::RigidbodyComponent& c) { return InspectorPhysicsModel::CycleEnum(c, index); });
+    case PhysicsComponentKind::Collider:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Colliders(), entity, "Edit Collider",
+            [index](kb::scene::ColliderComponent& c) { return InspectorPhysicsModel::CycleEnum(c, index); });
+    case PhysicsComponentKind::CharacterController:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().CharacterControllers(), entity, "Edit Character Controller",
+            [index](kb::scene::CharacterControllerComponent& c) { return InspectorPhysicsModel::CycleEnum(c, index); });
+    case PhysicsComponentKind::Joint:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Joints(), entity, "Edit Joint",
+            [index](kb::scene::JointComponent& c) { return InspectorPhysicsModel::CycleEnum(c, index); });
+    }
+    return false;
+}
+
+[[nodiscard]] bool TogglePhysicsBool(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, PhysicsComponentKind kind, int index) {
+    switch (kind) {
+    case PhysicsComponentKind::Rigidbody:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Rigidbodies(), entity, "Edit Rigidbody",
+            [index](kb::scene::RigidbodyComponent& c) { return InspectorPhysicsModel::ToggleBool(c, index); });
+    case PhysicsComponentKind::Collider:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Colliders(), entity, "Edit Collider",
+            [index](kb::scene::ColliderComponent& c) { return InspectorPhysicsModel::ToggleBool(c, index); });
+    case PhysicsComponentKind::CharacterController:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().CharacterControllers(), entity, "Edit Character Controller",
+            [index](kb::scene::CharacterControllerComponent& c) { return InspectorPhysicsModel::ToggleBool(c, index); });
+    case PhysicsComponentKind::Joint:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Joints(), entity, "Edit Joint",
+            [index](kb::scene::JointComponent& c) { return InspectorPhysicsModel::ToggleBool(c, index); });
+    }
+    return false;
+}
+
+[[nodiscard]] bool ReadPhysicsFloat(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, PhysicsComponentKind kind, int index, float& out) {
+    switch (kind) {
+    case PhysicsComponentKind::Rigidbody:
+        if (const auto* c = sceneContext.Scene().Components().Rigidbodies().TryGet(entity)) { return InspectorPhysicsModel::ReadFloat(*c, index, out); }
+        return false;
+    case PhysicsComponentKind::Collider:
+        if (const auto* c = sceneContext.Scene().Components().Colliders().TryGet(entity)) { return InspectorPhysicsModel::ReadFloat(*c, index, out); }
+        return false;
+    case PhysicsComponentKind::CharacterController:
+        if (const auto* c = sceneContext.Scene().Components().CharacterControllers().TryGet(entity)) { return InspectorPhysicsModel::ReadFloat(*c, index, out); }
+        return false;
+    case PhysicsComponentKind::Joint:
+        if (const auto* c = sceneContext.Scene().Components().Joints().TryGet(entity)) { return InspectorPhysicsModel::ReadFloat(*c, index, out); }
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ApplyPhysicsFloat(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, PhysicsComponentKind kind, int index, float value) {
+    switch (kind) {
+    case PhysicsComponentKind::Rigidbody:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Rigidbodies(), entity, "Edit Rigidbody",
+            [index, value](kb::scene::RigidbodyComponent& c) { return InspectorPhysicsModel::ApplyFloat(c, index, value); });
+    case PhysicsComponentKind::Collider:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Colliders(), entity, "Edit Collider",
+            [index, value](kb::scene::ColliderComponent& c) { return InspectorPhysicsModel::ApplyFloat(c, index, value); });
+    case PhysicsComponentKind::CharacterController:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().CharacterControllers(), entity, "Edit Character Controller",
+            [index, value](kb::scene::CharacterControllerComponent& c) { return InspectorPhysicsModel::ApplyFloat(c, index, value); });
+    case PhysicsComponentKind::Joint:
+        return EditPhysicsComponent(sceneContext, sceneContext.Scene().Components().Joints(), entity, "Edit Joint",
+            [index, value](kb::scene::JointComponent& c) { return InspectorPhysicsModel::ApplyFloat(c, index, value); });
+    }
+    return false;
+}
+
+[[nodiscard]] bool HandlePhysicsClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, PhysicsComponentKind kind, const InspectorPanelRenderer::Hit& hit) {
+    if (hit.property == InspectorPropertyId::ComponentRemove) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(sceneContext.RemovePhysicsComponent(entity, kind));
+        sceneContext.Inspector().CloseComponentMenus();
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::ColliderFitToMesh) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(sceneContext.FitColliderToMesh(entity));
+        return true;
+    }
+    if (PhysicsKindForProperty(hit.property) != kind || hit.index < 0) {
+        sceneContext.Inspector().EndTextEdit();
+        return true;
+    }
+    const int index = hit.index;
+    switch (InspectorPhysicsModel::KindOf(kind, index)) {
+    case PhysicsFieldKind::Bool:
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(TogglePhysicsBool(sceneContext, entity, kind, index));
+        return true;
+    case PhysicsFieldKind::Enum:
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(CyclePhysicsEnum(sceneContext, entity, kind, index));
+        return true;
+    case PhysicsFieldKind::Float: {
+        float value = 0.0F;
+        if (ReadPhysicsFloat(sceneContext, entity, kind, index, value)) {
+            // BeginTextEdit resets the edit index — set it afterwards so the commit
+            // path knows which field row is being edited.
+            sceneContext.Inspector().BeginTextEdit(PhysicsFieldProperty(kind), FormatCompactFloat(value));
+            sceneContext.Inspector().SetEditIndex(index);
+        }
+        return true;
+    }
+    }
+    return true;
+}
+
+// --- Drag-to-scrub for entity numeric fields (physics + light floats) ---------
+// Transform and material fields already scrub; these give every other numeric
+// entity field the same "hold LMB + move left/right" behaviour.
+
+[[nodiscard]] bool IsGenericEntityFloatProperty(InspectorPropertyId property) noexcept {
+    return PhysicsKindForProperty(property).has_value() || IsLightFloatProperty(property);
+}
+
+[[nodiscard]] bool ReadEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float& out) {
+    if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForProperty(property); kind.has_value()) {
+        return ReadPhysicsFloat(sceneContext, entity, *kind, index, out);
+    }
+    if (IsLightFloatProperty(property)) {
+        if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity)) {
+            return ReadLightFloat(*light, property, out);
+        }
+    }
+    return false;
+}
+
+// Writes the value through the field's own undoable path (each is a self-contained
+// begin+commit, so no held transaction conflicts with the click/commit handlers).
+void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float value) {
+    if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForProperty(property); kind.has_value()) {
+        static_cast<void>(ApplyPhysicsFloat(sceneContext, entity, *kind, index, value));
+        return;
+    }
+    if (IsLightFloatProperty(property)) {
+        static_cast<void>(MutateLightComponent(sceneContext, entity, "Edit Light", [property, value](kb::scene::LightComponent& light) {
+            static_cast<void>(WriteLightFloat(light, property, value));
+        }));
+    }
+}
+
+// Begins a scrub drag on a numeric entity field. Only Float fields scrub — Enum/
+// Bool physics rows keep their click behaviour. Returns true when the press was
+// consumed as a drag start.
+[[nodiscard]] bool BeginEntityFloatDrag(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit, int x, int y) {
+    const std::optional<PhysicsComponentKind> physicsKind = PhysicsKindForProperty(hit.property);
+    const bool isPhysicsFloat = physicsKind.has_value() && hit.index >= 0 && InspectorPhysicsModel::KindOf(*physicsKind, hit.index) == PhysicsFieldKind::Float;
+    const bool isLightFloat = IsLightFloatProperty(hit.property);
+    if (!isPhysicsFloat && !isLightFloat) {
+        return false;
+    }
+    float value = 0.0F;
+    if (!ReadEntityFloatField(sceneContext, entity, hit.property, hit.index, value)) {
+        return false;
+    }
+    sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y);
+    sceneContext.Inspector().SetEditIndex(hit.index); // BeginFloatDrag ends text edit (resets index) first
+    return true;
+}
+
 } // namespace
 
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
@@ -632,8 +964,14 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.kind == InspectorHitKind::ComponentMenuButton) {
         sceneContext.Inspector().EndTextEdit();
-        if (hit.section == InspectorSectionId::Script && hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
-            static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+        if (hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
+            if (hit.section == InspectorSectionId::Script) {
+                static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::MeshRenderer) {
+                static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
+            } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
+                static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
+            }
         }
         return true;
     }
@@ -668,6 +1006,16 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
 
+    // Drag-to-scrub: pressing a numeric entity field (physics/light float) starts a
+    // horizontal scrub; a click that does not move opens the inline editor on
+    // pointer-up (handled below in HandlePointerUp). Transform/material fields have
+    // their own scrub paths and are not caught here.
+    if ((hit.kind == InspectorHitKind::TextField || hit.kind == InspectorHitKind::FloatField) &&
+        IsGenericEntityFloatProperty(hit.property) &&
+        BeginEntityFloatDrag(sceneContext, entity, hit, x, y)) {
+        return true;
+    }
+
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
     }
@@ -676,6 +1024,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
+    }
+    if (const std::optional<PhysicsComponentKind> physicsKind = PhysicsKindForSection(hit.section); physicsKind.has_value()) {
+        return HandlePhysicsClick(sceneContext, entity, *physicsKind, hit);
     }
     if (hit.section == InspectorSectionId::AddComponent) {
         return HandleAddComponentClick(sceneContext, entity, hit);
@@ -730,7 +1081,9 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     }
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
-        sceneContext.CancelActiveTransformEdit();
+        if (!IsGenericEntityFloatProperty(property)) {
+            sceneContext.CancelActiveTransformEdit();
+        }
         sceneContext.Inspector().EndFloatDrag();
         return true;
     }
@@ -740,6 +1093,12 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
         return true;
     }
     sceneContext.Inspector().MarkFloatDragMoved();
+    // Physics/light floats: scrub in 0.1 steps (~6 px per step) as requested.
+    if (IsGenericEntityFloatProperty(property)) {
+        const float delta = std::round(static_cast<float>(dx - dy) / 6.0F) * 0.1F;
+        ApplyEntityFloatField(sceneContext, entity, property, sceneContext.Inspector().EditIndex(), sceneContext.Inspector().DragStartValue() + delta);
+        return true;
+    }
     const float delta = static_cast<float>(dx - dy) * StepFor(property) * 0.08F;
     static_cast<void>(sceneContext.ApplyActiveTransformEditProperty(property, sceneContext.Inspector().DragStartValue() + delta));
     return true;
@@ -757,6 +1116,7 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const InspectorPropertyId property = inspector.DraggedProperty();
     const bool moved = inspector.FloatDragMoved();
     const float startValue = inspector.DragStartValue();
+    const int dragIndex = inspector.EditIndex(); // captured before EndFloatDrag clears it
     inspector.EndFloatDrag();
     if (IsMaterialFloatProperty(property)) {
         if (moved) {
@@ -766,6 +1126,16 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
         }
         if (!moved && property != InspectorPropertyId::None) {
             inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+        }
+        return true;
+    }
+    if (IsGenericEntityFloatProperty(property)) {
+        // Each scrub step already applied via its own undoable command. A click
+        // without movement opens the inline editor (restoring the row index that
+        // BeginTextEdit clears).
+        if (!moved && property != InspectorPropertyId::None) {
+            inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+            inspector.SetEditIndex(dragIndex);
         }
         return true;
     }
@@ -830,12 +1200,16 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         return true;
     case VK_RETURN: {
         if (inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch) {
-            const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(inspector.EditBuffer());
-            const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
-            if (!tiles.empty() && sceneContext.Scene().Entities().IsAlive(entity)) {
-                static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles.front()->id));
+            // Enter adds the top search match — but only while actually searching
+            // (an empty query is the category list, where Enter must do nothing).
+            if (!inspector.EditBuffer().empty()) {
+                const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(inspector.EditBuffer());
+                const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+                if (!tiles.empty() && sceneContext.Scene().Entities().IsAlive(entity)) {
+                    static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles.front()->id));
+                }
+                inspector.CloseAddComponentBrowser();
             }
-            inspector.CloseAddComponentBrowser();
             return true;
         }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
@@ -848,6 +1222,19 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             const int index = inspector.EditIndex();
             if (index >= 0 && ParseFloat(inspector.EditBuffer(), scale)) {
                 static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().InspectorAsset(), static_cast<std::size_t>(index), scale));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::ScriptVariable) {
+            const kb::scene::SceneEntity variableEntity = sceneContext.SelectedEntity();
+            const int index = inspector.EditIndex();
+            const std::vector<EditorSceneContext::EntityScriptVariable> variables = sceneContext.EntityScriptExposedVariables(variableEntity);
+            if (sceneContext.Scene().Entities().IsAlive(variableEntity) && index >= 0 && static_cast<std::size_t>(index) < variables.size()) {
+                const EditorSceneContext::EntityScriptVariable& variable = variables[static_cast<std::size_t>(index)];
+                if (const std::optional<kb::script::ScriptValue> parsed = ParseScriptVariableEditText(inspector.EditBuffer(), variable); parsed.has_value()) {
+                    static_cast<void>(sceneContext.SetEntityScriptVariable(variableEntity, variable.name, *parsed));
+                }
             }
             inspector.EndTextEdit();
             return true;
@@ -877,6 +1264,19 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 static_cast<void>(MutateLightComponent(sceneContext, entity, "Edit Light Component", [property, value](kb::scene::LightComponent& light) {
                     static_cast<void>(WriteLightFloat(light, property, value));
                 }));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (const std::optional<PhysicsComponentKind> physicsKind = PhysicsKindForProperty(inspector.EditedProperty());
+            physicsKind.has_value() && sceneContext.Scene().Entities().IsAlive(entity)) {
+            const int index = inspector.EditIndex();
+            float currentValue = 0.0F;
+            float value = 0.0F;
+            if (index >= 0 &&
+                ReadPhysicsFloat(sceneContext, entity, *physicsKind, index, currentValue) &&
+                EvaluateMath(inspector.EditBuffer(), currentValue, value)) {
+                static_cast<void>(ApplyPhysicsFloat(sceneContext, entity, *physicsKind, index, value));
             }
             inspector.EndTextEdit();
             return true;
@@ -916,7 +1316,7 @@ bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, co
     const int dropdownHover = hit.kind == InspectorHitKind::ValueTypeOption ? hit.index : -1;
     const int previousDropdownHover = sceneContext.Inspector().ValueTypeDropdownHover();
     sceneContext.Inspector().SetValueTypeDropdownHover(dropdownHover);
-    const bool hoverChanged = sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property);
+    const bool hoverChanged = sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property, hit.index);
     return hoverChanged || previousDropdownHover != dropdownHover;
 }
 

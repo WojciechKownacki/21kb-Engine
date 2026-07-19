@@ -8,7 +8,9 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
+#include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/InspectorPhysicsModel.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -429,6 +431,129 @@ void RunScriptAttachSuite(Report& report) {
 
     report.Check(context.RemoveScriptFromEntity(actor), "Remove script component");
     report.Check(!context.HasEntityScript(actor), "Actor has no script after removal");
+}
+
+// Reproduces the reported bug: editing a script's `Inspector.*` declarations and
+// saving (Ctrl+S) must refresh the Inspector's exposed-variable schema WITHOUT a
+// separate editor/scene save. ReloadOpenScriptAsset() — driven each frame off the
+// Script Editor's save serial — drops the stale cached asset so the next read
+// re-parses the file the editor just wrote.
+void RunScriptInspectorSchemaRefreshSuite(Report& report) {
+    EditorSceneContext context;
+
+    report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset for schema refresh");
+    const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });
+    report.Check(script.IsValid(), "Schema-refresh Lua script registered");
+
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(actor.IsValid(), "Create actor for schema refresh");
+    report.Check(context.AttachScriptToEntity(actor, script), "Attach script to entity for schema refresh");
+    report.Check(context.OpenLuaScript(script), "Open the script for schema refresh");
+    const std::filesystem::path path = context.ScriptEditor().FilePath();
+    report.Check(std::filesystem::exists(path), "Open schema-refresh script exists on disk");
+
+    // Force the initial (template) parse into the asset cache: the starter
+    // template declares no Inspector variables.
+    report.Check(context.EntityScriptExposedVariables(actor).empty(), "Fresh script template exposes no Inspector variables");
+
+    // Author a first Inspector declaration on disk. The cached schema is stale
+    // until the save is picked up (exactly the reported symptom).
+    report.Check(EditorScriptAssetGateway::WriteSource(path, "Inspector.speedA = 3.5\nfunction Tick(self, dt) end\n"),
+        "Write first Inspector declaration to disk");
+    report.Check(context.EntityScriptExposedVariables(actor).empty(), "Cached schema stays empty until the save is picked up");
+    report.Check(context.ReloadOpenScriptAsset(), "Reload drops the stale cached asset after the first save");
+    {
+        const std::vector<EditorSceneContext::EntityScriptVariable> vars = context.EntityScriptExposedVariables(actor);
+        report.Check(vars.size() == 1U && vars.front().name == "speedA", "Inspector schema shows the declared variable after reload");
+    }
+
+    // Rename the variable on disk (the screenshot scenario). Without a reload the
+    // schema still shows the pre-save name; the reload refreshes it.
+    report.Check(EditorScriptAssetGateway::WriteSource(path, "Inspector.speedRenamed = 7.0\nfunction Tick(self, dt) end\n"),
+        "Rename the Inspector declaration on disk");
+    {
+        const std::vector<EditorSceneContext::EntityScriptVariable> stale = context.EntityScriptExposedVariables(actor);
+        report.Check(stale.size() == 1U && stale.front().name == "speedA", "Without reload the schema is still the pre-save name (the reported bug)");
+    }
+    report.Check(context.ReloadOpenScriptAsset(), "Reload drops the stale asset after the rename");
+    {
+        const std::vector<EditorSceneContext::EntityScriptVariable> refreshed = context.EntityScriptExposedVariables(actor);
+        report.Check(refreshed.size() == 1U && refreshed.front().name == "speedRenamed", "Saving the script refreshes the Inspector schema to the new name");
+    }
+}
+
+// Proves the Inspector's component affordances the user reported missing:
+// (1) the Mesh Renderer section-header "×" removes the component (like Script),
+// (2) the Script field resolves the bound Lua asset so its picker "magnifier"
+// can reveal it in Project Files (like the Mesh/Material asset fields).
+void RunInspectorComponentAffordancesSuite(Report& report) {
+    EditorSceneContext context;
+
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(actor.IsValid(), "Create actor for component affordances");
+
+    // (1) Mesh Renderer remove-component "×".
+    report.Check(context.AddComponentToEntity(actor, "MeshRenderer"), "Add Mesh Renderer component");
+    report.Check(context.Scene().Components().MeshRenderers().Has(actor), "Mesh Renderer component present after add");
+    report.Check(context.RemoveMeshRendererFromEntity(actor), "Mesh Renderer '×' removes the component");
+    report.Check(!context.Scene().Components().MeshRenderers().Has(actor), "Mesh Renderer component gone after remove");
+    report.Check(!context.RemoveMeshRendererFromEntity(actor), "Removing an absent Mesh Renderer reports no-op");
+
+    // (2) Script field asset resolution for the picker "magnifier".
+    report.Check(context.EntityScriptAssetId(actor) == kb::assets::AssetId{}, "No script asset before attach");
+    report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset for picker");
+    const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });
+    report.Check(script.IsValid(), "Picker Lua script registered");
+    report.Check(context.AttachScriptToEntity(actor, script), "Attach script for picker");
+    report.Check(context.EntityScriptAssetId(actor) == script, "Script field resolves the bound Lua asset for the picker reveal");
+}
+
+// The engine has a full physics subsystem (Jolt) but the editor never exposed it.
+// Proves each physics component is now addable through the Add Component catalog
+// path and rejects a duplicate add.
+void RunPhysicsComponentCatalogSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(actor.IsValid(), "Create actor for physics components");
+
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody"), "Add Rigidbody component");
+    report.Check(context.Scene().Components().Rigidbodies().Has(actor), "Rigidbody present after add");
+    report.Check(!context.AddComponentToEntity(actor, "Rigidbody"), "Duplicate Rigidbody add is rejected");
+
+    report.Check(context.AddComponentToEntity(actor, "Collider"), "Add Collider component");
+    report.Check(context.Scene().Components().Colliders().Has(actor), "Collider present after add");
+
+    report.Check(context.AddComponentToEntity(actor, "CharacterController"), "Add Character Controller component");
+    report.Check(context.Scene().Components().CharacterControllers().Has(actor), "Character Controller present after add");
+
+    report.Check(context.AddComponentToEntity(actor, "Joint"), "Add Joint component");
+    report.Check(context.Scene().Components().Joints().Has(actor), "Joint present after add");
+
+    // The catalog surfaces them under a Physics category so the menu can list them.
+    report.Check(kb::editor::InspectorComponentCatalog::Find("Rigidbody") != nullptr &&
+            kb::editor::InspectorComponentCatalog::Find("Rigidbody")->category == "Physics",
+        "Rigidbody tile is catalogued under Physics");
+    report.Check(kb::editor::InspectorComponentCatalog::Find("Joint") != nullptr &&
+            kb::editor::InspectorComponentCatalog::Find("Joint")->category == "Physics",
+        "Joint tile is catalogued under Physics");
+
+    // Collider gizmos are on by default (green wireframes visible) and toggle.
+    report.Check(context.ArePhysicsGizmosVisible(), "Collider gizmos are visible by default");
+    context.SetPhysicsGizmosVisible(false);
+    report.Check(!context.ArePhysicsGizmosVisible(), "The collider gizmo toggle turns wireframes off");
+    context.SetPhysicsGizmosVisible(true);
+    // Fit-to-Mesh needs a Collider AND a resolvable mesh; the actor has no mesh.
+    report.Check(!context.CanFitColliderToMesh(actor), "Fit-to-Mesh is unavailable without a Mesh Renderer mesh");
+    report.Check(!context.FitColliderToMesh(actor), "Fit-to-Mesh no-ops without a mesh");
+
+    // The section-header "×" removes each physics component (undoable path).
+    report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::Rigidbody), "Rigidbody '×' removes the component");
+    report.Check(!context.Scene().Components().Rigidbodies().Has(actor), "Rigidbody gone after remove");
+    report.Check(!context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::Rigidbody), "Removing an absent Rigidbody is a no-op");
+    report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::Collider), "Collider '×' removes the component");
+    report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::CharacterController), "Character Controller '×' removes the component");
+    report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::Joint), "Joint '×' removes the component");
+    report.Check(!context.Scene().Components().Joints().Has(actor), "Joint gone after remove");
 }
 
 void RunSelectionTransformSuite(Report& report) {
@@ -2049,11 +2174,23 @@ void RunInspectorLightComponentSuite(Report& report) {
     if (intensityHit.kind != InspectorHitKind::None) {
         const POINT point = Center(intensityHit.rect);
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, intensityHit, point.x, point.y), "Clicking Light intensity starts editing");
+        // Numeric fields now scrub on drag; a click (press + release, no movement)
+        // opens the inline text editor on pointer-up.
+        static_cast<void>(InspectorPanelInteraction::HandlePointerUp(context));
         context.Inspector().ClearText();
         context.Inspector().InsertText("4.25");
         report.Check(InspectorPanelInteraction::HandleKeyDown(nullptr, context, static_cast<WPARAM>(0x0D)), "Committing Light intensity is handled");
         const kb::scene::LightComponent* light = context.Scene().Components().Lights().TryGet(lightEntity);
         report.Check(light != nullptr && std::abs(light->intensity - 4.25F) < 0.001F, "Committed Light intensity updates the runtime component");
+
+        // Drag-to-scrub: press + horizontal move changes the value in 0.1 steps
+        // (~6 px each); release commits. 60 px right => +1.0.
+        const POINT dragStart = Center(intensityHit.rect);
+        static_cast<void>(InspectorPanelInteraction::HandlePointerDown(context, intensityHit, dragStart.x, dragStart.y));
+        static_cast<void>(InspectorPanelInteraction::HandlePointerDrag(context, dragStart.x + 60, dragStart.y));
+        static_cast<void>(InspectorPanelInteraction::HandlePointerUp(context));
+        const kb::scene::LightComponent* scrubbed = context.Scene().Components().Lights().TryGet(lightEntity);
+        report.Check(scrubbed != nullptr && scrubbed->intensity > 5.0F, "Dragging a numeric field right scrubs its value up in 0.1 steps");
     }
 
     if (castsShadowHit.kind != InspectorHitKind::None) {
@@ -2313,6 +2450,36 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(boxTransform.localPosition.y < 4.0F, "Jolt plugin loaded through editor reload moves a dynamic body");
     report.Check(boxTransform.localPosition.y > 0.35F, "Jolt plugin loaded through editor reload keeps the body above the floor");
 
+    // Unity-like: a Collider WITHOUT a Rigidbody is an implicit static body, so a
+    // dynamic body lands on it instead of tunneling through. Placed far from the
+    // first floor so the two scenarios never interact.
+    const kb::scene::SceneEntity colliderOnlyFloor = context.CreateHierarchyObject();
+    context.Scene().Transforms().Set(colliderOnlyFloor, kb::scene::TransformComponent{
+        .localPosition = kb::scene::Vec3{ 40.0F, -0.5F, 0.0F },
+    });
+    context.Scene().Components().Colliders().Set(colliderOnlyFloor, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F },
+    });
+    const kb::scene::SceneEntity fallingBox = context.CreateHierarchyObject();
+    context.Scene().Transforms().Set(fallingBox, kb::scene::TransformComponent{
+        .localPosition = kb::scene::Vec3{ 40.0F, 4.0F, 0.0F },
+    });
+    context.Scene().Components().Rigidbodies().Set(fallingBox, kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+        .mass = 1.0F,
+    });
+    context.Scene().Components().Colliders().Set(fallingBox, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+    });
+    for (int frame = 0; frame < 120; ++frame) {
+        static_cast<void>(context.Scene().Runtime().Update(1.0F / 60.0F));
+    }
+    const kb::scene::TransformComponent fallingBoxTransform = context.Scene().Transforms().Get(fallingBox);
+    report.Check(fallingBoxTransform.localPosition.y < 4.0F, "A dynamic body over a collider-only floor still falls under gravity");
+    report.Check(fallingBoxTransform.localPosition.y > 0.35F, "A Collider without a Rigidbody acts as a static body (the dynamic body does not tunnel through)");
+
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox again is handled");
     report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Second click disables the plugin");
     report.Check(context.Plugins().HasPendingReload(), "Disabling plugin keeps pending reload marked");
@@ -2530,10 +2697,11 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         "P2.2 one-pixel node jitter stays below the shared drag threshold and creates no edit");
     report.Check(context.BeginMaterialGraphNodeDrag(materialId, 2U, 100, 100) &&
             context.DragMaterialGraphNode(120, 100) && context.EndMaterialGraphNodeDrag() &&
-            context.MaterialEditor().GraphNodePosition(2U)->first % MaterialGraphInteractionPolicy::GridSpacing == 0 &&
+            context.MaterialEditor().GraphNodePosition(2U).has_value() &&
+            context.MaterialEditor().GraphNodePosition(2U)->first != 20 &&
             context.CanUndoSceneCommand() && context.UndoSceneCommand() &&
             context.MaterialEditor().GraphNodePosition(2U) == std::optional<std::pair<std::int32_t, std::int32_t>>{ { 20, 20 } },
-        "P2.2 committed node drag snaps its anchor to the visible graph grid and records one undo command");
+        "P2.2 committed node drag tracks the cursor smoothly (no grid snap) and records one undo command");
 
     const RECT feedbackContent{ 0, 0, 1280, 820 };
     const kb::render::RenderMaterialGraphDocument& feedbackGraph = context.MaterialEditor().WorkingCopy()->graph;
@@ -2714,6 +2882,9 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
+    RunSuiteInScratch(report, "script_inspector_schema_refresh", &RunScriptInspectorSchemaRefreshSuite);
+    RunSuiteInScratch(report, "inspector_component_affordances", &RunInspectorComponentAffordancesSuite);
+    RunSuiteInScratch(report, "physics_component_catalog", &RunPhysicsComponentCatalogSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);

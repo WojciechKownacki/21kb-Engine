@@ -370,6 +370,44 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+// A click on any tab — the active one or an inactive sibling — must hit-test as a
+// dock Tab. The pointer router relies on this: a dock hit means the click is a
+// layout action (switch tabs), so it must NOT clear the scene selection and blank
+// the Inspector. Guards the "switching tabs deselects the object" fix.
+void RunTabClickIsDockInteractionTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
+    kb::editor::tests::Require(sceneLayout != nullptr, "Scene panel should exist in default layout");
+
+    // Dock the Inspector onto the Scene leaf so the leaf carries two tabs.
+    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 80, 90, 380, 300 });
+    model.Commands().DockPanelTo(4U, kb::editor::DockDropPreview{
+                                      .zone = kb::editor::DockDropZone::Center,
+                                      .kind = kb::editor::DockDropPreviewKind::Glow,
+                                      .leafId = sceneLayout->leafId,
+                                      .rect = sceneLayout->content,
+                                  });
+    model.Commands().ActivatePanel(2U);
+
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* scene = FindPanelLayout(layout, 2U);
+    const kb::editor::DockPanelLayout* inspector = FindPanelLayout(layout, 4U);
+    kb::editor::tests::Require(scene != nullptr && inspector != nullptr && scene->leafId == inspector->leafId,
+        "Scene/Inspector should share a leaf with two tabs");
+    kb::editor::tests::Require(scene->active && !inspector->active, "Scene tab should be active, Inspector inactive");
+
+    const auto tabCenterHit = [&](const kb::editor::DockPanelLayout& panel) {
+        return model.Queries().HitTest(layout, panel.tab.x + panel.tab.width / 2, panel.tab.y + panel.tab.height / 2);
+    };
+    const kb::editor::DockHit activeHit = tabCenterHit(*scene);
+    const kb::editor::DockHit inactiveHit = tabCenterHit(*inspector);
+    kb::editor::tests::Require(activeHit.kind == kb::editor::DockHitKind::Tab && activeHit.panelId == 2U,
+        "Clicking the active tab must register as a dock Tab hit");
+    kb::editor::tests::Require(inactiveHit.kind == kb::editor::DockHitKind::Tab && inactiveHit.panelId == 4U,
+        "Clicking an inactive tab must register as a dock Tab hit");
+}
+
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunClosePanelRemovesTabFromLayoutTest();
@@ -385,6 +423,7 @@ void RunEditorDockingTests() {
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
+    RunTabClickIsDockInteractionTest();
 }
 
 } // namespace kb::editor::tests

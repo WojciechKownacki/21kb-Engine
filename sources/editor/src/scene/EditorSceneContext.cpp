@@ -5,6 +5,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/script/ScriptAsset.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneVisitors.hpp"
@@ -15,6 +16,16 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/CharacterControllerComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "rendering/EditorMeshPreviewRasterizer.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
+#include "rendering/EditorMeshPreviewTypes.hpp"
+#include "inspection/InspectorPhysicsModel.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -1675,6 +1686,59 @@ bool EditorSceneContext::IsHierarchySearchFocused() const noexcept {
 
 bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
     return hierarchyRenameEntity_.IsValid() && scene_->Entities().IsAlive(hierarchyRenameEntity_);
+}
+
+bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
+    return IsHierarchyRenaming()
+        || IsHierarchySearchFocused()
+        || assetBrowser_.IsTextEditing()
+        || assetBrowser_.IsSearchFocused()
+        || Inspector().IsTextEditing()
+        || IsMaterialGraphNodeRenameEditing()
+        || IsMaterialGraphConstantInlineEditing()
+        || IsMaterialEditorFindFocused();
+}
+
+bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
+    const kb::scene::SceneEntity primary = SelectedEntity();
+    const std::vector<kb::scene::SceneEntity>& selected = SelectedHierarchyEntities();
+    const std::optional<kb::scene::Vec3> center = EditorSceneSelectionPivot::Resolve(*scene_, selected, primary);
+    if (!center.has_value()) {
+        return false;
+    }
+
+    // Bounding-sphere radius of the selected entities around the pivot. A
+    // single point-like selection collapses to zero spread; the default floor
+    // then frames it at a comfortable distance.
+    float maxSpread = 0.0F;
+    for (const kb::scene::SceneEntity entity : selected) {
+        if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
+            continue;
+        }
+        const kb::scene::TransformComponent* transform = scene_->Transforms().TryGet(entity);
+        if (transform == nullptr) {
+            continue;
+        }
+        const kb::scene::Vec3 delta{
+            transform->localPosition.x - center->x,
+            transform->localPosition.y - center->y,
+            transform->localPosition.z - center->z,
+        };
+        maxSpread = std::max(maxSpread, std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z));
+    }
+
+    // Frame every live scene-viewport camera (each docked/floating scene panel
+    // renders its own per-panel camera; the parameterless default is not one of
+    // them), so F actually reframes the viewport the user is looking at. The
+    // 0.5s eased animation is advanced each frame by TickViewportFocusAnimations.
+    constexpr float kFrameSelectionAnimationSeconds = 0.5F;
+    static_cast<void>(viewportState_.FocusAllCamerasOn(*center, std::max(1.5F, maxSpread + 1.5F), kFrameSelectionAnimationSeconds));
+    MarkSceneRenderDirty();
+    return true;
+}
+
+bool EditorSceneContext::TickViewportFocusAnimations(float deltaSeconds) noexcept {
+    return viewportState_.TickFocusAnimations(deltaSeconds);
 }
 
 bool EditorSceneContext::IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept {
@@ -3497,12 +3561,12 @@ bool EditorSceneContext::DragMaterialGraphNode(int x, int y) {
     }
     const int rawDeltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphZoom_)));
     const int rawDeltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphZoom_)));
-    const int deltaX = MaterialGraphInteractionPolicy::SnapCoordinate(
-                           static_cast<std::int32_t>(materialGraphDragStartNodeX_ + rawDeltaX)) -
-        materialGraphDragStartNodeX_;
-    const int deltaY = MaterialGraphInteractionPolicy::SnapCoordinate(
-                           static_cast<std::int32_t>(materialGraphDragStartNodeY_ + rawDeltaY)) -
-        materialGraphDragStartNodeY_;
+    // Smooth dragging: apply the raw (zoom-corrected) delta directly so the
+    // node tracks the cursor. The previous grid snap (SnapCoordinate, 32u)
+    // quantized the target every move, making nodes jump between grid cells
+    // instead of following the pointer.
+    const int deltaX = rawDeltaX;
+    const int deltaY = rawDeltaY;
     if (deltaX == materialGraphDragStartOffsetX_ && deltaY == materialGraphDragStartOffsetY_) {
         return false;
     }
@@ -3620,14 +3684,14 @@ bool EditorSceneContext::DragMaterialGraphComment(int x, int y) {
     }
     const int deltaX = static_cast<int>(std::lround(static_cast<float>(screenDeltaX) / std::max(0.1F, materialGraphZoom_)));
     const int deltaY = static_cast<int>(std::lround(static_cast<float>(screenDeltaY) / std::max(0.1F, materialGraphZoom_)));
-    const std::int32_t snappedX = MaterialGraphInteractionPolicy::SnapCoordinate(
-        static_cast<std::int32_t>(materialGraphCommentDragStartCommentX_ + deltaX));
-    const std::int32_t snappedY = MaterialGraphInteractionPolicy::SnapCoordinate(
-        static_cast<std::int32_t>(materialGraphCommentDragStartCommentY_ + deltaY));
+    // Smooth dragging (matches DragMaterialGraphNode): track the cursor with the
+    // raw zoom-corrected delta rather than quantizing the target to the 32u grid.
+    const std::int32_t nextX = static_cast<std::int32_t>(materialGraphCommentDragStartCommentX_ + deltaX);
+    const std::int32_t nextY = static_cast<std::int32_t>(materialGraphCommentDragStartCommentY_ + deltaY);
     if (!materialEditor_.MoveGraphCommentGroup(
             materialGraphCommentDragId_,
-            snappedX,
-            snappedY,
+            nextX,
+            nextY,
             materialGraphCommentDragMemberNodeIds_)) {
         return false;
     }
@@ -6700,7 +6764,21 @@ bool EditorSceneContext::SetMeshRendererMeshAsset(kb::scene::SceneEntity entity,
     }
 
     return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh" : "Clear Mesh", [this, entity, assetId]() {
-        return EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId);
+        if (!EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId)) {
+            return false;
+        }
+        // Keep an existing Collider fitted to the new geometry (Unity-like: the
+        // collision shape follows the mesh when you swap it). Skipped when the
+        // mesh is being cleared.
+        if (assetId.IsValid() && scene_->Components().Colliders().Has(entity)) {
+            std::string reason;
+            if (ApplyColliderFitToMesh(entity, reason)) {
+                console_.Info("Physics", "Collider refit to new mesh: " + reason + ".");
+            } else {
+                console_.Warning("Physics", "Collider not refit to new mesh: " + reason + ".");
+            }
+        }
+        return true;
     });
 }
 
@@ -6725,9 +6803,16 @@ bool EditorSceneContext::SetMeshRendererMaterialAsset(kb::scene::SceneEntity ent
         }
     }
 
-    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material" : "Clear Mesh Material", [this, entity, assetId]() {
+    const bool assigned = ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material" : "Clear Mesh Material", [this, entity, assetId]() {
         return EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(*scene_, entity, assetId);
     });
+    if (assigned && assetId.IsValid()) {
+        // The assigned material may be a graph material that has never been cooked for this
+        // scene's shading variant; schedule a scene recook so the mesh shows the authored
+        // graph program instead of the builtin-PBR flatten until the next scene reload.
+        sceneGraphCookPending_ = true;
+    }
+    return assigned;
 }
 
 bool EditorSceneContext::ApplyMaterialToSelectedMeshRenderers(kb::assets::AssetId assetId) {
@@ -6790,6 +6875,9 @@ bool EditorSceneContext::ApplyMaterialToSelectedMeshRenderers(kb::assets::AssetI
     });
     if (applied) {
         static_cast<void>(assetBrowser_.SelectAsset(assetId, scene_->Assets().Manager()));
+        // Cook the applied graph material for the scene's shading variant so the meshes
+        // render the authored graph program rather than the builtin-PBR flatten.
+        sceneGraphCookPending_ = true;
         MarkSceneRenderDirty();
     }
     LogMaterialGraphDebug(console_, "apply-material-result applied=" + std::string{ applied ? "true" : "false" } + " asset=" + std::to_string(assetId.value));
@@ -6830,9 +6918,14 @@ bool EditorSceneContext::SetMeshRendererMaterialSlotAsset(kb::scene::SceneEntity
         }
     }
 
-    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material Slot" : "Clear Mesh Material Slot", [this, entity, slotIndex, assetId]() {
+    const bool assigned = ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material Slot" : "Clear Mesh Material Slot", [this, entity, slotIndex, assetId]() {
         return EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(*scene_, entity, slotIndex, assetId);
     });
+    if (assigned && assetId.IsValid()) {
+        // Cook the newly-assigned slot graph material for the scene's shading variant.
+        sceneGraphCookPending_ = true;
+    }
+    return assigned;
 }
 
 bool EditorSceneContext::CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex) {
@@ -6869,6 +6962,99 @@ bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) cons
     return behaviour != nullptr && behaviour->enabled;
 }
 
+std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::EntityScriptExposedVariables(kb::scene::SceneEntity entity) const {
+    std::vector<EntityScriptVariable> result;
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr) {
+        return result;
+    }
+    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
+        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    if (!asset.IsLoaded()) {
+        return result;
+    }
+    const kb::script::LuaScriptAsset& script = *asset.Get();
+    const std::span<const kb::scene::BehaviourVariableOverride> overrides = scene_->Entities().BehaviourVariableOverrides(entity);
+    result.reserve(script.exposedVariables.size());
+    for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
+        const kb::script::ScriptApiPin& pin = script.exposedVariables[index];
+        // Effective value = the override delta if one is stored, else the
+        // script's declared @expose default.
+        kb::script::ScriptValue value = index < script.exposedVariableDefaults.size()
+            ? script.exposedVariableDefaults[index]
+            : kb::script::ScriptValue{};
+        bool overridden = false;
+        for (const kb::scene::BehaviourVariableOverride& entry : overrides) {
+            if (entry.name == pin.name) {
+                value = entry.value;
+                overridden = true;
+                break;
+            }
+        }
+        result.push_back(EntityScriptVariable{
+            .name = pin.name,
+            .type = pin.type,
+            .value = std::move(value),
+            .overridden = overridden,
+        });
+    }
+    return result;
+}
+
+bool EditorSceneContext::SetEntityScriptVariable(kb::scene::SceneEntity entity, std::string name, kb::script::ScriptValue value) {
+    if (!entity.IsValid() || name.empty() || scene_->Components().Behaviours().TryGet(entity) == nullptr) {
+        return false;
+    }
+    // Resolve the script's declared default so an edit back to it drops the
+    // override instead of storing a redundant delta (store-only-non-default).
+    kb::script::ScriptValue defaultValue;
+    bool hasDefault = false;
+    if (const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity); behaviour != nullptr) {
+        const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
+            scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
+        if (asset.IsLoaded()) {
+            const kb::script::LuaScriptAsset& script = *asset.Get();
+            for (std::size_t index = 0U; index < script.exposedVariables.size(); ++index) {
+                if (script.exposedVariables[index].name == name && index < script.exposedVariableDefaults.size()) {
+                    defaultValue = script.exposedVariableDefaults[index];
+                    hasDefault = true;
+                    break;
+                }
+            }
+        }
+    }
+    return ExecuteSceneCommand("Set Script Variable", [this, entity, name, value, defaultValue, hasDefault]() {
+        if (hasDefault && value == defaultValue) {
+            static_cast<void>(scene_->Entities().RemoveBehaviourVariableOverride(entity, name));
+        } else {
+            scene_->Entities().SetBehaviourVariableOverride(entity, name, value);
+        }
+        return true;
+    });
+}
+
+bool EditorSceneContext::RevertEntityScriptVariable(kb::scene::SceneEntity entity, std::string_view name) {
+    if (!entity.IsValid() || name.empty()) {
+        return false;
+    }
+    return ExecuteSceneCommand("Revert Script Variable", [this, entity, name = std::string{ name }]() {
+        return scene_->Entities().RemoveBehaviourVariableOverride(entity, name);
+    });
+}
+
+bool EditorSceneContext::ReloadOpenScriptAsset() {
+    if (!scriptEditor_.IsOpen()) {
+        return false;
+    }
+    const kb::assets::AssetId assetId = scriptEditor_.AssetId();
+    if (!assetId.IsValid()) {
+        return false;
+    }
+    // Erase the cache entry so EntityScriptExposedVariables' next Load re-reads
+    // the file the Script Editor just wrote and re-parses the Inspector schema.
+    return scene_->Assets().Manager().Unload(assetId);
+}
+
 std::vector<std::pair<kb::assets::AssetId, std::string>> EditorSceneContext::AvailableScriptAssets() const {
     std::vector<std::pair<kb::assets::AssetId, std::string>> scripts;
     for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
@@ -6895,6 +7081,211 @@ bool EditorSceneContext::RemoveScriptFromEntity(kb::scene::SceneEntity entity) {
         scene_->Components().Behaviours().Remove(entity);
         return true;
     });
+}
+
+bool EditorSceneContext::RemoveMeshRendererFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_->Components().MeshRenderers().Has(entity)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Remove Component", [this, entity]() {
+        if (!scene_->Entities().IsAlive(entity)) {
+            return false;
+        }
+        scene_->Components().MeshRenderers().Remove(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemovePhysicsComponent(kb::scene::SceneEntity entity, PhysicsComponentKind kind) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+    const auto present = [&]() {
+        switch (kind) {
+        case PhysicsComponentKind::Rigidbody: return scene_->Components().Rigidbodies().Has(entity);
+        case PhysicsComponentKind::Collider: return scene_->Components().Colliders().Has(entity);
+        case PhysicsComponentKind::CharacterController: return scene_->Components().CharacterControllers().Has(entity);
+        case PhysicsComponentKind::Joint: return scene_->Components().Joints().Has(entity);
+        }
+        return false;
+    };
+    if (!present()) {
+        return false;
+    }
+    return ExecuteSceneCommand("Remove Component", [this, entity, kind]() {
+        if (!scene_->Entities().IsAlive(entity)) {
+            return false;
+        }
+        switch (kind) {
+        case PhysicsComponentKind::Rigidbody: scene_->Components().Rigidbodies().Remove(entity); break;
+        case PhysicsComponentKind::Collider: scene_->Components().Colliders().Remove(entity); break;
+        case PhysicsComponentKind::CharacterController: scene_->Components().CharacterControllers().Remove(entity); break;
+        case PhysicsComponentKind::Joint: scene_->Components().Joints().Remove(entity); break;
+        }
+        return true;
+    });
+}
+
+kb::assets::AssetId EditorSceneContext::EntityScriptAssetId(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    return behaviour != nullptr ? kb::assets::AssetId{ behaviour->behaviourAssetId } : kb::assets::AssetId{};
+}
+
+namespace {
+
+// Mesh-local bounds of an entity's Mesh Renderer mesh: a per-axis axis-aligned
+// box (center + half-extents) plus the bounding-sphere radius. Per-axis extents
+// matter — a single sphere radius fits a flat plane/quad as a large CUBE, which
+// is exactly the "collider is a big box around a plane" bug; the box half-extents
+// hug the geometry on each axis instead.
+struct EntityMeshBounds {
+    kb::scene::Vec3 center{};
+    kb::scene::Vec3 halfExtents{}; // per-axis, mesh-local
+    float sphereRadius = 0.0F;
+};
+
+// Resolves EntityMeshBounds by loading the mesh through the AssetManager — the
+// SAME mount-aware path the renderer uses — so procedural or virtual primitives
+// with no on-disk physicalPath (and therefore no preview-stats entry) still fit.
+// Bounds come from the same rasterizer the preview stats use, so they match what
+// the viewport draws.
+[[nodiscard]] bool TryLoadEntityMeshBounds(kb::scene::Scene& scene, kb::scene::SceneEntity entity, EntityMeshBounds& out, std::string& reason) {
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr) {
+        reason = "entity has no Mesh Renderer";
+        return false;
+    }
+    if (renderer->meshAssetId == 0U) {
+        reason = "Mesh Renderer has no mesh assigned";
+        return false;
+    }
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetId meshAssetId{ renderer->meshAssetId };
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(meshAssetId);
+    if (metadata == nullptr) {
+        reason = "mesh asset " + std::to_string(renderer->meshAssetId) + " is not registered";
+        return false;
+    }
+
+    const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> asset =
+        manager.Load<kb::render::RenderMeshAssetData>(meshAssetId);
+    if (!asset.IsLoaded()) {
+        reason = "mesh '" + metadata->type + "' could not be loaded for bounds";
+        return false;
+    }
+    const kb::editor::EditorMeshPreviewGeometry geometry = kb::editor::EditorMeshPreviewRasterizer::ExtractGeometry(*asset);
+    if (geometry.positions.size() < 3U) {
+        reason = "mesh '" + metadata->type + "' produced no usable geometry (vertices=" + std::to_string(geometry.positions.size()) + ")";
+        return false;
+    }
+
+    kb::editor::EditorMeshPreviewVector3 minPoint = geometry.positions.front();
+    kb::editor::EditorMeshPreviewVector3 maxPoint = geometry.positions.front();
+    for (const kb::editor::EditorMeshPreviewVector3& p : geometry.positions) {
+        minPoint.x = std::min(minPoint.x, p.x);
+        minPoint.y = std::min(minPoint.y, p.y);
+        minPoint.z = std::min(minPoint.z, p.z);
+        maxPoint.x = std::max(maxPoint.x, p.x);
+        maxPoint.y = std::max(maxPoint.y, p.y);
+        maxPoint.z = std::max(maxPoint.z, p.z);
+    }
+    out.center = kb::scene::Vec3{
+        (minPoint.x + maxPoint.x) * 0.5F,
+        (minPoint.y + maxPoint.y) * 0.5F,
+        (minPoint.z + maxPoint.z) * 0.5F,
+    };
+    out.halfExtents = kb::scene::Vec3{
+        (maxPoint.x - minPoint.x) * 0.5F,
+        (maxPoint.y - minPoint.y) * 0.5F,
+        (maxPoint.z - minPoint.z) * 0.5F,
+    };
+    out.sphereRadius = geometry.stats.boundsRadius > 0.0F
+        ? geometry.stats.boundsRadius
+        : std::sqrt(out.halfExtents.x * out.halfExtents.x + out.halfExtents.y * out.halfExtents.y + out.halfExtents.z * out.halfExtents.z);
+    reason = "mesh '" + metadata->type + "' size="
+        + std::to_string(out.halfExtents.x * 2.0F) + " x "
+        + std::to_string(out.halfExtents.y * 2.0F) + " x "
+        + std::to_string(out.halfExtents.z * 2.0F);
+    return true;
+}
+
+// Writes mesh bounds into a collider according to its shape. Box uses the per-
+// axis extents (so a plane becomes a thin slab, not a cube); a small minimum
+// keeps a flat axis from collapsing to a degenerate zero-thickness shape the
+// physics backend would reject.
+void ApplyMeshBoundsToCollider(kb::scene::ColliderComponent& collider, const EntityMeshBounds& bounds) {
+    constexpr float kMinHalfExtent = 0.005F;
+    collider.center = bounds.center;
+    switch (collider.shape) {
+    case kb::scene::ColliderShape::Sphere:
+        collider.radius = std::max(0.01F, bounds.sphereRadius);
+        break;
+    case kb::scene::ColliderShape::Capsule: {
+        const float radius = std::max(0.01F, std::max(bounds.halfExtents.x, bounds.halfExtents.z));
+        collider.radius = radius;
+        collider.height = std::max(2.0F * radius, 2.0F * bounds.halfExtents.y);
+        break;
+    }
+    case kb::scene::ColliderShape::Box:
+    default:
+        collider.boxSize = kb::scene::Vec3{
+            std::max(2.0F * kMinHalfExtent, 2.0F * bounds.halfExtents.x),
+            std::max(2.0F * kMinHalfExtent, 2.0F * bounds.halfExtents.y),
+            std::max(2.0F * kMinHalfExtent, 2.0F * bounds.halfExtents.z),
+        };
+        break;
+    }
+}
+
+} // namespace
+
+bool EditorSceneContext::CanFitColliderToMesh(kb::scene::SceneEntity entity) const {
+    // Cheap check only (this runs every paint): a Collider plus a Mesh Renderer
+    // that references a mesh. The actual bounds load happens on the Fit action.
+    if (!entity.IsValid() || !scene_->Components().Colliders().Has(entity)) {
+        return false;
+    }
+    const kb::scene::MeshRendererComponent* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+    return renderer != nullptr && renderer->meshAssetId != 0U;
+}
+
+bool EditorSceneContext::ApplyColliderFitToMesh(kb::scene::SceneEntity entity, std::string& reason) {
+    kb::scene::ColliderComponent* collider = scene_->Components().Colliders().TryGet(entity);
+    if (collider == nullptr) {
+        reason = "the entity has no Collider";
+        return false;
+    }
+    EntityMeshBounds bounds;
+    if (!TryLoadEntityMeshBounds(*scene_, entity, bounds, reason)) {
+        return false;
+    }
+    // Mesh-local bounds; the entity's transform scale is applied later by the
+    // physics backend and the debug-draw gizmo, so we store the unscaled size.
+    ApplyMeshBoundsToCollider(*collider, bounds);
+    scene_->Components().Colliders().MarkModified(entity);
+    return true;
+}
+
+bool EditorSceneContext::FitColliderToMesh(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_->Components().Colliders().Has(entity)) {
+        console_.Warning("Physics", "Fit to Mesh: the selected entity has no Collider.");
+        return false;
+    }
+    const kb::scene::MeshRendererComponent* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr || renderer->meshAssetId == 0U) {
+        console_.Warning("Physics", "Fit to Mesh: the entity has no Mesh Renderer mesh to fit to.");
+        return false;
+    }
+    std::string reason;
+    const bool ok = ExecuteSceneCommand("Fit Collider To Mesh", [this, entity, &reason]() {
+        return ApplyColliderFitToMesh(entity, reason);
+    });
+    if (ok) {
+        console_.Info("Physics", "Fit to Mesh: " + reason + ".");
+    } else {
+        console_.Warning("Physics", "Fit to Mesh failed: " + (reason.empty() ? std::string{ "no resolvable mesh bounds" } : reason) + ".");
+    }
+    return ok;
 }
 
 bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
@@ -6950,6 +7341,61 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Audio Listener Component", [this, entity]() {
             scene_->Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Rigidbody") {
+        if (scene_->Components().Rigidbodies().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Rigidbody component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Rigidbody Component", [this, entity]() {
+            scene_->Components().Rigidbodies().Set(entity, kb::scene::RigidbodyComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Collider") {
+        if (scene_->Components().Colliders().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Collider component.");
+            return false;
+        }
+        // Auto-fit the new collider to the entity's mesh so it matches the visible
+        // geometry out of the box (Unity-style), instead of a default 0.5 sphere.
+        // Per-axis, so a plane/quad becomes a thin slab rather than a cube.
+        EntityMeshBounds bounds;
+        std::string reason;
+        const bool fitToMesh = TryLoadEntityMeshBounds(*scene_, entity, bounds, reason);
+        if (fitToMesh) {
+            console_.Info("Physics", "Collider auto-fit to mesh: " + reason + ".");
+        } else {
+            console_.Warning("Physics", "Collider added with default size — auto-fit skipped: " + reason + ".");
+        }
+        return ExecuteSceneCommand("Add Collider Component", [this, entity, fitToMesh, bounds]() {
+            kb::scene::ColliderComponent collider{};
+            if (fitToMesh) {
+                ApplyMeshBoundsToCollider(collider, bounds);
+            }
+            scene_->Components().Colliders().Set(entity, collider);
+            return true;
+        });
+    }
+    if (componentId == "CharacterController") {
+        if (scene_->Components().CharacterControllers().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Character Controller component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Character Controller Component", [this, entity]() {
+            scene_->Components().CharacterControllers().Set(entity, kb::scene::CharacterControllerComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Joint") {
+        if (scene_->Components().Joints().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Joint component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Joint Component", [this, entity]() {
+            scene_->Components().Joints().Set(entity, kb::scene::JointComponent{});
             return true;
         });
     }

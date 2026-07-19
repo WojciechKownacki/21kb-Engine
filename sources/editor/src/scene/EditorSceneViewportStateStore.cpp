@@ -34,6 +34,29 @@ const EditorViewportCameraState& EditorSceneViewportStateStore::Camera(std::uint
     return cameras_.try_emplace(viewportKey).first->second;
 }
 
+bool EditorSceneViewportStateStore::FocusAllCamerasOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept {
+    if (cameras_.empty()) {
+        // No panel has rendered a camera yet — frame the default so a viewport
+        // that first appears afterwards still starts framed on the selection.
+        Camera().FocusOn(target, radius, durationSeconds);
+        return true;
+    }
+    for (auto& [key, camera] : cameras_) {
+        static_cast<void>(key);
+        camera.FocusOn(target, radius, durationSeconds);
+    }
+    return true;
+}
+
+bool EditorSceneViewportStateStore::TickFocusAnimations(float deltaSeconds) noexcept {
+    bool animating = false;
+    for (auto& [key, camera] : cameras_) {
+        static_cast<void>(key);
+        animating = camera.TickFocus(deltaSeconds) || animating;
+    }
+    return animating;
+}
+
 void EditorSceneViewportStateStore::BeginCameraNavigation(std::uint64_t viewportKey, EditorViewportCameraNavigationMode mode, int x, int y) noexcept {
     EndCameraNavigation();
     activeCameraKey_ = viewportKey;
