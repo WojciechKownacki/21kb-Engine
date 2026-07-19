@@ -526,6 +526,12 @@ struct PhysicsBodySnapshot {
 
 using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
 
+// Unity-like: an entity with a Collider but NO Rigidbody is an implicit STATIC
+// body (a plain static collider). This query finds every collider; the ones that
+// also have a Rigidbody are skipped (handled by PhysicsBodyQuery with their real
+// Rigidbody), and the rest get a synthesized Static RigidbodyComponent.
+using ColliderOnlyBodyQuery = kb::ecs::Query<TransformComponent, ColliderComponent>;
+
 // LIB-131: a CharacterControllerComponent entity deliberately never appears in
 // PhysicsBodyQuery above (it has no Rigidbody/Collider - the whole point of a character
 // controller is a shape that moves itself via collision sweeps instead of being simulated
@@ -1115,17 +1121,40 @@ private:
             .maxBatchSize = 1024U,
             .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
         };
+        std::unordered_set<std::uint64_t> rigidbodyEntities;
         {
             PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
-            physicsBodyQuery.ForEachBatchKernel(settings, [this](const PhysicsBodyQuery::Batch& batch) {
+            physicsBodyQuery.ForEachBatchKernel(settings, [this, &rigidbodyEntities](const PhysicsBodyQuery::Batch& batch) {
                 const TransformComponent* transforms = batch.Components<0>();
                 const RigidbodyComponent* rigidbodies = batch.Components<1>();
                 const ColliderComponent* colliders = batch.Components<2>();
                 for (std::size_t index = 0; index < batch.Count(); ++index) {
+                    const SceneEntity entity{ batch.EntityAt(index).Id() };
+                    rigidbodyEntities.insert(entity.Id());
                     physicsBodyScratch_.push_back(PhysicsBodySnapshot{
-                        .entity = SceneEntity{ batch.EntityAt(index).Id() },
+                        .entity = entity,
                         .transform = transforms[index],
                         .rigidbody = rigidbodies[index],
+                        .collider = colliders[index],
+                    });
+                }
+            });
+        }
+        // Unity-like: a Collider without a Rigidbody becomes an implicit Static body.
+        {
+            ColliderOnlyBodyQuery colliderQuery = context.EcsWorld().CreateQuery<TransformComponent, ColliderComponent>();
+            colliderQuery.ForEachBatchKernel(settings, [this, &rigidbodyEntities](const ColliderOnlyBodyQuery::Batch& batch) {
+                const TransformComponent* transforms = batch.Components<0>();
+                const ColliderComponent* colliders = batch.Components<1>();
+                for (std::size_t index = 0; index < batch.Count(); ++index) {
+                    const SceneEntity entity{ batch.EntityAt(index).Id() };
+                    if (rigidbodyEntities.find(entity.Id()) != rigidbodyEntities.end()) {
+                        continue; // already handled above with its explicit Rigidbody
+                    }
+                    physicsBodyScratch_.push_back(PhysicsBodySnapshot{
+                        .entity = entity,
+                        .transform = transforms[index],
+                        .rigidbody = RigidbodyComponent{ .bodyType = RigidbodyBodyType::Static },
                         .collider = colliders[index],
                     });
                 }
