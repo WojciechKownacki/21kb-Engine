@@ -2987,6 +2987,10 @@ EditorMaterialGraphCookService& EditorSceneContext::MaterialGraphCookService() n
     return *materialGraphCookService_;
 }
 
+bool EditorSceneContext::GpuMaterialGraphCookAvailable() const noexcept {
+    return materialGraphCookService_ != nullptr && materialGraphCookService_->ShadercAvailable();
+}
+
 EditorMaterialGraphCookResult EditorSceneContext::OpenMaterialGraphCookResult() const {
     const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
     if (materialGraphCookService_ == nullptr || !openAsset.IsValid()) {
