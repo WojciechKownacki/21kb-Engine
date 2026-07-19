@@ -42,13 +42,7 @@ public:
         kb::assets::AssetId materialAssetId,
         const kb::render::RenderMaterialAssetData* material,
         bool previewSceneReady,
-        kb::render::RenderMaterialGraphBuildContext graphContext = {},
-        // Whether the GPU graph toolchain can actually produce the cooked program
-        // binary (i.e. shaderc is available). When false, a graph that compiles to
-        // shader SOURCE still cannot run on the GPU, so the scene renders the CPU
-        // PBR flatten — the telemetry must report that instead of claiming
-        // GpuMaterialGraph (Finding 3: no more "GPU graph" telemetry with no shaderc).
-        bool gpuProgramAvailable = true);
+        kb::render::RenderMaterialGraphBuildContext graphContext = {});
 };
 
 } // namespace kb::editor
