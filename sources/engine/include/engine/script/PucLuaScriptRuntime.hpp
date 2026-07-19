@@ -102,6 +102,12 @@ public:
         std::span<const std::uint8_t> hasDefaults);
     [[nodiscard]] std::span<const PucLuaExposedVariableInstance> InstanceVariables(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) const noexcept;
     [[nodiscard]] bool SetInstanceVariable(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value);
+    // Editor-authored per-instance override: unlike SetInstanceVariable it
+    // CREATES the (entity,asset) instance record if it does not exist yet (so it
+    // can be seeded before the behaviour's first execution), types the value from
+    // the asset's declared @expose definition, and marks it overridden so the
+    // per-frame default re-sync preserves it.
+    void SetInstanceVariableOverride(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value) override;
 
     void SetDebugSettings(PucLuaDebugSettings settings);
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;

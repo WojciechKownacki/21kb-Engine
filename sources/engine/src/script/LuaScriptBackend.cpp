@@ -17,4 +17,14 @@ ScriptBackendExecutionResult LuaScriptBackend::ExecuteEvent(const kb::scene::Beh
     return runtime_.ExecuteEvent(behaviour, event, eventId, context);
 }
 
+void LuaScriptBackend::ApplyExposedVariableOverrides(
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    std::span<const kb::scene::BehaviourVariableOverride> overrides) {
+    const kb::assets::AssetId assetId{ behaviour.behaviourAssetId };
+    for (const kb::scene::BehaviourVariableOverride& entry : overrides) {
+        runtime_.SetInstanceVariableOverride(entity, assetId, entry.name, entry.value);
+    }
+}
+
 } // namespace kb::script
