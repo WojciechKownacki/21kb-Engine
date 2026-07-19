@@ -1762,9 +1762,13 @@ void RunRendererBindsGraphMaterialGpuProgramTest() {
     Require(renderer.SubmitScene(scene, desc), "Graph GPU program submit test renderer did not submit scene");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
-    Require(runtimeStats.graphMaterialGpuCount == 1U, "MAT-26: Submitting a graph material must count one GPU material graph binding");
-    Require(runtimeStats.graphMaterialCpuFallbackCount == 0U, "MAT-26: A valid graph material must not count as a CPU fallback at submit");
-    Require(runtimeStats.materialErrorCount == 0U, "MAT-26: A valid graph material must not resolve to an error material");
+    // Finding 3: this graph material is saved but never cooked, so no GPU program binary exists.
+    // graphMaterialGpuCount/CpuFallback report the ACTUAL draw outcome (not the resolve-time renderMode
+    // intent), so a material that renders the builtin flatten because its cooked binary is missing must
+    // be counted as a CPU fallback, NOT as a live GPU graph material. (MAT-31 covers the cooked GPU path.)
+    Require(runtimeStats.graphMaterialGpuCount == 0U, "MAT-26: A graph material with no cooked GPU binary must NOT be counted as a GPU material (it renders the builtin flatten)");
+    Require(runtimeStats.graphMaterialCpuFallbackCount == 1U, "MAT-26: A graph material that falls back to the builtin flatten at draw must count as exactly one CPU fallback");
+    Require(runtimeStats.materialErrorCount == 0U, "MAT-26: A valid but uncooked graph material must still resolve (not an error material)");
 
     renderer.EndFrame();
     renderer.Shutdown();
@@ -1947,7 +1951,10 @@ void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
         Require(materialMetadata != nullptr, "MAT-84 scene multi-graph test did not discover a graph material");
         const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
             .name = "Graph Mesh " + std::to_string(index),
-            .transform = TransformAt(static_cast<float>(index) * 2.0F, 0.0F, 0.0F),
+            // Keep every mesh inside the identity camera's clip volume ([-1,1]) so all three actually
+            // DRAW — graphMaterialGpuCount now reflects the draw-time outcome, so a mesh culled off
+            // screen would (correctly) not count as a rendered GPU material.
+            .transform = TransformAt((static_cast<float>(index) - 1.0F) * 0.3F, 0.0F, 0.0F),
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
             .meshAssetId = meshMetadata->id.value,
@@ -4322,6 +4329,25 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
             << "alphaMode OPAQUE\n";
     }
 
+    // This test asserts the GPU material-graph render mode, so the graph material must actually have a
+    // cooked GPU binary (graphMaterialGpuCount now reflects the true draw outcome, not resolve intent).
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+    {
+        const std::optional<RenderMaterialAssetData> graphMaterial = RenderMaterialAssetLoader::LoadMaterial(graphMaterialPath);
+        Require(graphMaterial.has_value(), "MAT-27 GPU material mode test could not load the graph material to cook");
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graphMaterial->graph, RenderMaterialGraphBuildContext{ .assetId = 0x2700U });
+        Require(compiled.Succeeded(), "MAT-27 GPU material mode test graph must compile");
+        RenderMaterialGraphShaderArtifactRequest request{};
+        request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+        request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+        request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+        request.cacheRoot = cacheRoot.generic_string();
+        request.pass = "BaseOpaque";
+        const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+        Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+            "MAT-27 GPU material mode test must cook the graph binary");
+    }
+
     kb::scene::Scene scene;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph CPU fallback counter test could not register mesh loader");
@@ -4377,6 +4403,7 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
         .syncTransformCacheEntries = 4U,
         .syncTransformResolvingEntries = 4U,
     });
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
     Require(renderer.Initialize(surface, &config), "Graph CPU fallback counter test did not initialize renderer");
 
     const RenderSceneSubmitDesc desc{

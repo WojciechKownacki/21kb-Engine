@@ -51,6 +51,10 @@ public:
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
+    // Reset once per scene submit (before its passes) so the per-material GPU/fallback dedup accumulates
+    // across all of a submit's passes; read after the submit for the true GPU-vs-fallback material counts.
+    void ResetGraphMaterialDrawStats() const noexcept { passResources_.ResetGraphMaterialDrawStats(); }
+    [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
     void EndFrame(std::uint64_t frameIndex) const { passResources_.EndFrame(frameIndex); }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
 

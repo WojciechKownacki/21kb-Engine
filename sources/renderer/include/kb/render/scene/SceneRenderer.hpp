@@ -75,6 +75,12 @@ public:
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
+    // Draw-time, per-material graph render outcome for the last scene submit: the true GPU vs
+    // CPU-fallback material counts (a graph material with no cooked binary renders the builtin
+    // flatten and counts as a fallback). Reset at the start of each submit before its passes.
+    void ResetGraphMaterialDrawStats() const noexcept;
+    [[nodiscard]] std::uint32_t GraphMaterialGpuDrawCount() const noexcept;
+    [[nodiscard]] std::uint32_t GraphMaterialCpuFallbackDrawCount() const noexcept;
 
 private:
     RenderResourceRegistry resources_;

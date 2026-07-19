@@ -544,6 +544,27 @@ void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
     lastProgramResolution_ = SceneMeshPassProgramResolution{};
 }
 
+void SceneMeshPassResources::ResetGraphMaterialDrawStats() const noexcept {
+    graphGpuMaterials_.clear();
+    graphFellBackMaterials_.clear();
+}
+
+SceneMeshGraphMaterialDrawStats SceneMeshPassResources::GraphMaterialDrawStats() const noexcept {
+    SceneMeshGraphMaterialDrawStats stats{};
+    // A material renders its authored graph as long as it bound its GPU program in at least one drawn
+    // pass. A per-pass fall-back to the builtin path is NOT necessarily a failure: a simple opaque graph
+    // legitimately casts shadows with the builtin depth shader (its graph does not affect the silhouette),
+    // so that pass reports fellBackToBuiltin without the material rendering flat. A material only counts as
+    // a CPU fallback when it NEVER bound its GPU program (e.g. the cooked binary was missing everywhere).
+    stats.gpuCount = static_cast<std::uint32_t>(graphGpuMaterials_.size());
+    for (const void* material : graphFellBackMaterials_) {
+        if (!graphGpuMaterials_.contains(material)) {
+            ++stats.cpuFallbackCount;
+        }
+    }
+    return stats;
+}
+
 bgfx::UniformHandle& SceneMeshPassResources::AcquireGraphUniform(
     std::string_view name,
     bool sampler) const {
@@ -689,6 +710,19 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
     }
     if (resolution.fellBackToBuiltin) {
         ++programBindStats_.builtinFallbackBindCount;
+    }
+    // Record the ACTUAL per-material draw outcome (deduped by material resource) so the reported
+    // graphMaterialGpuCount/CpuFallback reflect what rendered, not the resolve-time renderMode intent.
+    // A graph-capable material that bound its GPU program lands in the GPU set; any pass that did NOT
+    // (missing cooked binary, shadow fail-closed) lands it in the fell-back set. GraphMaterialDrawStats()
+    // then treats "fell back in any pass" as a CPU fallback.
+    if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+        const void* materialId = static_cast<const void*>(material);
+        if (resolution.graphProgram) {
+            graphGpuMaterials_.insert(materialId);
+        } else {
+            graphFellBackMaterials_.insert(materialId);
+        }
     }
     if (!bgfx::isValid(lastBoundProgram_) || lastBoundProgram_.idx != resolution.program.idx) {
         ++programBindStats_.programSwitchCount;
