@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -57,6 +58,17 @@ public:
     // LIB-067: destroy every still-alive queued entity, clear the queue, and
     // return the count destroyed. Called once per frame by the scene system.
     [[nodiscard]] std::size_t DrainDeferredDestroys() noexcept;
+
+    // Per-instance overrides of a behaviour's exposed ("@expose") script
+    // variables, authored in the Inspector. Delta-over-default (the Unity/
+    // Unreal/Godot/O3DE model): only variables whose value differs from the
+    // script's declared default are stored; setting one back to its default
+    // drops the override. Read returns the stored deltas (empty span if none).
+    [[nodiscard]] std::span<const BehaviourVariableOverride> BehaviourVariableOverrides(SceneEntity entity) const noexcept;
+    void SetBehaviourVariableOverride(SceneEntity entity, std::string name, kb::script::ScriptValue value);
+    bool RemoveBehaviourVariableOverride(SceneEntity entity, std::string_view name) noexcept;
+    void ReplaceBehaviourVariableOverrides(SceneEntity entity, std::vector<BehaviourVariableOverride> overrides);
+
     [[nodiscard]] bool SetParent(std::span<const SceneObject> objects, SceneObject parent) noexcept;
 
     [[nodiscard]] bool IsAlive(SceneObject object) const noexcept;

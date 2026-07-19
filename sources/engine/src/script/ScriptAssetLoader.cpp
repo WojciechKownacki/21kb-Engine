@@ -282,12 +282,132 @@ namespace {
     return Trim(line.substr(directive.size()));
 }
 
+[[nodiscard]] bool IsInspectorIdentifier(std::string_view text) noexcept {
+    if (text.empty()) {
+        return false;
+    }
+    const auto isFirst = [](char c) noexcept { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; };
+    if (!isFirst(text.front())) {
+        return false;
+    }
+    for (const char c : text.substr(1U)) {
+        if (!isFirst(c) && !(c >= '0' && c <= '9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Recognizes a top-level `Inspector.name = value` (or `Inspector["name"] = value`)
+// declaration and returns its variable name + the raw value text. This is the
+// static half of the engine-provided `Inspector` table: the runtime table routes
+// reads/writes per entity, while this parse discovers the schema WITHOUT running
+// the script, so the editor can show the variables before play.
+[[nodiscard]] bool ExtractInspectorDeclaration(std::string_view line, std::string& name, std::string_view& valueText) {
+    line = Trim(line);
+    if (line.starts_with("--")) {
+        return false;
+    }
+    static constexpr std::string_view kPrefix = "Inspector";
+    if (!line.starts_with(kPrefix)) {
+        return false;
+    }
+    std::string_view rest = line.substr(kPrefix.size());
+    if (rest.starts_with(".")) {
+        rest = rest.substr(1U);
+        const std::size_t equals = rest.find('=');
+        if (equals == std::string_view::npos) {
+            return false;
+        }
+        const std::string_view lhs = Trim(rest.substr(0U, equals));
+        if (!IsInspectorIdentifier(lhs)) {
+            return false;
+        }
+        name = std::string{ lhs };
+        valueText = Trim(rest.substr(equals + 1U));
+        return true;
+    }
+    if (rest.starts_with("[")) {
+        const std::size_t close = rest.find(']');
+        if (close == std::string_view::npos) {
+            return false;
+        }
+        std::string_view key = Trim(rest.substr(1U, close - 1U));
+        if (key.size() < 2U || (key.front() != '"' && key.front() != '\'') || key.back() != key.front()) {
+            return false;
+        }
+        key = key.substr(1U, key.size() - 2U);
+        const std::string_view afterBracket = Trim(rest.substr(close + 1U));
+        if (!afterBracket.starts_with("=") || key.empty()) {
+            return false;
+        }
+        name = std::string{ key };
+        valueText = Trim(afterBracket.substr(1U));
+        return true;
+    }
+    return false;
+}
+
+struct InspectorInference {
+    ScriptValueType type = ScriptValueType::Void;
+    ScriptValue value;
+};
+
+// Infers the exposed variable's type + default from the Lua literal on the RHS:
+// true/false -> Bool, "..."/'...' -> String, an integer literal -> Int, any other
+// number -> Float. Returns nullopt for anything that is not a simple literal
+// (e.g. a function call or table) — those are not inspector-editable.
+[[nodiscard]] std::optional<InspectorInference> InferInspectorValue(std::string_view valueText) {
+    if (const std::size_t comment = valueText.find("--"); comment != std::string_view::npos) {
+        valueText = Trim(valueText.substr(0U, comment));
+    }
+    valueText = Trim(valueText);
+    if (valueText.empty()) {
+        return std::nullopt;
+    }
+    if (valueText == "true" || valueText == "false") {
+        return InspectorInference{ .type = ScriptValueType::Bool, .value = ScriptValue{ valueText == "true" } };
+    }
+    if (valueText.size() >= 2U && (valueText.front() == '"' || valueText.front() == '\'') && valueText.back() == valueText.front()) {
+        return InspectorInference{ .type = ScriptValueType::String, .value = ScriptValue{ std::string{ valueText.substr(1U, valueText.size() - 2U) } } };
+    }
+    const std::string number{ valueText };
+    char* end = nullptr;
+    const double parsed = std::strtod(number.c_str(), &end);
+    if (end == number.c_str() || end != number.c_str() + number.size()) {
+        return std::nullopt;
+    }
+    const bool isInteger = valueText.find('.') == std::string_view::npos &&
+        valueText.find('e') == std::string_view::npos &&
+        valueText.find('E') == std::string_view::npos;
+    if (isInteger) {
+        return InspectorInference{ .type = ScriptValueType::Int, .value = ScriptValue{ static_cast<int>(parsed) } };
+    }
+    return InspectorInference{ .type = ScriptValueType::Float, .value = ScriptValue{ static_cast<float>(parsed) } };
+}
+
 void ParseLuaAssetMetadata(LuaScriptAsset& asset) {
     std::istringstream input{ asset.source };
     std::string rawLine;
     while (std::getline(input, rawLine)) {
         if (const std::optional<std::string_view> importName = ExtractLuaDirective(rawLine, "@import"); importName.has_value() && !importName->empty()) {
             asset.imports.emplace_back(*importName);
+            continue;
+        }
+        // Engine-provided `Inspector` table declaration (real Lua code, preferred
+        // over the legacy `-- @expose` comment which is still handled below).
+        std::string inspectorName;
+        std::string_view inspectorValue;
+        if (ExtractInspectorDeclaration(rawLine, inspectorName, inspectorValue)) {
+            if (const std::optional<InspectorInference> inferred = InferInspectorValue(inspectorValue); inferred.has_value()) {
+                asset.exposedVariables.push_back(ScriptApiPin{
+                    .name = std::move(inspectorName),
+                    .type = inferred->type,
+                    .required = false,
+                });
+                asset.exposedVariableDefaults.push_back(inferred->value);
+                asset.exposedVariableHasDefault.push_back(true);
+            }
             continue;
         }
         const std::optional<std::string_view> exposed = ExtractLuaDirective(rawLine, "@expose");

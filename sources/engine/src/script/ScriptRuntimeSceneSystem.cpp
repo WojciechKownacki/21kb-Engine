@@ -333,6 +333,14 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
             tracked.entity = current.entity;
             tracked.behaviour = current.behaviour;
             if (!tracked.created) {
+                // Seed editor-authored exposed-variable overrides into the backend
+                // BEFORE Created runs, so the very first lifecycle hook already
+                // observes the authored value (the Unity/Godot "apply overrides
+                // before _ready" timing). No-op for backends without exposed vars.
+                if (IScriptBackend* backend = runtime_.FindBackend(tracked.behaviour.backend); backend != nullptr) {
+                    backend->ApplyExposedVariableOverrides(
+                        tracked.entity, tracked.behaviour, scene.Entities().BehaviourVariableOverrides(tracked.entity));
+                }
                 ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Created, deltaSeconds);
                 tracked.created = true;
             }

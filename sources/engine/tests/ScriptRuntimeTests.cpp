@@ -13310,6 +13310,142 @@ void RunScriptEventBusReachesVisualGraphCustomEventTest() {
     kb::tests::Require(afterDestroy.delivered == 0U && recordedAmounts.size() == 1U, "A Broadcast after the behaviour was destroyed must not re-invoke the graph — the subscription must genuinely be gone, not just skipped once");
 }
 
+// Regression: stopping play must fire each behaviour's Destroyed hook (the Unity
+// OnDestroy-equivalent). ScriptRuntimeHost::DispatchShutdownLifecycle drives the
+// installed scene system's shutdown so the editor can tear scripts down before
+// it reverts the play snapshot; previously nothing called it on Stop and
+// Destroyed never ran.
+void RunHostShutdownLifecycleFiresDestroyedTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Destroyed-on-stop host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x0D35U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LifecycleObj" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+function Tick(self, dt) end
+function Destroyed(self, dt) SetShared("wasDestroyed", true) end
+)");
+    kb::tests::Require(loaded.succeeded, "Destroyed-on-stop script did not load");
+
+    kb::tests::Require(host.InstallSceneSystem(), "Destroyed-on-stop scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(!host.SharedState().Get("wasDestroyed").has_value(),
+        "Destroyed must NOT fire during a normal frame — only on shutdown");
+
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F),
+        "DispatchShutdownLifecycle must report the installed scene system");
+    kb::tests::Require(host.SharedState().Get("wasDestroyed").has_value()
+            && host.SharedState().Get("wasDestroyed")->AsBool(),
+        "Stopping play (DispatchShutdownLifecycle) must fire the behaviour's Destroyed hook");
+
+    // A host that never installed a scene system has nothing to tear down and
+    // reports so honestly (the editor guards on this before calling).
+    kb::scene::Scene bareScene;
+    kb::script::ScriptRuntimeHost bareHost{ bareScene };
+    kb::tests::Require(!bareHost.DispatchShutdownLifecycle(0.0F),
+        "DispatchShutdownLifecycle must return false when no scene system is installed");
+}
+
+// Exposed-variable override end to end: an editor-authored per-instance override
+// stored on the scene (delta-over-default) must be seeded into the Lua runtime
+// before Created and observed by the script, instead of the @expose default.
+void RunExposedVariableOverrideSeedingTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "override seeding host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x0E4A0U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Tunable" });
+
+    // Declare exposed 'speed' Float = 3.5 (what ScriptAssetLoader would parse
+    // from `-- @expose speed Float = 3.5`).
+    const std::vector<kb::script::ScriptApiPin> pins{ kb::script::ScriptApiPin{ .name = "speed", .type = kb::script::ScriptValueType::Float } };
+    const std::vector<kb::script::ScriptValue> defaults{ kb::script::ScriptValue{ 3.5F } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    host.LuaRuntime().SetScriptExposedVariables(kAsset, pins, defaults, hasDefaults);
+
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+function Created(self, dt) SetShared("seenSpeed", self:GetVariable("speed")) end
+function Tick(self, dt) end
+)");
+    kb::tests::Require(loaded.succeeded, "override seeding script did not load");
+
+    // Author an override in the scene: speed = 12.0 (a delta from default 3.5).
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 12.0F });
+    kb::tests::Require(scene.Entities().BehaviourVariableOverrides(object.Entity()).size() == 1U,
+        "scene must store the authored exposed-variable override delta");
+
+    kb::tests::Require(host.InstallSceneSystem(), "override seeding scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const std::optional<kb::script::ScriptValue> seen = host.SharedState().Get("seenSpeed");
+    kb::tests::Require(seen.has_value() && kb::tests::NearlyEqual(seen->AsFloat(), 12.0F),
+        "Created must observe the editor-authored override (12.0), not the @expose default (3.5)");
+
+    // Removing the last override drops the entity's whole entry (store-only-non-default).
+    kb::tests::Require(scene.Entities().RemoveBehaviourVariableOverride(object.Entity(), "speed"),
+        "removing an existing override must report success");
+    kb::tests::Require(scene.Entities().BehaviourVariableOverrides(object.Entity()).empty(),
+        "removing the last override must drop the entity's override entry entirely");
+}
+
+// The engine-provided `Inspector` table: a script reads `Inspector.speed` (getting
+// the current entity's override ?? default) and writes it back (persisting per
+// entity) — the direct, non-comment, per-instance access the design calls for.
+void RunInspectorTableRuntimeTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Inspector table host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x01457U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "InspectorObj" });
+
+    const std::vector<kb::script::ScriptApiPin> pins{ kb::script::ScriptApiPin{ .name = "speed", .type = kb::script::ScriptValueType::Float } };
+    const std::vector<kb::script::ScriptValue> defaults{ kb::script::ScriptValue{ 3.5F } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    host.LuaRuntime().SetScriptExposedVariables(kAsset, pins, defaults, hasDefaults);
+
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+Inspector.speed = 3.5
+function Created(self, dt)
+    SetShared("readAtStart", Inspector.speed)
+    Inspector.speed = Inspector.speed + 1
+end
+function Tick(self, dt)
+    SetShared("readAfterWrite", Inspector.speed)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Inspector table script did not load");
+
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 12.0F });
+    kb::tests::Require(host.InstallSceneSystem(), "Inspector table scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const std::optional<kb::script::ScriptValue> readAtStart = host.SharedState().Get("readAtStart");
+    kb::tests::Require(readAtStart.has_value() && kb::tests::NearlyEqual(readAtStart->AsFloat(), 12.0F),
+        "Inspector.speed must read the editor override (12), not the declared default (3.5)");
+    const std::optional<kb::script::ScriptValue> readAfterWrite = host.SharedState().Get("readAfterWrite");
+    kb::tests::Require(readAfterWrite.has_value() && kb::tests::NearlyEqual(readAfterWrite->AsFloat(), 13.0F),
+        "a script's `Inspector.speed = Inspector.speed + 1` write must persist per entity (12 + 1 = 13)");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -13410,6 +13546,9 @@ void RunScriptRuntimeTests() {
     RunTransformApiRotateLookAtAndPointConversionTest();
     RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
+    RunHostShutdownLifecycleFiresDestroyedTest();
+    RunExposedVariableOverrideSeedingTest();
+    RunInspectorTableRuntimeTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();

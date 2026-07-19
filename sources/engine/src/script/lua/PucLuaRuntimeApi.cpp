@@ -12,6 +12,9 @@ namespace kb::script {
 
 void PucLuaRuntimeApi::AttachRuntimeFunctions(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime) {
     PucLuaModuleApi::AttachImport(state, environmentIndex, runtime);
+    // Attach `Inspector` with a null context so top-level `Inspector.x = default`
+    // declarations run harmlessly at chunk load (the schema is parsed statically).
+    PucLuaSelfApi::AttachInspector(state, environmentIndex, nullptr);
 }
 
 void PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime) {
@@ -20,6 +23,9 @@ void PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex
     PucLuaEventsApi::Attach(state, environmentIndex, context, runtime);
     PucLuaSharedApi::Attach(state, environmentIndex, context);
     PucLuaFunctionApi::Attach(state, environmentIndex, context);
+    // Re-attach `Inspector` bound to THIS execution's context so `Inspector.x`
+    // read/write routes to the current entity's exposed-variable instance.
+    PucLuaSelfApi::AttachInspector(state, environmentIndex, &context);
 }
 
 void PucLuaRuntimeApi::PushSelf(lua_State* state, ScriptExecutionContext& context) {

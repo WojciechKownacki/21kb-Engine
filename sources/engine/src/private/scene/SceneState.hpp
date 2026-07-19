@@ -7,6 +7,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -237,6 +238,14 @@ public:
     std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::vector<std::string> denseEntityNames;
     std::unordered_map<SceneEntity::IdType, std::string> entityNames;
+    // Per-instance overrides of behaviours' exposed ("@expose") script variables,
+    // authored in the Inspector — a side-table because BehaviourComponent is a
+    // fixed POD in the archetype store and cannot hold variable-length data.
+    // Delta-over-default: only variables whose value differs from the script's
+    // declared default are stored (same "present means non-default authored
+    // data" shape as entityNames). Seeded into the script runtime before each
+    // behaviour's Created lifecycle.
+    std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>> behaviourVariableOverrides;
     // LIB-068: entities are active by default (absent from this set); an
     // entity is only ever added here by an explicit SetActive(false) —
     // same "presence means non-default" shape already used by

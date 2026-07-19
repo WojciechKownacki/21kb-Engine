@@ -740,6 +740,53 @@ pin 1 Output then Void
         "Script behaviour binding service did not preserve component settings");
 }
 
+// The engine-provided `Inspector` table doubles as the declaration site: a plain
+// top-level `Inspector.name = default` in real Lua source (not a comment) is
+// parsed into the exposed-variable schema, its type inferred from the literal.
+// This replaces the rejected `@expose` comment convention.
+void RunInspectorDeclarationParseTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "InspectorProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "Hero.lua",
+        "Inspector.speed = 3.5\n"
+        "Inspector.lives = 3\n"
+        "Inspector.enabled = true\n"
+        "Inspector.title = \"hero\"\n"
+        "Inspector[\"dashPower\"] = 12.0\n"
+        "-- Inspector.ignored = 1.0\n"
+        "function Tick(self, dt)\nend\n");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Inspector declaration project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Inspector declaration discovery did not find the Lua asset");
+
+    const kb::assets::AssetMetadata* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Hero.lua");
+    kb::tests::Require(luaMetadata != nullptr && luaMetadata->type == "LuaScript", "Inspector declaration Lua asset was not classified");
+
+    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> luaAsset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(luaMetadata->id);
+    kb::tests::Require(luaAsset.IsLoaded(), "Inspector declaration Lua asset did not load");
+
+    // Five real declarations parsed in source order; the commented one ignored.
+    kb::tests::Require(luaAsset->exposedVariables.size() == 5U, "Inspector declarations did not parse the expected variable count");
+    kb::tests::Require(luaAsset->exposedVariables[0].name == "speed" && luaAsset->exposedVariables[0].type == kb::script::ScriptValueType::Float &&
+            luaAsset->exposedVariableHasDefault[0] != 0U && kb::tests::NearlyEqual(luaAsset->exposedVariableDefaults[0].AsFloat(), 3.5F),
+        "Inspector.speed did not infer a Float with its default");
+    kb::tests::Require(luaAsset->exposedVariables[1].name == "lives" && luaAsset->exposedVariables[1].type == kb::script::ScriptValueType::Int &&
+            luaAsset->exposedVariableDefaults[1].AsInt() == 3,
+        "Inspector.lives did not infer an Int with its default");
+    kb::tests::Require(luaAsset->exposedVariables[2].name == "enabled" && luaAsset->exposedVariables[2].type == kb::script::ScriptValueType::Bool &&
+            luaAsset->exposedVariableDefaults[2].AsBool(),
+        "Inspector.enabled did not infer a Bool with its default");
+    kb::tests::Require(luaAsset->exposedVariables[3].name == "title" && luaAsset->exposedVariables[3].type == kb::script::ScriptValueType::String &&
+            luaAsset->exposedVariableDefaults[3].AsString() == "hero",
+        "Inspector.title did not infer a String with its default");
+    kb::tests::Require(luaAsset->exposedVariables[4].name == "dashPower" && luaAsset->exposedVariables[4].type == kb::script::ScriptValueType::Float &&
+            kb::tests::NearlyEqual(luaAsset->exposedVariableDefaults[4].AsFloat(), 12.0F),
+        "Inspector[\"dashPower\"] bracket declaration did not infer a Float");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -757,6 +804,7 @@ void RunAssetRuntimeTests() {
     RunScenePrefabRuntimeAssetTest();
     RunSceneAudioClipAssetDiscoveryTest();
     RunScriptAssetPipelineTest();
+    RunInspectorDeclarationParseTest();
 }
 
 } // namespace kb::tests

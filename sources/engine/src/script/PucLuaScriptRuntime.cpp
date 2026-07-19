@@ -251,6 +251,48 @@ bool PucLuaScriptRuntime::SetInstanceVariable(kb::scene::SceneEntity entity, kb:
     return true;
 }
 
+void PucLuaScriptRuntime::SetInstanceVariableOverride(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value) {
+    if (!entity.IsValid() || !assetId.IsValid() || name.empty()) {
+        return;
+    }
+    // Type the override from the asset's declared @expose definition when known
+    // (PrepareLuaAsset runs before the seeding point, so it usually is), so it
+    // coerces to exactly the type the script observes; else fall back to the
+    // supplied value's own type.
+    ScriptValueType declaredType = ScriptValueType::Void;
+    if (const auto definitions = exposedVariables_.find(assetId.value); definitions != exposedVariables_.end()) {
+        for (const ExposedVariableRecord& definition : definitions->second) {
+            if (definition.pin.name == name) {
+                declaredType = definition.pin.type;
+                break;
+            }
+        }
+    }
+    if (declaredType == ScriptValueType::Void) {
+        declaredType = value.Type();
+    }
+    if (declaredType == ScriptValueType::Void || !PucLuaValueBridge::IsCompatible(value, declaredType)) {
+        return;
+    }
+    std::vector<PucLuaExposedVariableInstance>& variables = instanceVariables_[InstanceKey{
+        .entityId = entity.Id(),
+        .assetId = assetId.value,
+    }];
+    PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(variables, name);
+    if (variable == nullptr) {
+        variables.push_back(PucLuaExposedVariableInstance{
+            .name = std::string{ name },
+            .type = declaredType,
+            .value = PucLuaValueBridge::Coerce(std::move(value), declaredType),
+            .overridden = true,
+        });
+        return;
+    }
+    variable->type = declaredType;
+    variable->value = PucLuaValueBridge::Coerce(std::move(value), declaredType);
+    variable->overridden = true;
+}
+
 void PucLuaScriptRuntime::SetDebugSettings(PucLuaDebugSettings settings) {
     debugSettings_ = std::move(settings);
 }

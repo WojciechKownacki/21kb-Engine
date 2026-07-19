@@ -42,4 +42,62 @@ std::size_t SceneEntityService::DrainDeferredDestroys(Scene& scene) noexcept {
     return destroyed;
 }
 
+std::span<const BehaviourVariableOverride> SceneEntityService::BehaviourVariableOverrides(const Scene& scene, SceneEntity entity) noexcept {
+    const std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>>& table =
+        SceneAccess::State(scene).behaviourVariableOverrides;
+    const auto iter = table.find(entity.Id());
+    if (iter == table.end()) {
+        return {};
+    }
+    return iter->second;
+}
+
+void SceneEntityService::SetBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string name, kb::script::ScriptValue value) {
+    if (!entity.IsValid() || name.empty()) {
+        return;
+    }
+    std::vector<BehaviourVariableOverride>& overrides = SceneAccess::State(scene).behaviourVariableOverrides[entity.Id()];
+    for (BehaviourVariableOverride& existing : overrides) {
+        if (existing.name == name) {
+            existing.value = std::move(value);
+            return;
+        }
+    }
+    overrides.push_back(BehaviourVariableOverride{ .name = std::move(name), .value = std::move(value) });
+}
+
+bool SceneEntityService::RemoveBehaviourVariableOverride(Scene& scene, SceneEntity entity, std::string_view name) noexcept {
+    std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>>& table =
+        SceneAccess::State(scene).behaviourVariableOverrides;
+    const auto iter = table.find(entity.Id());
+    if (iter == table.end()) {
+        return false;
+    }
+    std::vector<BehaviourVariableOverride>& overrides = iter->second;
+    const auto pos = std::ranges::find_if(overrides, [name](const BehaviourVariableOverride& candidate) {
+        return candidate.name == name;
+    });
+    if (pos == overrides.end()) {
+        return false;
+    }
+    overrides.erase(pos);
+    if (overrides.empty()) {
+        table.erase(iter);
+    }
+    return true;
+}
+
+void SceneEntityService::ReplaceBehaviourVariableOverrides(Scene& scene, SceneEntity entity, std::vector<BehaviourVariableOverride> overrides) {
+    if (!entity.IsValid()) {
+        return;
+    }
+    std::unordered_map<SceneEntity::IdType, std::vector<BehaviourVariableOverride>>& table =
+        SceneAccess::State(scene).behaviourVariableOverrides;
+    if (overrides.empty()) {
+        static_cast<void>(table.erase(entity.Id()));
+        return;
+    }
+    table[entity.Id()] = std::move(overrides);
+}
+
 } // namespace kb::scene
