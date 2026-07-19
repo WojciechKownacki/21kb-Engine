@@ -41,10 +41,18 @@ struct ScriptEditorInstance {
     return client;
 }
 
+// Monotonic across all editor windows: the host compares it frame-to-frame to
+// detect a save and reload the affected script asset.
+std::uint64_t& SaveSerialRef() noexcept {
+    static std::uint64_t serial = 0;
+    return serial;
+}
+
 void SaveInstance(ScriptEditorInstance& instance) {
     const std::string text = instance.document.ToText();
     if (ScriptSourceFile::Write(instance.filePath, text)) {
         instance.savedText = text;
+        ++SaveSerialRef();
     }
 }
 
@@ -235,6 +243,10 @@ void ScriptEditorWindow::Hide(HWND window) noexcept {
 bool ScriptEditorWindow::IsModified(HWND window) {
     const ScriptEditorInstance* instance = InstanceOf(window);
     return instance != nullptr && instance->document.IsModified(instance->savedText);
+}
+
+std::uint64_t ScriptEditorWindow::SaveSerial() noexcept {
+    return SaveSerialRef();
 }
 
 } // namespace kb::editor

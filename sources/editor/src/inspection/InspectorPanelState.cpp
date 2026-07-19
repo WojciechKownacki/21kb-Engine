@@ -12,96 +12,29 @@ constexpr float kMeshPreviewFitZoom = 1.35F;
 } // namespace
 
 bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept {
-    switch (section) {
-    case InspectorSectionId::General:
-        return generalCollapsed_;
-    case InspectorSectionId::Transform:
-        return transformCollapsed_;
-    case InspectorSectionId::Asset:
-        return assetCollapsed_;
-    case InspectorSectionId::Details:
-        return detailsCollapsed_;
-    case InspectorSectionId::AudioSource:
-        return audioSourceCollapsed_;
-    case InspectorSectionId::AudioListener:
-        return audioListenerCollapsed_;
-    case InspectorSectionId::MeshRenderer:
-        return meshRendererCollapsed_;
-    case InspectorSectionId::Light:
-        return lightCollapsed_;
-    case InspectorSectionId::Folder:
-        return folderCollapsed_;
-    case InspectorSectionId::InputAction:
-        return inputActionCollapsed_;
-    case InspectorSectionId::InputMappings:
-        return inputMappingsCollapsed_;
-    case InspectorSectionId::Material:
-        return materialCollapsed_;
-    case InspectorSectionId::MaterialPreview:
-        return materialPreviewCollapsed_;
-    case InspectorSectionId::Script:
-        return scriptCollapsed_;
-    default:
-        return false;
-    }
+    return collapsedSections_.find(section) != collapsedSections_.end();
 }
 
 void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
-    bool* target = nullptr;
-    switch (section) {
-    case InspectorSectionId::General:
-        target = &generalCollapsed_;
-        break;
-    case InspectorSectionId::Transform:
-        target = &transformCollapsed_;
-        break;
-    case InspectorSectionId::Asset:
-        target = &assetCollapsed_;
-        break;
-    case InspectorSectionId::Details:
-        target = &detailsCollapsed_;
-        break;
-    case InspectorSectionId::AudioSource:
-        target = &audioSourceCollapsed_;
-        break;
-    case InspectorSectionId::AudioListener:
-        target = &audioListenerCollapsed_;
-        break;
-    case InspectorSectionId::MeshRenderer:
-        target = &meshRendererCollapsed_;
-        break;
-    case InspectorSectionId::Light:
-        target = &lightCollapsed_;
-        break;
-    case InspectorSectionId::Folder:
-        target = &folderCollapsed_;
-        break;
-    case InspectorSectionId::InputAction:
-        target = &inputActionCollapsed_;
-        break;
-    case InspectorSectionId::InputMappings:
-        target = &inputMappingsCollapsed_;
-        break;
-    case InspectorSectionId::Material:
-        target = &materialCollapsed_;
-        break;
-    case InspectorSectionId::MaterialPreview:
-        target = &materialPreviewCollapsed_;
-        break;
-    case InspectorSectionId::Script:
-        target = &scriptCollapsed_;
-        break;
-    default:
-        break;
+    if (section == InspectorSectionId::None) {
+        return;
     }
-    if (target != nullptr) {
-        *target = !*target;
+    if (const auto it = collapsedSections_.find(section); it != collapsedSections_.end()) {
+        collapsedSections_.erase(it);
+    } else {
+        collapsedSections_.insert(section);
     }
 }
 
 void InspectorPanelState::ToggleAddComponentBrowser() {
     scriptComponentMenuOpen_ = false;
     addComponentBrowserOpen_ = !addComponentBrowserOpen_;
+    // Always (re)open at the top-level category list, unscrolled and settled.
+    addComponentView_ = AddComponentView::Categories;
+    addComponentCategory_.clear();
+    addComponentScroll_ = 0;
+    addComponentSlide_ = 1.0F;
+    addComponentScrollDragging_ = false;
     if (addComponentBrowserOpen_) {
         BeginTextEdit(InspectorPropertyId::AddComponentSearch, {});
     } else if (editedProperty_ == InspectorPropertyId::AddComponentSearch) {
@@ -111,18 +44,64 @@ void InspectorPanelState::ToggleAddComponentBrowser() {
 
 void InspectorPanelState::CloseAddComponentBrowser() noexcept {
     addComponentBrowserOpen_ = false;
+    addComponentView_ = AddComponentView::Categories;
+    addComponentCategory_.clear();
+    addComponentScroll_ = 0;
+    addComponentSlide_ = 1.0F;
+    addComponentScrollDragging_ = false;
     if (editedProperty_ == InspectorPropertyId::AddComponentSearch) {
         EndTextEdit();
     }
 }
 
-bool InspectorPanelState::SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) noexcept {
-    if (hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property) {
+void InspectorPanelState::OpenAddComponentCategory(std::string category) noexcept {
+    addComponentView_ = AddComponentView::Components;
+    addComponentCategory_ = std::move(category);
+    addComponentScroll_ = 0;
+    addComponentSlide_ = 0.0F; // start the slide-in animation
+    addComponentSlideForward_ = true;
+    addComponentScrollDragging_ = false;
+}
+
+void InspectorPanelState::CloseAddComponentCategory() noexcept {
+    addComponentView_ = AddComponentView::Categories;
+    addComponentCategory_.clear();
+    addComponentScroll_ = 0;
+    addComponentSlide_ = 0.0F;
+    addComponentSlideForward_ = false;
+    addComponentScrollDragging_ = false;
+}
+
+void InspectorPanelState::SetAddComponentScroll(int offset, int maxScroll) noexcept {
+    addComponentScroll_ = std::clamp(offset, 0, std::max(0, maxScroll));
+}
+
+bool InspectorPanelState::TickAddComponentSlide(float deltaSeconds) noexcept {
+    if (addComponentSlide_ >= 1.0F) {
+        return false;
+    }
+    // ~0.18s slide; clamp to keep it snappy even on a slow frame.
+    addComponentSlide_ = std::min(1.0F, addComponentSlide_ + std::max(0.0F, deltaSeconds) / 0.18F);
+    return addComponentSlide_ < 1.0F;
+}
+
+void InspectorPanelState::BeginAddComponentScrollbarDrag(int grabOffset) noexcept {
+    addComponentScrollDragging_ = true;
+    addComponentScrollGrab_ = grabOffset;
+}
+
+void InspectorPanelState::EndAddComponentScrollbarDrag() noexcept {
+    addComponentScrollDragging_ = false;
+}
+
+bool InspectorPanelState::SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, int index) noexcept {
+    if (hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property && hoveredIndex_ == index) {
         return false;
     }
     hoveredKind_ = kind;
     hoveredSection_ = section;
     hoveredProperty_ = property;
+    hoveredIndex_ = index;
     return true;
 }
 
@@ -167,8 +146,8 @@ int InspectorPanelState::ValueTypeDropdownHover() const noexcept {
     return valueTypeDropdownHover_;
 }
 
-bool InspectorPanelState::IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept {
-    return hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property;
+bool InspectorPanelState::IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, int index) const noexcept {
+    return hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property && (index < 0 || hoveredIndex_ == index);
 }
 
 bool InspectorPanelState::IsAnyHovered() const noexcept {
@@ -177,6 +156,10 @@ bool InspectorPanelState::IsAnyHovered() const noexcept {
 
 InspectorPropertyId InspectorPanelState::HoveredProperty() const noexcept {
     return hoveredProperty_;
+}
+
+int InspectorPanelState::HoveredIndex() const noexcept {
+    return hoveredIndex_;
 }
 
 bool InspectorPanelState::IsListeningForKey() const noexcept {

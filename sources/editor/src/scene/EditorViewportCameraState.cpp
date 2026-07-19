@@ -43,6 +43,10 @@ constexpr float kMaxSpeed = 200.0F;
     return kb::scene::Vec3{ value.x * scale, value.y * scale, value.z * scale };
 }
 
+[[nodiscard]] kb::scene::Vec3 Lerp(kb::scene::Vec3 a, kb::scene::Vec3 b, float t) noexcept {
+    return kb::scene::Vec3{ a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t };
+}
+
 [[nodiscard]] float DirectionSign(bool positive, bool negative) noexcept {
     return (positive ? 1.0F : 0.0F) - (negative ? 1.0F : 0.0F);
 }
@@ -109,6 +113,7 @@ EditorViewportCameraAxes EditorViewportCameraState::Axes() const noexcept {
 }
 
 void EditorViewportCameraState::BeginNavigation(EditorViewportCameraNavigationMode mode, int x, int y) noexcept {
+    focusAnimating_ = false;
     navigationMode_ = mode;
     lastX_ = x;
     lastY_ = y;
@@ -224,6 +229,60 @@ bool EditorViewportCameraState::ApplyWheel(float wheelSteps, bool adjustSpeed) n
 
     MoveLocal(0.0F, 0.0F, wheelSteps * kWheelDollyScale);
     return true;
+}
+
+void EditorViewportCameraState::FocusOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept {
+    const float safeRadius = std::max(0.25F, radius);
+    const float halfFov = DegreesToRadians(std::clamp(verticalFovDegrees_, 1.0F, 179.0F) * 0.5F);
+    const float tanHalf = std::max(0.05F, std::tan(halfFov));
+    const EditorViewportCameraAxes axes = Axes();
+    const kb::scene::Vec3 targetPivot = target;
+    const float targetDistance = std::max(kMinOrbitDistance, (safeRadius / tanHalf) * 1.3F);
+    const kb::scene::Vec3 targetPosition = Sub(targetPivot, Mul(axes.forward, targetDistance));
+    if (durationSeconds <= 0.0F) {
+        focusAnimating_ = false;
+        orbitPivot_ = targetPivot;
+        orbitDistance_ = targetDistance;
+        position_ = targetPosition;
+        return;
+    }
+    focusStartPosition_ = position_;
+    focusStartPivot_ = orbitPivot_;
+    focusStartDistance_ = orbitDistance_;
+    focusTargetPosition_ = targetPosition;
+    focusTargetPivot_ = targetPivot;
+    focusTargetDistance_ = targetDistance;
+    focusElapsed_ = 0.0F;
+    focusDuration_ = durationSeconds;
+    focusAnimating_ = true;
+}
+
+bool EditorViewportCameraState::TickFocus(float deltaSeconds) noexcept {
+    if (!focusAnimating_) {
+        return false;
+    }
+    // A manual navigation (the user grabbing the camera) takes precedence and
+    // abandons the animation wherever it is.
+    if (IsNavigating()) {
+        focusAnimating_ = false;
+        return false;
+    }
+    focusElapsed_ += std::max(0.0F, deltaSeconds);
+    float t = focusDuration_ > 0.0F ? (focusElapsed_ / focusDuration_) : 1.0F;
+    if (t >= 1.0F) {
+        t = 1.0F;
+        focusAnimating_ = false;
+    }
+    // Smoothstep easing: ease-in/ease-out so the move starts and settles gently.
+    const float eased = t * t * (3.0F - 2.0F * t);
+    position_ = Lerp(focusStartPosition_, focusTargetPosition_, eased);
+    orbitPivot_ = Lerp(focusStartPivot_, focusTargetPivot_, eased);
+    orbitDistance_ = focusStartDistance_ + (focusTargetDistance_ - focusStartDistance_) * eased;
+    return true;
+}
+
+bool EditorViewportCameraState::IsFocusAnimating() const noexcept {
+    return focusAnimating_;
 }
 
 void EditorViewportCameraState::ClampPitch() noexcept {
