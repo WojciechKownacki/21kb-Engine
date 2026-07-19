@@ -21,6 +21,12 @@ struct RuntimeMaterialSourceGraphLoadResult {
     RenderMaterialAssetParseResult parseResult;
     kb::assets::AssetId assetId{};
     std::filesystem::path path;
+    // True when the authoritative external source graph was unresolvable and the
+    // graph embedded in the .kbmat was returned as a fail-safe fallback instead
+    // (Finding 1: avoids turning every mesh magenta when a .kbmatgraph is
+    // renamed/deleted). Never set when the external graph resolves — the external
+    // always wins there, so a *changed* external graph is still authoritative.
+    bool usedInlineFallback = false;
 };
 
 struct RuntimeMaterialFunctionLibraryBuildResult {
