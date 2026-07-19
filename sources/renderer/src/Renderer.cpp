@@ -454,8 +454,13 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastMaterialErrorCount_ = 0U;
     lastMaterialReloadCount_ = 0U;
     lastMaterialResolverDiagnosticCount_ = 0U;
-    lastGraphMaterialCpuFallbackCount_ = 0U;
-    lastGraphMaterialGpuCount_ = 0U;
+    if (sceneRenderer_ != nullptr) {
+        // graphMaterialGpuCount/CpuFallback are now the TRUE per-material draw outcome (a graph
+        // material with no cooked binary renders the builtin flatten and counts as a fallback),
+        // accumulated across this submit's viewports/passes. Clear it before rendering — this
+        // replaces the resolve-time renderMode counting that used to run in the material ensurer.
+        sceneRenderer_->ResetGraphMaterialDrawStats();
+    }
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
         std::ostringstream message;
@@ -713,16 +718,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .materialErrorCount = lastMaterialErrorCount_,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
-        .graphMaterialCpuFallbackCount = lastGraphMaterialCpuFallbackCount_,
-        .graphMaterialGpuCount = lastGraphMaterialGpuCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
     {
         std::ostringstream message;
         message << "SubmitSceneToViewport EnsureSceneResources end materialLoaded=" << lastMaterialLoadedCount_
                 << " materialFallback=" << lastMaterialFallbackCount_
-                << " graphCpuFallback=" << lastGraphMaterialCpuFallbackCount_
-                << " graphGpu=" << lastGraphMaterialGpuCount_
                 << " diagnostics=" << lastSceneDiagnostics_.events.size();
         WriteRendererBreadcrumb("renderer", message.str());
     }
@@ -1433,8 +1434,8 @@ Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexc
         .materialErrorCount = lastMaterialErrorCount_,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
-        .graphMaterialCpuFallbackCount = lastGraphMaterialCpuFallbackCount_,
-        .graphMaterialGpuCount = lastGraphMaterialGpuCount_,
+        .graphMaterialCpuFallbackCount = sceneRenderer_ != nullptr ? sceneRenderer_->GraphMaterialCpuFallbackDrawCount() : 0U,
+        .graphMaterialGpuCount = sceneRenderer_ != nullptr ? sceneRenderer_->GraphMaterialGpuDrawCount() : 0U,
         .scenePassSubmitStatsCapacity = static_cast<std::uint32_t>(lastScenePassSubmitStats_.capacity()),
         .shadowMapSize = defaultShadowMap_.Size(),
         .shadowMapAllocationBytes = defaultShadowMap_.AllocationBytes(),

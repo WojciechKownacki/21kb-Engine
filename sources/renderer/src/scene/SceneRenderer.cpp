@@ -385,4 +385,18 @@ MaterialProgramRegistryStats SceneRenderer::MaterialProgramStats() const noexcep
     return meshSubmitter_ != nullptr ? meshSubmitter_->ProgramRegistryStats() : MaterialProgramRegistryStats{};
 }
 
+void SceneRenderer::ResetGraphMaterialDrawStats() const noexcept {
+    if (meshSubmitter_ != nullptr) {
+        meshSubmitter_->ResetGraphMaterialDrawStats();
+    }
+}
+
+std::uint32_t SceneRenderer::GraphMaterialGpuDrawCount() const noexcept {
+    return meshSubmitter_ != nullptr ? meshSubmitter_->GraphMaterialDrawStats().gpuCount : 0U;
+}
+
+std::uint32_t SceneRenderer::GraphMaterialCpuFallbackDrawCount() const noexcept {
+    return meshSubmitter_ != nullptr ? meshSubmitter_->GraphMaterialDrawStats().cpuFallbackCount : 0U;
+}
+
 } // namespace kb::render

@@ -309,8 +309,6 @@ private:
     std::uint32_t lastMaterialErrorCount_ = 0;
     std::uint32_t lastMaterialReloadCount_ = 0;
     std::uint32_t lastMaterialResolverDiagnosticCount_ = 0;
-    std::uint32_t lastGraphMaterialCpuFallbackCount_ = 0;
-    std::uint32_t lastGraphMaterialGpuCount_ = 0;
     std::uint32_t lastCompletedFrame_ = 0;
     std::vector<TemporalViewportState> temporalViewportStates_;
     DisplayConfig displayConfig_{};

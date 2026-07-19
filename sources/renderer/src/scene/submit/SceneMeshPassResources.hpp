@@ -9,8 +9,10 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::render {
@@ -40,6 +42,19 @@ struct SceneMeshProgramBindStats {
     std::uint32_t programSwitchCount = 0U;
 };
 
+// The ACTUAL, draw-time outcome of graph-material rendering for one scene submit,
+// deduplicated per distinct material resource (not per bind — a material binds
+// across several passes). A material counts as GPU when it bound its cooked GPU
+// program in at least one drawn pass (its authored graph rendered); it counts as
+// a CPU fallback only when it NEVER bound its GPU program and fell back to the
+// builtin path everywhere (e.g. the cooked binary was missing). This is the
+// source of truth for graphMaterialGpuCount / graphMaterialCpuFallbackCount —
+// resolve-time renderMode only expresses intent, not what actually rendered.
+struct SceneMeshGraphMaterialDrawStats {
+    std::uint32_t gpuCount = 0U;
+    std::uint32_t cpuFallbackCount = 0U;
+};
+
 struct SceneMeshPassProgramResolution {
     bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
     MaterialProgramKey key{};
@@ -63,6 +78,10 @@ public:
     [[nodiscard]] SceneMeshPassProgramResolution LastProgramResolution() const noexcept { return lastProgramResolution_; }
     void ResetProgramBindStats() const noexcept;
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
+    // Cleared at the start of every scene submit (see SceneMeshSubmitter::Submit); the per-material
+    // GPU/fallback sets then accumulate across that submit's passes so the counts reflect one frame.
+    void ResetGraphMaterialDrawStats() const noexcept;
+    [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept;
 
 private:
     struct RetiredGraphUniform {
@@ -85,6 +104,11 @@ private:
     mutable std::vector<std::string> usedGraphSamplerUniforms_;
     mutable std::vector<std::string> usedGraphUniforms_;
     mutable SceneMeshProgramBindStats programBindStats_{};
+    // Distinct graph-material resources that bound their GPU program vs fell back this submit.
+    // Keyed by the material resource pointer, which is stable for the duration of a submit's draw
+    // (resources are ensured before drawing and not mutated during it). See GraphMaterialDrawStats().
+    mutable std::unordered_set<const void*> graphGpuMaterials_;
+    mutable std::unordered_set<const void*> graphFellBackMaterials_;
     mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
     mutable SceneMeshPassProgramResolution lastProgramResolution_{};
     // MAT-78/#16: per-graph texture sampler uniforms, created lazily by name and reused across binds so the
