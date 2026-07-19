@@ -1874,6 +1874,87 @@ void RunMaterialGraphCanvasClipSuite(Report& report) {
     ReleaseDC(nullptr, screenDc);
 }
 
+// Finding 5 (inspector <-> graph edit reconciliation): when a .kbmat is open in the Material Editor,
+// a PBR scalar edited through the Inspector and a node added to the graph must BOTH survive a save --
+// neither path may clobber the other's unsaved change. Reproduces the exact audit scenario in both
+// orders through the real EditorSceneContext edit routing.
+void RunMaterialInspectorGraphEditReconcileSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 5: register material loader");
+
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InspectorGraphReconcile.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    fixture.desc.roughnessFactor = 0.20F;
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 5: create .kbmat fixture (roughness=0.20)");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 5: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InspectorGraphReconcile.kbmat");
+    report.Check(metadata != nullptr, "Finding 5: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+
+    // --- Order A: edit the GRAPH first, then a PBR scalar through the Inspector, then save. ---
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 5: open material (order A)");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -140, 60),
+        "Finding 5: add graph node (order A, unsaved working-copy graph edit)");
+    const std::uint32_t nodeA = context.SelectedMaterialGraphNodeId();
+    report.Check(context.SetMaterialRoughnessFactor(id, 0.77F), "Finding 5: edit roughness via Inspector (order A)");
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 5: save (order A)");
+
+    const std::optional<kb::render::RenderMaterialAssetData> reloadedA = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(reloadedA.has_value(), "Finding 5: reload after order A");
+    if (reloadedA.has_value()) {
+        report.Check(std::abs(reloadedA->desc.roughnessFactor - 0.77F) < 0.01F,
+            "Finding 5 (order A): the Inspector roughness edit survived the graph save (not clobbered)");
+        report.Check(nodeA != 0U && kb::render::FindRenderMaterialGraphNode(reloadedA->graph, nodeA) != nullptr,
+            "Finding 5 (order A): the graph node survived alongside the Inspector edit");
+    }
+
+    // --- Order B: edit a PBR scalar through the Inspector first, then the GRAPH, then save. ---
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 5: reopen material (order B)");
+    report.Check(context.SetMaterialRoughnessFactor(id, 0.33F), "Finding 5: edit roughness via Inspector (order B)");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector, 40, 60),
+        "Finding 5: add graph node (order B)");
+    const std::uint32_t nodeB = context.SelectedMaterialGraphNodeId();
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 5: save (order B)");
+
+    const std::optional<kb::render::RenderMaterialAssetData> reloadedB = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(reloadedB.has_value(), "Finding 5: reload after order B");
+    if (reloadedB.has_value()) {
+        report.Check(std::abs(reloadedB->desc.roughnessFactor - 0.33F) < 0.01F,
+            "Finding 5 (order B): the Inspector roughness edit survived a subsequent graph edit + save");
+        report.Check(nodeB != 0U && kb::render::FindRenderMaterialGraphNode(reloadedB->graph, nodeB) != nullptr,
+            "Finding 5 (order B): the newly added graph node survived alongside the earlier Inspector edit");
+    }
+
+    // --- Order C: the Inspector DRAG-SCRUB path (Begin/Apply/Commit) alongside an unsaved graph edit. ---
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 5: reopen material (order C, drag-scrub)");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -40, 140),
+        "Finding 5: add graph node (order C)");
+    const std::uint32_t nodeC = context.SelectedMaterialGraphNodeId();
+    report.Check(context.BeginMaterialAssetFloatEdit(id, InspectorPropertyId::MaterialRoughnessFactor),
+        "Finding 5: begin roughness drag-scrub (order C)");
+    report.Check(context.ApplyActiveMaterialAssetFloatEdit(0.55F), "Finding 5: apply roughness drag-scrub (order C)");
+    report.Check(context.CommitActiveMaterialAssetEdit(), "Finding 5: commit roughness drag-scrub (order C)");
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 5: save (order C)");
+    const std::optional<kb::render::RenderMaterialAssetData> reloadedC = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(reloadedC.has_value(), "Finding 5: reload after order C");
+    if (reloadedC.has_value()) {
+        report.Check(std::abs(reloadedC->desc.roughnessFactor - 0.55F) < 0.01F,
+            "Finding 5 (order C): the drag-scrubbed roughness survived alongside the unsaved graph node");
+        report.Check(nodeC != 0U && kb::render::FindRenderMaterialGraphNode(reloadedC->graph, nodeC) != nullptr,
+            "Finding 5 (order C): the graph node survived the drag-scrub commit + save");
+    }
+}
+
 void RunMaterialEditorGlobalSaveSuite(Report& report) {
     std::error_code error;
     const auto readFileBytes = [](const std::filesystem::path& path) {
@@ -2896,6 +2977,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_visual_redesign", &RunMaterialGraphVisualRedesignSuite);
     RunSuiteInScratch(report, "material_graph_canvas_clip", &RunMaterialGraphCanvasClipSuite);
     RunSuiteInScratch(report, "material_graph_interaction_lifecycle", &RunMaterialGraphInteractionLifecycleSuite);
+    RunSuiteInScratch(report, "material_inspector_graph_edit_reconcile", &RunMaterialInspectorGraphEditReconcileSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
