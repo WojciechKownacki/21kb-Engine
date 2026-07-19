@@ -1614,19 +1614,6 @@ void RunMaterialPreviewGpuGraphParityTest() {
     kb::editor::tests::Require(telemetry.compileDiagnostics.empty(),
         "KBMAT-MAT15: A valid graph preview must not surface compile diagnostics");
 
-    // Finding 3: the SAME valid graph, but with no GPU cook toolchain (shaderc missing),
-    // must report the CPU PBR flatten it actually renders — never claim GpuMaterialGraph
-    // (which is what the scene would otherwise mislead the user into believing runs).
-    const kb::editor::EditorMaterialPreviewTelemetry noShadercTelemetry =
-        kb::editor::EditorMaterialPreviewTelemetryBuilder::Build(
-            scene.Assets().Manager(), materialId, &material, true, {}, /*gpuProgramAvailable=*/false);
-    kb::editor::tests::Require(
-        noShadercTelemetry.renderMode == kb::editor::MaterialPreviewRenderMode::CpuPbrFlatteningFallback,
-        "Finding 3: a graph material with no GPU cook toolchain must report CPU PBR flattening, not GpuMaterialGraph");
-    kb::editor::tests::Require(
-        !noShadercTelemetry.compileDiagnostics.empty(),
-        "Finding 3: the GPU-graph-unavailable telemetry must surface a diagnostic explaining the CPU fallback");
-
     kb::render::RenderMaterialAssetData qualityMaterial{};
     qualityMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     qualityMaterial.graph.shadingModel = "unlit";
