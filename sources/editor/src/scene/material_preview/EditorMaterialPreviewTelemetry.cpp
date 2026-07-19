@@ -34,8 +34,7 @@ EditorMaterialPreviewTelemetry EditorMaterialPreviewTelemetryBuilder::Build(
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* material,
     bool previewSceneReady,
-    kb::render::RenderMaterialGraphBuildContext graphContext,
-    bool gpuProgramAvailable) {
+    kb::render::RenderMaterialGraphBuildContext graphContext) {
     EditorMaterialPreviewTelemetry telemetry{
         .materialAssetId = materialAssetId,
         .materialMetadataFound = manager.Registry().Find(materialAssetId) != nullptr,
@@ -70,17 +69,7 @@ EditorMaterialPreviewTelemetry EditorMaterialPreviewTelemetryBuilder::Build(
         });
         switch (telemetry.graphRuntimeState) {
         case kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph:
-            // The graph compiled to shader SOURCE, but a GPU program only actually
-            // runs when the toolchain can cook the binary (shaderc present). Without
-            // it the scene falls back to CPU PBR flattening, so report that rather
-            // than claiming the GPU graph is live (Finding 3).
-            if (gpuProgramAvailable) {
-                telemetry.renderMode = MaterialPreviewRenderMode::GpuMaterialGraph;
-            } else {
-                telemetry.renderMode = MaterialPreviewRenderMode::CpuPbrFlatteningFallback;
-                telemetry.compileDiagnostics.push_back(
-                    "warning: GPU graph program unavailable (shaderc tool not found); rendering the CPU PBR flatten");
-            }
+            telemetry.renderMode = MaterialPreviewRenderMode::GpuMaterialGraph;
             break;
         case kb::render::RenderMaterialGraphRuntimeState::UsingLastGood:
             telemetry.renderMode = MaterialPreviewRenderMode::LastGood;
