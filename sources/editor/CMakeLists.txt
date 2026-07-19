@@ -368,6 +368,8 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorColliderTextBuilder.hpp
     src/private/inspection/InspectorComponentCatalog.hpp
     src/private/inspection/InspectorComponentLabelFormatter.hpp
+    src/private/inspection/InspectorPhysicsModel.hpp
+    src/private/inspection/InspectorAddComponentBrowserModel.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
     src/private/inspection/EditorValueFormatter.hpp
@@ -706,6 +708,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
+    src/inspection/InspectorPhysicsModel.cpp
+    src/inspection/InspectorAddComponentBrowserModel.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
@@ -1059,6 +1063,8 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
+        src/inspection/InspectorPhysicsModel.cpp
+        src/inspection/InspectorAddComponentBrowserModel.cpp
         src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp

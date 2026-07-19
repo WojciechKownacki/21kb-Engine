@@ -54,6 +54,19 @@ public:
     [[nodiscard]] bool ApplyKeyboardFlight(const EditorViewportCameraFlightInput& input, float deltaSeconds) noexcept;
     [[nodiscard]] bool ApplyWheel(float wheelSteps, bool adjustSpeed) noexcept;
 
+    // Frames a world-space sphere (center, radius) in view while keeping the
+    // current yaw/pitch: recenters the orbit pivot on the target and pulls the
+    // camera back far enough for the sphere to fit the vertical FOV. With
+    // durationSeconds <= 0 it snaps immediately; with a positive duration it
+    // starts an eased animation from the current pose to the framed pose,
+    // advanced by TickFocus. Drives the viewport "frame selected" (F) shortcut.
+    void FocusOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept;
+    // Advances an in-progress focus animation by deltaSeconds; returns true while
+    // the animation is still running (so the caller keeps presenting), false when
+    // nothing is animating. A manual camera navigation cancels the animation.
+    [[nodiscard]] bool TickFocus(float deltaSeconds) noexcept;
+    [[nodiscard]] bool IsFocusAnimating() const noexcept;
+
 private:
     void ClampPitch() noexcept;
     void MoveLocal(float right, float up, float forward) noexcept;
@@ -75,6 +88,16 @@ private:
     int pendingX_ = 0;
     int pendingY_ = 0;
     bool hasPendingPointer_ = false;
+
+    bool focusAnimating_ = false;
+    float focusElapsed_ = 0.0F;
+    float focusDuration_ = 0.0F;
+    kb::scene::Vec3 focusStartPosition_{};
+    kb::scene::Vec3 focusStartPivot_{};
+    float focusStartDistance_ = 0.0F;
+    kb::scene::Vec3 focusTargetPosition_{};
+    kb::scene::Vec3 focusTargetPivot_{};
+    float focusTargetDistance_ = 0.0F;
 };
 
 } // namespace kb::editor

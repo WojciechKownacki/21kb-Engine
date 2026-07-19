@@ -86,6 +86,20 @@ public:
     [[nodiscard]] EditorViewportCameraState& Camera(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportCameraState& Camera(std::uint64_t viewportKey) const noexcept;
 
+    // Frames a world-space sphere (target, radius) in EVERY live scene-viewport
+    // camera. Scene panels render through per-panel cameras keyed by panel id
+    // (Camera(panelId)); the parameterless Camera() is key 0 and is not what a
+    // docked scene panel renders, so the viewport "frame selected" (F) shortcut
+    // must reach the actual per-panel cameras, not just the default. With
+    // durationSeconds > 0 the reframing is animated (advance via
+    // TickFocusAnimations). Returns true once it has (re)framed at least one
+    // camera.
+    [[nodiscard]] bool FocusAllCamerasOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept;
+    // Advances any in-progress camera focus animations by deltaSeconds; returns
+    // true while at least one camera is still animating (so the frame loop keeps
+    // presenting instead of parking).
+    [[nodiscard]] bool TickFocusAnimations(float deltaSeconds) noexcept;
+
     void BeginCameraNavigation(std::uint64_t viewportKey, EditorViewportCameraNavigationMode mode, int x, int y) noexcept;
     [[nodiscard]] bool HasActiveCameraNavigation() const noexcept;
     [[nodiscard]] std::uint64_t ActiveCameraKey() const noexcept;

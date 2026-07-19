@@ -29,6 +29,13 @@ public:
 
     static void Hide(HWND window) noexcept;
     [[nodiscard]] static bool IsModified(HWND window);
+
+    // Monotonic counter bumped on every successful Ctrl+S disk write, across all
+    // editor windows. The host polls it each frame to detect a save and reload
+    // the affected script asset so the Inspector's exposed-variable schema (parsed
+    // from `Inspector.name = default` declarations) refreshes without needing a
+    // separate editor/scene save.
+    [[nodiscard]] static std::uint64_t SaveSerial() noexcept;
 };
 
 #endif

@@ -29,6 +29,12 @@ namespace {
     if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) || sceneContext.HasActiveViewportCameraNavigation() || sceneContext.Gizmo().IsDragging()) {
         return false;
     }
+    // A single letter W/E/R must not retarget the gizmo while the user is
+    // typing into any inline text field (e.g. renaming an entity or folder
+    // whose name contains 'w', 'e' or 'r') — the letter belongs to the text.
+    if (sceneContext.IsAnyInlineTextEditActive()) {
+        return false;
+    }
 
     EditorTransformToolMode mode = sceneContext.Gizmo().toolMode;
     switch (key) {
@@ -54,6 +60,19 @@ namespace {
     gizmo.draggedAxis = -1;
     sceneContext.MarkSceneRenderDirty();
     return true;
+}
+
+// Viewport "frame selected" (F): recenters the scene camera on the current
+// entity selection. Suppressed while typing (so 'f' in a name is text) and
+// while the material graph handled it or the camera is being flown.
+[[nodiscard]] bool HandleSceneFrameSelectionShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
+    if (key != 'F' || ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) || ModifierDown(VK_SHIFT)) {
+        return false;
+    }
+    if (sceneContext.HasActiveViewportCameraNavigation() || sceneContext.IsAnyInlineTextEditActive()) {
+        return false;
+    }
+    return sceneContext.FrameSelectedEntitiesInViewport();
 }
 
 [[nodiscard]] bool HandleMaterialGraphShortcut(HWND messageWindow, EditorWindowMessageContext& context, WPARAM key) {
@@ -519,6 +538,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (HandleTransformToolShortcut(context_.sceneContext, wparam)) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (HandleSceneFrameSelectionShortcut(context_.sceneContext, wparam)) {
             context_.sceneViewport.RequestPresent();
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) {

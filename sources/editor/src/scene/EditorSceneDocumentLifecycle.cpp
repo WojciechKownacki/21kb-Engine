@@ -9,6 +9,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -108,6 +109,14 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     }
     kb::audio::AudioPlayback::StopAll(*scene_);
 
+    // Pick up on-disk asset edits made since the last play — most importantly a
+    // script saved in the Script Editor (which only writes the file, it does not
+    // touch the asset system). Discover re-hashes files, and on a content change
+    // evicts the cached asset and updates its contentHash, so the runtime's
+    // IsScriptCurrent check reloads the new source instead of re-running the
+    // stale compiled script.
+    static_cast<void>(scene_->Assets().Discover());
+
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
@@ -124,6 +133,14 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
 bool EditorSceneContext::RestorePlayModeSceneSession() {
     if (!playModeSceneSession_.Active()) {
         return true;
+    }
+    // Fire each behaviour's Destroyed (OnDestroy-equivalent) hook while the play
+    // scene is still live, BEFORE reverting to the snapshot — matching Unity,
+    // where stopping play tears behaviours down. Surface any error a Destroyed
+    // handler raises to the Console.
+    if (scriptModule_ != nullptr && scriptModule_->Host() != nullptr) {
+        static_cast<void>(scriptModule_->Host()->DispatchShutdownLifecycle(0.0F));
+        SurfaceScriptDiagnostics();
     }
     kb::audio::AudioPlayback::StopAll(*scene_);
     kb::scene::SceneInputActivation::Clear(*scene_);

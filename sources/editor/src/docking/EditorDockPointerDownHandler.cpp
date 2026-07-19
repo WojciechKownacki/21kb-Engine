@@ -56,7 +56,12 @@ bool EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int 
     if (activePanelChanged && leaf != nullptr) {
         InvalidateRect(window, nullptr, FALSE);
     }
-    return activePanelChanged;
+    // A dock element (tab or splitter) was hit — the DockHitKind::None case
+    // already returned false above. Report the click as consumed by the dock
+    // system (not just when the active panel changed) so the caller treats tab
+    // switches, re-clicks of the active tab and splitter drags as layout actions,
+    // never as empty-space clicks that would clear the scene selection.
+    return true;
 }
 
 void EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {

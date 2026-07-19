@@ -50,8 +50,17 @@ static constexpr std::array<HeroIconPath, 1> kMagnifyingGlass{
 static constexpr std::array<HeroIconPath, 1> kChevronRight{
     HeroIconPath{ "m8.25 4.5 7.5 7.5-7.5 7.5", false },
 };
+// Horizontal mirror of kChevronRight — the "back" arrow, same painted style as
+// the category chevron.
+static constexpr std::array<HeroIconPath, 1> kChevronLeft{
+    HeroIconPath{ "m15.75 4.5-7.5 7.5 7.5 7.5", false },
+};
 static constexpr std::array<HeroIconPath, 1> kChevronDown{
     HeroIconPath{ "m19.5 8.25-7.5 7.5-7.5-7.5", false },
+};
+// Heroicons outline "speaker-wave" (MIT). Arc flags spaced for the SVG parser.
+static constexpr std::array<HeroIconPath, 1> kSpeakerWave{
+    HeroIconPath{ "M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z", false },
 };
 static constexpr std::array<HeroIconPath, 1> kPlus{
     HeroIconPath{ "M12 4.5v15m7.5-7.5h-15", false },
@@ -146,8 +155,16 @@ HeroIconGlyph HeroIconAssets::ChevronRight() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kChevronRight } };
 }
 
+HeroIconGlyph HeroIconAssets::ChevronLeft() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kChevronLeft } };
+}
+
 HeroIconGlyph HeroIconAssets::ChevronDown() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kChevronDown } };
+}
+
+HeroIconGlyph HeroIconAssets::SpeakerWave() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSpeakerWave } };
 }
 
 HeroIconGlyph HeroIconAssets::Plus() noexcept {
