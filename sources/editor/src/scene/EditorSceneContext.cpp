@@ -80,6 +80,7 @@
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
@@ -2931,6 +2932,55 @@ bool EditorSceneContext::CycleMaterialPreviewPrimitive() {
         return SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Sphere());
     }
     return false;
+}
+
+const kb::scene::Scene& EditorSceneContext::MaterialThumbnailScene(kb::assets::AssetId id) {
+    if (materialThumbnailScene_ == nullptr) {
+        materialThumbnailScene_ = std::make_unique<EditorMaterialPreviewScene>();
+        static_cast<void>(materialThumbnailScene_->SetSceneSettings(materialPreviewScene_->SceneSettings()));
+        static_cast<void>(materialThumbnailScene_->SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Sphere()));
+    }
+    // Thumbnails show the material as saved on disk, so no working copy is passed: a tile must not change
+    // while an unrelated edit is open in the Material Editor.
+    const std::uint64_t revisionBefore = materialThumbnailScene_->Revision();
+    const kb::scene::Scene& thumbnailScene = materialThumbnailScene_->SceneFor(*scene_, id, nullptr);
+    // A graph-backed material needs its graph program, or the thumbnail would render the fallback instead
+    // of the material. Only on a rebuild, so this costs one cook per thumbnail at most.
+    if (materialGraphCookService_ != nullptr && materialThumbnailScene_->Revision() != revisionBefore) {
+        if (const std::optional<kb::render::RenderMaterialAssetData> saved = ReadMaterialDocumentAsset(id);
+            saved.has_value() && !saved->graph.nodes.empty()) {
+            static_cast<void>(materialGraphCookService_->RequestCook(
+                id,
+                *saved,
+                MaterialPreviewGraphBuildContext(
+                    id,
+                    materialThumbnailScene_->SceneSettings(),
+                    kb::render::RenderMaterialGraphVariantUsage::Preview)));
+        }
+    }
+    return thumbnailScene;
+}
+
+std::uint64_t EditorSceneContext::MaterialThumbnailSceneRevision() const noexcept {
+    return materialThumbnailScene_ == nullptr ? 0U : materialThumbnailScene_->Revision();
+}
+
+std::uint64_t EditorSceneContext::RequestMaterialThumbnailCapture(const std::filesystem::path& path) {
+    kb::scene::Scene* thumbnailScene = materialThumbnailScene_ == nullptr ? nullptr : materialThumbnailScene_->MutableScene();
+    if (thumbnailScene == nullptr || path.empty()) {
+        return 0U;
+    }
+    return kb::scene::SceneRenderFeedback::RequestScreenCapture(*thumbnailScene, path.generic_string());
+}
+
+kb::scene::SceneScreenCaptureStatus EditorSceneContext::MaterialThumbnailCaptureStatus(std::uint64_t captureId) const noexcept {
+    const kb::scene::Scene* thumbnailScene = materialThumbnailScene_ == nullptr
+        ? nullptr
+        : const_cast<EditorMaterialPreviewScene*>(materialThumbnailScene_.get())->MutableScene();
+    if (thumbnailScene == nullptr || captureId == 0U) {
+        return kb::scene::SceneScreenCaptureStatus::Unknown;
+    }
+    return kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*thumbnailScene, captureId);
 }
 
 const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSceneSettings() const noexcept {

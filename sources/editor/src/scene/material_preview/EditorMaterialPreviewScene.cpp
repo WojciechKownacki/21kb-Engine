@@ -297,6 +297,10 @@ const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(
     return *scene_;
 }
 
+kb::scene::Scene* EditorMaterialPreviewScene::MutableScene() noexcept {
+    return scene_.get();
+}
+
 const EditorMaterialPreviewPrimitivePolicy& EditorMaterialPreviewScene::PrimitivePolicy() const noexcept {
     return primitivePolicy_;
 }

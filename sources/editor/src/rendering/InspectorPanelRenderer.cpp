@@ -1209,6 +1209,7 @@ void DrawTelemetryRow(
     DrawTelemetryRow(dc, content, y, theme, inspector, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
     DrawTelemetryRow(dc, content, y, theme, inspector, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
     DrawTelemetryRow(dc, content, y, theme, inspector, "Missing Textures", FormatUInt64(telemetry.missingTextureCount));
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Virtual Path", NormalizePath(metadata.virtualPath));
     const std::size_t shown = std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows);
     for (std::size_t index = 0; index < shown; ++index) {
         DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? "Diagnostic" : "", telemetry.missingTextures[index]);
@@ -1299,53 +1300,13 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
 
 void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
-    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
-
     const std::string headerLabel = std::string{ MaterialDocumentLabel(metadata) } + (sceneContext.HasDirtyMaterialAssetEdit() ? " *" : "");
     DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, headerLabel);
-    int y = content.top + kHeaderHeight + kPanelPadTop;
-    y = DrawMaterialPreview(dc, content, y, theme, inspector, sceneContext, metadata);
-    if (!material.has_value()) {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
-        section.Field("Status", "Material source could not be read.");
-        section.Field("Id", FormatUInt64(metadata.id.value));
-        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
-        return;
-    }
-    {
-        const auto property = [](InspectorPropertyId) noexcept {
-            return InspectorPropertyId::None;
-        };
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Material, HeroIconKind::AdjustmentsHorizontal, "Material");
-        section.Float("Base R", FormatFloat(material->desc.baseColor[0]), property(InspectorPropertyId::MaterialBaseColorR));
-        section.Float("Base G", FormatFloat(material->desc.baseColor[1]), property(InspectorPropertyId::MaterialBaseColorG));
-        section.Float("Base B", FormatFloat(material->desc.baseColor[2]), property(InspectorPropertyId::MaterialBaseColorB));
-        section.Float("Base A", FormatFloat(material->desc.baseColor[3]), property(InspectorPropertyId::MaterialBaseColorA));
-        section.Float("Metallic", FormatFloat(material->desc.metallicFactor), property(InspectorPropertyId::MaterialMetallicFactor));
-        section.Float("Roughness", FormatFloat(material->desc.roughnessFactor), property(InspectorPropertyId::MaterialRoughnessFactor));
-        section.Float("Normal Scale", FormatFloat(material->desc.normalScale), property(InspectorPropertyId::MaterialNormalScale));
-        section.Float("Occlusion", FormatFloat(material->desc.occlusionStrength), property(InspectorPropertyId::MaterialOcclusionStrength));
-        section.Float("Emissive R", FormatFloat(material->desc.emissiveColor[0]), property(InspectorPropertyId::MaterialEmissiveColorR));
-        section.Float("Emissive G", FormatFloat(material->desc.emissiveColor[1]), property(InspectorPropertyId::MaterialEmissiveColorG));
-        section.Float("Emissive B", FormatFloat(material->desc.emissiveColor[2]), property(InspectorPropertyId::MaterialEmissiveColorB));
-        section.Float("Emissive Strength", FormatFloat(material->desc.emissiveStrength), property(InspectorPropertyId::MaterialEmissiveStrength));
-        section.Float("Alpha Cutoff", FormatFloat(material->desc.alphaCutoff), property(InspectorPropertyId::MaterialAlphaCutoff));
-        section.Field("Alpha Mode", AlphaModeName(material->desc.alphaMode), property(InspectorPropertyId::MaterialAlphaMode));
-        section.Bool("Double Sided", material->desc.doubleSided, property(InspectorPropertyId::MaterialDoubleSided));
-        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-        section.Field("Albedo", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.albedoTextureAssetId), property(InspectorPropertyId::MaterialAlbedoTexture));
-        section.Field("Normal", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.normalTextureAssetId), property(InspectorPropertyId::MaterialNormalTexture));
-        section.Field("Metallic-Roughness", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.metallicRoughnessTextureAssetId), property(InspectorPropertyId::MaterialMetallicRoughnessTexture));
-        section.Field("Occlusion", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.occlusionTextureAssetId), property(InspectorPropertyId::MaterialOcclusionTexture));
-        section.Field("Emissive", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.emissiveTextureAssetId), property(InspectorPropertyId::MaterialEmissiveTexture));
-        y = section.Bottom() + kSectionGap;
-    }
-    {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
-        section.Field("Id", FormatUInt64(metadata.id.value));
-        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
-    }
+    // A material is authored in the Material Editor, so its Inspector is the preview and nothing else:
+    // the old Material and Asset sections only restated what the graph already owns.
+    static_cast<void>(DrawMaterialPreview(dc, content, content.top + kHeaderHeight + kPanelPadTop, theme, inspector, sceneContext, metadata));
 }
+
 
 void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -1785,9 +1746,6 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     return static_cast<int>((context.has_value() ? context->mappings.size() : 0U) * 5U + 1U);
 }
 
-[[nodiscard]] int MaterialRows() noexcept {
-    return 20;
-}
 
 [[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     int rows = metadata.importCategory.empty() ? 0 : 1;
@@ -1818,9 +1776,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         return height;
     }
     if (IsMaterialDocument(metadata)) {
-        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size()) + kSectionGap;
-        height += SectionHeight(inspector, InspectorSectionId::Material, MaterialRows()) + kSectionGap;
-        height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
+        // Preview only: no Material or Asset sections to reserve room for, so the panel stops pretending
+        // it has content to scroll to.
+        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size());
         return height;
     }
 
@@ -2185,58 +2143,6 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
-[[nodiscard]] InspectorPanelRenderer::Hit HitTestMaterialSection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Material, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    if (state.IsCollapsed(InspectorSectionId::Material)) {
-        return {};
-    }
-    const std::array<InspectorPropertyId, 13> floatRows{ {
-        InspectorPropertyId::MaterialBaseColorR,
-        InspectorPropertyId::MaterialBaseColorG,
-        InspectorPropertyId::MaterialBaseColorB,
-        InspectorPropertyId::MaterialBaseColorA,
-        InspectorPropertyId::MaterialMetallicFactor,
-        InspectorPropertyId::MaterialRoughnessFactor,
-        InspectorPropertyId::MaterialNormalScale,
-        InspectorPropertyId::MaterialOcclusionStrength,
-        InspectorPropertyId::MaterialEmissiveColorR,
-        InspectorPropertyId::MaterialEmissiveColorG,
-        InspectorPropertyId::MaterialEmissiveColorB,
-        InspectorPropertyId::MaterialEmissiveStrength,
-        InspectorPropertyId::MaterialAlphaCutoff,
-    } };
-    for (const InspectorPropertyId property : floatRows) {
-        if (InspectorPanelRenderer::Hit hit = HitFloatRow(RowRect(content, y), InspectorSectionId::Material, property, x, yPoint); hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
-    }
-    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Material, InspectorPropertyId::MaterialAlphaMode, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    AdvanceRow(y);
-    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Material, InspectorPropertyId::MaterialDoubleSided, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    AdvanceRow(y);
-    const std::array<InspectorPropertyId, 5> textureRows{ {
-        InspectorPropertyId::MaterialAlbedoTexture,
-        InspectorPropertyId::MaterialNormalTexture,
-        InspectorPropertyId::MaterialMetallicRoughnessTexture,
-        InspectorPropertyId::MaterialOcclusionTexture,
-        InspectorPropertyId::MaterialEmissiveTexture,
-    } };
-    for (const InspectorPropertyId property : textureRows) {
-        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Material, property, x, yPoint); hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
-    }
-    return {};
-}
-
 [[nodiscard]] InspectorPanelRenderer::Hit HitLightFloatRow(
     const RECT& content,
     int& y,
@@ -2450,11 +2356,27 @@ std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& cont
     if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
         return std::nullopt;
     }
-    const RECT frame = MaterialPreviewFrameRect(content);
-    if (frame.right - frame.left <= 8 || frame.bottom - frame.top <= 8) {
+    // The surface has to travel with the panel exactly like the painted rows do: same scrolled content
+    // rect, same viewport clip. Reading the unscrolled panel rect left it pinned in place while the rest
+    // of the Inspector scrolled underneath it.
+    const int maxScroll = MaxScrollOffset(content, sceneContext);
+    const bool scrollable = maxScroll > 0;
+    const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
+    RECT scrolled = ContentViewportRect(content, scrollable);
+    OffsetRect(&scrolled, 0, -scroll);
+    const RECT viewport = ContentViewportRect(content, scrollable);
+
+    const RECT frame = MaterialPreviewFrameRect(scrolled);
+    RECT visible{};
+    if (IntersectRect(&visible, &frame, &viewport) == 0) {
+        // Scrolled out of sight: no surface at all, rather than one hanging over the rows below.
         return std::nullopt;
     }
-    return RECT{ frame.left + 1, frame.top + 1, frame.right - 1, frame.bottom - 1 };
+    const RECT inset{ visible.left + 1, visible.top + 1, visible.right - 1, visible.bottom - 1 };
+    if (inset.right - inset.left <= 8 || inset.bottom - inset.top <= 8) {
+        return std::nullopt;
+    }
+    return inset;
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
@@ -2581,14 +2503,6 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (metadata != nullptr && IsMaterialDocument(*metadata)) {
             if (InspectorPanelRenderer::Hit hit = HitTestMaterialPreviewSection(viewport, state, sceneContext, *metadata, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            y += kSectionGap;
-            if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Material, x, scrolledY); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            y += kSectionGap;
-            if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Asset, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             return {};

@@ -1,6 +1,7 @@
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
 
@@ -128,8 +129,9 @@ ProjectFilesMaterialPreviewImage ProjectFilesMaterialPreviewThumbnailModel::Rend
     const float emissiveR = ColorChannel(style.emissiveColor, 0) * style.emissiveStrength;
     const float emissiveG = ColorChannel(style.emissiveColor, 1) * style.emissiveStrength;
     const float emissiveB = ColorChannel(style.emissiveColor, 2) * style.emissiveStrength;
-    const float primitiveRadius = style.usesPreviewScenePrimitive ? style.previewBoundsRadius : 1.0F;
-    const float radius = (static_cast<float>(std::max(8, std::min(width - 14, height - 14))) * 0.5F) / std::max(0.5F, primitiveRadius);
+    // Same fraction the rendered thumbnail normalises its silhouette to, so swapping one for the other
+    // does not change the size of the ball in the tile.
+    const float radius = static_cast<float>(std::max(8, std::min(width, height))) * kMaterialPreviewBallFraction * 0.5F;
     const float centerX = static_cast<float>(width) * 0.5F;
     const float centerY = static_cast<float>(height) * 0.5F;
     const float shadowCenterY = centerY + radius * 0.72F;

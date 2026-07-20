@@ -3,6 +3,7 @@
 #include "engine/assets/AssetImportTypes.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -318,6 +319,12 @@ public:
     [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& MaterialPreviewPrimitivePolicy() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy);
     [[nodiscard]] bool CycleMaterialPreviewPrimitive();
+    // Thumbnail pipeline: ask the material preview scene to capture its next rendered frame to `path`,
+    // then poll. Returns 0 when the scene is unavailable or a capture is already in flight.
+    [[nodiscard]] const kb::scene::Scene& MaterialThumbnailScene(kb::assets::AssetId id);
+    [[nodiscard]] std::uint64_t RequestMaterialThumbnailCapture(const std::filesystem::path& path);
+    [[nodiscard]] kb::scene::SceneScreenCaptureStatus MaterialThumbnailCaptureStatus(std::uint64_t captureId) const noexcept;
+    [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
     [[nodiscard]] bool CycleMaterialPreviewSceneLightingPreset();
@@ -772,6 +779,10 @@ private:
     EditorScriptEditorState scriptEditor_;
     bool physicsGizmosVisible_ = true;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
+    // Thumbnails own a separate preview scene: the shared one is submitted by the Inspector and Material
+    // Editor surfaces too, so a capture attached to it could grab their frame instead - and rebuilding it
+    // per thumbnail would swap the material out from under those panels.
+    std::unique_ptr<EditorMaterialPreviewScene> materialThumbnailScene_;
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;

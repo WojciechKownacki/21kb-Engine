@@ -17,10 +17,13 @@ public:
     EditorMaterialColorPickerDialog() = delete;
 
 #if defined(_WIN32)
+    // `anchorScreenPoint` places the picker at the swatch the user clicked instead of the middle of the
+    // screen; pass nullptr to keep it centred on the owner.
     [[nodiscard]] static std::optional<std::array<float, 4U>> Show(
         HWND owner,
         std::string_view title,
-        const std::array<float, 4U>& currentColor);
+        const std::array<float, 4U>& currentColor,
+        const POINT* anchorScreenPoint = nullptr);
 #endif
 };
 

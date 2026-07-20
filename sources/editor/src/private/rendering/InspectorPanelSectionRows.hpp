@@ -12,6 +12,8 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <string_view>
 
