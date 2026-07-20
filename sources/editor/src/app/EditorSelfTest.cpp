@@ -1,8 +1,15 @@
 #include "app/EditorSelfTest.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
+#include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "platform/win32/EditorModalWindowScope.hpp"
+#include "windowing/FloatingWindowFactory.hpp"
+#include "windowing/FloatingWindowHitTestResolver.hpp"
+#include "assets/EditorAssetBrowserHitTester.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -99,6 +106,30 @@ private:
 // docked panel). Clicks are computed from the real layout (below), not hardcoded,
 // so the test follows any future geometry change automatically.
 constexpr RECT kContent{ 0, 0, 900, 560 };
+
+[[nodiscard]] LARGE_INTEGER QueryCounter() noexcept {
+    LARGE_INTEGER value{};
+    QueryPerformanceCounter(&value);
+    return value;
+}
+
+[[nodiscard]] double ElapsedMilliseconds(const LARGE_INTEGER& start) noexcept {
+    LARGE_INTEGER frequency{};
+    QueryPerformanceFrequency(&frequency);
+    const LARGE_INTEGER now = QueryCounter();
+    if (frequency.QuadPart == 0) {
+        return 0.0;
+    }
+    return (static_cast<double>(now.QuadPart - start.QuadPart) * 1000.0) / static_cast<double>(frequency.QuadPart);
+}
+
+[[nodiscard]] std::string FormatMilliseconds(double value) {
+    std::ostringstream text;
+    text.setf(std::ios::fixed);
+    text.precision(3);
+    text << value;
+    return text.str();
+}
 
 [[nodiscard]] POINT Center(const RECT& rect) noexcept {
     return POINT{ (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2 };
@@ -604,6 +635,50 @@ void RunSelectionTransformSuite(Report& report) {
     report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Redo reapplies second entity transform");
 }
 
+// The Inspector's material ball must be the live 3D preview surface, not a painted stand-in: the rect
+// resolver used to return nullopt, which silently disabled the surface for the whole panel.
+void RunInspectorMaterialPreviewSurfaceSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 17: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InspectorPreviewSurface.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 17: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 17: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InspectorPreviewSurface.kbmat");
+    report.Check(metadata != nullptr, "Finding 17: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+
+    report.Check(!InspectorPanelRenderer::MaterialPreviewRect(kContent, context).has_value(),
+        "Finding 17: no material selected means no preview surface");
+
+    report.Check(context.AssetBrowser().SelectAsset(metadata->id, context.Scene().Assets().Manager()),
+        "Finding 17: select the material for the Inspector");
+    const std::optional<RECT> previewRect = InspectorPanelRenderer::MaterialPreviewRect(kContent, context);
+    report.Check(previewRect.has_value(), "Finding 17: a selected material gets a live 3D preview surface rect");
+    if (!previewRect.has_value()) {
+        return;
+    }
+    report.Check(previewRect->right - previewRect->left > 40 && previewRect->bottom - previewRect->top > 40,
+        "Finding 17: the preview surface is big enough to render into");
+    report.Check(previewRect->left >= kContent.left && previewRect->right <= kContent.right &&
+            previewRect->top >= kContent.top && previewRect->bottom <= kContent.bottom,
+        "Finding 17: the preview surface stays inside the Inspector panel");
+
+    // The surface has to sit exactly where the panel paints its preview frame, or the 3D render lands
+    // somewhere else in the panel.
+    const InspectorPanelRenderer::Hit previewHeader = InspectorPanelRenderer::HitTest(
+        kContent, context, (previewRect->left + previewRect->right) / 2, previewRect->top - 12);
+    report.Check(previewHeader.section == InspectorSectionId::MaterialPreview,
+        "Finding 17: the surface sits directly under the Preview section header");
+}
+
 void RunInspectorMaterialDropTargetSuite(Report& report) {
     EditorSceneContext context;
     kb::scene::SceneEntity mesh = context.CreateHierarchyObject();
@@ -878,8 +953,20 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
             baseColor->pin == "baseColor" &&
             baseColor->direction == MaterialEditorGraphPinDirection::Input,
         "Material panel graph input hit preserves node, pin, and direction");
+    // A pin owns its own half of the node only: the far half belongs to the node, so dragging there moves
+    // the node instead of pulling a wire out of it (input-only nodes used to grab every click on the body).
     report.Check(
         MaterialEditorPanelRenderer::GraphPinAt(
+            content,
+            graph,
+            context,
+            materialId,
+            static_cast<int>(std::lround(baseColorPin.x + (40.0F * zoom))),
+            static_cast<int>(std::lround(baseColorPin.y)))
+             .has_value(),
+        "Material panel graph still hits an input pin from its own half of the node");
+    report.Check(
+        !MaterialEditorPanelRenderer::GraphPinAt(
             content,
             graph,
             context,
@@ -887,7 +974,7 @@ void RunMaterialGraphPanelCanvasHitTestSuite(Report& report) {
             static_cast<int>(std::lround(baseColorPin.x + (160.0F * zoom))),
             static_cast<int>(std::lround(baseColorPin.y)))
              .has_value(),
-        "Material panel graph hits a one-sided input across the row");
+        "Material panel graph leaves the far half of the node to node dragging, not to the input pin");
 
     const MaterialGraphCanvasPoint colorPin = canvasResult.canvas.PinCenterWindow(0U, 0U, true);
     const std::optional<MaterialEditorGraphPinHit> color = MaterialEditorPanelRenderer::GraphPinAt(
@@ -1955,6 +2042,465 @@ void RunMaterialInspectorGraphEditReconcileSuite(Report& report) {
     }
 }
 
+// Finding 1 (re-opening the already open material): double-clicking the .kbmat that is already open is a
+// natural "focus the editor" gesture, so it must not re-read the document from disk and silently drop the
+// unsaved working copy. A clean re-open must still reload, otherwise the guard would block refreshes.
+void RunMaterialEditorReopenPreservesUnsavedEditsSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 1: register material loader");
+
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "ReopenKeepsUnsavedEdits.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    fixture.desc.roughnessFactor = 0.20F;
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 1: create .kbmat fixture (roughness=0.20)");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 1: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/ReopenKeepsUnsavedEdits.kbmat");
+    report.Check(metadata != nullptr, "Finding 1: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 1: open material");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -120, 80),
+        "Finding 1: add graph node (unsaved working-copy edit)");
+    const std::uint32_t nodeId = context.SelectedMaterialGraphNodeId();
+    report.Check(context.SetMaterialRoughnessFactor(id, 0.66F), "Finding 1: edit roughness via Inspector (unsaved edit)");
+    report.Check(context.MaterialEditor().Dirty(), "Finding 1: editor reports dirty before the re-open");
+
+    // The bug: this second open re-read the document from disk and reset dirty_, discarding both edits.
+    report.Check(context.OpenMaterialEditorAsset(id), "Finding 1: re-opening the already open material succeeds");
+    const std::optional<kb::render::RenderMaterialAssetData>& afterReopen = context.MaterialEditor().WorkingCopy();
+    report.Check(context.MaterialEditor().Dirty(), "Finding 1: re-opening the open material keeps the dirty flag");
+    report.Check(afterReopen.has_value() && nodeId != 0U &&
+            kb::render::FindRenderMaterialGraphNode(afterReopen->graph, nodeId) != nullptr,
+        "Finding 1: the unsaved graph node survived the re-open");
+    report.Check(afterReopen.has_value() && std::abs(afterReopen->desc.roughnessFactor - 0.66F) < 0.01F,
+        "Finding 1: the unsaved Inspector roughness edit survived the re-open");
+
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 1: save after the re-open clears dirty");
+    const std::optional<kb::render::RenderMaterialAssetData> savedDocument =
+        kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(savedDocument.has_value() && std::abs(savedDocument->desc.roughnessFactor - 0.66F) < 0.01F &&
+            kb::render::FindRenderMaterialGraphNode(savedDocument->graph, nodeId) != nullptr,
+        "Finding 1: both preserved edits reached disk");
+
+    kb::render::RenderMaterialAssetData onDisk = fixture;
+    onDisk.desc.roughnessFactor = 0.42F;
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, onDisk),
+        "Finding 1: rewrite the asset on disk while the editor is clean");
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value() &&
+            std::abs(context.MaterialEditor().WorkingCopy()->desc.roughnessFactor - 0.42F) < 0.01F,
+        "Finding 1: a clean re-open still reloads the document from disk");
+
+    // The production gesture: a Project Files double-click resolved through the real browser layout and the
+    // real double-click router, not a direct OpenMaterialEditorAsset call.
+    report.Check(context.AssetBrowser().SelectFolder("/Game/Materials", context.Scene().Assets().Manager()),
+        "Finding 1: select the material folder in Project Files");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector, 60, -60),
+        "Finding 1: add graph node before the Project Files double-click");
+    const std::uint32_t doubleClickNodeId = context.SelectedMaterialGraphNodeId();
+    report.Check(context.MaterialEditor().Dirty(), "Finding 1: editor is dirty before the Project Files double-click");
+
+    std::optional<POINT> assetPoint;
+    for (int y = kContent.top; y < kContent.bottom && !assetPoint.has_value(); y += 4) {
+        for (int x = kContent.left; x < kContent.right; x += 4) {
+            const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(
+                kContent, x, y, context.AssetBrowser(), context.Scene().Assets().Manager());
+            if (hit.kind != EditorAssetBrowserHitKind::Asset) {
+                continue;
+            }
+            const std::optional<kb::assets::AssetId> hitAsset = EditorAssetBrowserHitPayloadResolver::AssetIdAt(
+                hit, context.AssetBrowser(), context.Scene().Assets().Manager());
+            if (hitAsset.has_value() && *hitAsset == id) {
+                assetPoint = POINT{ x, y };
+                break;
+            }
+        }
+    }
+    report.Check(assetPoint.has_value(), "Finding 1: locate the material tile in the Project Files layout");
+    if (!assetPoint.has_value()) {
+        return;
+    }
+    const EditorAssetBrowserDoubleClickResult doubleClick = EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(
+        nullptr, kContent, assetPoint->x, assetPoint->y, context);
+    report.Check(doubleClick == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened,
+        "Finding 1: the Project Files double-click still activates the Material Editor");
+    const std::optional<kb::render::RenderMaterialAssetData>& afterDoubleClick = context.MaterialEditor().WorkingCopy();
+    report.Check(context.MaterialEditor().OpenAssetId() == id && context.MaterialEditor().Dirty() &&
+            afterDoubleClick.has_value() && doubleClickNodeId != 0U &&
+            kb::render::FindRenderMaterialGraphNode(afterDoubleClick->graph, doubleClickNodeId) != nullptr,
+        "Finding 1: double-clicking the already open material in Project Files keeps the unsaved working copy");
+
+    // An in-flight node rename is memory-only state a reload would drop, so it must hold the guard too.
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 1: save before the rename-guard check");
+    report.Check(context.BeginMaterialGraphNodeRenameEdit(id, doubleClickNodeId),
+        "Finding 1: begin a node rename on the clean document");
+    context.AppendMaterialGraphNodeRenameEditText(L'Z');
+    report.Check(context.OpenMaterialEditorAsset(id) && context.IsMaterialGraphNodeRenameEditing(),
+        "Finding 1: re-opening while a node rename is in flight keeps the rename instead of reloading");
+    context.CancelMaterialGraphNodeRenameEdit();
+}
+
+// Finding 11 (a typed inline constant is pending work, not scratch state): a value typed into a constant
+// node and not confirmed with Enter used to be dropped by the close path without ever raising the unsaved
+// prompt, because HasDirtyMaterialAssetEdit did not count it. It now follows the node-rename contract:
+// it counts as unsaved, Save commits it, and closing the editor commits it instead of discarding it.
+void RunMaterialEditorInlineConstantCloseContractSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 11: register material loader");
+
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InlineConstantClose.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 11: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 11: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InlineConstantClose.kbmat");
+    report.Check(metadata != nullptr, "Finding 11: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+
+    const auto readMaterialBytes = [&materialPath]() {
+        std::ifstream input{ materialPath, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const auto armInlineConstant = [&context, id](std::uint32_t nodeId, std::wstring_view text) {
+        static_cast<void>(context.BeginMaterialGraphConstantInlineEdit(id, nodeId));
+        while (context.IsMaterialGraphConstantInlineEditing() && !context.MaterialEditor().GraphConstantInlineEditBuffer().empty()) {
+            context.BackspaceMaterialGraphConstantInlineEdit();
+        }
+        for (const wchar_t character : text) {
+            context.AppendMaterialGraphConstantInlineEditText(character);
+        }
+    };
+
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 11: open material");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -100, 60),
+        "Finding 11: add a constant node");
+    const std::uint32_t constantNodeId = context.SelectedMaterialGraphNodeId();
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 11: save the fixture so only the typed value can be lost");
+
+    // 1. A typed-but-unconfirmed value must register as unsaved work, which is what raises the close prompt.
+    armInlineConstant(constantNodeId, L"0.75");
+    report.Check(context.IsMaterialGraphConstantInlineEditing() && context.HasDirtyMaterialAssetEdit(),
+        "Finding 11: a typed inline constant counts as an unsaved material edit");
+
+    // 2. Answering Save on that prompt must persist the typed value, not the pre-edit one.
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.IsMaterialGraphConstantInlineEditing(),
+        "Finding 11: Save commits the in-flight inline constant");
+    const std::optional<kb::render::RenderMaterialAssetData> savedDocument =
+        kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    const kb::render::RenderMaterialGraphNode* savedNode =
+        savedDocument.has_value() ? kb::render::FindRenderMaterialGraphNode(savedDocument->graph, constantNodeId) : nullptr;
+    report.Check(savedNode != nullptr && savedNode->parameter.defaultValueHint.find("0.75") != std::string::npos,
+        "Finding 11: the typed inline constant reached disk through Save");
+
+    // 3. Closing the editor commits the typed value into the working copy instead of dropping it silently.
+    armInlineConstant(constantNodeId, L"0.25");
+    report.Check(context.IsMaterialGraphConstantInlineEditing(), "Finding 11: re-arm the inline constant before close");
+    context.CloseMaterialEditorAsset();
+    report.Check(!context.IsMaterialGraphConstantInlineEditing() && !context.MaterialEditor().OpenAssetId().IsValid(),
+        "Finding 11: closing the Material Editor clears the inline constant edit");
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 11: reopen the material after close");
+    report.Check(!context.HasDirtyMaterialAssetEdit(),
+        "Finding 11: the reopened material is clean");
+
+    // 4. Merely arming the edit (a click on the value, nothing typed) is not pending work: it must not mark
+    // the document unsaved, must not raise the close prompt and must not rewrite the file on commit.
+    const std::string cleanBytes = readMaterialBytes();
+    static_cast<void>(context.BeginMaterialGraphConstantInlineEdit(id, constantNodeId));
+    report.Check(context.IsMaterialGraphConstantInlineEditing() && !context.HasDirtyMaterialAssetEdit(),
+        "Finding 11: arming the inline constant without typing is not an unsaved edit");
+    report.Check(context.CommitMaterialGraphConstantInlineEdit() && !context.IsMaterialGraphConstantInlineEditing() &&
+            !context.MaterialEditor().Dirty(),
+        "Finding 11: committing an untouched inline constant is a no-op instead of a document rewrite");
+    report.Check(readMaterialBytes() == cleanBytes,
+        "Finding 11: an untouched inline constant leaves the asset file byte-identical");
+
+    // 5. An unparseable value must not leave the edit armed: that would keep HasDirtyMaterialAssetEdit()
+    // true forever and block Save for the whole editor with no way out.
+    armInlineConstant(constantNodeId, L"0.5..");
+    report.Check(context.HasDirtyMaterialAssetEdit(), "Finding 11: an unparseable typed value still counts as unsaved");
+    report.Check(!context.CommitMaterialGraphConstantInlineEdit(), "Finding 11: an unparseable inline constant fails to commit");
+    report.Check(!context.IsMaterialGraphConstantInlineEditing() && !context.HasDirtyMaterialAssetEdit(),
+        "Finding 11: a failed inline constant commit clears the edit instead of wedging the dirty state");
+    report.Check(context.SaveOpenDocuments(), "Finding 11: global Save still works after a failed inline constant commit");
+
+    // 6. Discard must actually discard: Revert clears an in-flight inline constant edit.
+    armInlineConstant(constantNodeId, L"0.9");
+    report.Check(context.HasDirtyMaterialAssetEdit(), "Finding 11: re-arm a typed value before Revert");
+    report.Check(context.RevertMaterialEditorAsset(id) && !context.IsMaterialGraphConstantInlineEditing() &&
+            !context.HasDirtyMaterialAssetEdit(),
+        "Finding 11: Revert discards the in-flight inline constant edit");
+}
+
+// Finding 12 (Save must never report success without writing): with the material open, an Inspector float
+// text edit is applied to the in-memory working copy only, so SaveMaterialEditorAsset used to return true
+// having written nothing at all — the working copy (including unrelated graph edits) was then dropped by
+// the close that the honest "true" authorised.
+void RunMaterialEditorInspectorTextEditSavesToDiskSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 12: register material loader");
+
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InspectorTextEditSave.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    fixture.desc.roughnessFactor = 0.10F;
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 12: create .kbmat fixture (roughness=0.10)");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 12: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InspectorTextEditSave.kbmat");
+    report.Check(metadata != nullptr, "Finding 12: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 12: open material");
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -80, 120),
+        "Finding 12: add a graph node so the working copy carries unsaved work of its own");
+    const std::uint32_t nodeId = context.SelectedMaterialGraphNodeId();
+
+    // Arm the Inspector float text edit exactly like the panel does: begin on the property, then type.
+    context.Inspector().BeginTextEdit(InspectorPropertyId::MaterialRoughnessFactor, "0.10");
+    context.Inspector().SelectAllText();
+    context.Inspector().InsertText("0.80");
+    report.Check(context.Inspector().IsTextEditDirty() && context.HasDirtyMaterialAssetEdit(),
+        "Finding 12: the armed Inspector float edit registers as unsaved material work");
+
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 12: Save reports success");
+    report.Check(!context.HasDirtyMaterialAssetEdit(),
+        "Finding 12: a successful Save leaves nothing unsaved behind");
+
+    const std::optional<kb::render::RenderMaterialAssetData> savedDocument =
+        kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    report.Check(savedDocument.has_value() && std::abs(savedDocument->desc.roughnessFactor - 0.80F) < 0.01F,
+        "Finding 12: the Inspector value Save claimed to persist actually reached disk");
+    report.Check(savedDocument.has_value() && nodeId != 0U &&
+            kb::render::FindRenderMaterialGraphNode(savedDocument->graph, nodeId) != nullptr,
+        "Finding 12: the unrelated graph edit in the same working copy reached disk too");
+}
+
+// Finding 13 (dialog modality): a modal Material Editor dialog must lock the whole editor, not just the
+// window it was parented to, or a panel in a floating window stays clickable while the dialog is up.
+// Real HWNDs, because that is the only thing that proves the Win32 behaviour.
+void RunModalWindowScopeSuite(Report& report) {
+    const wchar_t className[] = L"KBEditorSelfTestModalScopeWindow";
+    WNDCLASSW windowClass{};
+    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpszClassName = className;
+    const bool classRegistered = RegisterClassW(&windowClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    report.Check(classRegistered, "Finding 13: register self-test window class");
+    if (!classRegistered) {
+        return;
+    }
+
+    const auto makeWindow = [className]() {
+        return CreateWindowExW(
+            0, className, L"kb self-test", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            0, 0, 120, 80, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    };
+    const HWND mainWindow = makeWindow();      // stands in for the docked editor window
+    const HWND floatingWindow = makeWindow();  // stands in for an undocked Material Editor panel
+    const HWND outerDialog = makeWindow();     // stands in for the parameter/colour dialog
+    const HWND innerDialog = makeWindow();     // stands in for a second dialog opened on top
+    const bool windowsCreated = mainWindow != nullptr && floatingWindow != nullptr &&
+        outerDialog != nullptr && innerDialog != nullptr;
+    report.Check(windowsCreated, "Finding 13: create the stand-in editor windows");
+    if (!windowsCreated) {
+        for (const HWND window : { mainWindow, floatingWindow, outerDialog, innerDialog }) {
+            if (window != nullptr) {
+                DestroyWindow(window);
+            }
+        }
+        return;
+    }
+    ShowWindow(innerDialog, SW_HIDE);
+    const auto enabled = [](HWND window) { return IsWindowEnabled(window) != 0; };
+
+    {
+        const EditorModalWindowScope outerScope{ outerDialog };
+        report.Check(!enabled(mainWindow) && !enabled(floatingWindow),
+            "Finding 13: a modal dialog disables the main window AND the floating panel, not just its owner");
+        report.Check(enabled(outerDialog), "Finding 13: the dialog itself stays interactive");
+
+        ShowWindow(innerDialog, SW_SHOWNA);
+        {
+            const EditorModalWindowScope innerScope{ innerDialog };
+            report.Check(!enabled(outerDialog), "Finding 13: a nested dialog disables the dialog below it");
+        }
+        report.Check(enabled(outerDialog) && !enabled(mainWindow) && !enabled(floatingWindow),
+            "Finding 13: closing the nested dialog restores only it, leaving the editor locked by the outer dialog");
+        ShowWindow(innerDialog, SW_HIDE);
+    }
+    report.Check(enabled(mainWindow) && enabled(floatingWindow) && enabled(outerDialog),
+        "Finding 13: closing the last dialog unlocks the whole editor");
+
+    for (const HWND window : { mainWindow, floatingWindow, outerDialog, innerDialog }) {
+        DestroyWindow(window);
+    }
+}
+
+// Finding 15 (undocked panels must be resizable): the border strip already hit-tests as a resize edge, but
+// the window style has to allow sizing or Windows ignores those codes and the edges feel dead.
+void RunFloatingWindowResizeSuite(Report& report) {
+    const wchar_t className[] = L"KBEditorSelfTestFloatingWindow";
+    WNDCLASSW windowClass{};
+    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpszClassName = className;
+    const bool classRegistered = RegisterClassW(&windowClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    report.Check(classRegistered, "Finding 15: register self-test window class");
+    if (!classRegistered) {
+        return;
+    }
+    const HWND owner = CreateWindowExW(
+        0, className, L"kb self-test owner", WS_OVERLAPPEDWINDOW, 0, 0, 200, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    report.Check(owner != nullptr, "Finding 15: create the owner window");
+    if (owner == nullptr) {
+        return;
+    }
+
+    const DockRect rect{ .x = 120, .y = 120, .width = 480, .height = 320 };
+    const HWND floating = FloatingWindowFactory::Create(GetModuleHandleW(nullptr), owner, className, "Material Editor", rect);
+    report.Check(floating != nullptr, "Finding 15: create a floating panel window through the production factory");
+    if (floating == nullptr) {
+        DestroyWindow(owner);
+        return;
+    }
+    report.Check((GetWindowLongW(floating, GWL_STYLE) & WS_THICKFRAME) != 0,
+        "Finding 15: an undocked panel window is created with a sizing frame");
+
+    RECT frame{};
+    GetWindowRect(floating, &frame);
+    const EditorMetrics metrics{};
+    const auto hitAt = [floating, &metrics](int screenX, int screenY) {
+        return FloatingWindowHitTestResolver::Resolve(floating, MAKELPARAM(screenX, screenY), metrics);
+    };
+    report.Check(hitAt(frame.left, frame.top) == HTTOPLEFT && hitAt(frame.right - 1, frame.bottom - 1) == HTBOTTOMRIGHT,
+        "Finding 15: the window corners hit-test as resize corners");
+    report.Check(hitAt(frame.left, (frame.top + frame.bottom) / 2) == HTLEFT &&
+            hitAt(frame.right - 1, (frame.top + frame.bottom) / 2) == HTRIGHT &&
+            hitAt((frame.left + frame.right) / 2, frame.bottom - 1) == HTBOTTOM,
+        "Finding 15: the window edges hit-test as resize edges");
+    report.Check(hitAt((frame.left + frame.right) / 2, (frame.top + frame.bottom) / 2) == HTCLIENT,
+        "Finding 15: the middle of the panel stays a normal client area");
+
+    DestroyWindow(floating);
+    DestroyWindow(owner);
+}
+
+// Interaction cost budget: every mouse move during a drag runs hit-tests and a repaint, so a single
+// pointer event has to stay well under a frame or the editor drops to single-digit FPS on a real graph.
+void RunMaterialGraphInteractionCostSuite(Report& report) {
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 16: register material loader");
+    std::error_code error;
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InteractionCost.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 16: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 16: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InteractionCost.kbmat");
+    if (metadata == nullptr) {
+        report.Check(false, "Finding 16: resolve .kbmat metadata");
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id), "Finding 16: open material");
+
+    // A graph of a size a user actually builds.
+    for (int index = 0; index < 40; ++index) {
+        static_cast<void>(context.AddMaterialGraphNode(
+            id,
+            index % 2 == 0 ? kb::render::RenderMaterialGraphNodeKind::TextureSample
+                           : kb::render::RenderMaterialGraphNodeKind::Multiply,
+            -600 + (index % 8) * 260,
+            -400 + (index / 8) * 220));
+    }
+    const std::optional<kb::render::RenderMaterialAssetData>& document = context.MaterialEditor().WorkingCopy();
+    if (!document.has_value()) {
+        report.Check(false, "Finding 16: build the benchmark graph");
+        return;
+    }
+    report.Check(document->graph.nodes.size() >= 40U, "Finding 16: benchmark graph has a realistic node count");
+
+    const int iterations = 200;
+    const auto hitTestCost = [&]() {
+        const LARGE_INTEGER start = QueryCounter();
+        for (int index = 0; index < iterations; ++index) {
+            const int x = kContent.left + 40 + (index % 500);
+            const int y = kContent.top + 40 + (index % 300);
+            static_cast<void>(MaterialEditorPanelRenderer::GraphPinAt(kContent, document->graph, context, id, x, y));
+            static_cast<void>(MaterialEditorPanelRenderer::GraphNodeAt(kContent, document->graph, context, id, x, y));
+        }
+        return ElapsedMilliseconds(start) / static_cast<double>(iterations);
+    };
+
+    const double perEventMs = hitTestCost();
+    report.Check(perEventMs < 8.0,
+        "Finding 16: one pointer event of graph hit-testing stays under 8 ms (measured " +
+            FormatMilliseconds(perEventMs) + " ms on a " + std::to_string(document->graph.nodes.size()) + " node graph)");
+
+    // The other half of a frame: the repaint every pointer event triggers.
+    double perPaintMs = 0.0;
+    const HDC screenDc = GetDC(nullptr);
+    if (screenDc != nullptr) {
+        const HDC memoryDc = CreateCompatibleDC(screenDc);
+        const HBITMAP bitmap = CreateCompatibleBitmap(screenDc, kContent.right, kContent.bottom);
+        if (memoryDc != nullptr && bitmap != nullptr) {
+            HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+            MaterialEditorPanelRenderer renderer;
+            const int paintIterations = 30;
+            const LARGE_INTEGER start = QueryCounter();
+            for (int index = 0; index < paintIterations; ++index) {
+                renderer.Paint(memoryDc, kContent, EditorTheme{}, context);
+            }
+            perPaintMs = ElapsedMilliseconds(start) / static_cast<double>(paintIterations);
+            if (previous != nullptr) {
+                SelectObject(memoryDc, previous);
+            }
+        }
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (memoryDc != nullptr) {
+            DeleteDC(memoryDc);
+        }
+        ReleaseDC(nullptr, screenDc);
+    }
+    // Debug-build budget: a real regression (a rebuild-everything paint) lands far above this, while the
+    // normal 28-33 ms spread of an unoptimised build does not trip it.
+    report.Check(perPaintMs > 0.0 && perPaintMs < 60.0,
+        "Finding 16: one Material Editor repaint stays under 60 ms (measured " + FormatMilliseconds(perPaintMs) +
+            " ms, i.e. " + FormatMilliseconds(perPaintMs > 0.0 ? 1000.0 / perPaintMs : 0.0) + " FPS ceiling)");
+}
+
 void RunMaterialEditorGlobalSaveSuite(Report& report) {
     std::error_code error;
     const auto readFileBytes = [](const std::filesystem::path& path) {
@@ -2708,6 +3254,21 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
             !context.MaterialEditor().Dirty() && !context.CanUndoSceneCommand(),
         "P1.22 cancel rewire restores original link without history");
 
+    // Finding 14: pulling a wire off an input pin and letting go anywhere but on a pin must leave the link
+    // unplugged (and undoable) — otherwise the only way to disconnect two nodes is the Alt+click shortcut.
+    report.Check(context.DetachMaterialGraphInputPinConnection(materialId, 1U, "baseColor", 20, 20),
+        "Finding 14: pull the wire off the input pin");
+    report.Check(context.AbandonMaterialGraphPinConnection() &&
+            context.MaterialEditor().WorkingCopy()->graph.links.empty() &&
+            context.MaterialEditor().Dirty() && !context.HasMaterialGraphPinConnection(),
+        "Finding 14: dropping the wire away from a pin keeps the link disconnected");
+    report.Check(context.UndoSceneCommand() && context.MaterialEditor().WorkingCopy()->graph.links.size() == 1U,
+        "Finding 14: the disconnect is a single undo step");
+    report.Check(context.RedoSceneCommand() && context.MaterialEditor().WorkingCopy()->graph.links.empty(),
+        "Finding 14: redo re-applies the disconnect");
+    report.Check(context.UndoSceneCommand() && context.MaterialEditor().WorkingCopy()->graph.links.size() == 1U,
+        "Finding 14: restore the link for the remaining checks");
+
     const bool dragCreateOpened = context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 420, 260) &&
         context.OpenMaterialGraphContextMenuForPinConnection(materialId, 420, 260, 460, 180) &&
         context.IsMaterialGraphContextMenuPinFiltered();
@@ -2871,9 +3432,11 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
             ReleaseDC(nullptr, screenDc);
         }
     }
+    // Contract changed on request: dragging a wire no longer advertises compatibility. No rings are painted
+    // around pins and the wire keeps its source colour; validity is decided when the wire is dropped.
     report.Check(
-        compatibleRingRendered && incompatibleRingRendered,
-        "P2.10 production paint renders green compatible and red incompatible pin feedback rings (green=" +
+        !compatibleRingRendered && !incompatibleRingRendered,
+        "P2.10 production paint draws no compatibility rings while a connection is being dragged (green=" +
             std::to_string(compatibleFeedbackPixelCount) + ", red=" +
             std::to_string(incompatibleFeedbackPixelCount) + ")");
 
@@ -2978,7 +3541,14 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_canvas_clip", &RunMaterialGraphCanvasClipSuite);
     RunSuiteInScratch(report, "material_graph_interaction_lifecycle", &RunMaterialGraphInteractionLifecycleSuite);
     RunSuiteInScratch(report, "material_inspector_graph_edit_reconcile", &RunMaterialInspectorGraphEditReconcileSuite);
+    RunSuiteInScratch(report, "material_editor_reopen_keeps_unsaved_edits", &RunMaterialEditorReopenPreservesUnsavedEditsSuite);
+    RunSuiteInScratch(report, "material_editor_inline_constant_close", &RunMaterialEditorInlineConstantCloseContractSuite);
+    RunSuiteInScratch(report, "material_editor_inspector_text_edit_save", &RunMaterialEditorInspectorTextEditSavesToDiskSuite);
+    RunSuiteInScratch(report, "modal_window_scope", &RunModalWindowScopeSuite);
+    RunSuiteInScratch(report, "floating_window_resize", &RunFloatingWindowResizeSuite);
+    RunSuiteInScratch(report, "material_graph_interaction_cost", &RunMaterialGraphInteractionCostSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
+    RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);

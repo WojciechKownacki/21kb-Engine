@@ -41,6 +41,7 @@
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 
@@ -1259,6 +1260,147 @@ void RunMaterialAssetEditCommandUndoRedoTest() {
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
+}
+
+// The inline constant edit is keyed by a node id, which is only meaningful inside the document it was
+// started in. Opening another material (or closing the editor) must drop it, otherwise a later commit
+// writes the captured buffer into whatever node reuses that id in the new document.
+// The static material previews (Inspector ball, Project Files tile) are shaded from a colour, and for a
+// graph-backed material the PBR descriptor stays at its white fallback. They must therefore read what the
+// graph feeds into Material Output, or every graph material renders as the same white sphere.
+void RunMaterialPreviewAppearanceReadsGraphTest() {
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    const kb::render::RenderMaterialGraphNode* output = nullptr;
+    for (const kb::render::RenderMaterialGraphNode& node : material.graph.nodes) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            output = &node;
+            break;
+        }
+    }
+    kb::editor::tests::Require(output != nullptr, "Preview appearance test needs a Material Output node.");
+    const std::uint32_t outputId = output->id;
+
+    // Descriptor-only material: the appearance is the descriptor, unchanged.
+    material.desc.baseColor[0] = 1.0F;
+    material.desc.baseColor[1] = 1.0F;
+    material.desc.baseColor[2] = 1.0F;
+    const kb::editor::MaterialPreviewAppearance descriptorOnly =
+        kb::editor::MaterialPreviewAppearanceResolver::Resolve(material, nullptr);
+    kb::editor::tests::Require(!descriptorOnly.fromGraph &&
+            kb::editor::tests::NearlyEqual(descriptorOnly.baseColor[0], 1.0F) &&
+            kb::editor::tests::NearlyEqual(descriptorOnly.baseColor[2], 1.0F),
+        "A material without a graph-driven base colour should keep the descriptor colour.");
+
+    // Graph-driven base colour: a constant feeding Material Output wins over the white descriptor.
+    kb::render::RenderMaterialGraphNode constant{
+        .id = 4242U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -260,
+        .positionY = 40,
+    };
+    constant.parameter.defaultValueHint = "0.2 0.6 0.1";
+    material.graph.nodes.push_back(constant);
+    material.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .id = 9001U,
+        .fromNodeId = constant.id,
+        .fromPin = "rgba",
+        .toNodeId = outputId,
+        .toPin = "baseColor",
+    });
+
+    const kb::editor::MaterialPreviewAppearance fromGraph =
+        kb::editor::MaterialPreviewAppearanceResolver::Resolve(material, nullptr);
+    kb::editor::tests::Require(fromGraph.fromGraph, "A graph-driven base colour should be reported as coming from the graph.");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(fromGraph.baseColor[0], 0.2F) &&
+            kb::editor::tests::NearlyEqual(fromGraph.baseColor[1], 0.6F) &&
+            kb::editor::tests::NearlyEqual(fromGraph.baseColor[2], 0.1F),
+        "The preview colour should be the constant the graph feeds into Material Output.");
+
+    // Texture-driven base colour: resolved through the injected texture supplier.
+    material.graph.links.clear();
+    kb::render::RenderMaterialGraphNode textureSample{
+        .id = 4343U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -260,
+        .positionY = 220,
+    };
+    material.graph.nodes.push_back(textureSample);
+    material.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .id = 9002U,
+        .fromNodeId = textureSample.id,
+        .fromPin = "rgba",
+        .toNodeId = outputId,
+        .toPin = "baseColor",
+    });
+    material.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "textureSample4343",
+        .type = kb::render::RenderMaterialParameterType::Texture,
+        .assetId = 777U,
+    });
+
+    kb::scene::Scene scene;
+    const kb::editor::MaterialPreviewAppearance withoutSupplier =
+        kb::editor::MaterialPreviewAppearanceResolver::Resolve(material, &scene.Assets().Manager());
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(withoutSupplier.baseColor[0], 1.0F),
+        "Without a texture supplier the preview should fall back to the descriptor instead of guessing.");
+
+    const auto supplier = [](const kb::assets::AssetManager&, kb::assets::AssetId textureId)
+        -> std::optional<std::array<float, 3U>> {
+        return textureId.value == 777U
+            ? std::optional<std::array<float, 3U>>{ std::array<float, 3U>{ 0.30F, 0.55F, 0.20F } }
+            : std::nullopt;
+    };
+    const kb::editor::MaterialPreviewAppearance withSupplier =
+        kb::editor::MaterialPreviewAppearanceResolver::Resolve(material, &scene.Assets().Manager(), supplier);
+    kb::editor::tests::Require(withSupplier.fromGraph &&
+            kb::editor::tests::NearlyEqual(withSupplier.baseColor[1], 0.55F),
+        "A texture-driven base colour should use the texture's average colour, not the white fallback.");
+}
+
+void RunMaterialEditorInlineConstantEditIsScopedToOpenDocumentTest() {
+    kb::render::RenderMaterialAssetData first{};
+    first.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    kb::render::RenderMaterialAssetData second{};
+    second.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    const kb::assets::AssetId firstId{ 0x21C01ULL };
+    const kb::assets::AssetId secondId{ 0x21C02ULL };
+
+    kb::editor::MaterialEditorState materialEditor;
+    materialEditor.Open(firstId, first);
+    std::uint32_t constantNodeId = 0U;
+    kb::editor::tests::Require(
+        materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -120, 40, &constantNodeId) && constantNodeId != 0U,
+        "Inline constant edit scope test could not add a constant node");
+    kb::editor::tests::Require(materialEditor.BeginGraphConstantInlineEdit(constantNodeId),
+        "Inline constant edit scope test could not begin the inline edit");
+    // BeginGraphConstantInlineEdit prefills the buffer with the node's default hint, so assert the typed
+    // character actually landed instead of merely checking that the buffer is non-empty.
+    const std::string armedBuffer{ materialEditor.GraphConstantInlineEditBuffer() };
+    materialEditor.AppendGraphConstantInlineEditText(L'7');
+    kb::editor::tests::Require(materialEditor.IsGraphConstantInlineEditing(constantNodeId) &&
+            materialEditor.GraphConstantInlineEditBuffer() == armedBuffer + "7",
+        "Inline constant edit scope test did not capture the typed inline constant text");
+
+    materialEditor.Open(secondId, second);
+    kb::editor::tests::Require(!materialEditor.IsGraphConstantInlineEditing() &&
+            materialEditor.GraphConstantInlineEditNodeId() == 0U &&
+            materialEditor.GraphConstantInlineEditBuffer().empty(),
+        "Opening another material must not carry the inline constant edit over to the new document");
+
+    materialEditor.Open(firstId, first);
+    std::uint32_t reopenedConstantNodeId = 0U;
+    kb::editor::tests::Require(
+        materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -120, 40, &reopenedConstantNodeId) &&
+            reopenedConstantNodeId != 0U,
+        "Inline constant edit scope test could not add a constant node before Close");
+    kb::editor::tests::Require(materialEditor.BeginGraphConstantInlineEdit(reopenedConstantNodeId),
+        "Inline constant edit scope test could not re-begin the inline edit before Close");
+    materialEditor.Close();
+    kb::editor::tests::Require(!materialEditor.IsGraphConstantInlineEditing() &&
+            materialEditor.GraphConstantInlineEditNodeId() == 0U &&
+            materialEditor.GraphConstantInlineEditBuffer().empty(),
+        "Closing the Material Editor must not leave an inline constant edit armed");
 }
 
 void RunMaterialEditorWorkingCopySaveRevertUndoRedoTest() {
@@ -7004,6 +7146,8 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialTextureSlotValidationTest();
     RunMaterialEditorNormalSlotBuildsGraphNormalMapTest();
     RunMaterialAssetEditCommandUndoRedoTest();
+    RunMaterialPreviewAppearanceReadsGraphTest();
+    RunMaterialEditorInlineConstantEditIsScopedToOpenDocumentTest();
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
     RunMaterialEditorDocumentHistoryIsolationTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();

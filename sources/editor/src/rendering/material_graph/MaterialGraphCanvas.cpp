@@ -296,35 +296,9 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
         const float texturePinLaneWidth = node.texturePreview.enabled
             ? std::clamp(screenWidth * 0.14F, texturePinLaneMin, texturePinLaneMax)
             : 0.0F;
-        const bool outputUsesValueRows = node.outputsPerField ||
-            (node.inputs.empty() && !node.valueFields.empty() && node.outputs.size() == 1U) ||
-            (!node.valueFields.empty() && node.outputs.size() > 1U);
-        const auto hasInputOnRow = [&](float cy) noexcept {
-            for (std::size_t otherPin = 0U; otherPin < node.inputs.size(); ++otherPin) {
-                const MaterialGraphCanvasPoint otherWorld = PinCenterWorld(
-                    node,
-                    static_cast<std::uint32_t>(otherPin),
-                    false);
-                const float otherCy = (otherWorld.y - node.y) * zoom_;
-                if (std::abs(otherCy - cy) <= rowHalf) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        const auto hasOutputOnRow = [&](float cy) noexcept {
-            for (std::size_t otherPin = 0U; otherPin < node.outputs.size(); ++otherPin) {
-                const MaterialGraphCanvasPoint otherWorld = PinCenterWorld(
-                    node,
-                    static_cast<std::uint32_t>(otherPin),
-                    true);
-                const float otherCy = (otherWorld.y - node.y) * zoom_;
-                if (std::abs(otherCy - cy) <= rowHalf) {
-                    return true;
-                }
-            }
-            return false;
-        };
+        // A pin only answers clicks in its own half of the node; the other half drags the node, the
+        // same as its title bar. Without this an input-only node (Material Output) pulled a wire out of
+        // every click anywhere on its body.
         std::optional<MaterialGraphCanvasPinHit> bestHit;
         float bestDistanceSquared = std::numeric_limits<float>::max();
         const auto consider = [&](std::size_t pin, bool output, bool horizontallyEligible, float verticalHalf) {
@@ -364,11 +338,10 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             if (std::abs(by - cy) > rowHalf) {
                 continue;
             }
-            const bool outputOnRow = hasOutputOnRow(cy);
             consider(
                 pin,
                 false,
-                node.texturePreview.enabled ? bx <= texturePinLaneWidth : (!outputOnRow || bx <= center),
+                node.texturePreview.enabled ? bx <= texturePinLaneWidth : bx <= center,
                 rowHalf);
         }
 
@@ -381,12 +354,10 @@ std::optional<MaterialGraphCanvasPinHit> MaterialGraphCanvas::HitTestPinLocal(
             if (std::abs(by - cy) > rowHalf) {
                 continue;
             }
-            const bool inputOnRow = hasInputOnRow(cy);
-            const bool outputOnlyOwnsFullRow = !inputOnRow && !outputUsesValueRows;
             consider(
                 pin,
                 true,
-                node.texturePreview.enabled ? bx >= screenWidth - texturePinLaneWidth : (outputOnlyOwnsFullRow || bx >= center),
+                node.texturePreview.enabled ? bx >= screenWidth - texturePinLaneWidth : bx >= center,
                 rowHalf);
         }
         if (bestHit.has_value()) {

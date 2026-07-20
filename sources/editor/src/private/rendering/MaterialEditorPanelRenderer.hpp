@@ -478,7 +478,9 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
     case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
     case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
-        return SIZE{ 420, 232 };
+        // Width is preview + the two label columns and nothing more; the side gutters used to be wide
+        // enough to fit a second preview.
+        return SIZE{ 352, 232 };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return SIZE{ 282, 270 };
     case kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes:
@@ -787,6 +789,13 @@ inline int MaterialEditorPanelRectHeight(const RECT& rect) noexcept {
 
 inline int MaterialEditorPanelScaled(int value, float zoom) noexcept {
     return std::max(1, static_cast<int>(std::lround(static_cast<float>(value) * zoom)));
+}
+
+// Sizes never collapse below a pixel, but coordinates must keep their sign: scaling a graph position with
+// the size helper pinned every negative coordinate to +1, so a node dragged past the canvas origin stuck in
+// place while its pins (computed in float by MaterialGraphCanvas) kept following the cursor.
+inline int MaterialEditorPanelScaledCoordinate(int value, float zoom) noexcept {
+    return static_cast<int>(std::lround(static_cast<float>(value) * zoom));
 }
 
 inline MaterialEditorPanelDiagnosticRows MaterialEditorPanelRenderer::DiagnosticRows(const kb::render::RenderMaterialAssetParseResult& result) {
@@ -1759,10 +1768,14 @@ inline RECT MaterialEditorPanelTextureSamplePreviewRect(const RECT& node) noexce
     const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::TextureSample);
     const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
     const int headerBottom = node.top + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale);
-    const int left = node.left + MaterialEditorPanelScaled(58, scale);
-    const int right = node.right - MaterialEditorPanelScaled(92, scale);
-    const int top = headerBottom + MaterialEditorPanelScaled(10, scale);
-    const int bottom = node.bottom - MaterialEditorPanelScaled(12, scale);
+    // Equal insets on both axes: the right side needs the most room (the RGBA/R/G/B/A label column), so
+    // that inset drives all four and the preview sits centred in the node body instead of skewed left.
+    const int sideInset = MaterialEditorPanelScaled(58, scale);
+    const int verticalInset = MaterialEditorPanelScaled(12, scale);
+    const int left = node.left + sideInset;
+    const int right = node.right - sideInset;
+    const int top = headerBottom + verticalInset;
+    const int bottom = node.bottom - verticalInset;
     return RECT{
         left,
         top,
@@ -2517,8 +2530,8 @@ inline std::optional<RECT> MaterialEditorPanelGraphNodeRectWithView(
     const int nodeWidth = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cx), clampedZoom);
     const int nodeHeight = MaterialEditorPanelScaled(static_cast<int>(graphNodeSize.cy), clampedZoom);
 
-    const int x = canvas.left + panX + MaterialEditorPanelScaled(target->positionX + nodeOffsetX, clampedZoom);
-    const int y = canvas.top + panY + MaterialEditorPanelScaled(target->positionY + nodeOffsetY, clampedZoom);
+    const int x = canvas.left + panX + MaterialEditorPanelScaledCoordinate(target->positionX + nodeOffsetX, clampedZoom);
+    const int y = canvas.top + panY + MaterialEditorPanelScaledCoordinate(target->positionY + nodeOffsetY, clampedZoom);
     return RECT{ x, y, x + nodeWidth, y + nodeHeight };
 }
 
@@ -2560,8 +2573,8 @@ inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCommentRect(
     }
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
-    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
-    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
+    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaledCoordinate(target->positionX, clampedZoom);
+    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaledCoordinate(target->positionY, clampedZoom);
     const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(32, target->width), clampedZoom);
     const int height = MaterialEditorPanelScaled(std::max<std::int32_t>(32, target->height), clampedZoom);
     return RECT{ x, y, x + width, y + height };
@@ -2584,8 +2597,8 @@ inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCompositeRect(
     }
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), MaterialGraphInteractionPolicy::MinimumZoom, MaterialGraphInteractionPolicy::MaximumZoom);
-    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
-    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
+    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaledCoordinate(target->positionX, clampedZoom);
+    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaledCoordinate(target->positionY, clampedZoom);
     const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(64, target->width), clampedZoom);
     const int height = MaterialEditorPanelScaled(std::max<std::int32_t>(64, target->height), clampedZoom);
     return RECT{ x, y, x + width, y + height };
@@ -2625,6 +2638,18 @@ inline void MaterialEditorPanelConfigureGraphCanvasViewport(
         clampedZoom);
 }
 
+// Hiding only happens inside collapsed composites, which most graphs do not use. Checking that first lets
+// the common path skip a full document copy (every node, link and string) on every hit-test and every
+// paint - it was the single biggest per-mouse-move allocation in the editor.
+inline bool MaterialEditorPanelGraphHasHiddenNodes(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
+    for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graph, node.id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline kb::render::RenderMaterialGraphDocument MaterialEditorPanelVisibleGraphDocument(
     const kb::render::RenderMaterialGraphDocument& graph) {
     kb::render::RenderMaterialGraphDocument visible = graph;
@@ -2646,12 +2671,28 @@ inline kb::render::RenderMaterialGraphDocument MaterialEditorPanelVisibleGraphDo
     return visible;
 }
 
-inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiveGraphCanvas(
+// Returns the document itself when nothing is hidden, otherwise fills and returns the filtered copy.
+inline const kb::render::RenderMaterialGraphDocument& MaterialEditorPanelVisibleGraphDocumentView(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    kb::render::RenderMaterialGraphDocument& scratch) {
+    if (!MaterialEditorPanelGraphHasHiddenNodes(graph)) {
+        return graph;
+    }
+    scratch = MaterialEditorPanelVisibleGraphDocument(graph);
+    return scratch;
+}
+
+// Rebuilding the canvas means rebuilding every node, pin and label of the graph; a single pointer event
+// asks for it several times (hit-tests plus the repaint) with identical inputs. Cache the last build and
+// reuse it while the document revision, the view transform and the drag offsets are unchanged.
+inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiveGraphCanvasUncached(
     const RECT& content,
     const kb::render::RenderMaterialGraphDocument& graph,
     const EditorSceneContext& sceneContext,
     kb::assets::AssetId assetId) {
-    kb::render::RenderMaterialGraphDocument visible = MaterialEditorPanelVisibleGraphDocument(graph);
+    kb::render::RenderMaterialGraphDocument visibleScratch;
+    const kb::render::RenderMaterialGraphDocument& visible =
+        MaterialEditorPanelVisibleGraphDocumentView(graph, visibleScratch);
     MaterialGraphCanvasDocumentBuildResult result = BuildMaterialGraphCanvasFromDocument(visible);
     for (std::size_t index = 0U; index < visible.nodes.size(); ++index) {
         MaterialGraphCanvasNode* canvasNode = result.canvas.MutableNodeAt(static_cast<std::uint32_t>(index));
@@ -2676,6 +2717,46 @@ inline MaterialGraphCanvasDocumentBuildResult MaterialEditorPanelBuildInteractiv
         sceneContext.MaterialGraphPanX(),
         sceneContext.MaterialGraphPanY());
     return result;
+}
+
+struct MaterialEditorPanelGraphCanvasCacheEntry {
+    bool valid = false;
+    std::uint64_t signature = 0U;
+    std::uint64_t assetId = 0U;
+    RECT content{};
+    const void* graph = nullptr;
+    std::size_t nodeCount = 0U;
+    std::size_t linkCount = 0U;
+    MaterialGraphCanvasDocumentBuildResult result;
+};
+
+inline const MaterialGraphCanvasDocumentBuildResult& MaterialEditorPanelBuildInteractiveGraphCanvas(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId) {
+    thread_local MaterialEditorPanelGraphCanvasCacheEntry cache;
+    const std::uint64_t signature = sceneContext.MaterialGraphViewSignature(assetId);
+    const bool hit = cache.valid &&
+        cache.signature == signature &&
+        cache.assetId == assetId.value &&
+        cache.graph == static_cast<const void*>(&graph) &&
+        cache.nodeCount == graph.nodes.size() &&
+        cache.linkCount == graph.links.size() &&
+        cache.content.left == content.left && cache.content.top == content.top &&
+        cache.content.right == content.right && cache.content.bottom == content.bottom;
+    if (hit) {
+        return cache.result;
+    }
+    cache.result = MaterialEditorPanelBuildInteractiveGraphCanvasUncached(content, graph, sceneContext, assetId);
+    cache.signature = signature;
+    cache.assetId = assetId.value;
+    cache.content = content;
+    cache.graph = static_cast<const void*>(&graph);
+    cache.nodeCount = graph.nodes.size();
+    cache.linkCount = graph.links.size();
+    cache.valid = true;
+    return cache.result;
 }
 
 inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept {
@@ -2772,7 +2853,9 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    kb::render::RenderMaterialGraphDocument visible = MaterialEditorPanelVisibleGraphDocument(graphView);
+    kb::render::RenderMaterialGraphDocument visibleScratch;
+    const kb::render::RenderMaterialGraphDocument& visible =
+        MaterialEditorPanelVisibleGraphDocumentView(graphView, visibleScratch);
     MaterialGraphCanvasDocumentBuildResult canvasResult = BuildMaterialGraphCanvasFromDocument(visible);
     MaterialEditorPanelConfigureGraphCanvasViewport(canvasResult.canvas, content, 1.0F, 0, 0);
 
@@ -2813,7 +2896,7 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    MaterialGraphCanvasDocumentBuildResult canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
+    const MaterialGraphCanvasDocumentBuildResult& canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
     MaterialGraphCanvasPinPredicate compatibleCandidate;
     if (sceneContext.HasMaterialGraphPinConnection() &&
         sceneContext.MaterialGraphPinConnectionAssetId() == assetId) {

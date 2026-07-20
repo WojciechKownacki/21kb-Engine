@@ -1,6 +1,7 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
 #include "rendering/material_graph/MaterialGraphCanvas.hpp"
 
@@ -72,12 +73,10 @@ void RunMaterialGraphCanvasPinRowsAreForgivingTest() {
     Require(inputEdgeHit->node == 1U, "Material graph canvas hit the wrong input node.");
     Require(inputEdgeHit->pin == 0U, "Material graph canvas hit the wrong input pin.");
     Require(!inputEdgeHit->output, "Material graph canvas input edge should not hit as output.");
-    const std::optional<MaterialGraphCanvasPinHit> inputLabelHit = canvas.HitTestPin(
-        baseColor.x + 160.0F,
-        baseColor.y);
-    Require(inputLabelHit.has_value(), "Material graph canvas should hit a one-sided input across the row.");
-    Require(inputLabelHit->node == 1U && inputLabelHit->pin == 0U && !inputLabelHit->output,
-        "Material graph canvas one-sided input row should preserve node, pin, and direction.");
+    // A pin claims its own half of the node and no more: the far half stays available for dragging the
+    // node by its body, so an input-only node no longer pulls a wire out of every click on it.
+    Require(!canvas.HitTestPin(baseColor.x + 160.0F, baseColor.y).has_value(),
+        "Material graph canvas should leave the far half of a one-sided row to node dragging.");
 
     const MaterialGraphCanvasPoint rgba = canvas.PinCenterWindow(0U, 0U, true);
     const std::optional<MaterialGraphCanvasPinHit> outputEdgeHit = canvas.HitTestPin(
@@ -91,6 +90,35 @@ void RunMaterialGraphCanvasPinRowsAreForgivingTest() {
         "Material graph canvas should hit a texture output from the reference side lane.");
     Require(!canvas.HitTestPin(40.0F + 120.0F + 210.0F, rgba.y).has_value(),
         "Material graph canvas texture preview center should stay reserved for picker interaction.");
+}
+
+// A node dragged above or left of the graph origin must keep moving, and its pins must stay glued to its
+// body: the body used to clamp at +1px (size scaler applied to a coordinate) while the pins moved on.
+void RunMaterialGraphNodeNegativePositionKeepsPinsAttachedTest() {
+    const RECT content{ 0, 0, 900, 560 };
+    kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    Require(!graph.nodes.empty(), "Negative-position test needs a node.");
+    kb::render::RenderMaterialGraphNode& node = graph.nodes.front();
+
+    const auto bodyLeftFor = [&content, &graph](std::int32_t x, std::int32_t y) {
+        graph.nodes.front().positionX = x;
+        graph.nodes.front().positionY = y;
+        const std::optional<RECT> rect =
+            kb::editor::MaterialEditorPanelGraphNodeRectWithView(content, graph, graph.nodes.front().id, 1.0F, 0, 0, 0, 0);
+        Require(rect.has_value(), "Negative-position test could not resolve the node rect.");
+        return rect->left;
+    };
+
+    const LONG atOrigin = bodyLeftFor(0, 0);
+    const LONG atMinus200 = bodyLeftFor(-200, -160);
+    const LONG atMinus400 = bodyLeftFor(-400, -160);
+    Require(atMinus200 < atOrigin, "A node moved left of the origin should render left of it.");
+    Require(atMinus400 < atMinus200, "A node moved further left should keep moving, not clamp.");
+    Require(atOrigin - atMinus200 == 200 && atMinus200 - atMinus400 == 200,
+        "Negative graph coordinates should scale linearly like positive ones.");
+
+    node.positionX = -400;
+    node.positionY = -160;
 }
 
 void RunMaterialGraphCanvasCanonicalPinGeometryTest() {
@@ -388,6 +416,7 @@ void RunMaterialGraphCanvasAdapterBuildsDocumentLinksTest() {
 
 void RunEditorMaterialGraphCanvasTests() {
     RunMaterialGraphCanvasPinRowsAreForgivingTest();
+    RunMaterialGraphNodeNegativePositionKeepsPinsAttachedTest();
     RunMaterialGraphCanvasCanonicalPinGeometryTest();
     RunMaterialGraphCanvasNearestCompatiblePinTest();
     RunMaterialGraphCanvasViewportClippingTest();
