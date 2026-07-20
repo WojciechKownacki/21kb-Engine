@@ -2,6 +2,7 @@
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorModalWindowScope.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -301,14 +302,16 @@ public:
             return {};
         }
         const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
-        EnableOwner(false);
-        SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
-        SetForegroundWindow(window_);
+        {
+            const EditorModalWindowScope modal{ window_ };
+            SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
+            SetForegroundWindow(window_);
 
-        MSG message{};
-        while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+            MSG message{};
+            while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
         }
 
         if (window_ != nullptr && IsWindow(window_) != 0) {

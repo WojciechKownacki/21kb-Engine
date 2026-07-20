@@ -179,7 +179,8 @@ namespace {
     case RenderMaterialGraphNodeKind::TextureSampleCube:
     case RenderMaterialGraphNodeKind::TextureSampleVolume:
     case RenderMaterialGraphNodeKind::TextureSample2DArray:
-        return 420.0F;
+        // Must match MaterialEditorPanelGraphNodeSize: this table places the pins, that one paints the body.
+        return 352.0F;
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:

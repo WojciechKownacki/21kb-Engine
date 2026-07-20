@@ -1,6 +1,7 @@
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorModalWindowScope.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -419,19 +420,20 @@ public:
         }
         const RECT bounds = CenteredWindowRect(owner);
         ColorPickerLog("show owner=" + IntText(owner_ != nullptr ? 1 : 0) + " bounds=" + RectText(bounds));
-        EnableOwner(false);
-        SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
-        SetForegroundWindow(window_);
-        InvalidateRect(window_, nullptr, FALSE);
-        UpdateWindow(window_);
+        {
+            const EditorModalWindowScope modal{ window_ };
+            SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
+            SetForegroundWindow(window_);
+            InvalidateRect(window_, nullptr, FALSE);
+            UpdateWindow(window_);
 
-        MSG message{};
-        while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+            MSG message{};
+            while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
         }
 
-        EnableOwner(true);
         if (window_ != nullptr && IsWindow(window_) != 0) {
             DestroyWindow(window_);
             window_ = nullptr;

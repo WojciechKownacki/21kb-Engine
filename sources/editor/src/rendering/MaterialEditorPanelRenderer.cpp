@@ -1142,7 +1142,7 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
         return std::nullopt;
     }
 
-    MaterialGraphCanvasDocumentBuildResult canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
+    const MaterialGraphCanvasDocumentBuildResult& canvasResult = MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
     const std::optional<std::uint32_t> canvasLink = canvasResult.canvas.HitTestLink(static_cast<float>(x), static_cast<float>(y));
     if (!canvasLink.has_value()) {
         return std::nullopt;
@@ -2211,14 +2211,7 @@ void DrawGraphNodeDirect(
                     .point = scaledPin,
                     .color = GraphInputPinColor(node, inputPins[index].first),
                     .tinted = false,
-                    .dragState = MaterialEditorPanelRenderer::GraphPinDragState(
-                        graph,
-                        sceneContext.MaterialGraphPinConnectionNodeId(),
-                        sceneContext.MaterialGraphPinConnectionPin(),
-                        sceneContext.MaterialGraphPinConnectionIsOutput(),
-                        node.id,
-                        inputPins[index].first,
-                        false),
+                    .dragState = MaterialEditorGraphPinDragState::None,
                 });
                 const bool textureSample = MaterialEditorPanelIsTextureSamplePreviewNode(node.kind);
                 const RECT texturePreview = textureSample ? MaterialEditorPanelTextureSamplePreviewRect(rect) : RECT{};
@@ -2252,14 +2245,7 @@ void DrawGraphNodeDirect(
                 .point = output,
                 .color = GraphOutputPinColor(node, outputPins[index].first),
                 .tinted = GraphOutputPinTinted(node.kind, outputPins[index].first),
-                .dragState = MaterialEditorPanelRenderer::GraphPinDragState(
-                    graph,
-                    sceneContext.MaterialGraphPinConnectionNodeId(),
-                    sceneContext.MaterialGraphPinConnectionPin(),
-                    sceneContext.MaterialGraphPinConnectionIsOutput(),
-                    node.id,
-                    outputPins[index].first,
-                    true),
+                .dragState = MaterialEditorGraphPinDragState::None,
             });
             RECT outputLabelRect{
                 rect.left + ScaleMetric(6, scale),
@@ -2411,7 +2397,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
         return;
     }
 
-    MaterialGraphCanvasDocumentBuildResult canvasResult =
+    const MaterialGraphCanvasDocumentBuildResult& canvasResult =
         MaterialEditorPanelBuildInteractiveGraphCanvas(content, graph, sceneContext, assetId);
     const std::optional<MaterialGraphCanvasPoint> anchorPoint = GraphCanvasPinWindowPoint(
         canvasResult.canvas,
@@ -2427,34 +2413,8 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
     COLORREF pendingColor = sceneContext.MaterialGraphPinConnectionIsOutput()
         ? GraphOutputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin())
         : GraphInputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin());
-    if (const std::optional<MaterialEditorGraphPinHit> hovered = MaterialEditorPanelRenderer::GraphPinAt(
-            content,
-            graph,
-            sceneContext,
-            assetId,
-            cursor.x,
-            cursor.y)) {
-        switch (MaterialEditorPanelRenderer::GraphPinDragState(
-            graph,
-            sceneContext.MaterialGraphPinConnectionNodeId(),
-            sceneContext.MaterialGraphPinConnectionPin(),
-            sceneContext.MaterialGraphPinConnectionIsOutput(),
-            hovered->nodeId,
-            hovered->pin,
-            hovered->direction == MaterialEditorGraphPinDirection::Output)) {
-        case MaterialEditorGraphPinDragState::Compatible:
-            pendingColor = RGB(72, 220, 126);
-            break;
-        case MaterialEditorGraphPinDragState::Incompatible:
-            pendingColor = RGB(235, 76, 86);
-            break;
-        case MaterialEditorGraphPinDragState::Source:
-            pendingColor = RGB(104, 174, 255);
-            break;
-        case MaterialEditorGraphPinDragState::None:
-            break;
-        }
-    }
+    // The dragged wire keeps the colour of the pin it came from: no compatibility tinting, no rings on
+    // other pins. Validity is decided on drop, not advertised while the user is still moving the mouse.
     HeroIconGdiplusRuntime::EnsureStarted();
     Gdiplus::Graphics pendingLinkGraphics(dc);
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
@@ -2993,7 +2953,7 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
         ? kb::render::MakeDefaultRenderMaterialGraphDocument()
         : kb::render::RenderMaterialGraphDocument{};
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
-    MaterialGraphCanvasDocumentBuildResult canvasResult =
+    const MaterialGraphCanvasDocumentBuildResult& canvasResult =
         MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
 
     const int savedDc = SaveDC(dc);

@@ -386,6 +386,9 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
+    src/private/platform/win32/EditorModalWindowScope.hpp
+    src/private/rendering/MaterialPreviewAppearanceResolver.hpp
+    src/private/rendering/MaterialPreviewTextureAverageColor.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
@@ -652,6 +655,8 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/MaterialPreviewAppearanceResolver.cpp
+    src/rendering/MaterialPreviewTextureAverageColor.cpp
     src/rendering/MaterialEditorPanelLayout.cpp
     src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
     src/rendering/material_graph/MaterialGraphCanvas.cpp
@@ -1060,6 +1065,7 @@ if(BUILD_TESTING)
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
+        src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp

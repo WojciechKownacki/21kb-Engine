@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/assets/AssetManager.hpp"
+#include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 
 #include <cstdint>
@@ -42,7 +44,10 @@ class ProjectFilesMaterialPreviewThumbnailModel {
 public:
     ProjectFilesMaterialPreviewThumbnailModel() = delete;
 
-    [[nodiscard]] static ProjectFilesMaterialPreviewStyle StyleFromAsset(const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] static ProjectFilesMaterialPreviewStyle StyleFromAsset(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetManager* assets = nullptr,
+        MaterialPreviewTextureAverageColorFn textureAverageColor = nullptr);
     [[nodiscard]] static ProjectFilesMaterialPreviewImage RenderImage(int width, int height, const ProjectFilesMaterialPreviewStyle& style, bool selected);
 };
 

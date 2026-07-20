@@ -1,6 +1,7 @@
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
 
 #include <algorithm>
@@ -58,7 +59,10 @@ namespace {
 
 } // namespace
 
-ProjectFilesMaterialPreviewStyle ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(const kb::assets::AssetMetadata& metadata) {
+ProjectFilesMaterialPreviewStyle ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetManager* assets,
+    MaterialPreviewTextureAverageColorFn textureAverageColor) {
     ProjectFilesMaterialPreviewStyle style{};
     const ProjectFilesMaterialPreviewThumbnailPolicy policy = ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(metadata);
     style.usesPreviewScenePrimitive = policy.usesPreviewScenePrimitive;
@@ -78,10 +82,13 @@ ProjectFilesMaterialPreviewStyle ProjectFilesMaterialPreviewThumbnailModel::Styl
         return style;
     }
 
-    style.baseColor = ToPreviewColor(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
-    style.emissiveColor = ToPreviewColor(material->desc.emissiveColor[0], material->desc.emissiveColor[1], material->desc.emissiveColor[2]);
-    style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
-    style.emissiveStrength = std::clamp(material->desc.emissiveStrength, 0.0F, 64.0F);
+    // Same reason as the Inspector ball: for a graph-backed material desc stays at its white fallbacks,
+    // so ask the graph what actually reaches Material Output.
+    const MaterialPreviewAppearance appearance = MaterialPreviewAppearanceResolver::Resolve(*material, assets, textureAverageColor);
+    style.baseColor = ToPreviewColor(appearance.baseColor[0], appearance.baseColor[1], appearance.baseColor[2]);
+    style.emissiveColor = ToPreviewColor(appearance.emissiveColor[0], appearance.emissiveColor[1], appearance.emissiveColor[2]);
+    style.roughness = appearance.roughness;
+    style.emissiveStrength = appearance.emissiveStrength;
     style.loadedFromAsset = true;
     return style;
 }
