@@ -21,6 +21,9 @@ public:
         const kb::scene::Scene& sourceScene,
         kb::assets::AssetId materialAssetId,
         const kb::render::RenderMaterialAssetData* workingCopy = nullptr);
+    // The thumbnail pipeline needs to talk to the scene's async screen-capture channel, which is a
+    // mutating call; SceneFor stays const so nothing else can accidentally edit the shared preview scene.
+    [[nodiscard]] kb::scene::Scene* MutableScene() noexcept;
     [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& PrimitivePolicy() const noexcept;
     bool SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& SceneSettings() const noexcept;
