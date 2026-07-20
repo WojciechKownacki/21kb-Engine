@@ -18,6 +18,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
@@ -303,7 +304,24 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         state.floatingWindows,
         state.metrics);
     const bool previewPresented = PresentMaterialPreview(state, state.window, inspector, materialEditor);
-    return scenePresented || previewPresented;
+
+    // Material thumbnails: one material per frame is rendered at thumbnail resolution into a small
+    // staging strip inside the Project Files panel and captured from the GPU. Only while that panel is
+    // visible - nobody is looking at tiles otherwise, so nobody pays for them.
+    bool thumbnailPresented = false;
+    if (const std::optional<RECT> assets = EditorPanelContentResolver::Resolve(
+            DockPanelKind::Assets,
+            state.window,
+            state.window,
+            state.dockModel,
+            state.floatingWindows,
+            state.metrics);
+        assets.has_value() && EditorMaterialThumbnailCache().HasPendingWork()) {
+        const RECT staging{ assets->left, assets->top, assets->left + 8, assets->top + 8 };
+        EditorMaterialThumbnailCache().Tick(state.sceneContext, state.sceneViewport, state.window, staging);
+        thumbnailPresented = true;
+    }
+    return scenePresented || previewPresented || thumbnailPresented;
 }
 
 [[nodiscard]] bool QueueFloatingHosts(EditorApplicationState& state, bool refreshToolbar, bool& scenePresented) {

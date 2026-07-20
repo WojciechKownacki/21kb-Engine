@@ -387,6 +387,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
+    src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/MaterialPreviewAppearanceResolver.hpp
     src/private/rendering/MaterialPreviewTextureAverageColor.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -655,6 +656,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/EditorMaterialThumbnailService.cpp
     src/rendering/MaterialPreviewAppearanceResolver.cpp
     src/rendering/MaterialPreviewTextureAverageColor.cpp
     src/rendering/MaterialEditorPanelLayout.cpp

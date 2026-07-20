@@ -8,6 +8,7 @@
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/ProjectFilesAssetTileFrameRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
@@ -522,6 +523,54 @@ void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAss
     }
 }
 
+void DrawMaterialThumbnailBitmap(HDC dc, const RECT& target, const EditorMaterialThumbnailImage& image, bool selected) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty()) {
+        return;
+    }
+    // Same framed slot the painted preview used: the render replaces the ball inside it, not the framing
+    // around it.
+    const COLORREF frameFill = selected ? RGB(31, 34, 39) : RGB(24, 27, 31);
+    const COLORREF frameBorder = selected ? RGB(123, 143, 170) : RGB(48, 54, 62);
+    GdiDrawing::DrawSharpFrame(dc, target, frameFill, frameBorder);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    // The thumbnail carries its own alpha (the render on a punched-out background), so it composites onto
+    // the tile instead of stamping a black square over it.
+    const HDC sourceDc = CreateCompatibleDC(dc);
+    if (sourceDc == nullptr) {
+        return;
+    }
+    void* bits = nullptr;
+    const HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0U);
+    if (bitmap != nullptr && bits != nullptr) {
+        std::memcpy(bits, image.bgra.data(), image.bgra.size() * sizeof(std::uint32_t));
+        HGDIOBJ previous = SelectObject(sourceDc, bitmap);
+        const BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+        static_cast<void>(AlphaBlend(
+            dc,
+            target.left,
+            target.top,
+            target.right - target.left,
+            target.bottom - target.top,
+            sourceDc,
+            0,
+            0,
+            image.width,
+            image.height,
+            blend));
+        SelectObject(sourceDc, previous);
+    }
+    if (bitmap != nullptr) {
+        DeleteObject(bitmap);
+    }
+    DeleteDC(sourceDc);
+}
+
 void DrawAssetTile(
     HDC dc,
     RECT tile,
@@ -535,7 +584,14 @@ void DrawAssetTile(
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
     if (const ProjectFilesTextureThumbnailImage* texture = TextureThumbnailCache().ThumbnailFor(asset.metadata)) {
         DrawTextureThumbnailBitmap(dc, TexturePreviewRect(tile, visual), *texture);
+    } else if (const RECT materialSlot = Draw::Inset(MaterialPreviewRect(tile, visual), 2, 2);
+               const EditorMaterialThumbnailImage* materialThumbnail = EditorMaterialThumbnailCache().ThumbnailFor(
+                   asset.metadata,
+                   std::min(Draw::RectWidth(materialSlot), Draw::RectHeight(materialSlot)))) {
+        // The real thing: the material rendered by the renderer, with the preview scene's lighting.
+        DrawMaterialThumbnailBitmap(dc, materialSlot, *materialThumbnail, asset.selected);
     } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata, manager)) {
+        // Painted stand-in, shown only until that render lands (and if it never can).
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
     } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);

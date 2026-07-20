@@ -6,6 +6,7 @@
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
 #include "windowing/FloatingWindowHitTestResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
@@ -637,6 +638,60 @@ void RunSelectionTransformSuite(Report& report) {
 
 // The Inspector's material ball must be the live 3D preview surface, not a painted stand-in: the rect
 // resolver used to return nullopt, which silently disabled the surface for the whole panel.
+// Finding 19 (material Inspector is the preview and nothing else): a material is authored in the Material
+// Editor, so the Inspector must not restate its channels or asset fields - only the live preview, with the
+// virtual path folded into it.
+void RunInspectorMaterialColorRowsSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 19: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InspectorColorRows.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 19: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 19: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InspectorColorRows.kbmat");
+    report.Check(metadata != nullptr, "Finding 19: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.AssetBrowser().SelectAsset(metadata->id, context.Scene().Assets().Manager()),
+        "Finding 19: select the material in the Inspector");
+
+    bool foundMaterialSection = false;
+    bool foundAssetSection = false;
+    bool foundPreviewSection = false;
+    const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+    for (int scroll = 0; scroll <= maxScroll; scroll += std::max<int>(1, static_cast<int>(kContent.bottom - kContent.top) - 80)) {
+        static_cast<void>(context.Inspector().SetScrollOffset(scroll, maxScroll));
+        for (int y = kContent.top; y < kContent.bottom; ++y) {
+            for (int x = kContent.left; x < kContent.right; x += 8) {
+                const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                if (hit.section == InspectorSectionId::Material) {
+                    foundMaterialSection = true;
+                }
+                if (hit.section == InspectorSectionId::Asset) {
+                    foundAssetSection = true;
+                }
+                if (hit.section == InspectorSectionId::MaterialPreview) {
+                    foundPreviewSection = true;
+                }
+            }
+        }
+    }
+    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
+    report.Check(foundPreviewSection, "Finding 19: the material Inspector keeps its Preview section");
+    report.Check(!foundMaterialSection, "Finding 19: the Material section is gone");
+    report.Check(!foundAssetSection, "Finding 19: the Asset section is gone");
+
+    // Nothing below the preview means the panel no longer needs to scroll at all.
+    report.Check(InspectorPanelRenderer::MaxScrollOffset(kContent, context) == 0,
+        "Finding 19: the material Inspector fits without scrolling");
+}
+
 void RunInspectorMaterialPreviewSurfaceSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -677,6 +732,31 @@ void RunInspectorMaterialPreviewSurfaceSuite(Report& report) {
         kContent, context, (previewRect->left + previewRect->right) / 2, previewRect->top - 12);
     report.Check(previewHeader.section == InspectorSectionId::MaterialPreview,
         "Finding 17: the surface sits directly under the Preview section header");
+
+    // Scrolling: the surface is a child window over the panel, so it has to travel with the rows and
+    // disappear once its slot leaves the viewport. Otherwise it hangs over whatever scrolled into place.
+    // A short panel is the case that scrolls: the material Inspector is preview-only now, so at full height
+    // it fits. A short one is exactly where a pinned surface would hang over the rows below.
+    const RECT shortPanel{ kContent.left, kContent.top, kContent.right, kContent.top + 260 };
+    const std::optional<RECT> shortRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(shortPanel, context);
+    report.Check(maxScroll > 0 && shortRect.has_value(), "Finding 17: a short Inspector panel scrolls");
+    if (maxScroll <= 0 || !shortRect.has_value()) {
+        return;
+    }
+    const int step = std::max(1, maxScroll / 4);
+    static_cast<void>(context.Inspector().SetScrollOffset(step, maxScroll));
+    const std::optional<RECT> scrolledRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    report.Check(scrolledRect.has_value() && scrolledRect->top < shortRect->top,
+        "Finding 17: scrolling moves the preview surface with the panel content");
+
+    static_cast<void>(context.Inspector().SetScrollOffset(maxScroll, maxScroll));
+    const std::optional<RECT> farRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    report.Check(!farRect.has_value() ||
+            (farRect->top >= shortPanel.top && farRect->bottom <= shortPanel.bottom &&
+                farRect->bottom > farRect->top),
+        "Finding 17: scrolled far, the surface is either gone or clipped inside the panel, never floating over other rows");
+    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
 }
 
 void RunInspectorMaterialDropTargetSuite(Report& report) {
@@ -2140,8 +2220,9 @@ void RunMaterialEditorReopenPreservesUnsavedEditsSuite(Report& report) {
         "Finding 1: double-clicking the already open material in Project Files keeps the unsaved working copy");
 
     // An in-flight node rename is memory-only state a reload would drop, so it must hold the guard too.
-    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
-        "Finding 1: save before the rename-guard check");
+    const bool savedBeforeRenameGuard = context.SaveMaterialEditorAsset(id);
+    report.Check(savedBeforeRenameGuard, "Finding 1: save before the rename-guard check succeeds");
+    report.Check(!context.MaterialEditor().Dirty(), "Finding 1: save before the rename-guard check clears dirty");
     report.Check(context.BeginMaterialGraphNodeRenameEdit(id, doubleClickNodeId),
         "Finding 1: begin a node rename on the clean document");
     context.AppendMaterialGraphNodeRenameEditText(L'Z');
@@ -2305,6 +2386,149 @@ void RunMaterialEditorInspectorTextEditSavesToDiskSuite(Report& report) {
 // Finding 13 (dialog modality): a modal Material Editor dialog must lock the whole editor, not just the
 // window it was parented to, or a panel in a floating window stays clickable while the dialog is up.
 // Real HWNDs, because that is the only thing that proves the Win32 behaviour.
+// Thumbnail image quality: the capture has no MSAA and sits on opaque black, so the pipeline has to do
+// the work - anti-aliased silhouette from a supersampled coverage mask, transparent background, and a
+// contact shadow so the ball is grounded instead of floating.
+void RunMaterialThumbnailImagePipelineSuite(Report& report) {
+    // A synthetic "linear render": a lit sphere-ish disc on the renderer's opaque black clear.
+    constexpr int kSource = 1024;
+    EditorMaterialThumbnailImage image{ .width = kSource, .height = kSource };
+    image.bgra.assign(static_cast<std::size_t>(kSource) * static_cast<std::size_t>(kSource), 0xFF000000U);
+    const double center = kSource * 0.5;
+    const double radius = kSource * 0.40;
+    for (int y = 0; y < kSource; ++y) {
+        for (int x = 0; x < kSource; ++x) {
+            const double dx = x - center;
+            const double dy = y - center;
+            if ((dx * dx + dy * dy) > (radius * radius)) {
+                continue;
+            }
+            image.bgra[static_cast<std::size_t>(y) * kSource + static_cast<std::size_t>(x)] = 0xFF20A030U;
+        }
+    }
+
+    EditorMaterialThumbnailService::ProcessCapture(image);
+    report.Check(image.width == 256 && image.height == 256,
+        "Finding 18: the oversized capture is downsampled to tile resolution");
+    if (image.width != 256 || image.height != 256) {
+        return;
+    }
+    const auto alphaAt = [&image](int x, int y) {
+        return (image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) +
+            static_cast<std::size_t>(x)] >> 24U) & 0xFFU;
+    };
+
+    report.Check(alphaAt(2, 2) == 0U, "Finding 18: the black background is punched out to full transparency");
+    report.Check(alphaAt(128, 128) == 255U, "Finding 18: the material itself stays fully opaque");
+
+    // The silhouette edge must contain partial coverage - that is what "not pixelated" means here.
+    int partialCoverage = 0;
+    for (int x = 0; x < image.width; ++x) {
+        const std::uint32_t alpha = alphaAt(x, 128);
+        if (alpha > 8U && alpha < 247U) {
+            ++partialCoverage;
+        }
+    }
+    report.Check(partialCoverage >= 2,
+        "Finding 18: the silhouette is anti-aliased (partial coverage pixels on the edge: " +
+            std::to_string(partialCoverage) + ")");
+
+    // Contact shadow: opacity below the ball that the render itself never produced.
+    const int shadowY = std::min(image.height - 2, static_cast<int>(std::lround(image.height * 0.5 + 256 * 0.40 * 0.5 / 4.0 + 30)));
+    int shadowPixels = 0;
+    for (int x = 0; x < image.width; ++x) {
+        const std::uint32_t alpha = alphaAt(x, image.height - 40);
+        if (alpha > 8U) {
+            ++shadowPixels;
+        }
+    }
+    static_cast<void>(shadowY);
+    report.Check(shadowPixels > 0,
+        "Finding 18: a soft contact shadow grounds the ball (shadow pixels under it: " +
+            std::to_string(shadowPixels) + ")");
+
+    // One source of truth for the ball size: whatever the render framed, the thumbnail normalises the
+    // silhouette to the shared fraction, so a tile never resizes the ball when the render replaces the
+    // painted stand-in. Two very different framings must come out identical.
+    const auto silhouetteWidth = [](const EditorMaterialThumbnailImage& thumbnail) {
+        int left = thumbnail.width;
+        int right = -1;
+        for (int y = 0; y < thumbnail.height; ++y) {
+            for (int x = 0; x < thumbnail.width; ++x) {
+                if (((thumbnail.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(thumbnail.width) +
+                        static_cast<std::size_t>(x)] >> 24U) & 0xFFU) < 200U) {
+                    continue;
+                }
+                left = std::min(left, x);
+                right = std::max(right, x);
+            }
+        }
+        return right - left + 1;
+    };
+    const auto renderDisc = [](int size, double radiusFraction) {
+        EditorMaterialThumbnailImage fixture{ .width = size, .height = size };
+        fixture.bgra.assign(static_cast<std::size_t>(size) * static_cast<std::size_t>(size), 0xFF000000U);
+        const double center = size * 0.5;
+        const double radius = size * radiusFraction;
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                const double dx = x - center;
+                const double dy = y - center;
+                if ((dx * dx + dy * dy) <= (radius * radius)) {
+                    fixture.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)] =
+                        0xFF20A030U;
+                }
+            }
+        }
+        EditorMaterialThumbnailService::ProcessCapture(fixture);
+        return fixture;
+    };
+    const EditorMaterialThumbnailImage tightRender = renderDisc(kSource, 0.48);
+    const EditorMaterialThumbnailImage looseRender = renderDisc(kSource, 0.28);
+    const int tightWidth = silhouetteWidth(tightRender);
+    const int looseWidth = silhouetteWidth(looseRender);
+    report.Check(std::abs(tightWidth - looseWidth) <= 4,
+        "Finding 18: the ball is one size regardless of how the render framed it (" +
+            std::to_string(tightWidth) + " vs " + std::to_string(looseWidth) + " px)");
+    report.Check(std::abs(tightWidth - static_cast<int>(std::lround(256.0 * kMaterialPreviewBallFraction))) <= 6,
+        "Finding 18: the ball matches the shared size fraction the painted stand-in also uses");
+
+    // Detail retention: a tile draws the thumbnail small, so the service scales it itself instead of
+    // letting GDI stretch the master. A checkerboard survives that path only if the scaler is an area
+    // filter - a naive nearest/stretch collapses it into one flat colour.
+    EditorMaterialThumbnailImage detail{ .width = 256, .height = 256 };
+    detail.bgra.assign(256U * 256U, 0xFF000000U);
+    for (int y = 0; y < 256; ++y) {
+        for (int x = 0; x < 256; ++x) {
+            const bool light = (((x / 4) + (y / 4)) % 2) == 0;
+            detail.bgra[static_cast<std::size_t>(y) * 256U + static_cast<std::size_t>(x)] =
+                0xFF000000U | (light ? 0x00C8C8C8U : 0x00303030U);
+        }
+    }
+    const EditorMaterialThumbnailImage scaled = EditorMaterialThumbnailService::ScaleForDisplaySize(detail, 56);
+    std::uint32_t darkest = 255U;
+    std::uint32_t brightest = 0U;
+    for (const std::uint32_t pixel : scaled.bgra) {
+        const std::uint32_t green = (pixel >> 8U) & 0xFFU;
+        darkest = std::min(darkest, green);
+        brightest = std::max(brightest, green);
+    }
+    report.Check(scaled.width == 56 && scaled.height == 56, "Finding 18: the thumbnail is scaled to the tile's own size");
+    report.Check(brightest > darkest + 24U,
+        "Finding 18: texture detail survives the downscale to tile size (contrast kept: " +
+            std::to_string(brightest - darkest) + ")");
+
+    // Leave the processed thumbnail on disk so the result can be eyeballed, like the other visual suites.
+    if (const std::optional<CLSID> encoder = GdiplusEncoderClsid(L"image/bmp")) {
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap bitmap(image.width, image.height, image.width * 4,
+            PixelFormat32bppARGB, reinterpret_cast<BYTE*>(image.bgra.data()));
+        const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "21kb_selftest" / "_materialThumbnailPipeline.bmp";
+        static_cast<void>(bitmap.Save(path.wstring().c_str(), &*encoder, nullptr));
+    }
+}
+
 void RunModalWindowScopeSuite(Report& report) {
     const wchar_t className[] = L"KBEditorSelfTestModalScopeWindow";
     WNDCLASSW windowClass{};
@@ -3544,10 +3768,12 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_editor_reopen_keeps_unsaved_edits", &RunMaterialEditorReopenPreservesUnsavedEditsSuite);
     RunSuiteInScratch(report, "material_editor_inline_constant_close", &RunMaterialEditorInlineConstantCloseContractSuite);
     RunSuiteInScratch(report, "material_editor_inspector_text_edit_save", &RunMaterialEditorInspectorTextEditSavesToDiskSuite);
+    RunSuiteInScratch(report, "material_thumbnail_image_pipeline", &RunMaterialThumbnailImagePipelineSuite);
     RunSuiteInScratch(report, "modal_window_scope", &RunModalWindowScopeSuite);
     RunSuiteInScratch(report, "floating_window_resize", &RunFloatingWindowResizeSuite);
     RunSuiteInScratch(report, "material_graph_interaction_cost", &RunMaterialGraphInteractionCostSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
+    RunSuiteInScratch(report, "inspector_material_color_rows", &RunInspectorMaterialColorRowsSuite);
     RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);

@@ -1,5 +1,7 @@
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 
+#include "rendering/EditorMaterialThumbnailService.hpp"
+
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -40,7 +42,10 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
     const EditorMeshThumbnailService& meshThumbnails) {
     std::ostringstream out;
     AppendRect(out, content);
-    out << "rev=" << manager.Revision()
+    // A thumbnail landing must repaint the retained panel surface, otherwise the tile keeps its stand-in
+    // until something else happens to invalidate it.
+    out << "matThumbs=" << EditorMaterialThumbnailCache().Revision()
+        << ";rev=" << manager.Revision()
         << ";folder=" << kb::assets::NormalizeAssetPath(state.SelectedFolder())
         << ";contentFolder=" << kb::assets::NormalizeAssetPath(state.SelectedContentFolder())
         << ";asset=" << state.SelectedAsset().value

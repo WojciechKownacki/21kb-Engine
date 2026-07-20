@@ -234,10 +234,19 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return {};
 }
 
+[[nodiscard]] POINT ScreenPointFor(HWND window, int x, int y) noexcept {
+    POINT point{ x, y };
+    if (window != nullptr) {
+        ClientToScreen(window, &point);
+    }
+    return point;
+}
+
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
     HWND owner,
-    const MaterialEditorParameterValue& value) {
-    return EditorMaterialColorPickerDialog::Show(owner, "Material Graph Color", value.numbers);
+    const MaterialEditorParameterValue& value,
+    POINT anchorScreenPoint) {
+    return EditorMaterialColorPickerDialog::Show(owner, "Material Graph Color", value.numbers, &anchorScreenPoint);
 }
 
 [[nodiscard]] std::string GraphColorValueText(const MaterialEditorParameterValue& value, bool alpha) {
@@ -254,10 +263,11 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     HWND owner,
     EditorSceneContext& sceneContext,
     kb::assets::AssetId materialId,
-    const MaterialEditorGraphColorWatcherHit& hit) {
+    const MaterialEditorGraphColorWatcherHit& hit,
+    POINT anchorScreenPoint) {
     MaterialEditorParameterValue value = hit.value;
     if (!hit.applyImmediately) {
-        const std::optional<std::array<float, 4U>> picked = ShowGraphColorPicker(owner, hit.value);
+        const std::optional<std::array<float, 4U>> picked = ShowGraphColorPicker(owner, hit.value, anchorScreenPoint);
         if (!picked.has_value()) {
             return false;
         }
@@ -526,7 +536,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
-                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(messageWindow, property.value)) {
+                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(messageWindow, property.value, ScreenPointFor(messageWindow, x, y))) {
                                 static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
                                     materialId,
                                     property.nodeId,
@@ -655,7 +665,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
                         MaterialEditorPanelRenderer::GraphColorWatcherAt(*materialEditorContent, *material, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
-                    static_cast<void>(ApplyGraphColorWatcherHit(messageWindow, sceneContext_, materialId, *colorWatcher));
+                    static_cast<void>(ApplyGraphColorWatcherHit(messageWindow, sceneContext_, materialId, *colorWatcher, ScreenPointFor(messageWindow, x, y)));
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
                 }
