@@ -2,8 +2,11 @@
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
+#include "engine/library/EngineLibraryParsing.hpp"
+
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -27,12 +30,17 @@ namespace {
 
 [[nodiscard]] bool ParseFloatToken(std::string_view text, float& output) noexcept {
     text = Trim(text);
-    float parsed = 0.0F;
-    const std::from_chars_result result = std::from_chars(text.data(), text.data() + text.size(), parsed);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !std::isfinite(parsed)) {
+    // Apple's libc++ has no floating-point std::from_chars; TryParseDouble is the codebase's
+    // locale-independent replacement.
+    double parsed = 0.0;
+    if (!kb::library::TryParseDouble(text, parsed) || !std::isfinite(parsed)) {
         return false;
     }
-    output = parsed;
+    const double magnitude = parsed < 0.0 ? -parsed : parsed;
+    if (magnitude > static_cast<double>(std::numeric_limits<float>::max())) {
+        return false;
+    }
+    output = static_cast<float>(parsed);
     return true;
 }
 

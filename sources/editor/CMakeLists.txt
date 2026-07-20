@@ -1114,6 +1114,8 @@ if(BUILD_TESTING)
         tests/EditorTestSupport.hpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
+        # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
+        src/rendering/MaterialEditorPanelLayout.cpp
     )
 
     target_include_directories(kb_editor_material_graph_canvas_tests

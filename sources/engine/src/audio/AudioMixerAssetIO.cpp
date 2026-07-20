@@ -1,9 +1,12 @@
 #include "engine/audio/AudioMixerAssetIO.hpp"
 
+#include "engine/library/EngineLibraryParsing.hpp"
+
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <span>
 #include <sstream>
@@ -33,12 +36,18 @@ namespace {
 
 [[nodiscard]] bool ParseFloatToken(std::string_view text, float& output) noexcept {
     text = Trim(text);
-    float parsed = 0.0F;
-    const std::from_chars_result result = std::from_chars(text.data(), text.data() + text.size(), parsed);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !std::isfinite(parsed)) {
+    // Not std::from_chars: Apple's libc++ does not implement its floating-point overload (the CI macOS job
+    // fails with "call to deleted function"). TryParseDouble is this codebase's locale-independent answer
+    // to exactly that gap.
+    double parsed = 0.0;
+    if (!kb::library::TryParseDouble(text, parsed) || !std::isfinite(parsed)) {
         return false;
     }
-    output = parsed;
+    const double magnitude = parsed < 0.0 ? -parsed : parsed;
+    if (magnitude > static_cast<double>(std::numeric_limits<float>::max())) {
+        return false;
+    }
+    output = static_cast<float>(parsed);
     return true;
 }
 
