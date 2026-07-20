@@ -70,8 +70,10 @@ public:
     [[nodiscard]] kb::library::Stack<ScriptValue>* Stack(std::uint64_t handle) noexcept { return Lookup(stacks_, handle); }
 
 private:
+    // Explicit return type, not auto: the accessors above call Lookup before its definition, and a deduced
+    // return type is not available at that point (GCC rejects it; MSVC and Clang happen to accept it).
     template <typename Map>
-    [[nodiscard]] static auto* Lookup(Map& map, std::uint64_t handle) noexcept {
+    [[nodiscard]] static typename Map::mapped_type* Lookup(Map& map, std::uint64_t handle) noexcept {
         const auto found = map.find(handle);
         return found == map.end() ? nullptr : &found->second;
     }
