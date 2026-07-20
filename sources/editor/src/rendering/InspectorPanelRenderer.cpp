@@ -1,4 +1,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
+
+#include "rendering/MaterialPreviewAppearanceResolver.hpp"
+#include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 
 #if defined(_WIN32)
@@ -11,8 +14,10 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
+#include "inspection/InspectorPhysicsModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
@@ -62,6 +67,43 @@ using inspector_panel_rows::DrawValueBox;
 using inspector_panel_rows::DrawVec3Row;
 using inspector_panel_rows::SectionWriter;
 
+// Display/edit text for one exposed script variable's value (Bool rows use the
+// dedicated checkbox, so this covers the text-edited types). Floats use %g so a
+// 3.5 shows as "3.5" (round-trips cleanly through the edit box) rather than
+// std::to_string's "3.500000".
+[[nodiscard]] std::string FormatScriptVariableValue(const kb::script::ScriptValue& value, kb::script::ScriptValueType type) {
+    switch (type) {
+    case kb::script::ScriptValueType::String:
+    case kb::script::ScriptValueType::Name:
+    case kb::script::ScriptValueType::Guid:
+        return value.AsString();
+    case kb::script::ScriptValueType::Bool:
+        return value.AsBool() ? "true" : "false";
+    case kb::script::ScriptValueType::Int:
+        return std::to_string(value.AsInt());
+    case kb::script::ScriptValueType::Int64:
+        return std::to_string(value.AsInt64());
+    case kb::script::ScriptValueType::UInt32:
+        return std::to_string(value.AsUInt32());
+    case kb::script::ScriptValueType::Entity:
+    case kb::script::ScriptValueType::Component:
+    case kb::script::ScriptValueType::Hash:
+        return std::to_string(value.AsUInt64());
+    case kb::script::ScriptValueType::Double: {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%g", value.AsDouble());
+        return std::string{ buffer };
+    }
+    case kb::script::ScriptValueType::Float:
+    case kb::script::ScriptValueType::Void:
+    default: {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%g", static_cast<double>(value.AsFloat()));
+        return std::string{ buffer };
+    }
+    }
+}
+
 constexpr int kHeaderHeight = 62;
 constexpr int kHeaderIcon = 36;
 constexpr int kHeaderPad = 8;
@@ -86,10 +128,13 @@ constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
 constexpr int kAddComponentButtonHeight = 24;
-constexpr int kAddComponentBrowserMaxHeight = 280;
+constexpr int kAddComponentBrowserWidth = 240;   // narrow, Unity-style popup width
+constexpr int kAddComponentBrowserMaxHeight = 300;
 constexpr int kAddComponentSearchHeight = 24;
-constexpr int kAddComponentResultRowHeight = 26;
-constexpr int kAddComponentCategoryHeaderHeight = 22;
+constexpr int kAddComponentRowHeight = 26;
+constexpr int kAddComponentBackHeaderHeight = 24;
+constexpr int kAddComponentScrollbarWidth = 10;
+constexpr int kAddComponentListTop = 62;         // list start below title + search (categories/search view)
 constexpr int kScrollbarWidth = 12;
 constexpr int kScrollbarInset = 3;
 constexpr int kScrollbarMinThumb = 28;
@@ -170,6 +215,15 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
 [[nodiscard]] COLORREF HoverFill(const EditorTheme& theme) noexcept {
     static_cast<void>(theme);
     return Rgb(34, 38, 45);
+}
+
+// COLORREF a mixed `percentB`% toward b — matches ProjectFilesPanelDrawing::Blend,
+// used to reproduce the Project Files row-hover fill in the Add Component menu.
+[[nodiscard]] COLORREF BlendColor(COLORREF a, COLORREF b, int percentB) noexcept {
+    const int inv = 100 - percentB;
+    return RGB((GetRValue(a) * inv + GetRValue(b) * percentB) / 100,
+        (GetGValue(a) * inv + GetGValue(b) * percentB) / 100,
+        (GetBValue(a) * inv + GetBValue(b) * percentB) / 100);
 }
 
 [[nodiscard]] RECT Rect(int left, int top, int right, int bottom) noexcept {
@@ -284,78 +338,181 @@ void DrawDivider(HDC dc, int left, int right, int y) {
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
     const RECT button = AddComponentButtonRect(content, y);
     const int top = button.bottom + 8;
-    const int left = content.left + 12;
-    const int right = content.right - 12;
-    const int bottom = std::min(static_cast<int>(content.bottom), top + kAddComponentBrowserMaxHeight);
-    return Rect(left, top, right, bottom);
+    // Narrow, fixed-width popup (Unity-style) centred under the button. Always the
+    // full height: it is part of the scrollable inspector content (reserved by
+    // EntityContentHeight), so the viewport clip + scroll reveal it.
+    const int panelWidth = static_cast<int>(content.right - content.left);
+    const int width = std::min(kAddComponentBrowserWidth, std::max(160, panelWidth - 24));
+    const int left = content.left + std::max(12, (panelWidth - width) / 2);
+    const int bottom = top + kAddComponentBrowserMaxHeight;
+    return Rect(left, top, left + width, bottom);
 }
 
 [[nodiscard]] RECT AddComponentSearchRect(RECT browser) noexcept {
     return Rect(browser.left + 10, browser.top + 34, browser.right - 10, browser.top + 34 + kAddComponentSearchHeight);
 }
 
-[[nodiscard]] RECT AddComponentResultsRect(RECT browser) noexcept {
-    return Rect(browser.left + 1, browser.top + 68, browser.right - 1, browser.bottom - 1);
+// The fixed "‹ Category" back header, shown only inside a category (not
+// searching). Sits directly below the search box; the list is pushed down past it.
+[[nodiscard]] RECT AddComponentBackHeaderRect(RECT browser) noexcept {
+    return Rect(browser.left + 1, browser.top + kAddComponentListTop, browser.right - 1, browser.top + kAddComponentListTop + kAddComponentBackHeaderHeight);
+}
+
+// The scrollable list area. `showBackHeader` pushes it down past the back header.
+[[nodiscard]] RECT AddComponentListRect(RECT browser, bool showBackHeader) noexcept {
+    const int top = browser.top + kAddComponentListTop + (showBackHeader ? kAddComponentBackHeaderHeight + 2 : 0);
+    return Rect(browser.left + 1, top, browser.right - 1, browser.bottom - 4);
+}
+
+// The list area minus the scrollbar gutter (where rows draw), shown only when the
+// content overflows.
+[[nodiscard]] RECT AddComponentListInnerRect(RECT list, bool scrollable) noexcept {
+    if (scrollable) {
+        list.right -= kAddComponentScrollbarWidth;
+    }
+    return list;
+}
+
+[[nodiscard]] RECT AddComponentScrollbarTrackRect(RECT list) noexcept {
+    return Rect(list.right - kAddComponentScrollbarWidth, list.top, list.right, list.bottom);
+}
+
+[[nodiscard]] RECT AddComponentScrollbarThumbRect(RECT list, int rowCount, int scroll) noexcept {
+    const int listHeight = static_cast<int>(list.bottom - list.top);
+    const int total = InspectorAddComponentBrowserModel::TotalHeight(rowCount, kAddComponentRowHeight);
+    if (total <= listHeight || listHeight <= 0) {
+        return {};
+    }
+    const RECT track = AddComponentScrollbarTrackRect(list);
+    const int trackHeight = static_cast<int>(track.bottom - track.top);
+    const int thumbHeight = std::clamp(trackHeight * listHeight / std::max(1, total), 24, std::max(24, trackHeight));
+    const int maxScroll = InspectorAddComponentBrowserModel::MaxScroll(rowCount, kAddComponentRowHeight, listHeight);
+    const int travel = std::max(0, trackHeight - thumbHeight);
+    const int top = track.top + (maxScroll > 0 ? travel * std::clamp(scroll, 0, maxScroll) / maxScroll : 0);
+    return Rect(track.left + 1, top, track.right - 1, top + thumbHeight);
 }
 
 [[nodiscard]] std::string_view AddComponentQuery(const InspectorPanelState& inspector) noexcept {
     return inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? std::string_view{ inspector.EditBuffer() } : std::string_view{};
 }
 
+// Draws one Add Component row: icon (HeroIconPainter, the tab/section icon
+// source) + label, a trailing "›" chevron for a category, blue highlight when
+// hovered — matching the Unity component picker.
+void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, HeroIconKind icon, std::string_view label, bool isCategory, bool hovered) {
+    if (hovered) {
+        // The same subtle row-hover fill as the Project Files list.
+        GdiDrawing::FillRectColor(dc, row, BlendColor(Color(theme.strip), Color(theme.textSecondary), 12));
+    }
+    const int iconSize = 15;
+    const int iconTop = row.top + (static_cast<int>(row.bottom - row.top) - iconSize) / 2;
+    const RECT iconRect{ row.left + 8, iconTop, row.left + 8 + iconSize, iconTop + iconSize };
+    HeroIconPainter::Draw(dc, iconRect, icon, Color(theme.textPrimary), 1);
+    Text(dc, Rect(iconRect.right + 8, row.top, row.right - 18, row.bottom), label, Color(theme.textPrimary));
+    if (isCategory) {
+        const int chevronSize = 12;
+        const int chevronTop = row.top + (static_cast<int>(row.bottom - row.top) - chevronSize) / 2;
+        HeroIconPainter::Draw(dc, Rect(row.right - 16, chevronTop, row.right - 4, chevronTop + chevronSize), HeroIconKind::ChevronRight, Color(theme.textSecondary), 1);
+    }
+}
+
 void DrawAddComponentBrowser(HDC dc, RECT content, const EditorTheme& theme, const InspectorPanelState& inspector, int y) {
     const RECT browser = AddComponentBrowserRect(content, y);
     DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
 
-    ScopedFont titleFont(12, FW_SEMIBOLD);
     {
+        ScopedFont titleFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
-        Text(dc, Rect(browser.left + 10, browser.top + 4, browser.right - 10, browser.top + 28), "Add Component", Color(theme.textPrimary));
+        Text(dc, Rect(browser.left + 10, browser.top + 4, browser.right - 10, browser.top + 28), "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     const RECT search = AddComponentSearchRect(browser);
     const bool searchFocused = inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch;
     DrawFrame(dc, search, Rgb(20, 22, 25), searchFocused ? Color(theme.accent) : Rgb(54, 60, 68));
     const std::string_view query = AddComponentQuery(inspector);
-    if (!query.empty()) {
+    if (query.empty()) {
+        Text(dc, Shrink(search, 24, 0, 8, 0), "Search", Rgb(110, 118, 130));
+    } else {
         Text(dc, Shrink(search, 8, 0, 8, 0), query, Color(theme.textPrimary));
     }
+    HeroIconPainter::Draw(dc, Rect(search.left + 4, search.top + 5, search.left + 18, search.top + 19), HeroIconKind::MagnifyingGlass, Rgb(120, 128, 140), 1);
 
-    const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(query);
-    const RECT results = AddComponentResultsRect(browser);
-    int rowTop = results.top;
-    std::string category;
-    for (const InspectorComponentTile* tile : tiles) {
-        if (tile == nullptr) {
-            continue;
+    const std::string& category = inspector.AddComponentBrowserCategory();
+    const bool showBack = query.empty() && !category.empty();
+    if (showBack) {
+        const RECT back = AddComponentBackHeaderRect(browser);
+        const bool backHovered = inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentBack);
+        if (backHovered) {
+            GdiDrawing::FillRectColor(dc, back, BlendColor(Color(theme.strip), Color(theme.textSecondary), 12));
         }
-        if (tile->category != category) {
-            category = tile->category;
-            const RECT categoryRow = Rect(results.left, rowTop, results.right, rowTop + kAddComponentCategoryHeaderHeight);
-            if (categoryRow.bottom > results.bottom) {
+        const COLORREF backColor = backHovered ? Color(theme.textPrimary) : Color(theme.textSecondary);
+        // Back chevron — painted, the exact style/source as the category "›" chevrons.
+        const int chevronSize = 12;
+        const int chevronTop = back.top + (static_cast<int>(back.bottom - back.top) - chevronSize) / 2;
+        HeroIconPainter::Draw(dc, Rect(back.left + 8, chevronTop, back.left + 8 + chevronSize, chevronTop + chevronSize), HeroIconKind::ChevronLeft, backColor, 1);
+        // The category's own icon, then its name.
+        HeroIconKind categoryIcon = HeroIconKind::Cube;
+        for (const InspectorComponentCategory& entry : InspectorComponentCatalog::Categories()) {
+            if (entry.name == category) {
+                categoryIcon = entry.icon;
                 break;
             }
-            GdiDrawing::FillRectColor(dc, categoryRow, Rgb(25, 28, 33));
-            ScopedFont categoryFont(11, FW_SEMIBOLD);
-            const ScopedGdiObject selectedCategoryFont(dc, categoryFont.handle);
-            Text(dc, Rect(categoryRow.left + 10, categoryRow.top, categoryRow.right - 10, categoryRow.bottom), category, Color(theme.textSecondary));
-            rowTop += kAddComponentCategoryHeaderHeight;
         }
-        const RECT row = Rect(results.left, rowTop, results.right, rowTop + kAddComponentResultRowHeight);
-        if (row.bottom > results.bottom) {
-            break;
-        }
-        Text(dc, Rect(row.left + 22, row.top, row.right - 10, row.bottom), tile->label, Color(theme.textPrimary));
-        rowTop += kAddComponentResultRowHeight;
+        const int backIconSize = 15;
+        const int backIconTop = back.top + (static_cast<int>(back.bottom - back.top) - backIconSize) / 2;
+        HeroIconPainter::Draw(dc, Rect(back.left + 26, backIconTop, back.left + 26 + backIconSize, backIconTop + backIconSize), categoryIcon, Color(theme.textPrimary), 1);
+        ScopedFont backFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedBackFont(dc, backFont.handle);
+        Text(dc, Rect(back.left + 48, back.top, back.right - 10, back.bottom), category, Color(theme.textPrimary), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        GdiDrawing::FillRectColor(dc, Rect(back.left, back.bottom - 1, back.right, back.bottom), Rgb(52, 58, 66));
     }
 
-    if (tiles.empty()) {
-        Text(dc, results, "No components found", Rgb(122, 130, 144), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const RECT list = AddComponentListRect(browser, showBack);
+    const int listHeight = static_cast<int>(list.bottom - list.top);
+    const int rowCount = static_cast<int>(rows.size());
+    const int total = InspectorAddComponentBrowserModel::TotalHeight(rowCount, kAddComponentRowHeight);
+    const bool scrollable = total > listHeight;
+    const RECT inner = AddComponentListInnerRect(list, scrollable);
+    const int maxScroll = InspectorAddComponentBrowserModel::MaxScroll(rowCount, kAddComponentRowHeight, listHeight);
+    const int scroll = std::clamp(inspector.AddComponentScroll(), 0, maxScroll);
+
+    // Horizontal slide-in of the incoming level (smoothstep-eased).
+    const float slide = inspector.AddComponentSlide();
+    const float eased = slide * slide * (3.0F - 2.0F * slide);
+    const int slideDir = inspector.AddComponentSlideForward() ? 1 : -1;
+    const int offsetX = static_cast<int>((1.0F - eased) * static_cast<float>(inner.right - inner.left) * static_cast<float>(slideDir));
+
+    const int savedListDc = SaveDC(dc);
+    IntersectClipRect(dc, list.left, list.top, list.right, list.bottom);
+    if (rowCount == 0) {
+        Text(dc, list, "No components found", Rgb(122, 130, 144), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        const InspectorAddComponentBrowserModel::VisibleWindow window = InspectorAddComponentBrowserModel::Visible(rowCount, scroll, kAddComponentRowHeight, listHeight);
+        for (int i = window.first; i < window.first + window.count; ++i) {
+            const int rowTop = list.top - scroll + i * kAddComponentRowHeight;
+            const RECT rowRect = Rect(inner.left + offsetX, rowTop, inner.right + offsetX, rowTop + kAddComponentRowHeight);
+            const bool hovered = inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, i);
+            DrawAddComponentBrowserRow(dc, rowRect, theme, rows[static_cast<std::size_t>(i)].icon, rows[static_cast<std::size_t>(i)].label, rows[static_cast<std::size_t>(i)].kind == AddComponentRowKind::Category, hovered);
+        }
+    }
+    RestoreDC(dc, savedListDc);
+
+    if (scrollable) {
+        const RECT track = AddComponentScrollbarTrackRect(list);
+        DrawFrame(dc, track, Rgb(22, 24, 28), Rgb(40, 45, 52));
+        const RECT thumb = AddComponentScrollbarThumbRect(list, rowCount, scroll);
+        if (thumb.bottom > thumb.top) {
+            DrawFrame(dc, thumb, inspector.IsAddComponentScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        }
     }
 }
 
 void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const InspectorPanelState& inspector, int y) {
     const RECT button = AddComponentButtonRect(content, y);
-    DrawFrame(dc, button, inspector.IsAddComponentBrowserOpen() ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
+    const bool buttonActive = inspector.IsAddComponentBrowserOpen() ||
+        inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton);
+    DrawFrame(dc, button, buttonActive ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
     ScopedFont font(12, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, font.handle);
     Text(dc, button, "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -759,26 +916,17 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     if (meshAssetId == 0U) {
         return std::nullopt;
     }
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ meshAssetId });
-    if (metadata == nullptr) {
+    // Resolve through the AssetManager's cache (mount-aware, and a cache hit for
+    // any mesh the viewport is already rendering) rather than re-opening and
+    // re-parsing the mesh file from disk on every paint AND every hit-test — that
+    // per-call synchronous disk load was the Inspector's steady-state hitch.
+    kb::assets::AssetManager& manager = const_cast<kb::assets::AssetManager&>(sceneContext.Scene().Assets().Manager());
+    const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> asset =
+        manager.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{ meshAssetId });
+    if (!asset.IsLoaded()) {
         return std::nullopt;
     }
-    const std::optional<std::filesystem::path> resolved = ResolveAssetPhysicalPath(manager, *metadata);
-    if (!resolved.has_value()) {
-        return std::nullopt;
-    }
-
-    kb::render::RenderMeshAssetLoader loader;
-    kb::assets::AssetLoadResult result = loader.Load(kb::assets::AssetLoadRequest{
-        .metadata = *metadata,
-        .resolvedPath = *resolved,
-    });
-    if (!result.Succeeded() || result.asset == nullptr) {
-        return std::nullopt;
-    }
-    std::shared_ptr<kb::render::RenderMeshAssetData> mesh = std::static_pointer_cast<kb::render::RenderMeshAssetData>(result.asset);
-    return mesh == nullptr ? std::nullopt : std::optional<kb::render::RenderMeshAssetData>{ *mesh };
+    return *asset;
 }
 
 [[nodiscard]] InspectorPropertyId MeshRendererMaterialSlotProperty(std::uint32_t slotIndex) noexcept {
@@ -884,16 +1032,21 @@ struct InspectorMaterialPreviewStyle {
     bool loaded = false;
 };
 
-[[nodiscard]] InspectorMaterialPreviewStyle MaterialPreviewStyleFor(const std::optional<kb::render::RenderMaterialAssetData>& material) noexcept {
+[[nodiscard]] InspectorMaterialPreviewStyle MaterialPreviewStyleFor(
+    const std::optional<kb::render::RenderMaterialAssetData>& material,
+    const kb::assets::AssetManager* assets) {
     InspectorMaterialPreviewStyle style{};
     if (!material.has_value()) {
         return style;
     }
-    style.baseColor = ToColorRef(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
-    style.emissiveColor = ToColorRef(material->desc.emissiveColor[0], material->desc.emissiveColor[1], material->desc.emissiveColor[2]);
-    style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
-    style.metallic = std::clamp(material->desc.metallicFactor, 0.0F, 1.0F);
-    style.emissiveStrength = std::clamp(material->desc.emissiveStrength, 0.0F, 64.0F);
+    // Graph-backed materials leave desc at its white fallbacks, so read what the graph feeds into
+    // Material Output instead of painting every graph material as a white ball.
+    const MaterialPreviewAppearance appearance = MaterialPreviewAppearanceResolver::Resolve(*material, assets, &MaterialPreviewTextureAverageColor);
+    style.baseColor = ToColorRef(appearance.baseColor[0], appearance.baseColor[1], appearance.baseColor[2]);
+    style.emissiveColor = ToColorRef(appearance.emissiveColor[0], appearance.emissiveColor[1], appearance.emissiveColor[2]);
+    style.roughness = appearance.roughness;
+    style.metallic = appearance.metallic;
+    style.emissiveStrength = appearance.emissiveStrength;
     style.loaded = true;
     return style;
 }
@@ -1004,6 +1157,17 @@ void DrawTelemetryRow(
     y += kDividerHeight;
 }
 
+// Paint and the live 3D surface must agree on one rect, so the geometry lives here and both use it.
+// Preview is the first section of a material asset, so its position follows from the header alone.
+[[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content) noexcept {
+    const int y = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight;
+    return Rect(
+        content.left + kMaterialPreviewPadding,
+        y + kMaterialPreviewGap,
+        content.right - kMaterialPreviewPadding,
+        y + kMaterialPreviewGap + kMaterialPreviewHeight);
+}
+
 [[nodiscard]] int DrawMaterialPreview(
     HDC dc,
     RECT content,
@@ -1025,9 +1189,14 @@ void DrawTelemetryRow(
         : std::vector<MaterialDebugChannelRow>{};
     DrawDivider(dc, content.left, content.right, y);
     y += kDividerHeight;
-    const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
+    const RECT frame = MaterialPreviewFrameRect(content);
     DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
-    DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(material));
+    // The real material renders here: the same preview scene, lighting and post-process the Material
+    // Editor uses, presented into this rect. The software-shaded ball is only the fallback for when that
+    // scene is not available, because it can never show textures or the actual lighting response.
+    if (!telemetry.previewSceneReady) {
+        DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(material, &sceneContext.Scene().Assets().Manager()));
+    }
     y = frame.bottom + kMaterialPreviewGap;
 
     if (debugRows.empty()) {
@@ -1250,7 +1419,7 @@ void PaintAudioSourceSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::AudioSourceComponent& audioSource) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::Gamepad2, "Audio Source");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source");
     section.Field("Clip", AssetDisplayName(sceneContext, audioSource.clipAssetId), InspectorPropertyId::AudioSourceClip);
     section.Field("Volume", FormatFloat(audioSource.volume, 2), InspectorPropertyId::AudioSourceVolume);
     section.Field("Pitch", FormatFloat(audioSource.pitch, 2), InspectorPropertyId::AudioSourcePitch);
@@ -1271,7 +1440,7 @@ void PaintAudioListenerSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::AudioListenerComponent& audioListener) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::Gamepad2, "Audio Listener");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener");
     section.Bool("Enabled", audioListener.enabled, InspectorPropertyId::AudioListenerEnabled);
     section.Bool("Primary", audioListener.primary, InspectorPropertyId::AudioListenerPrimary);
     y = section.Bottom() + kSectionGap;
@@ -1341,7 +1510,7 @@ void PaintMeshRendererSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer", true);
     section.AssetField("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker);
     section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
@@ -1362,6 +1531,59 @@ void PaintMeshRendererSection(
     section.Bool("Casts Shadow", renderer.castsShadow);
     section.Bool("Receives Shadow", renderer.receivesShadow);
     y = section.Bottom() + kSectionGap;
+}
+
+// Renders any physics component as an index-addressed list of PhysicsField rows
+// (from InspectorPhysicsModel): a checkbox for Bool fields, an editable text row
+// for Float and (click-to-cycle) Enum fields. The section header carries the "×"
+// remove affordance like Script/Mesh Renderer. Every editable row shares one
+// InspectorPropertyId::PhysicsField id; the row index identifies the field.
+// The centred "Fit to Mesh" button rect within a collider-section action row.
+[[nodiscard]] RECT ColliderFitButtonRect(RECT row) noexcept {
+    const int margin = std::min(48, static_cast<int>(row.right - row.left) / 5);
+    return Rect(row.left + margin, row.top + 2, row.right - margin, row.bottom - 2);
+}
+
+void PaintPhysicsSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    InspectorSectionId sectionId,
+    std::string_view title,
+    InspectorPropertyId fieldProperty,
+    const std::vector<PhysicsField>& fields,
+    bool showFitButton,
+    bool fitEnabled) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, sectionId, HeroIconKind::Cube, title, true);
+    for (int index = 0; index < static_cast<int>(fields.size()); ++index) {
+        const PhysicsField& field = fields[static_cast<std::size_t>(index)];
+        // Pass the row index so hover/inline-edit highlight only the row under the
+        // cursor (all rows in a component share one property id).
+        if (field.kind == PhysicsFieldKind::Bool) {
+            section.Bool(field.label, field.boolValue, fieldProperty, index);
+        } else {
+            section.Field(field.label, field.value, fieldProperty, index);
+        }
+    }
+    int bottom = section.Bottom();
+    if (showFitButton && !inspector.IsCollapsed(sectionId)) {
+        const RECT button = ColliderFitButtonRect(Rect(content.left, bottom, content.right, bottom + kFieldRowHeight));
+        const bool hovered = fitEnabled && inspector.IsHovered(InspectorHitKind::TextField, sectionId, InspectorPropertyId::ColliderFitToMesh);
+        const COLORREF fill = !fitEnabled ? Rgb(30, 33, 38) : (hovered ? BlendColor(Color(theme.accent), Rgb(0, 0, 0), 15) : Rgb(38, 43, 50));
+        const COLORREF border = fitEnabled ? Color(theme.accent) : Rgb(52, 58, 66);
+        DrawFrame(dc, button, fill, border);
+        ScopedFont buttonFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedButtonFont(dc, buttonFont.handle);
+        const int iconSize = 13;
+        const int iconTop = button.top + (static_cast<int>(button.bottom - button.top) - iconSize) / 2;
+        const COLORREF textColor = fitEnabled ? Color(theme.textPrimary) : Rgb(96, 104, 116);
+        HeroIconPainter::Draw(dc, Rect(button.left + 14, iconTop, button.left + 14 + iconSize, iconTop + iconSize), HeroIconKind::Cube, textColor, 1);
+        Text(dc, Rect(button.left + 14 + iconSize, button.top, button.right - 10, button.bottom), "Fit to Mesh", textColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        bottom += kFieldRowHeight + kDividerHeight;
+    }
+    y = bottom + kSectionGap;
 }
 
 [[nodiscard]] std::size_t AliveSelectionCount(const kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> selected) noexcept {
@@ -1412,7 +1634,12 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     }
 }
 
-void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
+// Forward declarations — the layout-height helpers are defined further down but
+// PaintEntity needs them to size (and virtualize) each section.
+[[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept;
+[[nodiscard]] int MeshRendererRowCount(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
+
+void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const std::string title = scene.Entities().Name(selected);
@@ -1421,40 +1648,127 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     DrawHeader(dc, content, theme, HeroIconKind::Cube, title, subtitle);
     int y = content.top + kHeaderHeight + kPanelPadTop;
 
+    // Virtualization: a section is only painted when its [y, y+height] band
+    // intersects the visible viewport. The cursor advances by the section's
+    // measured height whether or not it painted, so culling can never shift the
+    // layout — off-screen sections just skip their (clipped-away) GDI work.
+    const auto sectionVisible = [&viewport](int top, int height) noexcept {
+        return top < viewport.bottom && top + height > viewport.top;
+    };
+
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(selected);
     {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "General");
-        section.Field("Name", scene.Entities().Name(selected), InspectorPropertyId::EntityName);
-        section.Bool("Visible", visibility.visible, InspectorPropertyId::EntityVisible);
-        y = section.Bottom() + kSectionGap;
+        const int h = SectionHeight(inspector, InspectorSectionId::General, 2);
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "General");
+            section.Field("Name", scene.Entities().Name(selected), InspectorPropertyId::EntityName);
+            section.Bool("Visible", visibility.visible, InspectorPropertyId::EntityVisible);
+        }
+        y += h + kSectionGap;
     }
 
     const kb::scene::TransformComponent transform = scene.Transforms().Get(selected);
     {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
-        section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
-        section.Rotation("Rotation", transform.localRotation);
-        section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
-        y = section.Bottom() + kSectionGap;
+        const int h = SectionHeight(inspector, InspectorSectionId::Transform, 3);
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
+            section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
+            section.Rotation("Rotation", transform.localRotation);
+            section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+        }
+        y += h + kSectionGap;
     }
 
     if (sceneContext.HasEntityScript(selected)) {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script", true);
-        section.Field("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName);
-        section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
-        y = section.Bottom() + kSectionGap;
+        const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
+        const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script", true);
+            section.AssetField("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
+            section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
+            // One editable row per exposed ("@expose") variable. A leading dot marks
+            // an overridden variable (its value differs from the script default) — the
+            // Godot/O3DE override affordance.
+            for (int index = 0; index < static_cast<int>(scriptVariables.size()); ++index) {
+                const EditorSceneContext::EntityScriptVariable& variable = scriptVariables[static_cast<std::size_t>(index)];
+                const std::string label = (variable.overridden ? std::string{ "\xE2\x80\xA2 " } : std::string{}) + variable.name;
+                if (variable.type == kb::script::ScriptValueType::Bool) {
+                    section.Bool(label, variable.value.AsBool(), InspectorPropertyId::ScriptVariable, index);
+                } else {
+                    // The row index keeps hover + the inline editor buffer in only the
+                    // variable being edited (all rows share the ScriptVariable id).
+                    section.Field(label, FormatScriptVariableValue(variable.value, variable.type), InspectorPropertyId::ScriptVariable, index);
+                }
+            }
+        }
+        y += h + kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
-        PaintLightSection(dc, content, y, theme, inspector, *light);
+        const int h = SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light));
+        if (sectionVisible(y, h)) {
+            PaintLightSection(dc, content, y, theme, inspector, *light);
+        } else {
+            y += h + kSectionGap;
+        }
     }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
-        PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+        const int h = SectionHeight(inspector, InspectorSectionId::MeshRenderer, MeshRendererRowCount(sceneContext, *meshRenderer));
+        if (sectionVisible(y, h)) {
+            PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+        } else {
+            y += h + kSectionGap;
+        }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
-        PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, 10);
+        if (sectionVisible(y, h)) {
+            PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
+        } else {
+            y += h + kSectionGap;
+        }
     }
     if (const kb::scene::AudioListenerComponent* audioListener = scene.Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
-        PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioListener, 2);
+        if (sectionVisible(y, h)) {
+            PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size()));
+        if (sectionVisible(y, h)) {
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
+        int h = SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(InspectorPhysicsModel::Fields(*collider).size()));
+        if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
+            h += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
+        }
+        if (sectionVisible(y, h)) {
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(InspectorPhysicsModel::Fields(*character).size()));
+        if (sectionVisible(y, h)) {
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(InspectorPhysicsModel::Fields(*joint).size()));
+        if (sectionVisible(y, h)) {
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
+        } else {
+            y += h + kSectionGap;
+        }
     }
     DrawAddComponent(dc, content, theme, inspector, y);
 }
@@ -1524,6 +1838,16 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     return height;
 }
 
+// Painted Mesh Renderer rows: Mesh + Material (2) + 6 per material slot +
+// Casts/Receives Shadow (2). Must match PaintMeshRendererSection exactly, or the
+// scrollable height drifts from the layout and the tail of the panel becomes
+// unreachable. The mesh comes from the AssetManager cache (see LoadMeshAssetData).
+[[nodiscard]] int MeshRendererRowCount(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer) {
+    const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
+    const std::uint32_t slotCount = InspectorMeshRendererMaterialSlotModel::SlotRowCount(renderer, mesh);
+    return 4 + 6 * static_cast<int>(slotCount);
+}
+
 [[nodiscard]] int EntityContentHeight(const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::scene::Scene& scene = sceneContext.Scene();
@@ -1531,19 +1855,35 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     height += SectionHeight(inspector, InspectorSectionId::General, 2) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
-        height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
+        const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
+        height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, MeshRendererRowCount(sceneContext, *renderer)) + kSectionGap;
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::AudioSource, 10) + kSectionGap;
     }
     if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioListener, 2) + kSectionGap;
+    }
+    if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size())) + kSectionGap;
+    }
+    if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(InspectorPhysicsModel::Fields(*collider).size())) + kSectionGap;
+        if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
+            height += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
+        }
+    }
+    if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(InspectorPhysicsModel::Fields(*character).size())) + kSectionGap;
+    }
+    if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(InspectorPhysicsModel::Fields(*joint).size())) + kSectionGap;
     }
     height += kAddComponentButtonHeight;
     if (inspector.IsAddComponentBrowserOpen()) {
@@ -1713,6 +2053,46 @@ void AdvanceRow(int& y) noexcept;
 
 void AdvanceRow(int& y) noexcept {
     y += kFieldRowHeight + kDividerHeight;
+}
+
+// Hit-tests a physics component section (header "×" + one row per field). Mirrors
+// the render order in PaintPhysicsSection: Bool fields are checkboxes, everything
+// else (Float, Enum) is a text row. The hit carries the field's row index.
+[[nodiscard]] InspectorPanelRenderer::Hit HitPhysicsSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId fieldProperty,
+    const std::vector<PhysicsField>& fields,
+    int x,
+    int yPoint,
+    int& y,
+    bool withFitButton = false) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, section, x, yPoint, true); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(section)) {
+        return {};
+    }
+    for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
+        const RECT row = RowRect(content, y);
+        InspectorPanelRenderer::Hit hit = fields[static_cast<std::size_t>(i)].kind == PhysicsFieldKind::Bool
+            ? HitBool(row, section, fieldProperty, x, yPoint)
+            : HitTextRow(row, section, fieldProperty, x, yPoint);
+        if (hit.kind != InspectorHitKind::None) {
+            hit.index = i;
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    if (withFitButton) {
+        const RECT button = ColliderFitButtonRect(RowRect(content, y));
+        if (Contains(button, x, yPoint)) {
+            return MakeHit(InspectorHitKind::TextField, section, InspectorPropertyId::ColliderFitToMesh, button);
+        }
+        AdvanceRow(y);
+    }
+    return {};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestInputActionSection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
@@ -1995,10 +2375,86 @@ int InspectorPanelRenderer::MaxScrollOffset(const RECT& content, const EditorSce
     return std::max(0, contentHeight - RectHeight(viewport));
 }
 
+// The open Add Component menu's frame in window (event) space. Derived from the
+// total content height (the menu is the last thing laid out) rather than by
+// re-walking the sections, then shifted by the inspector's own scroll.
+static std::optional<RECT> AddComponentBrowserWindowRect(const RECT& content, const EditorSceneContext& sceneContext) {
+    const InspectorPanelState& state = sceneContext.Inspector();
+    if (!state.IsAddComponentBrowserOpen()) {
+        return std::nullopt;
+    }
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (sceneContext.AssetBrowser().InspectorAsset().IsValid() ||
+        !sceneContext.Scene().Entities().IsAlive(selected) ||
+        sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        return std::nullopt; // the menu only appears on a single live entity selection
+    }
+    const int total = EntityContentHeight(sceneContext, selected);
+    const int maxInspectorScroll = InspectorPanelRenderer::MaxScrollOffset(content, sceneContext);
+    const int inspectorScroll = std::clamp(state.ScrollOffset(), 0, maxInspectorScroll);
+    const RECT viewport = ContentViewportRect(content, maxInspectorScroll > 0);
+    const int buttonY = content.top - inspectorScroll + total - kAddComponentButtonHeight - (8 + kAddComponentBrowserMaxHeight);
+    return AddComponentBrowserRect(viewport, buttonY);
+}
+
+InspectorPanelRenderer::AddComponentScrollInfo InspectorPanelRenderer::AddComponentScrollGeometry(const RECT& content, const EditorSceneContext& sceneContext) {
+    const std::optional<RECT> browser = AddComponentBrowserWindowRect(content, sceneContext);
+    if (!browser.has_value()) {
+        return {};
+    }
+    const InspectorPanelState& state = sceneContext.Inspector();
+    const std::string_view query = AddComponentQuery(state);
+    const std::string& category = state.AddComponentBrowserCategory();
+    const bool showBack = query.empty() && !category.empty();
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const RECT list = AddComponentListRect(*browser, showBack);
+    const int listHeight = static_cast<int>(list.bottom - list.top);
+    const int rowCount = static_cast<int>(rows.size());
+    if (InspectorAddComponentBrowserModel::TotalHeight(rowCount, kAddComponentRowHeight) <= listHeight) {
+        return {};
+    }
+    const int maxScroll = InspectorAddComponentBrowserModel::MaxScroll(rowCount, kAddComponentRowHeight, listHeight);
+    const int scroll = std::clamp(state.AddComponentScroll(), 0, maxScroll);
+    return AddComponentScrollInfo{
+        .active = true,
+        .track = AddComponentScrollbarTrackRect(list),
+        .thumb = AddComponentScrollbarThumbRect(list, rowCount, scroll),
+        .maxScroll = maxScroll,
+    };
+}
+
+bool InspectorPanelRenderer::AddComponentListContains(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const std::optional<RECT> browser = AddComponentBrowserWindowRect(content, sceneContext);
+    if (!browser.has_value()) {
+        return false;
+    }
+    const InspectorPanelState& state = sceneContext.Inspector();
+    const std::string_view query = AddComponentQuery(state);
+    const std::string& category = state.AddComponentBrowserCategory();
+    const bool showBack = query.empty() && !category.empty();
+    const RECT list = AddComponentListRect(*browser, showBack);
+    return x >= list.left && x < list.right && y >= list.top && y < list.bottom;
+}
+
 std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    static_cast<void>(content);
-    static_cast<void>(sceneContext);
-    return std::nullopt;
+    // Returning nullopt here used to disable the Inspector's 3D preview surface entirely, which is why the
+    // panel could only ever show the flat software ball.
+    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+    if (!assetId.IsValid()) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        return std::nullopt;
+    }
+    if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return std::nullopt;
+    }
+    const RECT frame = MaterialPreviewFrameRect(content);
+    if (frame.right - frame.left <= 8 || frame.bottom - frame.top <= 8) {
+        return std::nullopt;
+    }
+    return RECT{ frame.left + 1, frame.top + 1, frame.right - 1, frame.bottom - 1 };
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
@@ -2080,7 +2536,7 @@ void InspectorPanelRenderer::Paint(
         return;
     }
 
-    PaintEntity(dc, inner, theme, sceneContext, selected);
+    PaintEntity(dc, inner, viewport, theme, sceneContext, selected);
     RestoreDC(dc, -1);
     if (scrollable) {
         const RECT track = ScrollbarTrackRect(content);
@@ -2220,7 +2676,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::Script)) {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
@@ -2228,6 +2684,19 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
+            // One row per exposed variable, in the same order the renderer draws
+            // them; the row index identifies which variable was hit.
+            const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
+            for (int variableIndex = 0; variableIndex < static_cast<int>(scriptVariables.size()); ++variableIndex) {
+                InspectorPanelRenderer::Hit hit = scriptVariables[static_cast<std::size_t>(variableIndex)].type == kb::script::ScriptValueType::Bool
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptVariable, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptVariable, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) {
+                    hit.index = variableIndex;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
         }
         y += kSectionGap;
     }
@@ -2240,7 +2709,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::MeshRenderer, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::MeshRenderer, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::MeshRenderer)) {
@@ -2311,6 +2780,31 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         y += kSectionGap;
     }
 
+    if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        y += kSectionGap;
+    }
+    if (const kb::scene::ColliderComponent* collider = sceneContext.Scene().Components().Colliders().TryGet(selected); collider != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Collider, InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), x, scrolledY, y, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        y += kSectionGap;
+    }
+    if (const kb::scene::CharacterControllerComponent* character = sceneContext.Scene().Components().CharacterControllers().TryGet(selected); character != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::CharacterController, InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        y += kSectionGap;
+    }
+    if (const kb::scene::JointComponent* joint = sceneContext.Scene().Components().Joints().TryGet(selected); joint != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Joint, InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        y += kSectionGap;
+    }
+
     const RECT addButton = AddComponentButtonRect(viewport, y);
     if (Contains(addButton, x, scrolledY)) {
         return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton, addButton);
@@ -2321,26 +2815,43 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         if (Contains(search, x, scrolledY)) {
             return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentSearch, search);
         }
-        const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(AddComponentQuery(state));
-        const RECT results = AddComponentResultsRect(browser);
-        int rowTop = results.top;
-        std::string category;
-        for (std::size_t index = 0; index < tiles.size(); ++index) {
-            const InspectorComponentTile* tile = tiles[index];
-            if (tile == nullptr) {
-                continue;
+        const std::string_view query = AddComponentQuery(state);
+        const std::string& category = state.AddComponentBrowserCategory();
+        const bool showBack = query.empty() && !category.empty();
+        if (showBack) {
+            const RECT back = AddComponentBackHeaderRect(browser);
+            if (Contains(back, x, scrolledY)) {
+                return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentBack, back);
             }
-            if (tile->category != category) {
-                category = tile->category;
-                rowTop += kAddComponentCategoryHeaderHeight;
+        }
+        const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+        const RECT list = AddComponentListRect(browser, showBack);
+        const int listHeight = static_cast<int>(list.bottom - list.top);
+        const int rowCount = static_cast<int>(rows.size());
+        const bool browserScrollable = InspectorAddComponentBrowserModel::TotalHeight(rowCount, kAddComponentRowHeight) > listHeight;
+        const int browserScroll = std::clamp(state.AddComponentScroll(), 0, InspectorAddComponentBrowserModel::MaxScroll(rowCount, kAddComponentRowHeight, listHeight));
+        if (browserScrollable) {
+            const RECT thumb = AddComponentScrollbarThumbRect(list, rowCount, browserScroll);
+            if (thumb.bottom > thumb.top && Contains(thumb, x, scrolledY)) {
+                return MakeHit(InspectorHitKind::ScrollbarThumb, InspectorSectionId::AddComponent, InspectorPropertyId::None, thumb);
             }
-            RECT row = Rect(results.left, rowTop, results.right, rowTop + kAddComponentResultRowHeight);
-            if (Contains(row, x, scrolledY)) {
-                InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, row);
-                hit.index = static_cast<int>(index);
-                return hit;
+            const RECT track = AddComponentScrollbarTrackRect(list);
+            if (Contains(track, x, scrolledY)) {
+                return MakeHit(InspectorHitKind::ScrollbarTrack, InspectorSectionId::AddComponent, InspectorPropertyId::None, track);
             }
-            rowTop += kAddComponentResultRowHeight;
+        }
+        const RECT inner = AddComponentListInnerRect(list, browserScrollable);
+        if (scrolledY >= list.top && scrolledY < list.bottom && x >= inner.left && x < inner.right) {
+            const InspectorAddComponentBrowserModel::VisibleWindow window = InspectorAddComponentBrowserModel::Visible(rowCount, browserScroll, kAddComponentRowHeight, listHeight);
+            for (int i = window.first; i < window.first + window.count; ++i) {
+                const int rowTop = list.top - browserScroll + i * kAddComponentRowHeight;
+                const RECT rowRect = Rect(inner.left, rowTop, inner.right, rowTop + kAddComponentRowHeight);
+                if (Contains(rowRect, x, scrolledY)) {
+                    InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, rowRect);
+                    hit.index = i;
+                    return hit;
+                }
+            }
         }
     }
     return {};

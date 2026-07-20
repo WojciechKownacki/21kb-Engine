@@ -124,6 +124,47 @@ void PushVariables(lua_State* state, std::span<const PucLuaExposedVariableInstan
     }
 }
 
+// `Inspector.name` read. Upvalue 1 is the execution context (nullptr at chunk
+// load). With a context it returns the CURRENT entity's exposed-variable value
+// (override ?? default) — the per-entity semantics, identical to Self:GetVariable
+// keyed by the field name. Without a context (declaration time) it is nil.
+int LuaInspectorIndex(lua_State* state) {
+    ScriptExecutionContext* context = static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const char* variableName = luaL_checkstring(state, 2);
+    PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    const std::span<const PucLuaExposedVariableInstance> variables =
+        runtime == nullptr ? std::span<const PucLuaExposedVariableInstance>{} : runtime->InstanceVariables(context->Self(), context->Asset());
+    const PucLuaExposedVariableInstance* variable = PucLuaValueBridge::FindVariable(variables, variableName);
+    if (variable == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    PucLuaValueBridge::Push(state, variable->value);
+    return 1;
+}
+
+// `Inspector.name = value` write. At chunk load (context == nullptr) it is a
+// no-op: the declaration's name/type/default are parsed statically from the
+// source, so the top-level assignment must not error. During execution it writes
+// the CURRENT entity's exposed-variable instance (persisting like Self:SetVariable
+// — the value survives the per-frame default re-sync).
+int LuaInspectorNewIndex(lua_State* state) {
+    ScriptExecutionContext* context = static_cast<ScriptExecutionContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+    if (context == nullptr) {
+        return 0;
+    }
+    const char* variableName = luaL_checkstring(state, 2);
+    PucLuaScriptRuntime* runtime = *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state));
+    if (runtime != nullptr) {
+        static_cast<void>(runtime->SetInstanceVariable(context->Self(), context->Asset(), variableName, PucLuaValueBridge::FromLua(state, 3)));
+    }
+    return 0;
+}
+
 } // namespace
 
 void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) {
@@ -156,6 +197,19 @@ void PucLuaSelfApi::PushSelf(lua_State* state, ScriptExecutionContext& context) 
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaSelfSetVariable>, 1);
     lua_setfield(state, -2, "SetVariable");
+}
+
+void PucLuaSelfApi::AttachInspector(lua_State* state, int environmentIndex, ScriptExecutionContext* context) {
+    lua_newtable(state); // the Inspector proxy table — kept empty so every field access hits the metatable
+    lua_createtable(state, 0, 2);
+    lua_pushlightuserdata(state, context);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaInspectorIndex>, 1);
+    lua_setfield(state, -2, "__index");
+    lua_pushlightuserdata(state, context);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaInspectorNewIndex>, 1);
+    lua_setfield(state, -2, "__newindex");
+    lua_setmetatable(state, -2);
+    lua_setfield(state, environmentIndex, "Inspector");
 }
 
 } // namespace kb::script

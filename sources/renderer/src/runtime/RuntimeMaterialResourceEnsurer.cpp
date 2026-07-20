@@ -90,11 +90,8 @@ void EmitCachedRuntimeMaterialState(
     } else if (cached.status == RuntimeMaterialResolveStatus::LastGoodMaterial) {
         ++context.materialErrorCount;
     }
-    if (cached.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
-        ++context.graphMaterialCpuFallbackCount;
-    } else if (cached.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
-        ++context.graphMaterialGpuCount;
-    }
+    // graphMaterialGpuCount/CpuFallback are counted from the actual draw outcome now (see
+    // SceneMeshPassResources::GraphMaterialDrawStats), not the resolve-time renderMode here.
     ResolvedRuntimeMaterialAsset resolved{};
     resolved.diagnostics = cached.diagnostics;
     EmitRuntimeMaterialResolverDiagnostics(context, resolved, materialAssetId);
@@ -236,11 +233,6 @@ void EnsureMaterialInstance(
     if (reloadsExistingMaterial) {
         ++context.materialReloadCount;
     }
-    if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
-        ++context.graphMaterialCpuFallbackCount;
-    } else if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
-        ++context.graphMaterialGpuCount;
-    }
 
     materials[runtimeKey] = RuntimeMaterialResource{
         .handle = handle,
@@ -374,11 +366,6 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         ++context.materialLoadedCount;
         if (reloadsExistingMaterial) {
             ++context.materialReloadCount;
-        }
-        if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
-            ++context.graphMaterialCpuFallbackCount;
-        } else if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
-            ++context.graphMaterialGpuCount;
         }
 
         materials[runtimeKey] = RuntimeMaterialResource{

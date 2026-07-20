@@ -23,12 +23,18 @@ void ScriptModule::OnSceneAttach(kb::scene::Scene& scene) {
 
     diagnostics_.clear();
     ScriptRuntimeHostOptions runtimeOptions = std::move(options_.runtimeOptions);
-    runtimeOptions.installSceneSystem = true;
+    // Do NOT install the scene system from the constructor: its startup pass
+    // dispatches a lifecycle event that LOCKS the function registry (LIB-021),
+    // after which no function can be registered. configureHost registers the
+    // host's extra functions (e.g. the editor's Console-routing Log) and must
+    // run BEFORE that lock, so install the scene system explicitly afterwards.
+    runtimeOptions.installSceneSystem = false;
     host_ = std::make_unique<ScriptRuntimeHost>(scene, std::move(runtimeOptions));
 
     if (options_.configureHost) {
         options_.configureHost(*host_);
     }
+    static_cast<void>(host_->InstallSceneSystem());
 
     diagnostics_ = host_->Diagnostics();
 }

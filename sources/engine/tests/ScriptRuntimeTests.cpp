@@ -1716,6 +1716,77 @@ end
     kb::tests::Require(sawNilErrorOnSuccess.has_value() && sawNilErrorOnSuccess->AsBool(), "Lua CallFunction must return nil as its second value when the call succeeds, so `if err then` idiomatically detects failure only");
 }
 
+// LIB-041: a Lua caller marshals numeric literals as Int/Float and text as
+// String (PucLuaValueBridge::FromLua); this proves a function pinned to the
+// expanded value types (UInt32/Int64/Double/Name/Guid) is actually callable
+// from Lua — the ScriptFunctionRegistry gate now coerces those Lua inputs
+// instead of rejecting them as a type mismatch (the prior residual gap).
+void RunLuaCallExpandedTypeInputsTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua expanded-type-inputs host setup failed");
+
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                           .signature = kb::script::ScriptFunctionSignature{
+                               .name = "Tests.ExpandedTypeInputs",
+                               .inputs = {
+                                   kb::script::ScriptFunctionPin{ .name = "u32", .type = kb::script::ScriptValueType::UInt32 },
+                                   kb::script::ScriptFunctionPin{ .name = "big", .type = kb::script::ScriptValueType::Int64 },
+                                   kb::script::ScriptFunctionPin{ .name = "dbl", .type = kb::script::ScriptValueType::Double },
+                                   kb::script::ScriptFunctionPin{ .name = "nm", .type = kb::script::ScriptValueType::Name },
+                                   kb::script::ScriptFunctionPin{ .name = "gid", .type = kb::script::ScriptValueType::Guid },
+                               },
+                               .outputs = { kb::script::ScriptFunctionPin{ .name = "ok", .type = kb::script::ScriptValueType::Bool } },
+                           },
+                           .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> args) {
+                               const auto find = [args](std::string_view name) -> const kb::script::ScriptValue* {
+                                   for (const kb::script::ScriptFunctionArgument& arg : args) {
+                                       if (arg.name == name) {
+                                           return &arg.value;
+                                       }
+                                   }
+                                   return nullptr;
+                               };
+                               const kb::script::ScriptValue* u32 = find("u32");
+                               const kb::script::ScriptValue* big = find("big");
+                               const kb::script::ScriptValue* dbl = find("dbl");
+                               const kb::script::ScriptValue* nm = find("nm");
+                               const kb::script::ScriptValue* gid = find("gid");
+                               const bool matched =
+                                   u32 != nullptr && u32->Type() == kb::script::ScriptValueType::UInt32 && u32->AsUInt64() == 7U &&
+                                   big != nullptr && big->Type() == kb::script::ScriptValueType::Int64 && big->AsInt64() == 123 &&
+                                   dbl != nullptr && dbl->Type() == kb::script::ScriptValueType::Double && dbl->AsDouble() == 3.0 &&
+                                   nm != nullptr && nm->Type() == kb::script::ScriptValueType::Name && nm->AsString() == "hero" &&
+                                   gid != nullptr && gid->Type() == kb::script::ScriptValueType::Guid && gid->AsString() == "abc-123";
+                               return kb::script::ScriptFunctionCallResult{
+                                   .executed = true,
+                                   .outputs = { kb::script::ScriptFunctionArgument{ .name = "ok", .value = kb::script::ScriptValue{ matched } } },
+                               };
+                           },
+                       }),
+        "Lua expanded-type-inputs did not register Tests.ExpandedTypeInputs");
+
+    constexpr kb::assets::AssetId kLuaAsset{ 5041U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LuaExpandedTypeInputs" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    local ok = CallFunction("Tests.ExpandedTypeInputs", { u32 = 7, big = 123, dbl = 3, nm = "hero", gid = "abc-123" })
+    SetShared("expandedOk", ok)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Lua expanded-type-inputs script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(result.Succeeded(), "Lua call to a UInt32/Int64/Double/Name/Guid-pinned function must not produce a type-mismatch diagnostic");
+    const std::optional<kb::script::ScriptValue> ok = host.SharedState().Get("expandedOk");
+    kb::tests::Require(ok.has_value() && ok->AsBool(), "Lua-supplied Int/String inputs must reach a UInt32/Int64/Double/Name/Guid-pinned function coerced to those exact types");
+}
+
 // LIB-010 audit gap closed 2026-07-17: every existing Lua adapter test
 // (RunLuaCallFunctionResultAdapterTest above) only covered a registered
 // callback RETURNING a failed ScriptFunctionCallResult — never one that
@@ -6719,22 +6790,48 @@ void RunWorldDestroyDeferredFlagTest() {
     const kb::script::ScriptFunctionCallResult thirdDestroy = host.Functions().Call("World.Destroy", destroyArgs, context);
     kb::tests::Require(thirdDestroy.Succeeded() && !thirdDestroy.Output("destroyed")->AsBool(), "World.Destroy must remain idempotent across more than two repeat calls");
 
-    const kb::scene::SceneEntity liveEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "StillAlive" });
+    // LIB-067: deferred=true no longer rejects — it queues the destroy for the
+    // frame playback point. The entity stays alive until the scene system
+    // drains the queue (ScriptRuntimeSceneSystem::ExecuteFrame).
+    const kb::scene::SceneEntity deferredTarget = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "DeferredTarget" });
     const std::vector<kb::script::ScriptFunctionArgument> deferredDestroyArgs{
-        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ deferredTarget.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ true } },
     };
     const kb::script::ScriptFunctionCallResult deferredDestroy = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
-    kb::tests::Require(!deferredDestroy.Succeeded(), "World.Destroy(deferred=true) must be rejected today, not silently treated as immediate");
-    kb::tests::Require(scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=true) must not have destroyed the entity when the call itself failed");
+    kb::tests::Require(deferredDestroy.Succeeded() && deferredDestroy.Output("destroyed")->AsBool(),
+        "World.Destroy(deferred=true) must succeed and report destroyed=true for a live entity (it was queued)");
+    kb::tests::Require(scene.Entities().IsAlive(deferredTarget),
+        "World.Destroy(deferred=true) must NOT destroy the entity inline — it is deferred to the frame playback point");
 
+    // A repeated deferred call on the same still-alive entity is idempotent
+    // (the queue de-duplicates) and neither errors nor destroys early.
+    const kb::script::ScriptFunctionCallResult deferredAgain = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(deferredAgain.Succeeded() && scene.Entities().IsAlive(deferredTarget),
+        "A repeated World.Destroy(deferred=true) before the drain must stay queued, not error or destroy early");
+
+    // Driving one scene-system frame reaches the LIB-067 playback point and
+    // applies the queued destroy — proving the drain is actually wired in.
+    kb::script::ScriptRuntimeSceneSystem deferredSystem{ host.Runtime() };
+    static_cast<void>(deferredSystem.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(!scene.Entities().IsAlive(deferredTarget),
+        "A scene-system frame must drain the deferred-destroy queue and actually destroy the entity");
+
+    // Deferring a destroy of an already-dead entity is a harmless no-op: it
+    // reports destroyed=false and queues nothing, so a later frame stays clean.
+    const kb::script::ScriptFunctionCallResult deferredDead = host.Functions().Call("World.Destroy", deferredDestroyArgs, context);
+    kb::tests::Require(deferredDead.Succeeded() && !deferredDead.Output("destroyed")->AsBool(),
+        "World.Destroy(deferred=true) on an already-dead entity must report destroyed=false and queue nothing");
+
+    // deferred=false still behaves exactly like the default immediate call.
+    const kb::scene::SceneEntity immediateTarget = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "ImmediateTarget" });
     const std::vector<kb::script::ScriptFunctionArgument> explicitImmediateArgs{
-        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ liveEntity.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ immediateTarget.Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "deferred", .value = kb::script::ScriptValue{ false } },
     };
     const kb::script::ScriptFunctionCallResult explicitImmediateDestroy = host.Functions().Call("World.Destroy", explicitImmediateArgs, context);
     kb::tests::Require(explicitImmediateDestroy.Succeeded() && explicitImmediateDestroy.Output("destroyed")->AsBool(), "World.Destroy(deferred=false) must behave exactly like the default (immediate) call");
-    kb::tests::Require(!scene.Entities().IsAlive(liveEntity), "World.Destroy(deferred=false) must have actually destroyed the entity");
+    kb::tests::Require(!scene.Entities().IsAlive(immediateTarget), "World.Destroy(deferred=false) must have actually destroyed the entity");
 }
 
 // LIB-068: World.IsActive/SetActive — an entity's own fresh Scene/host,
@@ -13213,6 +13310,142 @@ void RunScriptEventBusReachesVisualGraphCustomEventTest() {
     kb::tests::Require(afterDestroy.delivered == 0U && recordedAmounts.size() == 1U, "A Broadcast after the behaviour was destroyed must not re-invoke the graph — the subscription must genuinely be gone, not just skipped once");
 }
 
+// Regression: stopping play must fire each behaviour's Destroyed hook (the Unity
+// OnDestroy-equivalent). ScriptRuntimeHost::DispatchShutdownLifecycle drives the
+// installed scene system's shutdown so the editor can tear scripts down before
+// it reverts the play snapshot; previously nothing called it on Stop and
+// Destroyed never ran.
+void RunHostShutdownLifecycleFiresDestroyedTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Destroyed-on-stop host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x0D35U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LifecycleObj" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+function Tick(self, dt) end
+function Destroyed(self, dt) SetShared("wasDestroyed", true) end
+)");
+    kb::tests::Require(loaded.succeeded, "Destroyed-on-stop script did not load");
+
+    kb::tests::Require(host.InstallSceneSystem(), "Destroyed-on-stop scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(!host.SharedState().Get("wasDestroyed").has_value(),
+        "Destroyed must NOT fire during a normal frame — only on shutdown");
+
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F),
+        "DispatchShutdownLifecycle must report the installed scene system");
+    kb::tests::Require(host.SharedState().Get("wasDestroyed").has_value()
+            && host.SharedState().Get("wasDestroyed")->AsBool(),
+        "Stopping play (DispatchShutdownLifecycle) must fire the behaviour's Destroyed hook");
+
+    // A host that never installed a scene system has nothing to tear down and
+    // reports so honestly (the editor guards on this before calling).
+    kb::scene::Scene bareScene;
+    kb::script::ScriptRuntimeHost bareHost{ bareScene };
+    kb::tests::Require(!bareHost.DispatchShutdownLifecycle(0.0F),
+        "DispatchShutdownLifecycle must return false when no scene system is installed");
+}
+
+// Exposed-variable override end to end: an editor-authored per-instance override
+// stored on the scene (delta-over-default) must be seeded into the Lua runtime
+// before Created and observed by the script, instead of the @expose default.
+void RunExposedVariableOverrideSeedingTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "override seeding host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x0E4A0U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Tunable" });
+
+    // Declare exposed 'speed' Float = 3.5 (what ScriptAssetLoader would parse
+    // from `-- @expose speed Float = 3.5`).
+    const std::vector<kb::script::ScriptApiPin> pins{ kb::script::ScriptApiPin{ .name = "speed", .type = kb::script::ScriptValueType::Float } };
+    const std::vector<kb::script::ScriptValue> defaults{ kb::script::ScriptValue{ 3.5F } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    host.LuaRuntime().SetScriptExposedVariables(kAsset, pins, defaults, hasDefaults);
+
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+function Created(self, dt) SetShared("seenSpeed", self:GetVariable("speed")) end
+function Tick(self, dt) end
+)");
+    kb::tests::Require(loaded.succeeded, "override seeding script did not load");
+
+    // Author an override in the scene: speed = 12.0 (a delta from default 3.5).
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 12.0F });
+    kb::tests::Require(scene.Entities().BehaviourVariableOverrides(object.Entity()).size() == 1U,
+        "scene must store the authored exposed-variable override delta");
+
+    kb::tests::Require(host.InstallSceneSystem(), "override seeding scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const std::optional<kb::script::ScriptValue> seen = host.SharedState().Get("seenSpeed");
+    kb::tests::Require(seen.has_value() && kb::tests::NearlyEqual(seen->AsFloat(), 12.0F),
+        "Created must observe the editor-authored override (12.0), not the @expose default (3.5)");
+
+    // Removing the last override drops the entity's whole entry (store-only-non-default).
+    kb::tests::Require(scene.Entities().RemoveBehaviourVariableOverride(object.Entity(), "speed"),
+        "removing an existing override must report success");
+    kb::tests::Require(scene.Entities().BehaviourVariableOverrides(object.Entity()).empty(),
+        "removing the last override must drop the entity's override entry entirely");
+}
+
+// The engine-provided `Inspector` table: a script reads `Inspector.speed` (getting
+// the current entity's override ?? default) and writes it back (persisting per
+// entity) — the direct, non-comment, per-instance access the design calls for.
+void RunInspectorTableRuntimeTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Inspector table host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x01457U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "InspectorObj" });
+
+    const std::vector<kb::script::ScriptApiPin> pins{ kb::script::ScriptApiPin{ .name = "speed", .type = kb::script::ScriptValueType::Float } };
+    const std::vector<kb::script::ScriptValue> defaults{ kb::script::ScriptValue{ 3.5F } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    host.LuaRuntime().SetScriptExposedVariables(kAsset, pins, defaults, hasDefaults);
+
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loaded = host.LuaRuntime().LoadScript(kAsset, R"(
+Inspector.speed = 3.5
+function Created(self, dt)
+    SetShared("readAtStart", Inspector.speed)
+    Inspector.speed = Inspector.speed + 1
+end
+function Tick(self, dt)
+    SetShared("readAfterWrite", Inspector.speed)
+end
+)");
+    kb::tests::Require(loaded.succeeded, "Inspector table script did not load");
+
+    scene.Entities().SetBehaviourVariableOverride(object.Entity(), "speed", kb::script::ScriptValue{ 12.0F });
+    kb::tests::Require(host.InstallSceneSystem(), "Inspector table scene system install failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const std::optional<kb::script::ScriptValue> readAtStart = host.SharedState().Get("readAtStart");
+    kb::tests::Require(readAtStart.has_value() && kb::tests::NearlyEqual(readAtStart->AsFloat(), 12.0F),
+        "Inspector.speed must read the editor override (12), not the declared default (3.5)");
+    const std::optional<kb::script::ScriptValue> readAfterWrite = host.SharedState().Get("readAfterWrite");
+    kb::tests::Require(readAfterWrite.has_value() && kb::tests::NearlyEqual(readAfterWrite->AsFloat(), 13.0F),
+        "a script's `Inspector.speed = Inspector.speed + 1` write must persist per entity (12 + 1 = 13)");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -13233,6 +13466,7 @@ void RunScriptRuntimeTests() {
     RunScriptFunctionRegistryCrossBackendTest();
     RunVisualGraphCallNativeFailureBranchTest();
     RunLuaCallFunctionResultAdapterTest();
+    RunLuaCallExpandedTypeInputsTest();
     RunLuaCallFunctionThrowingCallbackSafetyTest();
     RunScriptFunctionRegistryExceptionSafetyTest();
     RunNativeScriptBackendExceptionSafetyTest();
@@ -13312,6 +13546,9 @@ void RunScriptRuntimeTests() {
     RunTransformApiRotateLookAtAndPointConversionTest();
     RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
+    RunHostShutdownLifecycleFiresDestroyedTest();
+    RunExposedVariableOverrideSeedingTest();
+    RunInspectorTableRuntimeTest();
     RunWorldActiveStateTest();
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();

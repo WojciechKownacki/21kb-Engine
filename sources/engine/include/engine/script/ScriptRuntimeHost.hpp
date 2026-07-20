@@ -44,6 +44,9 @@ public:
 
     [[nodiscard]] bool Succeeded() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept;
+    // Per-frame script diagnostics (compile/behaviour errors) captured while the
+    // installed scene system ran, drained (and cleared) for the host to surface.
+    [[nodiscard]] std::vector<std::string> DrainSceneSystemDiagnostics();
     // LIB-028: the kb::library startup report (one entry per catalog
     // module: installed/disabled, version, reason) produced by the real
     // EngineLibraryModule::Install() call this host made while
@@ -51,6 +54,12 @@ public:
     [[nodiscard]] const std::vector<kb::library::EngineLibraryModuleReportEntry>& LibraryStartupReport() const noexcept;
 
     [[nodiscard]] bool InstallSceneSystem();
+    // Drives the installed script scene system's shutdown lifecycle NOW — fires
+    // Deactivated + Destroyed on every tracked behaviour and clears tracking,
+    // without removing the system. The editor calls this when play stops so a
+    // behaviour gets its Destroyed (OnDestroy-equivalent) hook before the scene
+    // snapshot is restored. Returns false if no scene system is installed.
+    bool DispatchShutdownLifecycle(float deltaSeconds);
     [[nodiscard]] kb::visual::VisualGraphNodeCatalog CreateVisualGraphNodeCatalog() const;
 
     [[nodiscard]] ScriptRuntime& Runtime() noexcept;

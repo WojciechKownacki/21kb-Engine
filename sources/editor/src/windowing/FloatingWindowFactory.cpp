@@ -8,7 +8,10 @@
 namespace kb::editor {
 
 HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t* className, const std::string& titleText, const DockRect& rect) noexcept {
-    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    // WS_THICKFRAME is what lets DefWindowProc act on the HTLEFT/HTBOTTOMRIGHT... codes that
+    // FloatingWindowHitTestResolver already returns for the border strip; without it the edges are inert
+    // and an undocked panel is stuck at its initial size.
+    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     const std::wstring title(titleText.begin(), titleText.end());
     const LONG_PTR ownerApplication = GetWindowLongPtrW(owner, GWLP_USERDATA);
     HWND floating = CreateWindowExW(

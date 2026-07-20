@@ -5,6 +5,7 @@
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
@@ -84,6 +85,9 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteStartup(kb:
     PrepareScene(scene);
     DispatchPendingSceneLifecycleEvents(scene, deltaSeconds);
     SyncBehaviourLifecycles(scene, deltaSeconds);
+    // LIB-067: drain here too so a deferred destroy queued from an OnStart /
+    // startup-phase behaviour is applied before the first ExecuteFrame.
+    static_cast<void>(scene.Entities().DrainDeferredDestroys());
     return lastResult_;
 }
 
@@ -131,6 +135,10 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
+    // queued during this frame's behaviour phases now that all iteration is
+    // done, so no behaviour ran against storage a deferred destroy will pull.
+    static_cast<void>(scene.Entities().DrainDeferredDestroys());
     return lastResult_;
 }
 
@@ -325,6 +333,14 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
             tracked.entity = current.entity;
             tracked.behaviour = current.behaviour;
             if (!tracked.created) {
+                // Seed editor-authored exposed-variable overrides into the backend
+                // BEFORE Created runs, so the very first lifecycle hook already
+                // observes the authored value (the Unity/Godot "apply overrides
+                // before _ready" timing). No-op for backends without exposed vars.
+                if (IScriptBackend* backend = runtime_.FindBackend(tracked.behaviour.backend); backend != nullptr) {
+                    backend->ApplyExposedVariableOverrides(
+                        tracked.entity, tracked.behaviour, scene.Entities().BehaviourVariableOverrides(tracked.entity));
+                }
                 ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Created, deltaSeconds);
                 tracked.created = true;
             }

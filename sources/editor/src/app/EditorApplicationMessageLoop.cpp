@@ -8,6 +8,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -18,6 +19,7 @@
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 
@@ -393,6 +395,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         runtime.SetEcsProfilerEnabled(true);
     }
     static_cast<void>(runtime.Update(deltaSeconds));
+    // Surface any scene-system fault (e.g. a plugin's system throwing) that the
+    // scheduler isolated this frame, so a broken plugin does not silently stop
+    // scripts/behaviours from running with no message in the Console.
+    for (const std::string& systemError : runtime.DrainSceneSystemErrors()) {
+        state.sceneContext.Console().Error("Scripts", systemError);
+    }
+    state.sceneContext.SurfaceScriptDiagnostics();
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();
@@ -401,6 +410,11 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 }
 
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
+    // Keep the scene's physics debug-draw flag in sync with the editor's collider
+    // gizmo toggle (the flag lives in per-scene state and resets on reload, so a
+    // cheap per-frame write keeps green collider wireframes on across reloads).
+    kb::scene::PhysicsDebugDraw::SetEnabled(state.sceneContext.Scene(), state.sceneContext.ArePhysicsGizmosVisible());
+
     bool navigationChanged = false;
     if (state.sceneContext.HasActiveViewportCameraNavigation()) {
         navigationChanged = EditorSceneViewportCameraController{
@@ -424,8 +438,38 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         InvalidateInspectorPanels(state);
     }
 
+    // Advance the "frame selected" (F) camera animation. Returning true keeps
+    // the loop pacing at frame rate (instead of parking in WaitMessage) until
+    // the ease completes, and requests a present so each interpolated step is
+    // rendered.
+    const bool focusChanged = state.sceneContext.TickViewportFocusAnimations(deltaSeconds);
+    if (focusChanged) {
+        state.sceneViewport.RequestPresent();
+    }
+
+    // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
+    // cached asset stale; detect the save here and reload it so the Inspector's
+    // exposed-variable schema reflects the edit immediately (no editor/scene save
+    // required). SaveSerial is monotonic, so a single equality check suffices.
+    bool scriptSaved = false;
+    if (const std::uint64_t saveSerial = ScriptEditorWindow::SaveSerial(); saveSerial != state.lastScriptSaveSerial) {
+        state.lastScriptSaveSerial = saveSerial;
+        if (state.sceneContext.ReloadOpenScriptAsset()) {
+            InvalidateInspectorPanels(state);
+            scriptSaved = true;
+        }
+    }
+
+    // Advance the Add Component menu's category<->components slide animation. Keeps
+    // the loop pacing at frame rate (instead of parking in WaitMessage) and
+    // repaints the Inspector each interpolated step until it settles.
+    const bool addComponentSliding = state.sceneContext.Inspector().TickAddComponentSlide(deltaSeconds);
+    if (addComponentSliding) {
+        InvalidateInspectorPanels(state);
+    }
+
     const bool viewportsPresented = PresentVisibleViewports(state);
-    return viewportsPresented || navigationChanged || gizmoChanged;
+    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved || addComponentSliding;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {
@@ -511,7 +555,18 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 InvalidateRect(state.window, nullptr, FALSE);
             }
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, kPausedToolbarAnimationIntervalMs, QS_ALLINPUT));
-        } else if (!state.playMode.IsPlaying() && !sceneFramePresented) {
+        } else if (state.playMode.IsPlaying()) {
+            // Play advances a frame every loop iteration, but TickEditorFrame only
+            // presents the scene viewport (its own swapchain) — the GDI panels
+            // (Console, Hierarchy, Inspector) only redraw on WM_PAINT. Without
+            // invalidating here, live output produced during play (a script's
+            // Console log, the HUD, runtime stats) lands in panel state but is not
+            // drawn until the next input event forces a repaint. Invalidate each
+            // play frame — as the paused branch already does — so it shows live.
+            if (state.window != nullptr) {
+                InvalidateRect(state.window, nullptr, FALSE);
+            }
+        } else if (!sceneFramePresented) {
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.

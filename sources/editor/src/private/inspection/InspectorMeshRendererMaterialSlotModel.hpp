@@ -38,6 +38,14 @@ public:
         const std::optional<kb::render::RenderMeshAssetData>& mesh,
         const std::function<std::string(std::uint64_t)>& materialName,
         const std::function<std::string(std::uint64_t)>& materialStatus = {});
+
+    // The number of slot rows Build() will emit for this renderer/mesh pair —
+    // the same count, without building any row strings. Lets the Inspector's
+    // layout/height code size the Mesh Renderer section without materialising
+    // the full slot model every frame.
+    [[nodiscard]] static std::uint32_t SlotRowCount(
+        const kb::scene::MeshRendererComponent& renderer,
+        const std::optional<kb::render::RenderMeshAssetData>& mesh) noexcept;
 };
 
 } // namespace kb::editor

@@ -3,6 +3,7 @@
 #include "rendering/EditorMeshPreviewTypes.hpp"
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -25,6 +26,10 @@ enum class InspectorSectionId : std::uint8_t {
     Material,
     MaterialPreview,
     Script,
+    Rigidbody,
+    Collider,
+    CharacterController,
+    Joint,
     AddComponent,
 };
 
@@ -124,7 +129,22 @@ enum class InspectorPropertyId : std::uint8_t {
     MaterialOcclusionTexture,
     MaterialEmissiveTexture,
     ScriptName,
+    // The Script field's picker ("magnifier") button — reveals the bound Lua
+    // asset in Project Files, mirroring the Mesh/Material asset-field pickers.
+    ScriptPicker,
     ScriptEnabled,
+    // One row per exposed ("@expose") script variable; the specific variable is
+    // identified by the Hit's/edit's row index (like InputMapping entries).
+    ScriptVariable,
+    // One row per physics-component field, keyed by row index (the "one id +
+    // index" model as ScriptVariable). One id per component so an in-flight float
+    // edit is unambiguous even when an entity carries several physics components.
+    RigidbodyField,
+    ColliderField,
+    CharacterControllerField,
+    JointField,
+    // The Collider section's "Fit to Mesh" action button.
+    ColliderFitToMesh,
     AudioSourceClip,
     AudioSourceVolume,
     AudioSourcePitch,
@@ -141,6 +161,7 @@ enum class InspectorPropertyId : std::uint8_t {
     AddComponentButton,
     AddComponentSearch,
     AddComponentOption,
+    AddComponentBack,
 };
 
 struct InspectorPanelState {
@@ -150,14 +171,41 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsAddComponentBrowserOpen() const noexcept { return addComponentBrowserOpen_; }
     void ToggleAddComponentBrowser();
     void CloseAddComponentBrowser() noexcept;
+
+    // Add Component menu navigation (Unity-style two levels: category list ->
+    // that category's components, with an animated horizontal slide between them).
+    enum class AddComponentView : std::uint8_t { Categories, Components };
+    [[nodiscard]] AddComponentView AddComponentBrowserView() const noexcept { return addComponentView_; }
+    [[nodiscard]] const std::string& AddComponentBrowserCategory() const noexcept { return addComponentCategory_; }
+    // Enter a category (slide forward) / return to the category list (slide back).
+    void OpenAddComponentCategory(std::string category) noexcept;
+    void CloseAddComponentCategory() noexcept;
+    // Scroll offset in pixels within the results list, clamped to [0, maxScroll].
+    [[nodiscard]] int AddComponentScroll() const noexcept { return addComponentScroll_; }
+    void SetAddComponentScroll(int offset, int maxScroll) noexcept;
+    // Horizontal slide animation: 1.0 = settled, <1.0 = mid-transition. Forward
+    // means "entering a category" (new content slides in from the right).
+    [[nodiscard]] float AddComponentSlide() const noexcept { return addComponentSlide_; }
+    [[nodiscard]] bool AddComponentSlideForward() const noexcept { return addComponentSlideForward_; }
+    // Advances the slide by dt; returns true while still animating.
+    [[nodiscard]] bool TickAddComponentSlide(float deltaSeconds) noexcept;
+    // Draggable results scrollbar.
+    void BeginAddComponentScrollbarDrag(int grabOffset) noexcept;
+    void EndAddComponentScrollbarDrag() noexcept;
+    [[nodiscard]] bool IsAddComponentScrollbarDragging() const noexcept { return addComponentScrollDragging_; }
+    [[nodiscard]] int AddComponentScrollbarGrabOffset() const noexcept { return addComponentScrollGrab_; }
     [[nodiscard]] bool IsComponentMenuOpen(InspectorSectionId section) const noexcept;
     void ToggleComponentMenu(InspectorSectionId section) noexcept;
     void CloseComponentMenus() noexcept;
-    [[nodiscard]] bool SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) noexcept;
+    // `index` disambiguates rows that share one property id (physics fields,
+    // script variables). Pass -1 for singular rows. IsHovered/HoveredIndex report
+    // it so only the row actually under the cursor highlights.
+    [[nodiscard]] bool SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, int index = -1) noexcept;
     void ClearHover() noexcept;
-    [[nodiscard]] bool IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept;
+    [[nodiscard]] bool IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, int index = -1) const noexcept;
     [[nodiscard]] bool IsAnyHovered() const noexcept;
     [[nodiscard]] InspectorPropertyId HoveredProperty() const noexcept;
+    [[nodiscard]] int HoveredIndex() const noexcept;
     [[nodiscard]] bool IsListeningForKey() const noexcept;
     [[nodiscard]] int KeyCaptureMappingIndex() const noexcept;
     void BeginKeyCapture(int mappingIndex) noexcept;
@@ -218,25 +266,23 @@ struct InspectorPanelState {
     void EndScrollbarDrag() noexcept;
 
 private:
-    bool generalCollapsed_ = false;
-    bool transformCollapsed_ = false;
-    bool assetCollapsed_ = false;
-    bool detailsCollapsed_ = false;
-    bool audioSourceCollapsed_ = false;
-    bool audioListenerCollapsed_ = false;
-    bool meshRendererCollapsed_ = false;
-    bool lightCollapsed_ = false;
-    bool folderCollapsed_ = false;
-    bool inputActionCollapsed_ = false;
-    bool inputMappingsCollapsed_ = false;
-    bool materialCollapsed_ = false;
-    bool materialPreviewCollapsed_ = false;
-    bool scriptCollapsed_ = false;
+    // Every section that is currently collapsed. A set (rather than one bool per
+    // section) so any InspectorSectionId — including the physics component
+    // sections — collapses without extending a hand-maintained switch.
+    std::set<InspectorSectionId> collapsedSections_;
     bool addComponentBrowserOpen_ = false;
+    AddComponentView addComponentView_ = AddComponentView::Categories;
+    std::string addComponentCategory_;
+    int addComponentScroll_ = 0;
+    float addComponentSlide_ = 1.0F;
+    bool addComponentSlideForward_ = true;
+    bool addComponentScrollDragging_ = false;
+    int addComponentScrollGrab_ = 0;
     bool scriptComponentMenuOpen_ = false;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
+    int hoveredIndex_ = -1;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
     std::string editOriginalBuffer_;
     std::string editBuffer_;

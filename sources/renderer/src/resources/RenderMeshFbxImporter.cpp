@@ -348,6 +348,23 @@ void CaptureMaterialLayerMapping(const std::string& nodeName, const std::vector<
     return true;
 }
 
+// The FBX top-level node list is terminated by a "null record": a node header
+// whose endOffset, propertyCount, propertyListLength and nameLength are all
+// zero. Everything after it is the fixed FBX footer (footer code + version +
+// padding + magic), which is NOT a node record. Peeking here (offset taken by
+// value, so the caller's cursor is untouched) lets ExtractGeometry stop at the
+// terminator instead of feeding the footer to ParseNode. Without this, ParseNode
+// rejects the footer and the whole parse fails after already decoding the mesh.
+[[nodiscard]] bool IsTopLevelNullRecord(const FbxReader& reader, std::size_t offset, bool wideNodes) {
+    bool ok = true;
+    const std::uint64_t endOffset = ReadRecordValue32Or64(reader, offset, wideNodes, ok);
+    const std::uint64_t propertyCount = ReadRecordValue32Or64(reader, offset, wideNodes, ok);
+    const std::uint64_t propertyListLength = ReadRecordValue32Or64(reader, offset, wideNodes, ok);
+    std::uint8_t nameLength = 0;
+    ok = ok && reader.ReadU8(offset, nameLength);
+    return ok && endOffset == 0U && propertyCount == 0U && propertyListLength == 0U && nameLength == 0U;
+}
+
 [[nodiscard]] bool ExtractGeometry(std::span<const std::byte> data, FbxGeometryData& geometry) {
     const FbxReader reader{ data };
     if (!reader.StartsWith(std::span<const unsigned char>{ kBinaryFbxMagic.data(), kBinaryFbxMagic.size() }) || reader.Size() < 27U) {
@@ -362,6 +379,11 @@ void CaptureMaterialLayerMapping(const std::string& nodeName, const std::vector<
 
     const bool wideNodes = version >= 7500U;
     while (offset < reader.Size()) {
+        // Stop at the top-level null-record terminator; the FBX footer follows it
+        // and must not be parsed as a node (that would discard the decoded mesh).
+        if (IsTopLevelNullRecord(reader, offset, wideNodes)) {
+            break;
+        }
         const std::size_t before = offset;
         if (!ParseNode(reader, offset, wideNodes, geometry)) {
             return false;
