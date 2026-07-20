@@ -413,12 +413,12 @@ public:
         ColorPickerLog("ctor " + RgbaText(rgba_) + " " + HsvText(hsv_));
     }
 
-    [[nodiscard]] std::optional<std::array<float, 4U>> Show(HWND owner) {
+    [[nodiscard]] std::optional<std::array<float, 4U>> Show(HWND owner, const POINT* anchorScreenPoint) {
         owner_ = owner;
         if (!EnsureWindow()) {
             return std::nullopt;
         }
-        const RECT bounds = CenteredWindowRect(owner);
+        const RECT bounds = anchorScreenPoint == nullptr ? CenteredWindowRect(owner) : AnchoredWindowRect(*anchorScreenPoint);
         ColorPickerLog("show owner=" + IntText(owner_ != nullptr ? 1 : 0) + " bounds=" + RectText(bounds));
         {
             const EditorModalWindowScope modal{ window_ };
@@ -485,6 +485,21 @@ private:
         RECT client{};
         GetClientRect(window_, &client);
         return client;
+    }
+
+    // Opens next to the click, nudged fully onto the monitor that click is on.
+    [[nodiscard]] RECT AnchoredWindowRect(POINT anchor) const {
+        RECT work{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+        if (const HMONITOR monitor = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST); monitor != nullptr) {
+            MONITORINFO info{};
+            info.cbSize = sizeof(info);
+            if (GetMonitorInfoW(monitor, &info) != 0) {
+                work = info.rcWork;
+            }
+        }
+        const int left = std::clamp<int>(anchor.x + 12, work.left, std::max<int>(work.left, work.right - kDialogWidth));
+        const int top = std::clamp<int>(anchor.y + 12, work.top, std::max<int>(work.top, work.bottom - kDialogHeight));
+        return Rect(left, top, left + kDialogWidth, top + kDialogHeight);
     }
 
     [[nodiscard]] RECT CenteredWindowRect(HWND owner) const {
@@ -1158,9 +1173,10 @@ private:
 std::optional<std::array<float, 4U>> EditorMaterialColorPickerDialog::Show(
     HWND owner,
     std::string_view title,
-    const std::array<float, 4U>& currentColor) {
+    const std::array<float, 4U>& currentColor,
+    const POINT* anchorScreenPoint) {
     ColorPickerWindow window{ std::string{ title }, currentColor };
-    return window.Show(owner);
+    return window.Show(owner, anchorScreenPoint);
 }
 
 } // namespace kb::editor
