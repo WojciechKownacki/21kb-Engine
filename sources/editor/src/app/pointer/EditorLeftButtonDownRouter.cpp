@@ -447,7 +447,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             const bool hadPendingPinConnection = sceneContext_.HasMaterialGraphPinConnection();
             static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
             if (hadPendingPinConnection) {
-                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                // Dismissing the "what do you want to connect?" menu leaves the wire unplugged rather than
+                // silently restoring the link the drag pulled off.
+                static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
             }
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
@@ -511,7 +513,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                                 static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
                             } else {
                                 const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                                    mainWindow_,
+                                    messageWindow,
                                     property.displayName,
                                     MaterialEditorPanelParameterValueText(property.value));
                                 if (value.has_value()) {
@@ -524,7 +526,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
-                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property.value)) {
+                            if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(messageWindow, property.value)) {
                                 static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
                                     materialId,
                                     property.nodeId,
@@ -558,7 +560,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (detailsHit.kind == MaterialEditorDetailsHitKind::Parameter) {
                         const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
                         const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                            mainWindow_,
+                            messageWindow,
                             parameter.displayName,
                             MaterialEditorPanelParameterValueText(parameter.value));
                         if (value.has_value()) {
@@ -582,7 +584,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (detailsHit.kind == MaterialEditorDetailsHitKind::TextureParameter) {
                         const MaterialEditorPanelParameterHit& parameter = detailsHit.parameter;
                         const EditorTextureAssetPickerDialog::Result result = EditorTextureAssetPickerDialog::Show(
-                            mainWindow_,
+                            messageWindow,
                             MakeEditorDarkTheme(),
                             sceneContext_,
                             kb::assets::AssetId{ parameter.value.assetId },
@@ -653,7 +655,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (const std::optional<MaterialEditorGraphColorWatcherHit> colorWatcher =
                         MaterialEditorPanelRenderer::GraphColorWatcherAt(*materialEditorContent, *material, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(colorWatcher->nodeId));
-                    static_cast<void>(ApplyGraphColorWatcherHit(mainWindow_, sceneContext_, materialId, *colorWatcher));
+                    static_cast<void>(ApplyGraphColorWatcherHit(messageWindow, sceneContext_, materialId, *colorWatcher));
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
                 }
@@ -664,11 +666,19 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     return;
                 }
                 if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
-                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
-                    const bool connectionStarted = pin->direction == MaterialEditorGraphPinDirection::Output
-                        ? sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y)
-                        : (sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y) ||
-                            sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
+                    // Unplugging a wire is not a selection gesture: selecting the node that owns the input
+                    // pin would leave e.g. Material Output selected just because a link was pulled off it.
+                    const bool detached = pin->direction == MaterialEditorGraphPinDirection::Input &&
+                        sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y);
+                    if (detached) {
+                        static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                    } else {
+                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
+                    }
+                    const bool connectionStarted = detached ||
+                        (pin->direction == MaterialEditorGraphPinDirection::Output
+                            ? sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y)
+                            : sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
                     if (connectionStarted) {
                         SetCapture(messageWindow);
                     }
@@ -706,6 +716,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             KeyDown(VK_MENU),
                             KeyDown(VK_CONTROL),
                             KeyDown(VK_SHIFT));
+                    // Clicking empty canvas drops the selection right away instead of waiting for the box
+                    // selection to end; the modifier operations keep it, because they extend it.
+                    if (selectionOperation == MaterialGraphSelectionOperation::Replace) {
+                        static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                    }
                     if (sceneContext_.BeginMaterialGraphBoxSelection(materialId, x, y, selectionOperation)) {
                         SetCapture(messageWindow);
                     }
