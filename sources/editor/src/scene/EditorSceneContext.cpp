@@ -89,6 +89,7 @@
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 
+#include <bit>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -2457,6 +2458,20 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
         return false;
     }
     EditorCrashBreadcrumbs::Write("material_open", "metadata type=" + metadata->type + " path=" + metadata->virtualPath.generic_string());
+    // Re-opening the material that is already open is a "focus the editor" gesture (double-click in
+    // Project Files, Open from the context menu). Reloading it from disk here would silently discard the
+    // unsaved working copy, so keep it. An armed Inspector text edit is deliberately excluded: it lives in
+    // the Inspector, a reload leaves it untouched, and blocking the refresh over it would be a false alarm.
+    if (id == materialEditor_.OpenAssetId() && materialEditor_.WorkingCopy().has_value() &&
+        (materialEditor_.Dirty() || HasActiveMaterialAssetEdit() || materialEditor_.IsGraphNodeRenameEditing() ||
+            materialEditor_.IsGraphConstantInlineEditDirty())) {
+        EditorCrashBreadcrumbs::Write("material_open", "already open and dirty; kept unsaved working copy");
+        console_.Warning(
+            "Materials",
+            "Material Editor already has unsaved edits for " + metadata->virtualPath.generic_string() +
+                ". Kept them; Save them, or Revert and open the asset again to load it from disk.");
+        return true;
+    }
     if (!PrepareMaterialAssetSelectionChange(id)) {
         EditorCrashBreadcrumbs::Write("material_open", "selection change cancelled");
         return false;
@@ -2677,6 +2692,12 @@ void EditorSceneContext::CloseMaterialEditorAsset() noexcept {
         if (materialEditor_.IsGraphNodeRenameEditing()) {
             static_cast<void>(CommitMaterialGraphNodeRenameEdit());
         }
+        // Same contract as the rename above: a value typed into a constant node is pending work, not
+        // scratch state, so commit it before ResetMaterialGraphTransientState cancels it. The commit
+        // clears the edit on every outcome, so no failure handling is needed here.
+        if (materialEditor_.IsGraphConstantInlineEditing()) {
+            static_cast<void>(CommitMaterialGraphConstantInlineEdit());
+        }
         ResetMaterialGraphTransientState();
         ClearMaterialEditorWorkingCopyRuntimePreview();
         MarkSceneRenderDirty();
@@ -2696,6 +2717,12 @@ bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
     if (materialEditor_.IsGraphNodeRenameEditing()) {
         return true;
     }
+    // A typed inline constant value exists nowhere else, so counting it here is what makes the close/quit
+    // prompts and the unsaved markers see it. Merely arming the edit (a click, prefilled buffer, nothing
+    // typed) is not pending work and must not mark a byte-identical document as unsaved.
+    if (materialEditor_.IsGraphConstantInlineEditDirty()) {
+        return true;
+    }
     if (HasActiveMaterialAssetEdit()) {
         return true;
     }
@@ -2712,6 +2739,9 @@ bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
 bool EditorSceneContext::PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset) {
     if (nextAsset != materialEditor_.OpenAssetId() && materialEditor_.IsGraphNodeRenameEditing()) {
         static_cast<void>(CommitMaterialGraphNodeRenameEdit());
+    }
+    if (nextAsset != materialEditor_.OpenAssetId() && materialEditor_.IsGraphConstantInlineEditing()) {
+        static_cast<void>(CommitMaterialGraphConstantInlineEdit());
     }
     if (!HasDirtyMaterialAssetEdit() || nextAsset == materialEditor_.OpenAssetId()) {
         return true;
@@ -3477,6 +3507,30 @@ bool EditorSceneContext::PromoteSelectedMaterialGraphNodeToParameter(kb::assets:
     }
     console_.Info("Materials", "Promoted material graph node #" + std::to_string(promotedNodeId) + " to a parameter.");
     return true;
+}
+
+std::uint64_t EditorSceneContext::MaterialGraphViewSignature(kb::assets::AssetId assetId) const noexcept {
+    // Everything the built graph canvas depends on, folded into one value the panel can compare cheaply:
+    // which document (and its revision), the view transform, and the live drag offsets.
+    const auto fold = [](std::uint64_t hash, std::uint64_t value) noexcept {
+        hash ^= value + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
+        return hash;
+    };
+    std::uint64_t hash = 0xCBF29CE484222325ULL;
+    hash = fold(hash, assetId.value);
+    hash = fold(hash, materialEditor_.OpenAssetId().value);
+    hash = fold(hash, materialEditor_.DocumentRevision());
+    hash = fold(hash, static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(materialGraphZoom_)));
+    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphPanX_)));
+    hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphPanY_)));
+    if (materialGraphNodeDragging_ && materialGraphDragAssetId_ == assetId) {
+        hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphDragStartOffsetX_)));
+        hash = fold(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(materialGraphDragStartOffsetY_)));
+        for (const MaterialGraphDragNodeStart& start : materialGraphDragStartNodes_) {
+            hash = fold(hash, start.nodeId);
+        }
+    }
+    return hash;
 }
 
 int EditorSceneContext::MaterialGraphNodeOffsetX(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
@@ -4645,10 +4699,16 @@ bool EditorSceneContext::CommitMaterialGraphConstantInlineEdit() {
         materialEditor_.CancelGraphConstantInlineEdit();
         return false;
     }
-    const bool committed = SetMaterialGraphConstantValue(id, nodeId, value);
-    if (committed) {
+    if (!materialEditor_.IsGraphConstantInlineEditDirty()) {
+        // Arming the edit prefills the buffer with the node's current value, so a click that types nothing
+        // must not rewrite the document (SetGraphConstantValue re-formats hints and parameter flags).
         materialEditor_.CancelGraphConstantInlineEdit();
+        return true;
     }
+    const bool committed = SetMaterialGraphConstantValue(id, nodeId, value);
+    // Always clear, exactly like the rename commit above: leaving an unparseable buffer armed would keep
+    // HasDirtyMaterialAssetEdit() true forever, which blocks Save for the whole editor with no way out.
+    materialEditor_.CancelGraphConstantInlineEdit();
     return committed;
 }
 
@@ -4927,6 +4987,22 @@ bool EditorSceneContext::CancelMaterialGraphPinConnection() {
     ClearMaterialGraphPinConnectionState();
     if (ownsTransaction) {
         CancelMaterialGraphWorkingCopyTransaction();
+    }
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialGraphPinConnectionDetach() const noexcept {
+    return materialGraphPendingConnectionOwnsTransaction_;
+}
+
+bool EditorSceneContext::AbandonMaterialGraphPinConnection() {
+    // Dropping a wire that was pulled off an input pin into empty space means "leave it unplugged": the
+    // detach is kept and lands in undo as its own edit. Only an explicit cancel (Escape) rolls it back,
+    // otherwise there would be no gesture that ends with a link actually removed.
+    const bool ownsTransaction = materialGraphPendingConnectionOwnsTransaction_;
+    ClearMaterialGraphPinConnectionState();
+    if (ownsTransaction) {
+        return CommitMaterialGraphWorkingCopyTransaction();
     }
     return true;
 }
@@ -6111,6 +6187,9 @@ bool EditorSceneContext::SaveMaterialEditorAsset(kb::assets::AssetId id) {
     if (materialEditor_.OpenAssetId() == id && materialEditor_.IsGraphNodeRenameEditing()) {
         static_cast<void>(CommitMaterialGraphNodeRenameEdit());
     }
+    if (materialEditor_.OpenAssetId() == id && materialEditor_.IsGraphConstantInlineEditing()) {
+        static_cast<void>(CommitMaterialGraphConstantInlineEdit());
+    }
     if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
         const std::optional<float> value = ParsePlainFloat(inspector_.EditBuffer());
         if (!value.has_value()) {
@@ -6122,7 +6201,14 @@ bool EditorSceneContext::SaveMaterialEditorAsset(kb::assets::AssetId id) {
             return false;
         }
         inspector_.EndTextEdit();
-        return true;
+        // For an open RenderMaterial the edit only reached the in-memory working copy
+        // (ExecuteMaterialAssetEdit -> ApplyPatchToMaterialEditorWorkingCopy), so returning here would
+        // report a successful Save that never touched the file. Fall through to the working-copy save
+        // below instead. Every other route (closed asset, instance, graph source) already wrote to disk
+        // through the command path and leaves the editor clean, so it returns right here.
+        if (materialEditor_.OpenAssetId() != id || !materialEditor_.Dirty()) {
+            return true;
+        }
     }
     if (HasActiveMaterialAssetEdit()) {
         if (activeMaterialEditAsset_ != id) {
@@ -6173,6 +6259,12 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     if (!id.IsValid()) {
         console_.Error("Materials", "No material asset is selected for Revert.");
         return false;
+    }
+    // Revert means discard: an in-flight node rename or inline constant edit is part of what the user asked
+    // to throw away, and leaving it armed would keep the editor reporting unsaved work after a Discard.
+    if (materialEditor_.OpenAssetId() == id) {
+        materialEditor_.CancelGraphNodeRenameEdit();
+        materialEditor_.CancelGraphConstantInlineEdit();
     }
     if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
         inspector_.EndTextEdit();

@@ -583,8 +583,20 @@ public:
         return findFocused_;
     }
 
+    // Bumped by every mutation of the working copy. Lets the panel cache the built graph canvas between
+    // pointer events instead of rebuilding it (nodes, pins, labels, links) several times per mouse move.
+    [[nodiscard]] std::uint64_t DocumentRevision() const noexcept {
+        return documentRevision_;
+    }
+
     [[nodiscard]] bool IsGraphConstantInlineEditing() const noexcept {
         return inlineConstantEditNodeId_ != 0U;
+    }
+
+    // Arming the edit prefills the buffer with the node's current value, so "editing" alone is not pending
+    // work — only a buffer that differs from that prefill is something the user would lose.
+    [[nodiscard]] bool IsGraphConstantInlineEditDirty() const noexcept {
+        return inlineConstantEditNodeId_ != 0U && inlineConstantEditBuffer_ != inlineConstantEditOriginal_;
     }
 
     [[nodiscard]] bool IsGraphNodeRenameEditing() const noexcept {
@@ -670,6 +682,7 @@ public:
         }
         node->positionX = positionX;
         node->positionY = positionY;
+        ++documentRevision_;
         return true;
     }
 
@@ -688,6 +701,7 @@ public:
                 node->positionX = position.second.first;
                 node->positionY = position.second.second;
                 changed = true;
+                ++documentRevision_;
             }
         }
         return changed;
@@ -1685,6 +1699,7 @@ public:
         if (inlineConstantEditBuffer_.empty()) {
             inlineConstantEditBuffer_ = ConstantDefaultValueHint(node->kind, {});
         }
+        inlineConstantEditOriginal_ = inlineConstantEditBuffer_;
         SelectNode(nodeId);
         return true;
     }
@@ -1710,6 +1725,7 @@ public:
     void CancelGraphConstantInlineEdit() noexcept {
         inlineConstantEditNodeId_ = 0U;
         inlineConstantEditBuffer_.clear();
+        inlineConstantEditOriginal_.clear();
     }
 
     [[nodiscard]] bool BeginGraphNodeRenameEdit(std::uint32_t nodeId) {
@@ -2065,6 +2081,7 @@ public:
         }
         comment->positionX = positionX;
         comment->positionY = positionY;
+        ++documentRevision_;
         return true;
     }
 
@@ -2098,6 +2115,7 @@ public:
                 node.positionY += deltaY;
             }
         }
+        ++documentRevision_;
         return true;
     }
 
@@ -2201,6 +2219,7 @@ public:
             return false;
         }
         composite->collapsed = collapsed;
+        ++documentRevision_;
         return true;
     }
 
@@ -2213,6 +2232,7 @@ public:
             return false;
         }
         composite->collapsed = !composite->collapsed;
+        ++documentRevision_;
         return true;
     }
 
@@ -2290,6 +2310,7 @@ public:
         std::optional<kb::render::RenderMaterialAssetData> document,
         std::optional<kb::render::RenderMaterialTypeSchema> schema = std::nullopt,
         std::optional<kb::render::RenderMaterialInstanceAssetData> instanceDocument = std::nullopt) {
+        ++documentRevision_;
         openAssetId_ = assetId;
         instanceParentSnapshot_ = document;
         instanceWorkingCopy_ = std::move(instanceDocument);
@@ -2320,11 +2341,15 @@ public:
         findResults_.clear();
         CloseGraphNodeEnumDropdown();
         CancelGraphNodeRenameEdit();
+        // Every per-node text edit is scoped to the document it was started in: a node id from the previous
+        // material would address a different node here and commit the stale buffer into it.
+        CancelGraphConstantInlineEdit();
         RefreshParameters();
         RefreshGraphDiagnostics();
     }
 
     void Close() noexcept {
+        ++documentRevision_;
         openAssetId_ = {};
         workingCopy_.reset();
         cleanSnapshot_.reset();
@@ -2345,6 +2370,7 @@ public:
         findResults_.clear();
         CloseGraphNodeEnumDropdown();
         CancelGraphNodeRenameEdit();
+        CancelGraphConstantInlineEdit();
         diagnostics_.clear();
         graphDiagnosticsLines_.clear();
         compilerDiagnostics_.clear();
@@ -2362,6 +2388,7 @@ public:
 
     void SetWorkingCopy(kb::render::RenderMaterialAssetData document) {
         workingCopy_ = std::move(document);
+        ++documentRevision_;
         dirty_ = !EquivalentDocument(workingCopy_, cleanSnapshot_);
         RefreshParameters();
         RefreshGraphDiagnostics();
@@ -2374,6 +2401,7 @@ public:
         kb::render::RenderMaterialAssetData effectiveDocument) {
         instanceWorkingCopy_ = std::move(instanceDocument);
         workingCopy_ = std::move(effectiveDocument);
+        ++documentRevision_;
         dirty_ = !EquivalentInstance(instanceWorkingCopy_, instanceCleanSnapshot_) ||
             !EquivalentDocument(workingCopy_, cleanSnapshot_);
         RefreshParameters();
@@ -2391,6 +2419,7 @@ public:
     }
 
     void RevertToCleanSnapshot() {
+        ++documentRevision_;
         if (instanceWorkingCopy_.has_value() || instanceCleanSnapshot_.has_value()) {
             instanceWorkingCopy_ = instanceCleanSnapshot_;
             if (instanceParentSnapshot_.has_value() && instanceWorkingCopy_.has_value()) {
@@ -5251,8 +5280,10 @@ private:
     std::uint32_t selectedCommentId_ = 0U;
     InspectorPropertyId selectedParameter_ = InspectorPropertyId::None;
     std::optional<GraphClipboard> graphClipboard_;
+    std::uint64_t documentRevision_ = 1U;
     std::uint32_t inlineConstantEditNodeId_ = 0U;
     std::string inlineConstantEditBuffer_;
+    std::string inlineConstantEditOriginal_;
     std::uint32_t renameNodeId_ = 0U;
     std::string renameBuffer_;
     bool renameSelectAll_ = false;

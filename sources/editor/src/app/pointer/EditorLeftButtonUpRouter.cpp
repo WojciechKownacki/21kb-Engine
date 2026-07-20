@@ -136,23 +136,27 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
                         pin->nodeId,
                         pin->pin,
                         pin->direction == MaterialEditorGraphPinDirection::Input)) {
-                        static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                        static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
                     }
                 } else {
-                    if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
+                    // A wire pulled off a connected pin is being unplugged: releasing it away from a pin
+                    // finishes the disconnect. The "create a node here" menu belongs to the other gesture,
+                    // dragging a new wire out of a pin.
+                    if (!sceneContext_.IsMaterialGraphPinConnectionDetach() &&
+                        MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
                         const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
                         if (!sceneContext_.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphPoint.x, graphPoint.y)) {
-                            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                            static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
                         }
                     } else {
-                        static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                        static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
                     }
                 }
             } else {
-                static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+                static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
             }
         } else {
-            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+            static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
         }
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

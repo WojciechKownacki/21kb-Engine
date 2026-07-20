@@ -14,6 +14,7 @@ public:
 
 #if defined(_WIN32)
     static void InvalidateMainAndSource(HWND mainWindow, HWND sourceWindow) noexcept;
+    static void InvalidatePanel(HWND window, const RECT& panelRect) noexcept;
 #endif
 };
 

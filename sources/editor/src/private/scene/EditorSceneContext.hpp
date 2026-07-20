@@ -428,6 +428,9 @@ public:
     [[nodiscard]] bool DuplicateSelectedMaterialGraphNodes(kb::assets::AssetId id, int offsetX, int offsetY);
     [[nodiscard]] bool BeginMaterialGraphWorkingCopyTransaction(kb::assets::AssetId id, std::string label);
     [[nodiscard]] bool CommitMaterialGraphWorkingCopyTransaction();
+    [[nodiscard]] bool AbandonMaterialGraphPinConnection();
+    [[nodiscard]] bool IsMaterialGraphPinConnectionDetach() const noexcept;
+    [[nodiscard]] std::uint64_t MaterialGraphViewSignature(kb::assets::AssetId assetId) const noexcept;
     void CancelMaterialGraphWorkingCopyTransaction();
     [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
     [[nodiscard]] bool SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId);

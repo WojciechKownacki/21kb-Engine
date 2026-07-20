@@ -8,6 +8,7 @@
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/ProjectFilesAssetTileFrameRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
+#include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/ProjectFilesTileTextRenderer.hpp"
@@ -342,7 +343,9 @@ private:
 
 class ProjectFilesMaterialPreviewStyleCache {
 public:
-    [[nodiscard]] const ProjectFilesMaterialPreviewStyle* StyleFor(const kb::assets::AssetMetadata& metadata) {
+    [[nodiscard]] const ProjectFilesMaterialPreviewStyle* StyleFor(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetManager& assets) {
         if (!ProjectFilesAssetIconResolver::IsMaterial(metadata)) {
             return nullptr;
         }
@@ -356,7 +359,7 @@ public:
             entry = ProjectFilesMaterialPreviewCacheEntry{
                 .contentHash = metadata.contentHash,
                 .physicalPath = metadata.physicalPath,
-                .style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(metadata),
+                .style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(metadata, &assets, &MaterialPreviewTextureAverageColor),
             };
             return &entry.style;
         }
@@ -366,7 +369,7 @@ public:
             ProjectFilesMaterialPreviewCacheEntry{
                 .contentHash = metadata.contentHash,
                 .physicalPath = metadata.physicalPath,
-                .style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(metadata),
+                .style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(metadata, &assets, &MaterialPreviewTextureAverageColor),
             });
         static_cast<void>(inserted);
         return &iter->second.style;
@@ -532,7 +535,7 @@ void DrawAssetTile(
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
     if (const ProjectFilesTextureThumbnailImage* texture = TextureThumbnailCache().ThumbnailFor(asset.metadata)) {
         DrawTextureThumbnailBitmap(dc, TexturePreviewRect(tile, visual), *texture);
-    } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata)) {
+    } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata, manager)) {
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
     } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);

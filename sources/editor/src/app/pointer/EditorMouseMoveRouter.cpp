@@ -64,6 +64,32 @@ EditorMouseMoveRouter::EditorMouseMoveRouter(
     , pointerDrag_(pointerDrag)
     , metrics_(metrics) {}
 
+namespace {
+
+// Graph interactions run on every mouse move: repaint the Material Editor panel only, so the scene
+// viewport, hierarchy, inspector and project files are not redrawn for a node being dragged.
+void InvalidateMaterialGraphPanel(
+    HWND messageWindow,
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics) {
+    const std::optional<RECT> panel = EditorPanelContentResolver::Resolve(
+        DockPanelKind::MaterialEditor,
+        messageWindow,
+        mainWindow,
+        dockModel,
+        floatingWindows,
+        metrics);
+    if (panel.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *panel);
+        return;
+    }
+    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+}
+
+} // namespace
+
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
     const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
@@ -116,7 +142,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             changed = sceneContext_.DragMaterialGraphNode(x, y);
         }
         if (changed) {
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         }
         return;
     }
@@ -128,7 +154,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         } else {
             static_cast<void>(sceneContext_.DragMaterialGraphComment(x, y));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         return;
     }
 
@@ -139,7 +165,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         } else {
             static_cast<void>(sceneContext_.DragMaterialGraphBoxSelection(x, y));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         return;
     }
 
@@ -150,7 +176,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         } else {
             static_cast<void>(sceneContext_.DragMaterialGraphPinConnection(x, y));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         return;
     }
 
@@ -161,7 +187,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         } else {
             static_cast<void>(sceneContext_.DragMaterialGraphPan(x, y));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         return;
     }
 

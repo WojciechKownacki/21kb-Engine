@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 
+#include "platform/win32/EditorModalWindowScope.hpp"
+
 #include <array>
 
 namespace kb::editor {
@@ -146,22 +148,21 @@ std::optional<std::string> EditorMaterialParameterValueDialog::Show(
     if (window == nullptr) {
         return std::nullopt;
     }
-    if (owner != nullptr) {
-        EnableWindow(owner, FALSE);
-    }
-    ShowWindow(window, SW_SHOW);
-    UpdateWindow(window);
+    {
+        const EditorModalWindowScope modal{ window };
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
 
-    MSG msg{};
-    while (!state.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (!IsDialogMessageW(window, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        MSG msg{};
+        while (!state.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (!IsDialogMessageW(window, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
     }
 
-    if (owner != nullptr) {
-        EnableWindow(owner, TRUE);
+    if (owner != nullptr && IsWindow(owner) != 0) {
         SetForegroundWindow(owner);
     }
     return state.result;

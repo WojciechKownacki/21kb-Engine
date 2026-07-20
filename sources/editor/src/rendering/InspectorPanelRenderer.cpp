@@ -1,4 +1,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
+
+#include "rendering/MaterialPreviewAppearanceResolver.hpp"
+#include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 
 #if defined(_WIN32)
@@ -1029,16 +1032,21 @@ struct InspectorMaterialPreviewStyle {
     bool loaded = false;
 };
 
-[[nodiscard]] InspectorMaterialPreviewStyle MaterialPreviewStyleFor(const std::optional<kb::render::RenderMaterialAssetData>& material) noexcept {
+[[nodiscard]] InspectorMaterialPreviewStyle MaterialPreviewStyleFor(
+    const std::optional<kb::render::RenderMaterialAssetData>& material,
+    const kb::assets::AssetManager* assets) {
     InspectorMaterialPreviewStyle style{};
     if (!material.has_value()) {
         return style;
     }
-    style.baseColor = ToColorRef(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
-    style.emissiveColor = ToColorRef(material->desc.emissiveColor[0], material->desc.emissiveColor[1], material->desc.emissiveColor[2]);
-    style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
-    style.metallic = std::clamp(material->desc.metallicFactor, 0.0F, 1.0F);
-    style.emissiveStrength = std::clamp(material->desc.emissiveStrength, 0.0F, 64.0F);
+    // Graph-backed materials leave desc at its white fallbacks, so read what the graph feeds into
+    // Material Output instead of painting every graph material as a white ball.
+    const MaterialPreviewAppearance appearance = MaterialPreviewAppearanceResolver::Resolve(*material, assets, &MaterialPreviewTextureAverageColor);
+    style.baseColor = ToColorRef(appearance.baseColor[0], appearance.baseColor[1], appearance.baseColor[2]);
+    style.emissiveColor = ToColorRef(appearance.emissiveColor[0], appearance.emissiveColor[1], appearance.emissiveColor[2]);
+    style.roughness = appearance.roughness;
+    style.metallic = appearance.metallic;
+    style.emissiveStrength = appearance.emissiveStrength;
     style.loaded = true;
     return style;
 }
@@ -1149,6 +1157,17 @@ void DrawTelemetryRow(
     y += kDividerHeight;
 }
 
+// Paint and the live 3D surface must agree on one rect, so the geometry lives here and both use it.
+// Preview is the first section of a material asset, so its position follows from the header alone.
+[[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content) noexcept {
+    const int y = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight;
+    return Rect(
+        content.left + kMaterialPreviewPadding,
+        y + kMaterialPreviewGap,
+        content.right - kMaterialPreviewPadding,
+        y + kMaterialPreviewGap + kMaterialPreviewHeight);
+}
+
 [[nodiscard]] int DrawMaterialPreview(
     HDC dc,
     RECT content,
@@ -1170,9 +1189,14 @@ void DrawTelemetryRow(
         : std::vector<MaterialDebugChannelRow>{};
     DrawDivider(dc, content.left, content.right, y);
     y += kDividerHeight;
-    const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
+    const RECT frame = MaterialPreviewFrameRect(content);
     DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
-    DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(material));
+    // The real material renders here: the same preview scene, lighting and post-process the Material
+    // Editor uses, presented into this rect. The software-shaded ball is only the fallback for when that
+    // scene is not available, because it can never show textures or the actual lighting response.
+    if (!telemetry.previewSceneReady) {
+        DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(material, &sceneContext.Scene().Assets().Manager()));
+    }
     y = frame.bottom + kMaterialPreviewGap;
 
     if (debugRows.empty()) {
@@ -2413,9 +2437,24 @@ bool InspectorPanelRenderer::AddComponentListContains(const RECT& content, const
 }
 
 std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    static_cast<void>(content);
-    static_cast<void>(sceneContext);
-    return std::nullopt;
+    // Returning nullopt here used to disable the Inspector's 3D preview surface entirely, which is why the
+    // panel could only ever show the flat software ball.
+    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+    if (!assetId.IsValid()) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        return std::nullopt;
+    }
+    if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return std::nullopt;
+    }
+    const RECT frame = MaterialPreviewFrameRect(content);
+    if (frame.right - frame.left <= 8 || frame.bottom - frame.top <= 8) {
+        return std::nullopt;
+    }
+    return RECT{ frame.left + 1, frame.top + 1, frame.right - 1, frame.bottom - 1 };
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
