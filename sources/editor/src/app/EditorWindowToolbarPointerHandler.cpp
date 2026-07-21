@@ -1,5 +1,7 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
+#include "app/EditorEditCommandPolicy.hpp"
+
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
@@ -130,7 +132,9 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
-                if (sceneContext.SaveOpenDocuments()) {
+                // Same guard as Ctrl+S: a graph gesture owns the working copy until it ends, and saving
+                // through it would write a half-finished document and re-base the clean snapshot.
+                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Save)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
@@ -140,16 +144,19 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                 }
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
+            // Through the policy's pointer route: these rows used to call the context directly and so did
+            // not honour the graph-gesture guard. The text-edit guard deliberately does not apply to a
+            // click - the commands commit the pending edit themselves.
             if (*row == 0) {
-                if (sceneContext.UndoSceneCommand()) {
+                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Undo)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 1) {
-                if (sceneContext.RedoSceneCommand()) {
+                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Redo)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
-                if (sceneContext.DuplicateSelectedHierarchyEntities()) {
+                if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Duplicate)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
@@ -263,7 +270,7 @@ struct TransportClickResult {
     }
 
     static_cast<void>(shellInteraction.SetPressedSave(true));
-    if (sceneContext.SaveOpenDocuments()) {
+    if (EditorEditCommandPolicy::ExecuteFromPointer(sceneContext, EditorEditCommand::Save)) {
         sceneViewport.RequestPresent();
     }
     InvalidateToolbar(mainWindow, layout);

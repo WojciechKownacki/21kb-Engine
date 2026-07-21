@@ -1167,100 +1167,13 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
 
 namespace {
 
-// Pin appearance only varies with (color, tinted, radius-in-pixels) -- the color comes from a
-// small fixed enum palette (GraphPinTypeColor) and the radius is already an integer pixel count
-// (ScaleMetric rounds it). A node graph draws one pin per input/output slot -- a Material Output
-// node alone has 14 -- and each pin previously did 5 antialiased Gdiplus FillEllipse calls (shadow,
-// edge, outer ring, face, shine), which dominated node-drawing time. Render the static (non-drag-
-// ring) appearance once per distinct (color, tinted, radius) into a small cached Gdiplus::Bitmap
-// and composite it with a single DrawImage thereafter.
+// How far a drawn pin bleeds outside its nominal radius, so a node's paint bounds cover its pins.
+// (There used to be a sprite cache here that rendered each distinct pin appearance once into a
+// Gdiplus::Bitmap. It had no callers left - DrawGraphPin draws directly - and its key ignored
+// insetScale, so it would have returned the wrong sprite if anything had used it. Deleted rather
+// than repaired; this padding is the one piece that is still live.)
 constexpr int kGraphPinSpritePadding = 5;
 
-struct GraphPinSpriteCache {
-    std::unordered_map<std::uint64_t, std::unique_ptr<Gdiplus::Bitmap>> sprites;
-};
-
-[[nodiscard]] GraphPinSpriteCache& GraphPinSprites() {
-    static GraphPinSpriteCache cache;
-    return cache;
-}
-
-[[nodiscard]] Gdiplus::Bitmap* BuildGraphPinSprite(COLORREF color, bool tinted, int r, float insetScale) {
-    HeroIconGdiplusRuntime::EnsureStarted();
-    const int size = (r * 2) + (kGraphPinSpritePadding * 2);
-    auto sprite = std::make_unique<Gdiplus::Bitmap>(size, size, PixelFormat32bppPARGB);
-    Gdiplus::Graphics graphics(sprite.get());
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-
-    const COLORREF edge = RGB(4, 6, 9);
-    const COLORREF outer = ScaleColor(color, tinted ? 0.72F : 0.9F);
-    const COLORREF face = tinted ? ScaleColor(color, 1.08F) : ScaleColor(color, 1.16F);
-    const float diameter = static_cast<float>(r * 2);
-    const Gdiplus::RectF outerRect{
-        static_cast<float>(kGraphPinSpritePadding),
-        static_cast<float>(kGraphPinSpritePadding),
-        diameter,
-        diameter,
-    };
-    const float inset = std::max(1.0F, insetScale);
-    const Gdiplus::RectF innerRect{
-        outerRect.X + inset,
-        outerRect.Y + inset,
-        std::max(1.0F, outerRect.Width - (inset * 2.0F)),
-        std::max(1.0F, outerRect.Height - (inset * 2.0F)),
-    };
-    Gdiplus::SolidBrush shadowBrush(ToGdiplusColor(RGB(0, 0, 0), 118U));
-    Gdiplus::SolidBrush edgeBrush(ToGdiplusColor(edge));
-    Gdiplus::SolidBrush outerBrush(ToGdiplusColor(outer));
-    Gdiplus::SolidBrush faceBrush(ToGdiplusColor(face));
-    Gdiplus::SolidBrush socketBrush(ToGdiplusColor(RGB(18, 22, 28), 255U));
-    Gdiplus::SolidBrush shineBrush(ToGdiplusColor(RGB(255, 255, 255), 50U));
-    Gdiplus::RectF shadowRect = outerRect;
-    shadowRect.X += std::max(1.0F, insetScale);
-    shadowRect.Y += std::max(1.0F, insetScale);
-    graphics.FillEllipse(&shadowBrush, shadowRect);
-    graphics.FillEllipse(&edgeBrush, outerRect);
-    graphics.FillEllipse(&socketBrush, innerRect);
-    const float ringInset = std::max(1.0F, inset * 1.25F);
-    const Gdiplus::RectF ringRect{
-        outerRect.X + ringInset,
-        outerRect.Y + ringInset,
-        std::max(1.0F, outerRect.Width - (ringInset * 2.0F)),
-        std::max(1.0F, outerRect.Height - (ringInset * 2.0F)),
-    };
-    graphics.FillEllipse(&outerBrush, ringRect);
-    const float coreInset = std::max(2.0F, inset * 1.85F);
-    const Gdiplus::RectF coreRect{
-        outerRect.X + coreInset,
-        outerRect.Y + coreInset,
-        std::max(1.0F, outerRect.Width - (coreInset * 2.0F)),
-        std::max(1.0F, outerRect.Height - (coreInset * 2.0F)),
-    };
-    graphics.FillEllipse(&faceBrush, coreRect);
-    graphics.FillEllipse(
-        &shineBrush,
-        Gdiplus::RectF{
-            outerRect.X + coreInset,
-            outerRect.Y + coreInset,
-            std::max(1.0F, coreRect.Width * 0.72F),
-            std::max(1.0F, coreRect.Height * 0.42F),
-        });
-    return sprite.release();
-}
-
-[[nodiscard]] Gdiplus::Bitmap& GraphPinSprite(COLORREF color, bool tinted, int r, float insetScale) {
-    GraphPinSpriteCache& cache = GraphPinSprites();
-    const std::uint64_t key = (static_cast<std::uint64_t>(color) << 24U) |
-        (static_cast<std::uint64_t>(tinted ? 1U : 0U) << 16U) |
-        static_cast<std::uint64_t>(static_cast<std::uint32_t>(r) & 0xFFFFU);
-    auto found = cache.sprites.find(key);
-    if (found == cache.sprites.end()) {
-        found = cache.sprites.emplace(key, std::unique_ptr<Gdiplus::Bitmap>(BuildGraphPinSprite(color, tinted, r, insetScale))).first;
-    }
-    return *found->second;
-}
 
 void DrawGraphPin(
     Gdiplus::Graphics& graphics,
@@ -3037,12 +2950,28 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
     RestoreDC(dc, savedDc);
 }
 
+// The document the panel draws. For anything read off disk the view owns it; for the material that is
+// actually open it POINTS at the editor's working copy instead of copying it.
+//
+// Copying was not just the cost of duplicating the whole document on every repaint: the interactive canvas
+// cache is keyed on the document's address, so the copy also guaranteed a cache miss between a pointer
+// event (which hit-tests against the working copy itself) and the repaint that event triggers - the canvas
+// was rebuilt twice per interaction instead of once.
 struct MaterialEditorDocumentView {
-    std::optional<kb::render::RenderMaterialAssetData> material{};
+    std::optional<kb::render::RenderMaterialAssetData> ownedMaterial{};
+    const kb::render::RenderMaterialAssetData* material = nullptr;
     std::string assetKind;
     kb::assets::AssetId parentMaterialAssetId{};
     std::vector<std::string> diagnostics;
     bool hasErrorDiagnostic = false;
+
+    // Call once after building, so `material` points at whatever the view ended up owning.
+    [[nodiscard]] MaterialEditorDocumentView&& Resolved() && noexcept {
+        if (material == nullptr && ownedMaterial.has_value()) {
+            material = &*ownedMaterial;
+        }
+        return std::move(*this);
+    }
 };
 
 [[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept {
@@ -3110,24 +3039,24 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
     const std::filesystem::path path = ResolveAssetPath(manager, metadata);
     if (path.empty()) {
         return MaterialEditorDocumentView{
-            .material = std::nullopt,
+            .ownedMaterial = std::nullopt,
             .assetKind = metadata.type == "RenderMaterialInstance" ? "Material Instance" : "Material",
             .parentMaterialAssetId = {},
             .diagnostics = { "Error file_open_failed: Material document path could not be resolved." },
             .hasErrorDiagnostic = true,
-        };
+        }.Resolved();
     }
 
     if (metadata.type == "RenderMaterial") {
         if (sceneContext.MaterialEditor().OpenAssetId() == metadata.id && sceneContext.MaterialEditor().WorkingCopy().has_value()) {
             std::vector<std::string> diagnostics = sceneContext.MaterialEditor().Diagnostics();
             return MaterialEditorDocumentView{
-                .material = sceneContext.MaterialEditor().WorkingCopy(),
+                .material = &*sceneContext.MaterialEditor().WorkingCopy(),
                 .assetKind = "Material",
                 .parentMaterialAssetId = {},
                 .diagnostics = std::move(diagnostics),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            };
+            }.Resolved();
         }
         kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
         std::vector<std::string> diagnostics;
@@ -3137,12 +3066,12 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             AppendMaterialGraphDiagnostics(diagnostics, hasError, *result.asset);
         }
         return MaterialEditorDocumentView{
-            .material = std::move(result.asset),
+            .ownedMaterial = std::move(result.asset),
             .assetKind = "Material",
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        };
+        }.Resolved();
     }
 
     if (metadata.type == kb::render::kRenderMaterialGraphAssetType) {
@@ -3150,12 +3079,12 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             sceneContext.MaterialEditor().WorkingCopy().has_value()) {
             std::vector<std::string> diagnostics = sceneContext.MaterialEditor().Diagnostics();
             return MaterialEditorDocumentView{
-                .material = sceneContext.MaterialEditor().WorkingCopy(),
+                .material = &*sceneContext.MaterialEditor().WorkingCopy(),
                 .assetKind = "Material Graph",
                 .parentMaterialAssetId = {},
                 .diagnostics = std::move(diagnostics),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            };
+            }.Resolved();
         }
         kb::render::RenderMaterialAssetParseResult result =
             kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(path, metadata.id);
@@ -3172,12 +3101,12 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             AppendMaterialGraphDiagnostics(diagnostics, hasError, *result.asset);
         }
         return MaterialEditorDocumentView{
-            .material = std::move(result.asset),
+            .ownedMaterial = std::move(result.asset),
             .assetKind = "Material Graph",
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        };
+        }.Resolved();
     }
 
     if (metadata.type != "RenderMaterialInstance") {
@@ -3190,12 +3119,12 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
     AppendMaterialInstanceDiagnostics(diagnostics, hasError, instance);
     if (!instance.asset.has_value() || !instance.asset->parentMaterialAssetId.IsValid()) {
         return MaterialEditorDocumentView{
-            .material = std::nullopt,
+            .ownedMaterial = std::nullopt,
             .assetKind = "Material Instance",
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = true,
-        };
+        }.Resolved();
     }
 
     const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance.asset->parentMaterialAssetId);
@@ -3210,12 +3139,12 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
         effectiveMaterial = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*parent, *instance.asset);
     }
     return MaterialEditorDocumentView{
-        .material = std::move(effectiveMaterial),
+        .ownedMaterial = std::move(effectiveMaterial),
         .assetKind = "Material Instance",
         .parentMaterialAssetId = instance.asset->parentMaterialAssetId,
         .diagnostics = std::move(diagnostics),
         .hasErrorDiagnostic = hasError,
-    };
+    }.Resolved();
 }
 
 void DrawGraphOverlay(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -3451,7 +3380,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         return;
     }
 
-    if (document->material.has_value()) {
+    if (document->material != nullptr) {
         DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else {
         DrawGraphGrid(dc, layout.graphCanvas);
@@ -3461,7 +3390,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
-    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->material.has_value()) {
+    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->material != nullptr) {
         const MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRowsForDocument(
             sceneContext,
             *document->material,

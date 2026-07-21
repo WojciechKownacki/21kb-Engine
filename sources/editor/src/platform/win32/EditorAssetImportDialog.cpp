@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "engine/assets/AssetImportCatalog.hpp"
+#include "platform/win32/EditorModalMessageLoop.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 
@@ -89,12 +90,13 @@ public:
         const int top = static_cast<int>(ownerRect.top) + std::max(0, (ownerHeight - kDialogHeight) / 2);
         EnableOwner(false);
         SetWindowPos(window_, HWND_TOPMOST, left, top, kDialogWidth, kDialogHeight, SWP_SHOWWINDOW);
-        MSG message{};
-        while (running_ && GetMessageW(&message, nullptr, 0U, 0U) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+        // No dialog navigation: this window handles its own keys.
+        const EditorModalLoopExit exit = RunEditorModalMessageLoop(window_, false, [this]() noexcept { return !running_; });
         if (window_ != nullptr && IsWindow(window_) != 0) DestroyWindow(window_);
         EnableOwner(true);
-        if (owner_ != nullptr) SetForegroundWindow(owner_);
-        return accepted_ ? std::optional<kb::assets::AssetImportOptions>{ kb::assets::AssetImportOptions{ .mesh = { .importMaterialSlots = importMaterialSlots_ } } } : std::nullopt;
+        if (owner_ != nullptr && IsWindow(owner_) != 0) SetForegroundWindow(owner_);
+        // An app quit or a window destroyed under the pump must not start an import.
+        return exit == EditorModalLoopExit::Completed && accepted_ ? std::optional<kb::assets::AssetImportOptions>{ kb::assets::AssetImportOptions{ .mesh = { .importMaterialSlots = importMaterialSlots_ } } } : std::nullopt;
     }
 
 private:
@@ -199,6 +201,9 @@ private:
         case WM_MOUSEWHEEL: self->Scroll(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -36 : 36); return 0;
         case WM_KEYDOWN: if (wparam == VK_ESCAPE) { self->Close(false); return 0; } if (wparam == VK_RETURN) { self->Close(true); return 0; } break;
         case WM_CLOSE: self->Close(false); return 0;
+        // Drop the handle here, like the other three editor dialogs do: after this message the HWND value can
+        // be reused by Windows for someone else's window, and the post-loop teardown must not act on it.
+        case WM_NCDESTROY: if (self->window_ == window) { self->window_ = nullptr; } SetWindowLongPtrW(window, GWLP_USERDATA, 0); break;
         default: break;
         }
         return DefWindowProcW(window, message, wparam, lparam);

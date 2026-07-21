@@ -32,6 +32,14 @@ namespace {
 }
 
 [[nodiscard]] bool ResolveDirtyMaterialEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+    // Alt+F4 reaches here without any mouse-up, so a graph gesture can still own the working copy (the docked
+    // tab's close button carries the same guard, in EditorLeftButtonDownRouter). Settle it before anything
+    // reads the document: a drag is finished the way a mouse-up would finish it - so the move is recorded,
+    // counts as unsaved work and stays undoable instead of being silently dropped - and a wire still in
+    // mid-air was never dropped on a pin, so it is cancelled and the link comes back. Without this the prompt
+    // describes, and Save writes, a half-finished document.
+    static_cast<void>(sceneContext.SettleMaterialGraphGesture());
+
     if (!sceneContext.HasDirtyMaterialAssetEdit()) {
         return true;
     }
