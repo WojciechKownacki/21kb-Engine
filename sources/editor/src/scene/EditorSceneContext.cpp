@@ -4053,6 +4053,15 @@ bool EditorSceneContext::AddMaterialGraphNode(
     kb::render::RenderMaterialGraphNodeKind kind,
     int graphX,
     int graphY) {
+    // Reachable corruption, not theory: with a node held mid-drag the graph still has keyboard focus, so
+    // Space opens the palette and Enter lands here. The edit records commandA{D0->D1}; the mouse-up then
+    // records commandB whose "before" is the snapshot the drag took at D0, so one Undo of B erases the new
+    // node as well as the move. Same guard as paste/duplicate/delete. (The wire-drop flow is unaffected: a
+    // pending pin connection routes through AddMaterialGraphNodeForPendingConnection, which is deliberately
+    // not guarded - creating the node IS how that gesture finishes.)
+    if (HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != kb::render::kRenderMaterialGraphAssetType) || materialEditor_.OpenAssetId() != id) {
         console_.Error("Materials", "Graph nodes can only be edited on an open Material asset.");
@@ -4154,6 +4163,9 @@ bool EditorSceneContext::AddMaterialGraphNodeForPendingConnection(kb::assets::As
 }
 
 bool EditorSceneContext::AddMaterialGraphComment(kb::assets::AssetId id, int graphX, int graphY) {
+    if (HasMaterialGraphGestureInFlight()) { // see AddMaterialGraphNode
+        return false;
+    }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != kb::render::kRenderMaterialGraphAssetType) || materialEditor_.OpenAssetId() != id) {
         console_.Error("Materials", "Graph comments can only be edited on an open Material asset.");
@@ -4181,6 +4193,9 @@ bool EditorSceneContext::AddMaterialGraphComment(kb::assets::AssetId id, int gra
 }
 
 bool EditorSceneContext::AddMaterialGraphComposite(kb::assets::AssetId id, int graphX, int graphY) {
+    if (HasMaterialGraphGestureInFlight()) { // see AddMaterialGraphNode
+        return false;
+    }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != kb::render::kRenderMaterialGraphAssetType) || materialEditor_.OpenAssetId() != id) {
         console_.Error("Materials", "Graph composites can only be edited on an open Material asset.");
@@ -4240,6 +4255,14 @@ bool EditorSceneContext::DeleteSelectedMaterialGraphNode(kb::assets::AssetId id)
     if (materialEditor_.OpenAssetId() != id) {
         return false;
     }
+    // A gesture owns the working copy until it ends: editing through a live drag records a stale "before"
+    // in the undo history, and doing it inside an open rewire transaction folds the change into something a
+    // cancel then throws away. The same guard sits on paste/duplicate/delete-comment. Guarded here rather
+    // than at each keyboard route, so every caller - shortcut, context menu, future CLI - gets the same
+    // answer.
+    if (HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
     const std::vector<std::uint32_t> selectedNodeIds = materialEditor_.SelectedNodeIds();
     if (selectedNodeIds.empty()) {
         return false;
@@ -4263,6 +4286,9 @@ bool EditorSceneContext::DeleteSelectedMaterialGraphNode(kb::assets::AssetId id)
 
 bool EditorSceneContext::DeleteSelectedMaterialGraphComment(kb::assets::AssetId id) {
     if (materialEditor_.OpenAssetId() != id || materialEditor_.SelectedCommentId() == 0U) {
+        return false;
+    }
+    if (HasMaterialGraphGestureInFlight()) {
         return false;
     }
     if (!materialEditor_.WorkingCopy().has_value()) {
@@ -4316,6 +4342,9 @@ bool EditorSceneContext::PasteMaterialGraphNodes(kb::assets::AssetId id, int off
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
         return false;
     }
+    if (HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
     kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
     const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
     std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
@@ -4334,6 +4363,9 @@ bool EditorSceneContext::PasteMaterialGraphNodes(kb::assets::AssetId id, int off
 
 bool EditorSceneContext::DuplicateSelectedMaterialGraphNodes(kb::assets::AssetId id, int offsetX, int offsetY) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    if (HasMaterialGraphGestureInFlight()) {
         return false;
     }
     kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
@@ -4420,6 +4452,32 @@ void EditorSceneContext::CancelMaterialGraphWorkingCopyTransaction() {
 
 bool EditorSceneContext::HasMaterialGraphWorkingCopyTransaction() const noexcept {
     return materialGraphWorkingCopyTransactionAssetId_.IsValid() && materialGraphWorkingCopyTransactionBefore_.has_value();
+}
+
+bool EditorSceneContext::HasMaterialGraphGestureInFlight() const noexcept {
+    return materialGraphNodeDragging_ || materialGraphCommentDragging_ || HasMaterialGraphPinConnection() ||
+        HasMaterialGraphWorkingCopyTransaction();
+}
+
+bool EditorSceneContext::SettleMaterialGraphGesture() {
+    if (!HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
+    // Order matters. The rewire goes first: while its transaction is open, RecordMaterialGraphWorkingCopyEdit
+    // folds every edit into the transaction instead of creating an undo command, so a drag committed before
+    // the cancel would be swallowed and then thrown away by the cancel's restore. Cancelling first puts the
+    // document back, and the drags below then commit against it as ordinary, undoable edits.
+    bool settled = CancelMaterialGraphPinConnection();
+    settled = EndMaterialGraphNodeDrag() || settled;
+    settled = EndMaterialGraphCommentDrag() || settled;
+    // Backstop. Today a transaction is only ever opened by the rewire gesture and is always cancelled with
+    // it, so this is unreachable - but if one ever outlived its gesture, the guard would refuse Save for the
+    // rest of the session with no way back. Settling has to mean settled.
+    if (HasMaterialGraphWorkingCopyTransaction()) {
+        CancelMaterialGraphWorkingCopyTransaction();
+        settled = true;
+    }
+    return settled;
 }
 
 bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId) {
@@ -6234,6 +6292,14 @@ bool EditorSceneContext::SaveMaterialEditorAsset(kb::assets::AssetId id) {
         console_.Error("Materials", "No material asset is selected for Save.");
         return false;
     }
+    // The gesture is settled BEFORE the text edits are committed, not after: a drag holds the "before"
+    // snapshot its undo command will record, captured when the drag began. Committing a rename first would
+    // leave that snapshot describing a document one edit out of date, so the two undo entries would no longer
+    // describe consecutive states and one Undo would roll back both. Scoped to the asset being saved, like
+    // the commits below - saving a different material is no reason to end a gesture on this one.
+    if (materialEditor_.OpenAssetId() == id) {
+        static_cast<void>(SettleMaterialGraphGesture());
+    }
     if (materialEditor_.OpenAssetId() == id && materialEditor_.IsGraphNodeRenameEditing()) {
         static_cast<void>(CommitMaterialGraphNodeRenameEdit());
     }
@@ -6315,6 +6381,11 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     if (materialEditor_.OpenAssetId() == id) {
         materialEditor_.CancelGraphNodeRenameEdit();
         materialEditor_.CancelGraphConstantInlineEdit();
+    }
+    // A gesture in flight is part of what a Discard throws away - but it has to be closed, not abandoned, or
+    // the drag would keep pointing at a document the revert has already replaced.
+    if (materialEditor_.OpenAssetId() == id) {
+        static_cast<void>(SettleMaterialGraphGesture());
     }
     if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
         inspector_.EndTextEdit();
@@ -7775,6 +7846,10 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
             return false;
         }
         materialGraphWorkingCopyTransactionChanged_ = true;
+        // This branch records nothing and never reaches SetWorkingCopy, so an in-place mutator folded into an
+        // open transaction would leave the dirty flag describing the document as it was before the gesture -
+        // and the close/quit prompt reads that flag. Recompute it here instead.
+        materialEditor_.RefreshDirty();
         LogMaterialGraphDebugDocument(console_, "record-edit-transaction " + debugLabel, *materialEditor_.WorkingCopy());
         const bool runtimeChanged = materialGraphWorkingCopyTransactionBefore_.has_value() &&
             MaterialWorkingCopyRuntimeContentHash(*materialGraphWorkingCopyTransactionBefore_) !=

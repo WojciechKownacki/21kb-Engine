@@ -107,6 +107,12 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 }
 
 [[nodiscard]] bool ResolveDirtyMaterialEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
+    // Same contract as the window-close twin in EditorWindowLifecycleHandler: settle any graph gesture before
+    // the dirty check, so the prompt describes - and a Save writes - a document the user could have confirmed.
+    // The click that reaches this row normally ends a gesture on its own, but not every gesture dies at the
+    // mouse-up (a wire dropped on empty canvas stays armed while its node menu is open), so do not rely on it.
+    static_cast<void>(sceneContext.SettleMaterialGraphGesture());
+
     if (!sceneContext.HasDirtyMaterialAssetEdit()) {
         return true;
     }

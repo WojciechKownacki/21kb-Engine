@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/material/MaterialEditorModels.hpp"
+#include "scene/material/MaterialEditorCanonicalCompare.hpp"
 
 #include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -215,31 +216,38 @@ public:
         return rows;
     }
 
-    [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept {
+    [[nodiscard]] const std::vector<std::string>& Diagnostics() const {
+        EnsureGraphDiagnostics();
         return diagnostics_;
     }
 
-    [[nodiscard]] bool DiagnosticsHaveError() const noexcept {
+    [[nodiscard]] bool DiagnosticsHaveError() const {
+        EnsureGraphDiagnostics();
         return diagnosticsHaveError_;
     }
 
-    [[nodiscard]] const std::vector<MaterialEditorGraphDiagnosticMarker>& GraphDiagnosticMarkers() const noexcept {
+    [[nodiscard]] const std::vector<MaterialEditorGraphDiagnosticMarker>& GraphDiagnosticMarkers() const {
+        EnsureGraphDiagnostics();
         return graphDiagnosticMarkers_;
     }
 
-    [[nodiscard]] kb::render::RenderMaterialGraphRuntimeState GraphRuntimeState() const noexcept {
+    [[nodiscard]] kb::render::RenderMaterialGraphRuntimeState GraphRuntimeState() const {
+        EnsureGraphDiagnostics();
         return graphRuntimeState_;
     }
 
-    [[nodiscard]] std::string_view GraphRuntimeStateName() const noexcept {
+    [[nodiscard]] std::string_view GraphRuntimeStateName() const {
+        EnsureGraphDiagnostics();
         return kb::render::RenderMaterialGraphRuntimeStateName(graphRuntimeState_);
     }
 
-    [[nodiscard]] const MaterialEditorMaterialStatsModel& MaterialStats() const noexcept {
+    [[nodiscard]] const MaterialEditorMaterialStatsModel& MaterialStats() const {
+        EnsureGraphDiagnostics();
         return materialStats_;
     }
 
-    [[nodiscard]] const MaterialEditorShaderViewerModel& ShaderViewer() const noexcept {
+    [[nodiscard]] const MaterialEditorShaderViewerModel& ShaderViewer() const {
+        EnsureGraphDiagnostics();
         return shaderViewer_;
     }
 
@@ -247,13 +255,14 @@ public:
         return findQuery_;
     }
 
-    [[nodiscard]] const std::vector<MaterialEditorFindResult>& FindResults() const noexcept {
+    [[nodiscard]] const std::vector<MaterialEditorFindResult>& FindResults() const {
+        EnsureFindResults();
         return findResults_;
     }
 
     void SetFindQuery(std::string query) {
         findQuery_ = std::move(query);
-        RefreshFindResults();
+        InvalidateFindResults();
     }
 
     void AppendFindText(wchar_t character) {
@@ -261,7 +270,7 @@ public:
             return;
         }
         findQuery_.push_back(static_cast<char>(character));
-        RefreshFindResults();
+        InvalidateFindResults();
     }
 
     void InsertFindText(std::string_view text) {
@@ -270,7 +279,7 @@ public:
                 findQuery_.push_back(character);
             }
         }
-        RefreshFindResults();
+        InvalidateFindResults();
     }
 
     void BackspaceFind() {
@@ -278,15 +287,17 @@ public:
             return;
         }
         findQuery_.pop_back();
-        RefreshFindResults();
+        InvalidateFindResults();
     }
 
     void ClearFindQuery() {
         findQuery_.clear();
         findResults_.clear();
+        findResultsStale_ = false;
     }
 
-    [[nodiscard]] std::optional<MaterialEditorFindFocusTarget> FindResultFocusTarget(std::size_t index) const noexcept {
+    [[nodiscard]] std::optional<MaterialEditorFindFocusTarget> FindResultFocusTarget(std::size_t index) const {
+        EnsureFindResults();
         if (index >= findResults_.size()) {
             return std::nullopt;
         }
@@ -297,6 +308,7 @@ public:
     }
 
     [[nodiscard]] bool FocusFindResult(std::size_t index) {
+        EnsureFindResults();
         if (index >= findResults_.size()) {
             return false;
         }
@@ -310,7 +322,8 @@ public:
         return false;
     }
 
-    [[nodiscard]] const std::vector<MaterialEditorParameter>& Parameters() const noexcept {
+    [[nodiscard]] const std::vector<MaterialEditorParameter>& Parameters() const {
+        EnsureParameters();
         return parameters_;
     }
 
@@ -349,7 +362,7 @@ public:
                 .group = group,
                 .expanded = instanceOverrideGroupExpanded_[MaterialEditorParameterGroupIndex(group)],
             };
-            for (const MaterialEditorParameter& parameter : parameters_) {
+            for (const MaterialEditorParameter& parameter : Parameters()) {
                 if (parameter.group != group) {
                     continue;
                 }
@@ -2318,9 +2331,11 @@ public:
         if (document.has_value() && instanceWorkingCopy_.has_value()) {
             workingCopy_ = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*document, *instanceWorkingCopy_);
             cleanSnapshot_ = workingCopy_;
+            InvalidateCleanCanonical();
         } else {
             workingCopy_ = document;
             cleanSnapshot_ = std::move(document);
+            InvalidateCleanCanonical();
             instanceParentSnapshot_.reset();
         }
         activeSchema_ = schema.has_value() && !schema->typeName.empty()
@@ -2344,8 +2359,8 @@ public:
         // Every per-node text edit is scoped to the document it was started in: a node id from the previous
         // material would address a different node here and commit the stale buffer into it.
         CancelGraphConstantInlineEdit();
-        RefreshParameters();
-        RefreshGraphDiagnostics();
+        InvalidateParameters();
+        InvalidateGraphDiagnostics();
     }
 
     void Close() noexcept {
@@ -2353,6 +2368,7 @@ public:
         openAssetId_ = {};
         workingCopy_.reset();
         cleanSnapshot_.reset();
+        InvalidateCleanCanonical();
         instanceWorkingCopy_.reset();
         instanceCleanSnapshot_.reset();
         instanceParentSnapshot_.reset();
@@ -2386,13 +2402,29 @@ public:
         shaderViewer_ = {};
     }
 
+    // Recomputes the dirty flag from the documents alone.
+    //
+    // Contract for the in-place mutators (MoveGraphNode/MoveGraphNodes/MoveGraphComment/MoveGraphCommentGroup
+    // and the composite collapse): they write straight into workingCopy_ and deliberately do NOT recompute
+    // dirty, refresh parameters, diagnostics or find results - a canonical compare of the whole document per
+    // mouse-move during a drag is exactly the cost they exist to avoid. Anything that calls them owes the
+    // state either a recorded edit (which routes through SetWorkingCopy) or a call to this.
+    void RefreshDirty() {
+        if (instanceWorkingCopy_.has_value() || instanceCleanSnapshot_.has_value()) {
+            dirty_ = !EquivalentInstance(instanceWorkingCopy_, instanceCleanSnapshot_) ||
+                !WorkingCopyMatchesCleanSnapshot();
+            return;
+        }
+        dirty_ = !WorkingCopyMatchesCleanSnapshot();
+    }
+
     void SetWorkingCopy(kb::render::RenderMaterialAssetData document) {
         workingCopy_ = std::move(document);
         ++documentRevision_;
-        dirty_ = !EquivalentDocument(workingCopy_, cleanSnapshot_);
-        RefreshParameters();
-        RefreshGraphDiagnostics();
-        RefreshFindResults();
+        dirty_ = !WorkingCopyMatchesCleanSnapshot();
+        InvalidateParameters();
+        InvalidateGraphDiagnostics();
+        InvalidateFindResults();
         PruneSelectionToWorkingCopy();
     }
 
@@ -2403,15 +2435,16 @@ public:
         workingCopy_ = std::move(effectiveDocument);
         ++documentRevision_;
         dirty_ = !EquivalentInstance(instanceWorkingCopy_, instanceCleanSnapshot_) ||
-            !EquivalentDocument(workingCopy_, cleanSnapshot_);
-        RefreshParameters();
-        RefreshGraphDiagnostics();
-        RefreshFindResults();
+            !WorkingCopyMatchesCleanSnapshot();
+        InvalidateParameters();
+        InvalidateGraphDiagnostics();
+        InvalidateFindResults();
         PruneSelectionToWorkingCopy();
     }
 
     void MarkSaved() {
         cleanSnapshot_ = workingCopy_;
+        InvalidateCleanCanonical();
         if (instanceWorkingCopy_.has_value()) {
             instanceCleanSnapshot_ = instanceWorkingCopy_;
         }
@@ -2425,6 +2458,7 @@ public:
             if (instanceParentSnapshot_.has_value() && instanceWorkingCopy_.has_value()) {
                 workingCopy_ = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*instanceParentSnapshot_, *instanceWorkingCopy_);
                 cleanSnapshot_ = workingCopy_;
+                InvalidateCleanCanonical();
             } else {
                 workingCopy_ = cleanSnapshot_;
             }
@@ -2432,12 +2466,23 @@ public:
             workingCopy_ = cleanSnapshot_;
         }
         dirty_ = false;
-        RefreshParameters();
-        RefreshGraphDiagnostics();
+        InvalidateParameters();
+        InvalidateGraphDiagnostics();
+        // The find panel lists nodes and comments by id; a revert can delete the very things it is listing,
+        // so it needs the same invalidation SetWorkingCopy does. Focusing a stale hit re-validates and
+        // quietly does nothing, which reads as a broken panel.
+        InvalidateFindResults();
         PruneSelectionToWorkingCopy();
     }
 
     bool SelectNode(std::uint32_t nodeId) {
+        // Same validation SetNodeSelection does. Without it a hit-test against the fabricated default graph
+        // an empty document is drawn with can put a node id that does not exist into the selection, where it
+        // sits until the next SetWorkingCopy prunes it.
+        if (nodeId != 0U && workingCopy_.has_value() &&
+            kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId) == nullptr) {
+            nodeId = 0U;
+        }
         std::vector<std::uint32_t> nextSelection;
         if (nodeId != 0U) {
             nextSelection.push_back(nodeId);
@@ -2603,6 +2648,7 @@ public:
     }
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError) {
+        EnsureGraphDiagnostics();
         externalDiagnostics_.clear();
         externalDiagnostics_.reserve(diagnostics.size());
         for (std::string& diagnostic : diagnostics) {
@@ -2618,6 +2664,7 @@ public:
         bool hasGpuProgram,
         bool hasLastGood,
         bool fallbackApplied) {
+        EnsureGraphDiagnostics();
         cookDiagnostics_.clear();
         cookDiagnostics_.reserve(diagnostics.size());
         for (std::string& diagnostic : diagnostics) {
@@ -2639,6 +2686,7 @@ public:
         std::uint32_t uniformCount,
         std::uint32_t varyingCount,
         std::vector<MaterialEditorCookPassTelemetry> passes) {
+        EnsureGraphDiagnostics();
         MaterialEditorMaterialStatsModel model{};
         model.sourceHash = sourceHash;
         model.available = std::ranges::any_of(passes, [](const MaterialEditorCookPassTelemetry& pass) {
@@ -5085,7 +5133,8 @@ private:
         }
     }
 
-    void RefreshGraphDiagnostics() {
+    // Everything a document change makes void. Cheap - it is all clears - so an edit still pays for it.
+    void ClearDerivedGraphDiagnostics() {
         graphDiagnosticsLines_.clear();
         compilerDiagnostics_.clear();
         graphDiagnosticMarkers_.clear();
@@ -5094,6 +5143,33 @@ private:
         ResetCookDiagnostics();
         materialStats_ = {};
         shaderViewer_ = {};
+    }
+
+    // An edit invalidates the diagnostics; it does not recompute them. Recomputing meant running the graph
+    // validator AND a full shader compile on the UI thread for every single edit - a mouse-move during a
+    // drag, a keystroke in an inline value - even though nothing reads the result until the panel repaints.
+    // The stale results are cleared immediately, so nothing on screen describes a document that no longer
+    // exists; the expensive part happens on the next read.
+    void InvalidateGraphDiagnostics() {
+        ClearDerivedGraphDiagnostics();
+        graphDiagnosticsStale_ = true;
+        graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
+        RebuildMergedDiagnostics();
+    }
+
+    // Anything that reads diagnostic state calls this first, and so does anything that pushes cook or
+    // external results IN - otherwise a deferred rebuild could land afterwards and wipe a fresh result.
+    void EnsureGraphDiagnostics() const {
+        if (!graphDiagnosticsStale_) {
+            return;
+        }
+        graphDiagnosticsStale_ = false;
+        const_cast<MaterialEditorState*>(this)->RefreshGraphDiagnostics();
+    }
+
+    void RefreshGraphDiagnostics() {
+        graphDiagnosticsStale_ = false;
+        ClearDerivedGraphDiagnostics();
         if (!workingCopy_.has_value()) {
             graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
             RebuildMergedDiagnostics();
@@ -5194,6 +5270,31 @@ private:
             externalDiagnosticsHaveError_ || (!cookSucceeded_ && cookCompleted_);
     }
 
+    // Derived data is invalidated on edit and rebuilt when something actually reads it.
+    //
+    // Rebuilding eagerly inside SetWorkingCopy meant every edit paid for the parameter list and the find
+    // results whether or not anyone was looking - and during a drag or an inline-value edit nobody is: the
+    // Inspector reads the parameters once per repaint, the find panel only while a query is open. The
+    // rebuild bodies below are unchanged; only when they run has moved.
+    void InvalidateParameters() noexcept { parametersStale_ = true; }
+    void InvalidateFindResults() noexcept { findResultsStale_ = true; }
+
+    void EnsureParameters() const {
+        if (!parametersStale_) {
+            return;
+        }
+        parametersStale_ = false;
+        const_cast<MaterialEditorState*>(this)->RefreshParameters();
+    }
+
+    void EnsureFindResults() const {
+        if (!findResultsStale_) {
+            return;
+        }
+        findResultsStale_ = false;
+        const_cast<MaterialEditorState*>(this)->RefreshFindResults();
+    }
+
     void RefreshParameters() {
         parameters_.clear();
         if (!workingCopy_.has_value()) {
@@ -5204,6 +5305,37 @@ private:
             return;
         }
         parameters_ = BuildParameters(*workingCopy_, activeSchema_);
+    }
+
+    // The clean snapshot only changes on open/save/revert, so its canonical text is worth keeping: a dirty
+    // check then serializes the working copy alone instead of both documents. Rebuilt lazily, because the
+    // change and the next check are not always adjacent.
+    void InvalidateCleanCanonical() noexcept {
+        cleanCanonicalValid_ = false;
+        cleanCanonical_.clear();
+    }
+
+    [[nodiscard]] const std::string& CleanCanonical() const {
+        if (!cleanCanonicalValid_) {
+            cleanCanonical_ = cleanSnapshot_.has_value() ? CanonicalDocument(*cleanSnapshot_) : std::string{};
+            cleanCanonicalValid_ = true;
+        }
+        return cleanCanonical_;
+    }
+
+    // Same answer EquivalentDocument(workingCopy_, cleanSnapshot_) gave - byte-identical canonical forms -
+    // reached without building either string on the hot path.
+    [[nodiscard]] bool WorkingCopyMatchesCleanSnapshot() const {
+        if (workingCopy_.has_value() != cleanSnapshot_.has_value()) {
+            return false;
+        }
+        if (!workingCopy_.has_value()) {
+            return true;
+        }
+        const kb::render::RenderMaterialAssetData& document = *workingCopy_;
+        return CanonicalTextEquals(CleanCanonical(), [&document](std::ostream& output) {
+            kb::render::RenderMaterialAssetWriter::Write(output, document);
+        });
     }
 
     [[nodiscard]] static std::string CanonicalDocument(const kb::render::RenderMaterialAssetData& document) {
@@ -5274,6 +5406,11 @@ private:
     bool findFocused_ = false;
     kb::render::RenderMaterialGraphRuntimeState graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
     bool dirty_ = false;
+    mutable std::string cleanCanonical_;
+    mutable bool cleanCanonicalValid_ = false;
+    mutable bool parametersStale_ = false;
+    mutable bool graphDiagnosticsStale_ = false;
+    mutable bool findResultsStale_ = false;
     bool infoPanelVisible_ = false;
     std::uint32_t selectedNodeId_ = 0U;
     std::vector<std::uint32_t> selectedNodeIds_;
