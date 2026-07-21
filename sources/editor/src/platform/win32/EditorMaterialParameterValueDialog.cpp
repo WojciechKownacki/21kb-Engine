@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 
+#include "platform/win32/EditorModalMessageLoop.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
 
 #include <array>
@@ -23,22 +25,15 @@ struct DialogState {
     std::string currentValue;
 };
 
+// UTF-8, via the editor's shared conversion. The hand-rolled pair that used to live here was Latin-1 one
+// way and ASCII the other: a parameter name outside ASCII rendered as mojibake, and - the part that mattered
+// - any non-ASCII character the user typed came back as '?', silently corrupting the value on the way out.
 [[nodiscard]] std::wstring Widen(std::string_view text) {
-    std::wstring wide;
-    wide.reserve(text.size());
-    for (const unsigned char ch : text) {
-        wide.push_back(static_cast<wchar_t>(ch));
-    }
-    return wide;
+    return ScriptEditorTextEncoding::Widen(text);
 }
 
 [[nodiscard]] std::string Narrow(std::wstring_view text) {
-    std::string narrow;
-    narrow.reserve(text.size());
-    for (const wchar_t ch : text) {
-        narrow.push_back(ch <= 0x7F ? static_cast<char>(ch) : '?');
-    }
-    return narrow;
+    return ScriptEditorTextEncoding::Narrow(text);
 }
 
 void Finish(DialogState& state, bool accepted) {
@@ -86,6 +81,11 @@ LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 0;
     }
     case WM_COMMAND:
+        // WM_NCDESTROY drops the state pointer, so a control notification that arrives after the window
+        // started dying must do nothing rather than write through a stale one. WM_CLOSE below already did.
+        if (state == nullptr) {
+            break;
+        }
         if (LOWORD(wparam) == kOkId) {
             Finish(*state, true);
             return 0;
@@ -100,6 +100,15 @@ LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             Finish(*state, false);
             return 0;
         }
+        break;
+    case WM_NCDESTROY:
+        // Last message this window ever gets - including when it is destroyed from outside, because its
+        // owner went away. Drop both directions of the link here so nothing afterwards can reach the state
+        // (which lives on Show's stack) and Show cannot address a handle Windows may already have recycled.
+        if (state != nullptr) {
+            state->window = nullptr;
+        }
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
         break;
     }
     return DefWindowProcW(window, message, wparam, lparam);
@@ -148,22 +157,29 @@ std::optional<std::string> EditorMaterialParameterValueDialog::Show(
     if (window == nullptr) {
         return std::nullopt;
     }
+    EditorModalLoopExit exit = EditorModalLoopExit::Completed;
     {
         const EditorModalWindowScope modal{ window };
         ShowWindow(window, SW_SHOW);
         UpdateWindow(window);
+        exit = RunEditorModalMessageLoop(window, true, [&state]() noexcept { return state.done; });
+    }
 
-        MSG msg{};
-        while (!state.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
-            if (!IsDialogMessageW(window, &msg)) {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
+    // When the loop ends without the dialog closing itself - the app is quitting, or the queue broke - the
+    // window is still alive while `state` is one return away from dying. `state.window` is nulled by
+    // WM_NCDESTROY, so this only ever touches a window that is genuinely still ours.
+    if (state.window != nullptr) {
+        DestroyWindow(state.window); // WM_NCDESTROY runs inside this call and nulls state.window
     }
 
     if (owner != nullptr && IsWindow(owner) != 0) {
         SetForegroundWindow(owner);
+    }
+    // Belt and braces: only Finish() writes the result and it sets `done` in the same call, so a non-Completed
+    // exit already implies an empty result. Stated explicitly so a future exit path cannot turn an app
+    // shutdown into a value the user never confirmed.
+    if (exit != EditorModalLoopExit::Completed) {
+        return std::nullopt;
     }
     return state.result;
 }

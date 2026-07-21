@@ -2,10 +2,16 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "app/EditorEditCommandPolicy.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "platform/win32/EditorDebugLogGate.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
+#include "platform/win32/EditorMaterialParameterValueDialog.hpp"
+#include "platform/win32/EditorModalMessageLoop.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 #include "windowing/FloatingWindowFactory.hpp"
 #include "windowing/FloatingWindowHitTestResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
@@ -106,6 +112,11 @@ private:
 // docked panel). Clicks are computed from the real layout (below), not hardcoded,
 // so the test follows any future geometry change automatically.
 constexpr RECT kContent{ 0, 0, 900, 560 };
+
+[[nodiscard]] std::string ReadFileTextForTest(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
 
 [[nodiscard]] LARGE_INTEGER QueryCounter() noexcept {
     LARGE_INTEGER value{};
@@ -637,6 +648,60 @@ void RunSelectionTransformSuite(Report& report) {
 
 // The Inspector's material ball must be the live 3D preview surface, not a painted stand-in: the rect
 // resolver used to return nullopt, which silently disabled the surface for the whole panel.
+// Finding 19 (material Inspector is the preview and nothing else): a material is authored in the Material
+// Editor, so the Inspector must not restate its channels or asset fields - only the live preview, with the
+// virtual path folded into it.
+void RunInspectorMaterialColorRowsSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 19: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "InspectorColorRows.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 19: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 19: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/InspectorColorRows.kbmat");
+    report.Check(metadata != nullptr, "Finding 19: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.AssetBrowser().SelectAsset(metadata->id, context.Scene().Assets().Manager()),
+        "Finding 19: select the material in the Inspector");
+
+    bool foundMaterialSection = false;
+    bool foundAssetSection = false;
+    bool foundPreviewSection = false;
+    const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+    for (int scroll = 0; scroll <= maxScroll; scroll += std::max<int>(1, static_cast<int>(kContent.bottom - kContent.top) - 80)) {
+        static_cast<void>(context.Inspector().SetScrollOffset(scroll, maxScroll));
+        for (int y = kContent.top; y < kContent.bottom; ++y) {
+            for (int x = kContent.left; x < kContent.right; x += 8) {
+                const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                if (hit.section == InspectorSectionId::Material) {
+                    foundMaterialSection = true;
+                }
+                if (hit.section == InspectorSectionId::Asset) {
+                    foundAssetSection = true;
+                }
+                if (hit.section == InspectorSectionId::MaterialPreview) {
+                    foundPreviewSection = true;
+                }
+            }
+        }
+    }
+    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
+    report.Check(foundPreviewSection, "Finding 19: the material Inspector keeps its Preview section");
+    report.Check(!foundMaterialSection, "Finding 19: the Material section is gone");
+    report.Check(!foundAssetSection, "Finding 19: the Asset section is gone");
+
+    // Nothing below the preview means the panel no longer needs to scroll at all.
+    report.Check(InspectorPanelRenderer::MaxScrollOffset(kContent, context) == 0,
+        "Finding 19: the material Inspector fits without scrolling");
+}
+
 void RunInspectorMaterialPreviewSurfaceSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -677,6 +742,31 @@ void RunInspectorMaterialPreviewSurfaceSuite(Report& report) {
         kContent, context, (previewRect->left + previewRect->right) / 2, previewRect->top - 12);
     report.Check(previewHeader.section == InspectorSectionId::MaterialPreview,
         "Finding 17: the surface sits directly under the Preview section header");
+
+    // Scrolling: the surface is a child window over the panel, so it has to travel with the rows and
+    // disappear once its slot leaves the viewport. Otherwise it hangs over whatever scrolled into place.
+    // A short panel is the case that scrolls: the material Inspector is preview-only now, so at full height
+    // it fits. A short one is exactly where a pinned surface would hang over the rows below.
+    const RECT shortPanel{ kContent.left, kContent.top, kContent.right, kContent.top + 260 };
+    const std::optional<RECT> shortRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(shortPanel, context);
+    report.Check(maxScroll > 0 && shortRect.has_value(), "Finding 17: a short Inspector panel scrolls");
+    if (maxScroll <= 0 || !shortRect.has_value()) {
+        return;
+    }
+    const int step = std::max(1, maxScroll / 4);
+    static_cast<void>(context.Inspector().SetScrollOffset(step, maxScroll));
+    const std::optional<RECT> scrolledRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    report.Check(scrolledRect.has_value() && scrolledRect->top < shortRect->top,
+        "Finding 17: scrolling moves the preview surface with the panel content");
+
+    static_cast<void>(context.Inspector().SetScrollOffset(maxScroll, maxScroll));
+    const std::optional<RECT> farRect = InspectorPanelRenderer::MaterialPreviewRect(shortPanel, context);
+    report.Check(!farRect.has_value() ||
+            (farRect->top >= shortPanel.top && farRect->bottom <= shortPanel.bottom &&
+                farRect->bottom > farRect->top),
+        "Finding 17: scrolled far, the surface is either gone or clipped inside the panel, never floating over other rows");
+    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
 }
 
 void RunInspectorMaterialDropTargetSuite(Report& report) {
@@ -2140,8 +2230,9 @@ void RunMaterialEditorReopenPreservesUnsavedEditsSuite(Report& report) {
         "Finding 1: double-clicking the already open material in Project Files keeps the unsaved working copy");
 
     // An in-flight node rename is memory-only state a reload would drop, so it must hold the guard too.
-    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
-        "Finding 1: save before the rename-guard check");
+    const bool savedBeforeRenameGuard = context.SaveMaterialEditorAsset(id);
+    report.Check(savedBeforeRenameGuard, "Finding 1: save before the rename-guard check succeeds");
+    report.Check(!context.MaterialEditor().Dirty(), "Finding 1: save before the rename-guard check clears dirty");
     report.Check(context.BeginMaterialGraphNodeRenameEdit(id, doubleClickNodeId),
         "Finding 1: begin a node rename on the clean document");
     context.AppendMaterialGraphNodeRenameEditText(L'Z');
@@ -2154,6 +2245,388 @@ void RunMaterialEditorReopenPreservesUnsavedEditsSuite(Report& report) {
 // node and not confirmed with Enter used to be dropped by the close path without ever raising the unsaved
 // prompt, because HasDirtyMaterialAssetEdit did not count it. It now follows the node-rename contract:
 // it counts as unsaved, Save commits it, and closing the editor commits it instead of discarding it.
+// Finding 20 (a graph gesture owns the working copy until it ends): Undo/Redo/Save must not run while a
+// node drag, a comment drag or a pin rewire is in flight. Undo would restore the document underneath the
+// live gesture and the commit that follows would record a stale "before"; Save would write the
+// half-finished document to disk and re-base the clean snapshot, so cancelling afterwards would leave the
+// editor claiming there is nothing unsaved over a file holding exactly that unconfirmed state.
+void RunMaterialGraphGestureBlocksEditCommandsSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 20: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "GestureEditGuard.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    // The gesture under test is unplugging a wire, so the fixture needs one: a constant feeding Base Color.
+    const kb::render::RenderMaterialGraphNode* outputNode = nullptr;
+    for (const kb::render::RenderMaterialGraphNode& node : fixture.graph.nodes) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            outputNode = &node;
+            break;
+        }
+    }
+    report.Check(outputNode != nullptr, "Finding 20: the default graph has a Material Output node");
+    if (outputNode == nullptr) {
+        return;
+    }
+    kb::render::RenderMaterialGraphNode constant{
+        .id = 4711U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -280,
+        .positionY = 40,
+    };
+    constant.parameter.defaultValueHint = "0.4 0.6 0.2 1";
+    const std::uint32_t outputNodeId = outputNode->id;
+    fixture.graph.nodes.push_back(constant);
+    fixture.graph.links.push_back(MakeSelfTestGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        constant.id,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        outputNodeId,
+        "baseColor"));
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 20: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 20: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/GestureEditGuard.kbmat");
+    report.Check(metadata != nullptr, "Finding 20: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 20: open material");
+    const std::optional<kb::render::RenderMaterialAssetData>& document = context.MaterialEditor().WorkingCopy();
+    if (!document.has_value() || document->graph.links.empty()) {
+        report.Check(false, "Finding 20: the fixture graph has a link to unplug");
+        return;
+    }
+    const kb::render::RenderMaterialGraphLink link = document->graph.links.front();
+    const std::size_t linkCountBefore = document->graph.links.size();
+    const std::string bytesBefore = ReadFileTextForTest(materialPath);
+
+    report.Check(EditorEditCommandPolicy::CanExecute(context), "Finding 20: edit commands are allowed with no gesture in flight");
+
+    // Positive control first, or every "the command was refused" assertion below could pass for the wrong
+    // reason. Undo only reaches the material history when the graph is focused, and only does anything when
+    // that history is non-empty - so focus the graph and record a real edit (a completed node drag) here.
+    context.FocusMaterialGraph(true);
+    const auto nodePosition = [&context](std::uint32_t nodeId) {
+        std::pair<int, int> position{ 0, 0 };
+        if (context.MaterialEditor().WorkingCopy().has_value()) {
+            for (const kb::render::RenderMaterialGraphNode& node : context.MaterialEditor().WorkingCopy()->graph.nodes) {
+                if (node.id == nodeId) {
+                    position = { node.positionX, node.positionY };
+                }
+            }
+        }
+        return position;
+    };
+    const std::pair<int, int> constantHome = nodePosition(constant.id);
+    // SelectMaterialGraphNode reports whether the selection CHANGED, so it is never part of an assertion
+    // here - the node is often selected already from an earlier step.
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 100, 100) && context.DragMaterialGraphNode(180, 150) &&
+            context.EndMaterialGraphNodeDrag(),
+        "Finding 20: record a completed node drag so the material undo history has something in it");
+    const std::pair<int, int> constantMoved = nodePosition(constant.id);
+    report.Check(constantMoved != constantHome, "Finding 20: the drag really moved the node");
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo) && nodePosition(constant.id) == constantHome,
+        "Finding 20: Undo DOES run - and undoes the move - when no gesture is in flight");
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Redo) && nodePosition(constant.id) == constantMoved,
+        "Finding 20: Redo DOES run when no gesture is in flight");
+
+    // Scenario A: unplug a wire (this opens a working-copy transaction) and try to undo mid-gesture.
+    const bool dirtyBeforeGesture = context.MaterialEditor().Dirty();
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20),
+        "Finding 20: pull the wire off the input pin");
+    report.Check(context.HasMaterialGraphWorkingCopyTransaction() && context.HasMaterialGraphPinConnection(),
+        "Finding 20: the rewire gesture owns an open working-copy transaction");
+    report.Check(!EditorEditCommandPolicy::CanExecute(context),
+        "Finding 20: edit commands are blocked while the gesture is in flight");
+    report.Check(!EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo),
+        "Finding 20: Undo does not run under a live gesture");
+    report.Check(context.MaterialEditor().WorkingCopy().has_value() &&
+            context.MaterialEditor().WorkingCopy()->graph.links.size() == linkCountBefore - 1U,
+        "Finding 20: the gesture's own edit is untouched by the refused Undo");
+    // The undo that WOULD have run is the node move recorded above, so this is what a refusal actually saves.
+    report.Check(nodePosition(constant.id) == constantMoved,
+        "Finding 20: the refused Undo did not roll the previous edit back under the live gesture");
+
+    // Scenario B: Save mid-gesture must not write the half-finished document nor re-base the clean snapshot.
+    report.Check(!EditorEditCommandPolicy::Execute(context, EditorEditCommand::Save),
+        "Finding 20: Save does not run under a live gesture");
+    report.Check(ReadFileTextForTest(materialPath) == bytesBefore,
+        "Finding 20: the asset on disk is untouched by the refused Save");
+
+    // Cancelling the gesture restores the document, and the editor is honest about it being unchanged.
+    report.Check(context.CancelMaterialGraphPinConnection(), "Finding 20: cancel the gesture");
+    report.Check(!context.HasMaterialGraphWorkingCopyTransaction(), "Finding 20: cancelling closes the transaction");
+    report.Check(context.MaterialEditor().WorkingCopy().has_value() &&
+            context.MaterialEditor().WorkingCopy()->graph.links.size() == linkCountBefore &&
+            context.MaterialEditor().Dirty() == dirtyBeforeGesture,
+        "Finding 20: after the cancel the document and the dirty flag are back where the gesture found them");
+    report.Check(EditorEditCommandPolicy::CanExecute(context), "Finding 20: edit commands work again once the gesture ends");
+
+    // The toolbar Save button and the File menu row used to call SaveOpenDocuments directly, bypassing the
+    // gate; they go through the policy's POINTER route now - which is the one asserted here, not the keyboard
+    // twin above. This IS reachable: a wire dropped on empty canvas keeps its pin connection armed while the
+    // node-creation menu is open (EditorLeftButtonUpRouter), so the mouse is free with a gesture in flight.
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20),
+        "Finding 20: re-open the rewire gesture for the toolbar check");
+    const std::string bytesBeforeToolbarSave = ReadFileTextForTest(materialPath);
+    report.Check(!EditorEditCommandPolicy::ExecuteFromPointer(context, EditorEditCommand::Save),
+        "Finding 20: the toolbar Save path refuses under a live gesture too");
+    report.Check(ReadFileTextForTest(materialPath) == bytesBeforeToolbarSave,
+        "Finding 20: the toolbar Save leaves the asset on disk untouched");
+    report.Check(context.CancelMaterialGraphPinConnection(), "Finding 20: cancel the second gesture");
+
+    // A NODE drag works differently from the two gestures above: it does not touch the working copy until the
+    // mouse-up (DragMaterialGraphNode only accumulates an offset; EndMaterialGraphNodeDrag applies it). What
+    // it holds mid-gesture is the "before" snapshot its undo record will use - so the damage a mid-drag Undo
+    // does is to the history, and that is what this block pins down.
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 100, 100) && context.DragMaterialGraphNode(220, 190),
+        "Finding 20: begin a node drag and move the pointer past the drag threshold");
+    report.Check(nodePosition(constant.id) == constantMoved,
+        "Finding 20: a node drag holds its move in the gesture, not in the document, until the mouse-up");
+    report.Check(!EditorEditCommandPolicy::CanExecute(context), "Finding 20: a node drag blocks edit commands too");
+    report.Check(!EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo) &&
+            nodePosition(constant.id) == constantMoved,
+        "Finding 20: the refused Undo leaves the snapshot the drag will record intact");
+    report.Check(context.EndMaterialGraphNodeDrag(), "Finding 20: end the node drag");
+    report.Check(EditorEditCommandPolicy::CanExecute(context), "Finding 20: the gate lifts when the drag ends");
+    const std::pair<int, int> constantAfterDrag = nodePosition(constant.id);
+    report.Check(constantAfterDrag != constantMoved, "Finding 20: the finished drag applied the move");
+    // The history is coherent: undoing the drag returns exactly to where the drag started. This is what a
+    // mid-drag Undo would have broken - the recorded "before" would have described a document that no longer
+    // existed by the time the drag committed.
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo) &&
+            nodePosition(constant.id) == constantMoved,
+        "Finding 20: undoing the drag lands exactly on the pre-drag position");
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Redo) &&
+            nodePosition(constant.id) == constantAfterDrag,
+        "Finding 20: and redo puts it back");
+
+    // A COMMENT drag is the case that really does edit the document mid-gesture (MoveGraphCommentGroup writes
+    // straight into the working copy), so this is where "Save must not write a half-finished document" is a
+    // statement about bytes on disk rather than about a flag.
+    report.Check(context.AddMaterialGraphComment(id, -420, -120), "Finding 20: add a comment to drag");
+    const std::uint32_t commentId = context.MaterialEditor().WorkingCopy().has_value() &&
+            !context.MaterialEditor().WorkingCopy()->graph.comments.empty()
+        ? context.MaterialEditor().WorkingCopy()->graph.comments.back().id
+        : 0U;
+    report.Check(commentId != 0U, "Finding 20: resolve the new comment id");
+    const std::string bytesBeforeDragSave = ReadFileTextForTest(materialPath);
+    if (commentId != 0U) {
+        static_cast<void>(context.SelectMaterialGraphComment(commentId));
+        const auto commentPosition = [&context, commentId]() {
+            std::pair<int, int> position{ 0, 0 };
+            if (context.MaterialEditor().WorkingCopy().has_value()) {
+                for (const kb::render::RenderMaterialGraphCommentBox& comment : context.MaterialEditor().WorkingCopy()->graph.comments) {
+                    if (comment.id == commentId) {
+                        position = { comment.positionX, comment.positionY };
+                    }
+                }
+            }
+            return position;
+        };
+        const std::pair<int, int> commentHome = commentPosition();
+        report.Check(context.BeginMaterialGraphCommentDrag(id, commentId, 100, 100) && context.DragMaterialGraphComment(240, 200),
+            "Finding 20: drag the comment past the threshold");
+        report.Check(commentPosition() != commentHome,
+            "Finding 20: a comment drag DOES change the working copy mid-gesture");
+        report.Check(context.HasMaterialGraphGestureInFlight() && !EditorEditCommandPolicy::CanExecuteFromPointer(context),
+            "Finding 20: the comment drag is a gesture the guard sees");
+        report.Check(!EditorEditCommandPolicy::ExecuteFromPointer(context, EditorEditCommand::Save),
+            "Finding 20: Save mid-comment-drag is refused");
+        report.Check(ReadFileTextForTest(materialPath) == bytesBeforeDragSave,
+            "Finding 20: the half-dragged comment never reaches the file");
+        report.Check(context.EndMaterialGraphCommentDrag(), "Finding 20: end the comment drag");
+    }
+
+    // Positive control for the pointer route: with the gesture over and the document dirty, the toolbar Save
+    // must actually write. Without this, ExecuteFromPointer could `return false` and every other assertion
+    // in this suite would still pass while the Save button was dead.
+    report.Check(context.MaterialEditor().Dirty(), "Finding 20: the finished drag left unsaved work");
+    report.Check(EditorEditCommandPolicy::ExecuteFromPointer(context, EditorEditCommand::Save),
+        "Finding 20: the toolbar Save DOES run once no gesture is in flight");
+    report.Check(ReadFileTextForTest(materialPath) != bytesBeforeDragSave && !context.MaterialEditor().Dirty(),
+        "Finding 20: and it reached the file");
+
+    // The graph's own keyboard shortcuts edit the same working copy and run before the edit-command policy,
+    // so they need the same predicate: pasting into a live drag would record a stale "before" in the undo
+    // history, and deleting the dragged node would leave the gesture pointing at nothing.
+    // The clipboard refuses the Material Output node, so this half of the check drags the constant instead.
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.CopySelectedMaterialGraphNodes(), "Finding 20: copy a node to the graph clipboard");
+    const std::size_t nodeCountBeforeGesture = context.MaterialEditor().WorkingCopy()->graph.nodes.size();
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 140, 140),
+        "Finding 20: begin a drag before the clipboard check");
+    report.Check(context.HasMaterialGraphGestureInFlight(), "Finding 20: the shared gesture predicate sees the drag");
+    static_cast<void>(context.PasteMaterialGraphNodes(id, 32, 32));
+    report.Check(context.MaterialEditor().WorkingCopy()->graph.nodes.size() == nodeCountBeforeGesture,
+        "Finding 20: a paste during a drag is refused by the same predicate the shortcut consults");
+    // The other three document mutators behind the same guard, plus the palette route, which is the one that
+    // is actually reachable mid-drag: the graph keeps keyboard focus while a node is held, so Space+Enter
+    // lands in AddMaterialGraphNode and its edit would be swallowed by the drag's stale snapshot.
+    report.Check(!context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 64, 64) &&
+            context.MaterialEditor().WorkingCopy()->graph.nodes.size() == nodeCountBeforeGesture,
+        "Finding 20: the Space palette cannot add a node through a live drag");
+    report.Check(!context.AddMaterialGraphComment(id, 64, 200), "Finding 20: nor add a comment");
+    report.Check(!context.DuplicateSelectedMaterialGraphNodes(id, 16, 16) &&
+            context.MaterialEditor().WorkingCopy()->graph.nodes.size() == nodeCountBeforeGesture,
+        "Finding 20: nor duplicate the selection");
+    report.Check(!context.DeleteSelectedMaterialGraphNode(id) &&
+            context.MaterialEditor().WorkingCopy()->graph.nodes.size() == nodeCountBeforeGesture,
+        "Finding 20: nor delete the node it is dragging");
+
+    report.Check(context.EndMaterialGraphNodeDrag(), "Finding 20: end the clipboard-check drag");
+    report.Check(!context.HasMaterialGraphGestureInFlight(), "Finding 20: no gesture in flight once it ends");
+
+    // Positive controls, so none of the refusals above can have come from a precondition rather than the
+    // guard. Each is measured against the count right before it, since they compound.
+    const auto nodeCount = [&context]() { return context.MaterialEditor().WorkingCopy()->graph.nodes.size(); };
+    std::size_t countBefore = nodeCount();
+    report.Check(context.PasteMaterialGraphNodes(id, 32, 32) && nodeCount() == countBefore + 1U,
+        "Finding 20: the same paste DOES add a node once the drag is over");
+    countBefore = nodeCount();
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 64, 64) &&
+            nodeCount() == countBefore + 1U,
+        "Finding 20: and the same add DOES work");
+    report.Check(context.AddMaterialGraphComment(id, 64, 200), "Finding 20: and the same comment DOES get added");
+    // Both need a selected, non-output node - the add/paste above leave the selection wherever they like.
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    countBefore = nodeCount();
+    report.Check(context.DuplicateSelectedMaterialGraphNodes(id, 16, 16) && nodeCount() > countBefore,
+        "Finding 20: and duplicate DOES work");
+    // Delete what the duplicate left selected, not the fixture constant - the blocks below still need its
+    // link to the Material Output.
+    countBefore = nodeCount();
+    report.Check(context.DeleteSelectedMaterialGraphNode(id) && nodeCount() < countBefore,
+        "Finding 20: and delete DOES work");
+    report.Check(!context.MaterialEditor().WorkingCopy()->graph.links.empty(),
+        "Finding 20: the fixture link survived the positive controls");
+
+    // The toolbar and the menus route through the policy too, but a CLICK on Save is not ambiguous the way
+    // Ctrl+S is while a field has the keys - and the commands commit the pending edit themselves. Refusing a
+    // click on text input would leave the Save button dead after any click into a search or rename box.
+    context.FocusMaterialEditorFind(true);
+    report.Check(!EditorEditCommandPolicy::CanExecute(context),
+        "Finding 20: the keyboard route still stands back while a text field owns the keys");
+    report.Check(EditorEditCommandPolicy::CanExecuteFromPointer(context),
+        "Finding 20: the toolbar/menu route still works while a text field is armed");
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20),
+        "Finding 20: re-open the rewire gesture for the pointer-route check");
+    report.Check(!EditorEditCommandPolicy::CanExecuteFromPointer(context),
+        "Finding 20: the toolbar/menu route does refuse while a gesture owns the working copy");
+    report.Check(context.CancelMaterialGraphPinConnection(), "Finding 20: cancel the pointer-route gesture");
+    context.FocusMaterialEditorFind(false);
+
+    // Alt+F4 does not go through the policy at all - the close prompt calls SaveMaterialEditorAsset directly -
+    // and it is reachable with the mouse still held, which is the one way a gesture really does outlive the
+    // user's intent. So the close path settles the gesture first; this is that contract.
+    // Start from a saved document, or "the interrupted drag counts as unsaved work" would be true anyway from
+    // the paste above and the assertion would prove nothing.
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 20: save first, so the settle check starts from a clean document");
+    const std::pair<int, int> settleHome = nodePosition(constant.id);
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 100, 100) && context.DragMaterialGraphNode(260, 240),
+        "Finding 20: start a drag that a close would interrupt");
+    // Settle's return value is not asserted anywhere in this suite: CancelMaterialGraphPinConnection cannot
+    // fail, so once a gesture is in flight the call can only return true. The effects below carry the weight.
+    static_cast<void>(context.SettleMaterialGraphGesture());
+    report.Check(!context.HasMaterialGraphGestureInFlight(), "Finding 20: nothing is left in flight after settling");
+    report.Check(nodePosition(constant.id) != settleHome && context.MaterialEditor().Dirty(),
+        "Finding 20: the interrupted drag is committed and counts as unsaved work, so the prompt appears at all");
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo) && nodePosition(constant.id) == settleHome,
+        "Finding 20: and it stayed undoable instead of being silently dropped");
+
+    // The other half: a wire still in mid-air was never dropped on a pin, so settling restores the link
+    // rather than committing a deletion the user never confirmed.
+    const std::size_t linksBeforeSettle = context.MaterialEditor().WorkingCopy()->graph.links.size();
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20),
+        "Finding 20: pull a wire off for the close-path check");
+    report.Check(context.MaterialEditor().WorkingCopy()->graph.links.size() == linksBeforeSettle - 1U,
+        "Finding 20: the wire is off");
+    static_cast<void>(context.SettleMaterialGraphGesture());
+    report.Check(context.MaterialEditor().WorkingCopy()->graph.links.size() == linksBeforeSettle &&
+            !context.HasMaterialGraphWorkingCopyTransaction(),
+        "Finding 20: settling puts the link back instead of saving the document without it");
+
+    // Ordering inside Save: the gesture must be settled BEFORE the in-flight text edits are committed. A drag
+    // holds the "before" snapshot its undo command will record, taken when the drag began; committing a
+    // rename first would leave that snapshot one edit out of date, so the two undo entries would no longer
+    // describe consecutive states and a single Undo would roll back both.
+    const std::pair<int, int> orderHome = nodePosition(constant.id);
+    report.Check(context.BeginMaterialGraphNodeRenameEdit(id, constant.id), "Finding 20: arm a node rename");
+    context.ClearMaterialGraphNodeRenameEditText();
+    context.InsertMaterialGraphNodeRenameEditText("Tint");
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 100, 100) && context.DragMaterialGraphNode(300, 260),
+        "Finding 20: drag the same node while the rename is armed");
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 20: save with both a rename and a drag pending");
+    const auto nodeName = [&context](std::uint32_t nodeId) {
+        std::string name;
+        if (context.MaterialEditor().WorkingCopy().has_value()) {
+            for (const kb::render::RenderMaterialGraphNode& node : context.MaterialEditor().WorkingCopy()->graph.nodes) {
+                if (node.id == nodeId) {
+                    name = node.parameter.displayName;
+                }
+            }
+        }
+        return name;
+    };
+    report.Check(nodeName(constant.id) == "Tint" && nodePosition(constant.id) != orderHome,
+        "Finding 20: both the rename and the move landed");
+    // NOTE: the undo history for this combination (a drag settled while a rename is armed) does not unwind
+    // the way the ordering alone predicts - one Undo takes back both edits. That is pre-existing behaviour of
+    // the rename/undo path, not something the settle introduced, and it is recorded in the findings file
+    // rather than asserted here. What IS asserted is the property that matters to the user: neither edit is
+    // lost, in memory or on disk.
+    const std::string bothPendingBytes = ReadFileTextForTest(materialPath);
+    report.Check(bothPendingBytes.find("Tint") != std::string::npos,
+        "Finding 20: the rename reached the file");
+    report.Check(!context.MaterialEditor().Dirty(),
+        "Finding 20: and the save left nothing behind - both pending edits went in together");
+
+    // An in-place mutator folded into an open transaction records no command and never reaches
+    // SetWorkingCopy, so the dirty flag used to keep describing the document as it was before the gesture -
+    // and that flag is what the close/quit prompt reads.
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 20: start the transaction-dirty check from a clean document");
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20) &&
+            context.HasMaterialGraphWorkingCopyTransaction(),
+        "Finding 20: open a transaction");
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.BeginMaterialGraphNodeDrag(id, constant.id, 100, 100) &&
+            context.DragMaterialGraphNode(340, 300) && context.EndMaterialGraphNodeDrag(),
+        "Finding 20: commit a node move inside that transaction");
+    // NOTE: no assertion here that the dirty flag saw the folded-in move. The only thing that can open a
+    // transaction is the detach above, and that already dirtied the document through SetWorkingCopy - so
+    // MaterialEditorState::RefreshDirty in the transaction branch is defensive and cannot be distinguished
+    // from the outside. Verified by reading, not asserted.
+    report.Check(context.MaterialEditor().Dirty() && context.CancelMaterialGraphPinConnection() &&
+            !context.MaterialEditor().Dirty(),
+        "Finding 20: cancelling the transaction takes the dirty flag back down with the document");
+
+    // And the wiring, not just the helper: Save itself settles, so the prompt's "Yes = Save" cannot write a
+    // document caught mid-rewire no matter which route reached it.
+    report.Check(context.DetachMaterialGraphInputPinConnection(id, link.toNodeId, link.toPin, 20, 20) &&
+            context.HasMaterialGraphGestureInFlight(),
+        "Finding 20: pull the wire off once more, this time to Save straight through it");
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 20: the close prompt's Save runs");
+    report.Check(!context.HasMaterialGraphGestureInFlight(),
+        "Finding 20: Save settled the gesture instead of writing through it");
+    const std::string savedBytes = ReadFileTextForTest(materialPath);
+    report.Check(savedBytes.find("graphLink") != std::string::npos &&
+            context.MaterialEditor().WorkingCopy()->graph.links.size() == linksBeforeSettle,
+        "Finding 20: the link the user never dropped is still there, in the document and on disk");
+}
+
 void RunMaterialEditorInlineConstantCloseContractSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -2305,6 +2778,149 @@ void RunMaterialEditorInspectorTextEditSavesToDiskSuite(Report& report) {
 // Finding 13 (dialog modality): a modal Material Editor dialog must lock the whole editor, not just the
 // window it was parented to, or a panel in a floating window stays clickable while the dialog is up.
 // Real HWNDs, because that is the only thing that proves the Win32 behaviour.
+// Thumbnail image quality: the capture has no MSAA and sits on opaque black, so the pipeline has to do
+// the work - anti-aliased silhouette from a supersampled coverage mask, transparent background, and a
+// contact shadow so the ball is grounded instead of floating.
+void RunMaterialThumbnailImagePipelineSuite(Report& report) {
+    // A synthetic "linear render": a lit sphere-ish disc on the renderer's opaque black clear.
+    constexpr int kSource = 1024;
+    EditorMaterialThumbnailImage image{ .width = kSource, .height = kSource };
+    image.bgra.assign(static_cast<std::size_t>(kSource) * static_cast<std::size_t>(kSource), 0xFF000000U);
+    const double center = kSource * 0.5;
+    const double radius = kSource * 0.40;
+    for (int y = 0; y < kSource; ++y) {
+        for (int x = 0; x < kSource; ++x) {
+            const double dx = x - center;
+            const double dy = y - center;
+            if ((dx * dx + dy * dy) > (radius * radius)) {
+                continue;
+            }
+            image.bgra[static_cast<std::size_t>(y) * kSource + static_cast<std::size_t>(x)] = 0xFF20A030U;
+        }
+    }
+
+    EditorMaterialThumbnailService::ProcessCapture(image);
+    report.Check(image.width == 256 && image.height == 256,
+        "Finding 18: the oversized capture is downsampled to tile resolution");
+    if (image.width != 256 || image.height != 256) {
+        return;
+    }
+    const auto alphaAt = [&image](int x, int y) {
+        return (image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) +
+            static_cast<std::size_t>(x)] >> 24U) & 0xFFU;
+    };
+
+    report.Check(alphaAt(2, 2) == 0U, "Finding 18: the black background is punched out to full transparency");
+    report.Check(alphaAt(128, 128) == 255U, "Finding 18: the material itself stays fully opaque");
+
+    // The silhouette edge must contain partial coverage - that is what "not pixelated" means here.
+    int partialCoverage = 0;
+    for (int x = 0; x < image.width; ++x) {
+        const std::uint32_t alpha = alphaAt(x, 128);
+        if (alpha > 8U && alpha < 247U) {
+            ++partialCoverage;
+        }
+    }
+    report.Check(partialCoverage >= 2,
+        "Finding 18: the silhouette is anti-aliased (partial coverage pixels on the edge: " +
+            std::to_string(partialCoverage) + ")");
+
+    // Contact shadow: opacity below the ball that the render itself never produced.
+    const int shadowY = std::min(image.height - 2, static_cast<int>(std::lround(image.height * 0.5 + 256 * 0.40 * 0.5 / 4.0 + 30)));
+    int shadowPixels = 0;
+    for (int x = 0; x < image.width; ++x) {
+        const std::uint32_t alpha = alphaAt(x, image.height - 40);
+        if (alpha > 8U) {
+            ++shadowPixels;
+        }
+    }
+    static_cast<void>(shadowY);
+    report.Check(shadowPixels > 0,
+        "Finding 18: a soft contact shadow grounds the ball (shadow pixels under it: " +
+            std::to_string(shadowPixels) + ")");
+
+    // One source of truth for the ball size: whatever the render framed, the thumbnail normalises the
+    // silhouette to the shared fraction, so a tile never resizes the ball when the render replaces the
+    // painted stand-in. Two very different framings must come out identical.
+    const auto silhouetteWidth = [](const EditorMaterialThumbnailImage& thumbnail) {
+        int left = thumbnail.width;
+        int right = -1;
+        for (int y = 0; y < thumbnail.height; ++y) {
+            for (int x = 0; x < thumbnail.width; ++x) {
+                if (((thumbnail.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(thumbnail.width) +
+                        static_cast<std::size_t>(x)] >> 24U) & 0xFFU) < 200U) {
+                    continue;
+                }
+                left = std::min(left, x);
+                right = std::max(right, x);
+            }
+        }
+        return right - left + 1;
+    };
+    const auto renderDisc = [](int size, double radiusFraction) {
+        EditorMaterialThumbnailImage fixture{ .width = size, .height = size };
+        fixture.bgra.assign(static_cast<std::size_t>(size) * static_cast<std::size_t>(size), 0xFF000000U);
+        const double center = size * 0.5;
+        const double radius = size * radiusFraction;
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                const double dx = x - center;
+                const double dy = y - center;
+                if ((dx * dx + dy * dy) <= (radius * radius)) {
+                    fixture.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)] =
+                        0xFF20A030U;
+                }
+            }
+        }
+        EditorMaterialThumbnailService::ProcessCapture(fixture);
+        return fixture;
+    };
+    const EditorMaterialThumbnailImage tightRender = renderDisc(kSource, 0.48);
+    const EditorMaterialThumbnailImage looseRender = renderDisc(kSource, 0.28);
+    const int tightWidth = silhouetteWidth(tightRender);
+    const int looseWidth = silhouetteWidth(looseRender);
+    report.Check(std::abs(tightWidth - looseWidth) <= 4,
+        "Finding 18: the ball is one size regardless of how the render framed it (" +
+            std::to_string(tightWidth) + " vs " + std::to_string(looseWidth) + " px)");
+    report.Check(std::abs(tightWidth - static_cast<int>(std::lround(256.0 * kMaterialPreviewBallFraction))) <= 6,
+        "Finding 18: the ball matches the shared size fraction the painted stand-in also uses");
+
+    // Detail retention: a tile draws the thumbnail small, so the service scales it itself instead of
+    // letting GDI stretch the master. A checkerboard survives that path only if the scaler is an area
+    // filter - a naive nearest/stretch collapses it into one flat colour.
+    EditorMaterialThumbnailImage detail{ .width = 256, .height = 256 };
+    detail.bgra.assign(256U * 256U, 0xFF000000U);
+    for (int y = 0; y < 256; ++y) {
+        for (int x = 0; x < 256; ++x) {
+            const bool light = (((x / 4) + (y / 4)) % 2) == 0;
+            detail.bgra[static_cast<std::size_t>(y) * 256U + static_cast<std::size_t>(x)] =
+                0xFF000000U | (light ? 0x00C8C8C8U : 0x00303030U);
+        }
+    }
+    const EditorMaterialThumbnailImage scaled = EditorMaterialThumbnailService::ScaleForDisplaySize(detail, 56);
+    std::uint32_t darkest = 255U;
+    std::uint32_t brightest = 0U;
+    for (const std::uint32_t pixel : scaled.bgra) {
+        const std::uint32_t green = (pixel >> 8U) & 0xFFU;
+        darkest = std::min(darkest, green);
+        brightest = std::max(brightest, green);
+    }
+    report.Check(scaled.width == 56 && scaled.height == 56, "Finding 18: the thumbnail is scaled to the tile's own size");
+    report.Check(brightest > darkest + 24U,
+        "Finding 18: texture detail survives the downscale to tile size (contrast kept: " +
+            std::to_string(brightest - darkest) + ")");
+
+    // Leave the processed thumbnail on disk so the result can be eyeballed, like the other visual suites.
+    if (const std::optional<CLSID> encoder = GdiplusEncoderClsid(L"image/bmp")) {
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap bitmap(image.width, image.height, image.width * 4,
+            PixelFormat32bppARGB, reinterpret_cast<BYTE*>(image.bgra.data()));
+        const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "21kb_selftest" / "_materialThumbnailPipeline.bmp";
+        static_cast<void>(bitmap.Save(path.wstring().c_str(), &*encoder, nullptr));
+    }
+}
+
 void RunModalWindowScopeSuite(Report& report) {
     const wchar_t className[] = L"KBEditorSelfTestModalScopeWindow";
     WNDCLASSW windowClass{};
@@ -2361,6 +2977,191 @@ void RunModalWindowScopeSuite(Report& report) {
     for (const HWND window : { mainWindow, floatingWindow, outerDialog, innerDialog }) {
         DestroyWindow(window);
     }
+}
+
+// Finding 22 (diagnostic logging must cost nothing by default): the colour picker opened an ofstream per
+// log line and called OutputDebugStringA from its constructor, from every paint and from mouse-move - file
+// I/O on the UI thread in the middle of a drag - with no way to turn it off short of a rebuild.
+void RunDebugLogGateSuite(Report& report) {
+    const char* const name = "KB_EDITOR_SELFTEST_LOG_GATE";
+    const auto set = [name](const char* value) { return SetEnvironmentVariableA(name, value) != 0; };
+
+    report.Check(SetEnvironmentVariableA(name, nullptr) != 0, "Finding 22: clear the switch");
+    report.Check(!EditorDebugLogVariableEnabled(name), "Finding 22: an unset variable means off");
+    report.Check(set("") && !EditorDebugLogVariableEnabled(name), "Finding 22: an empty variable means off");
+    report.Check(set("0") && !EditorDebugLogVariableEnabled(name), "Finding 22: \"0\" means off");
+    report.Check(set("1") && EditorDebugLogVariableEnabled(name), "Finding 22: \"1\" means on");
+    report.Check(set("verbose") && EditorDebugLogVariableEnabled(name), "Finding 22: any other value means on");
+    // Longer than the read buffer: must not be mistaken for unset, and must not read past it.
+    report.Check(set("00000000000000000000000000000001") && EditorDebugLogVariableEnabled(name),
+        "Finding 22: a value longer than the buffer still means on");
+    report.Check(SetEnvironmentVariableA(name, nullptr) != 0 && !EditorDebugLogVariableEnabled(name),
+        "Finding 22: and clearing it turns it back off");
+
+    // The switch the colour picker actually reads must be off in a normal editor process, or the picker is
+    // back to writing a file per paint.
+    report.Check(!EditorDebugLogVariableEnabled("KB_MATERIAL_COLOR_PICKER_LOG"),
+        "Finding 22: the colour picker trace is off unless someone asks for it");
+
+    // Finding 23: the parameter-value dialog used a hand-rolled Latin-1/ASCII conversion pair, so anything
+    // the user typed outside ASCII came back as '?' - a silent value corruption. It now delegates to the
+    // editor's shared UTF-8 conversion, which is what this round-trip pins.
+    const std::string utf8 = "Szorstkosc ÅwiatÅa â Î±/Î²";
+    const std::wstring wide = ScriptEditorTextEncoding::Widen(utf8);
+    report.Check(wide.find(L'?') == std::wstring::npos, "Finding 23: widening does not replace non-ASCII with '?'");
+    report.Check(ScriptEditorTextEncoding::Narrow(wide) == utf8,
+        "Finding 23: a non-ASCII parameter value survives the dialog's conversion both ways");
+    report.Check(ScriptEditorTextEncoding::Widen("").empty() && ScriptEditorTextEncoding::Narrow(L"").empty(),
+        "Finding 23: and empty text stays empty");
+}
+
+// Finding 24 (selection and find results must not outlive the document they point at).
+void RunMaterialEditorStaleReferenceSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 24: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "StaleReferences.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    kb::render::RenderMaterialGraphNode constant{
+        .id = 5150U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -260,
+        .positionY = 60,
+    };
+    constant.parameter.displayName = "Findable";
+    fixture.graph.nodes.push_back(constant);
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 24: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 24: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/StaleReferences.kbmat");
+    report.Check(metadata != nullptr, "Finding 24: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 24: open material");
+
+    // Selecting a node id that is not in the document must not stick. The graph panel hit-tests an empty
+    // document against a fabricated default graph, so ids that exist nowhere can reach this call.
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.MaterialEditor().SelectedNodeId() == constant.id, "Finding 24: a real node selects");
+    static_cast<void>(context.SelectMaterialGraphNode(999999U));
+    report.Check(context.MaterialEditor().SelectedNodeId() != 999999U,
+        "Finding 24: a node id that is not in the document never becomes the selection");
+
+    // Find results are rebuilt by SetWorkingCopy; a revert replaces the document the same way and must
+    // rebuild them too, or the panel lists nodes that no longer exist.
+    context.SetMaterialEditorFindQuery("Findable");
+    report.Check(!context.MaterialEditor().FindResults().empty(), "Finding 24: the fixture node is findable");
+    static_cast<void>(context.SelectMaterialGraphNode(constant.id));
+    report.Check(context.DeleteSelectedMaterialGraphNode(id), "Finding 24: delete the findable node");
+    report.Check(context.MaterialEditor().FindResults().empty(),
+        "Finding 24: deleting it clears the hit (SetWorkingCopy refreshes)");
+    report.Check(context.RevertMaterialEditorAsset(id), "Finding 24: revert brings the node back");
+    report.Check(!context.MaterialEditor().FindResults().empty(),
+        "Finding 24: and the revert rebuilds the find results instead of leaving them stale");
+}
+
+// Finding 21 (modal loops must survive an app quit): quitting the editor while a dialog is up used to be
+// swallowed by the dialog's own pump, and the parameter dialog left its window alive pointing at stack state
+// that was about to die.
+void RunModalMessageLoopQuitSuite(Report& report) {
+    // The queue must start clean or the assertions below measure someone else's messages. Bounded, because
+    // PeekMessage never removes WM_PAINT - it is regenerated until someone validates the update region, so
+    // an unbounded drain would spin forever the day a window is left alive by an earlier suite.
+    MSG drained{};
+    for (int i = 0; i < 512 && PeekMessageW(&drained, nullptr, 0, 0, PM_REMOVE) != 0; ++i) {
+    }
+
+    // Ordinary exit: the loop pumps until the dialog reports it is done.
+    int calls = 0;
+    report.Check(PostThreadMessageW(GetCurrentThreadId(), WM_APP, 0, 0) != 0, "Finding 21: queue a message to pump");
+    const EditorModalLoopExit completed = RunEditorModalMessageLoop(nullptr, false, [&calls]() noexcept { return ++calls > 1; });
+    report.Check(completed == EditorModalLoopExit::Completed, "Finding 21: a dialog that closes itself reports Completed");
+
+    // WM_QUIT: the loop stops AND puts the quit back, so the main pump still sees the shutdown.
+    PostQuitMessage(11);
+    const EditorModalLoopExit quit = RunEditorModalMessageLoop(nullptr, false, []() noexcept { return false; });
+    report.Check(quit == EditorModalLoopExit::Quit, "Finding 21: WM_QUIT ends the modal loop and is reported as a quit");
+    MSG queued{};
+    const bool requeued = PeekMessageW(&queued, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) != 0;
+    report.Check(requeued && queued.wParam == 11U,
+        "Finding 21: the quit is re-posted with its exit code instead of being swallowed by the dialog");
+
+    // A dialog destroyed from outside (its owner window closes, taking its owned windows with it) never sets
+    // its own "done" flag and never gets a quit, so a pump that only watches those two spins forever and
+    // freezes the editor. The queued quit is this assertion's safety net: without the handle check the loop
+    // would report Quit here rather than hang the whole self-test.
+    const wchar_t abandonClass[] = L"KBEditorSelfTestAbandonedDialog";
+    WNDCLASSW abandonWindowClass{};
+    abandonWindowClass.lpfnWndProc = DefWindowProcW;
+    abandonWindowClass.hInstance = GetModuleHandleW(nullptr);
+    abandonWindowClass.lpszClassName = abandonClass;
+    const bool abandonClassReady = RegisterClassW(&abandonWindowClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    report.Check(abandonClassReady, "Finding 21: register the stand-in dialog class");
+    const HWND abandoned = abandonClassReady
+        ? CreateWindowExW(0, abandonClass, L"kb self-test dialog", WS_OVERLAPPEDWINDOW, 0, 0, 120, 80, nullptr,
+              nullptr, GetModuleHandleW(nullptr), nullptr)
+        : nullptr;
+    report.Check(abandoned != nullptr, "Finding 21: create the stand-in dialog window");
+    if (abandoned != nullptr) {
+        // DefWindowProcW turns WM_CLOSE into DestroyWindow, i.e. the window dies inside the pump.
+        report.Check(PostMessageW(abandoned, WM_CLOSE, 0, 0) != 0, "Finding 21: queue the external destroy");
+        PostQuitMessage(5);
+        const EditorModalLoopExit abandonedExit =
+            RunEditorModalMessageLoop(abandoned, false, []() noexcept { return false; });
+        report.Check(abandonedExit == EditorModalLoopExit::Abandoned,
+            "Finding 21: a dialog destroyed from outside ends the pump instead of freezing the editor");
+        MSG leftoverQuit{};
+        static_cast<void>(PeekMessageW(&leftoverQuit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE));
+    }
+
+    // End to end through the real dialog: a quit delivered while it is up must tear the window down (its
+    // DialogState lives on Show's stack) and must not report a value the user never confirmed. The WM_APP
+    // ahead of the quit is a canary - GetMessageW only reports WM_QUIT once the queue holds nothing else, so
+    // if it is still queued afterwards the dialog never pumped and the rest of this block would pass vacuously.
+    report.Check(PostThreadMessageW(GetCurrentThreadId(), WM_APP, 0, 0) != 0, "Finding 21: queue the pump canary");
+    PostQuitMessage(3);
+    const std::optional<std::string> value =
+        EditorMaterialParameterValueDialog::Show(nullptr, "Roughness", "0.5");
+    // PM_NOREMOVE and an explicit message check, because PeekMessageW hands back WM_QUIT whatever filter it
+    // is given - removing here would eat the very quit the next assertion is about.
+    MSG canary{};
+    const bool canaryLeft = PeekMessageW(&canary, nullptr, WM_APP, WM_APP, PM_NOREMOVE) != 0 && canary.message == WM_APP;
+    report.Check(!canaryLeft, "Finding 21: the dialog really ran its message pump");
+    if (canaryLeft) {
+        // Failing is no reason to hand the next suite a dirty queue.
+        static_cast<void>(PeekMessageW(&canary, nullptr, WM_APP, WM_APP, PM_REMOVE));
+    }
+    report.Check(!value.has_value(), "Finding 21: a dialog abandoned by a quit returns no value");
+    // Our own thread, not FindWindowW: that searches the whole desktop, so a second editor instance with the
+    // same dialog open would fail this for the wrong reason.
+    struct DialogSearch {
+        const wchar_t* className;
+        bool found;
+    } search{ L"KBEditorMaterialParameterValueDialog", false };
+    EnumThreadWindows(
+        GetCurrentThreadId(),
+        [](HWND window, LPARAM parameter) -> BOOL {
+            DialogSearch& state = *reinterpret_cast<DialogSearch*>(parameter);
+            std::array<wchar_t, 64U> className{};
+            if (GetClassNameW(window, className.data(), static_cast<int>(className.size())) > 0 &&
+                std::wcscmp(className.data(), state.className) == 0) {
+                state.found = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+    report.Check(!search.found,
+        "Finding 21: the abandoned dialog window is destroyed instead of outliving the state it points at");
+    MSG dialogQuit{};
+    report.Check(PeekMessageW(&dialogQuit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) != 0 && dialogQuit.wParam == 3U,
+        "Finding 21: the quit survives the parameter dialog");
 }
 
 // Finding 15 (undocked panels must be resizable): the border strip already hit-tests as a resize edge, but
@@ -2466,6 +3267,42 @@ void RunMaterialGraphInteractionCostSuite(Report& report) {
     report.Check(perEventMs < 8.0,
         "Finding 16: one pointer event of graph hit-testing stays under 8 ms (measured " +
             FormatMilliseconds(perEventMs) + " ms on a " + std::to_string(document->graph.nodes.size()) + " node graph)");
+
+    // The third cost centre, and the one the audit flagged as untouched: every edit funnels through
+    // SetWorkingCopy, which re-derives the dirty flag. Measured on the same graph as the two above.
+    const int editIterations = 60;
+    kb::render::RenderMaterialAssetData edited = *document;
+    const LARGE_INTEGER editStart = QueryCounter();
+    for (int index = 0; index < editIterations; ++index) {
+        edited.graph.nodes.back().positionX = index * 7;
+        context.MaterialEditor().SetWorkingCopy(edited);
+    }
+    const double perEditMs = ElapsedMilliseconds(editStart) / static_cast<double>(editIterations);
+
+    // Budget, not a stopwatch: an edit used to re-derive everything (two canonical serializations for the
+    // dirty compare, the parameter list, the find results, the graph validator AND a full shader compile),
+    // which measured ~2.2 ms per edit on this graph in a Debug build. Deriving it lazily instead puts it
+    // well under a millisecond; the ceiling here is loose enough not to fire on a slow machine and tight
+    // enough that going back to eager rebuilds trips it.
+    report.Check(perEditMs < 1.2,
+        "Finding 16: one document edit stays under 1.2 ms (measured " + FormatMilliseconds(perEditMs) +
+            " ms on a " + std::to_string(context.MaterialEditor().WorkingCopy()->graph.nodes.size()) + " node graph)");
+
+    // Lazy must not mean absent. Reading after an edit has to produce the same answer eager rebuilding did.
+    report.Check(!context.MaterialEditor().Parameters().empty(),
+        "Finding 16: the parameter list is there when something reads it");
+    const std::size_t markerCount = context.MaterialEditor().GraphDiagnosticMarkers().size();
+    const bool hasDiagnostics = !context.MaterialEditor().Diagnostics().empty();
+    report.Check(hasDiagnostics || markerCount == 0U,
+        "Finding 16: the diagnostics are rebuilt on read, not left cleared");
+
+    // And a result that arrives from outside must not be wiped by a rebuild that was still pending.
+    context.MaterialEditor().SetWorkingCopy(edited);
+    context.MaterialEditor().ApplyCookResult({ "selftest cook line" }, true, true, false, false);
+    const std::vector<std::string>& afterCook = context.MaterialEditor().Diagnostics();
+    report.Check(std::ranges::any_of(afterCook, [](const std::string& line) {
+        return line.find("selftest cook line") != std::string::npos;
+    }), "Finding 16: a cook result that lands on a pending rebuild survives it");
 
     // The other half of a frame: the repaint every pointer event triggers.
     double perPaintMs = 0.0;
@@ -3542,12 +4379,18 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_interaction_lifecycle", &RunMaterialGraphInteractionLifecycleSuite);
     RunSuiteInScratch(report, "material_inspector_graph_edit_reconcile", &RunMaterialInspectorGraphEditReconcileSuite);
     RunSuiteInScratch(report, "material_editor_reopen_keeps_unsaved_edits", &RunMaterialEditorReopenPreservesUnsavedEditsSuite);
+    RunSuiteInScratch(report, "material_graph_gesture_edit_guard", &RunMaterialGraphGestureBlocksEditCommandsSuite);
     RunSuiteInScratch(report, "material_editor_inline_constant_close", &RunMaterialEditorInlineConstantCloseContractSuite);
     RunSuiteInScratch(report, "material_editor_inspector_text_edit_save", &RunMaterialEditorInspectorTextEditSavesToDiskSuite);
+    RunSuiteInScratch(report, "material_thumbnail_image_pipeline", &RunMaterialThumbnailImagePipelineSuite);
     RunSuiteInScratch(report, "modal_window_scope", &RunModalWindowScopeSuite);
+    RunSuiteInScratch(report, "modal_message_loop_quit", &RunModalMessageLoopQuitSuite);
+    RunSuiteInScratch(report, "debug_log_gate", &RunDebugLogGateSuite);
+    RunSuiteInScratch(report, "material_editor_stale_references", &RunMaterialEditorStaleReferenceSuite);
     RunSuiteInScratch(report, "floating_window_resize", &RunFloatingWindowResizeSuite);
     RunSuiteInScratch(report, "material_graph_interaction_cost", &RunMaterialGraphInteractionCostSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);
+    RunSuiteInScratch(report, "inspector_material_color_rows", &RunInspectorMaterialColorRowsSuite);
     RunSuiteInScratch(report, "inspector_material_preview_surface", &RunInspectorMaterialPreviewSurfaceSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);

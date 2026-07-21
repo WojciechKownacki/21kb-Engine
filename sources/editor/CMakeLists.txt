@@ -382,11 +382,15 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/scene/material/MaterialEditorCanonicalCompare.hpp
     src/private/scene/material/EditorTextureAssetMetadataResolver.hpp
     src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
+    src/private/platform/win32/EditorDebugLogGate.hpp
+    src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
+    src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/MaterialPreviewAppearanceResolver.hpp
     src/private/rendering/MaterialPreviewTextureAverageColor.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -655,6 +659,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
+    src/rendering/EditorMaterialThumbnailService.cpp
     src/rendering/MaterialPreviewAppearanceResolver.cpp
     src/rendering/MaterialPreviewTextureAverageColor.cpp
     src/rendering/MaterialEditorPanelLayout.cpp
@@ -1112,6 +1117,8 @@ if(BUILD_TESTING)
         tests/EditorTestSupport.hpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
+        # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
+        src/rendering/MaterialEditorPanelLayout.cpp
     )
 
     target_include_directories(kb_editor_material_graph_canvas_tests
