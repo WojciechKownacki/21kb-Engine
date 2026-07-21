@@ -382,10 +382,13 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/scene/material/MaterialEditorCanonicalCompare.hpp
     src/private/scene/material/EditorTextureAssetMetadataResolver.hpp
     src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
+    src/private/platform/win32/EditorDebugLogGate.hpp
+    src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/MaterialPreviewAppearanceResolver.hpp

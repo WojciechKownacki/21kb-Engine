@@ -2,6 +2,7 @@
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorModalMessageLoop.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -302,16 +303,14 @@ public:
             return {};
         }
         const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
+        EditorModalLoopExit exit = EditorModalLoopExit::Completed;
         {
             const EditorModalWindowScope modal{ window_ };
             SetWindowPos(window_, textureThumbnails_ ? HWND_TOP : HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
             SetForegroundWindow(window_);
 
-            MSG message{};
-            while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
+            // No dialog navigation: the picker handles its own keys, and IsDialogMessageW would eat them.
+            exit = RunEditorModalMessageLoop(window_, false, [this]() noexcept { return !running_; });
         }
 
         if (window_ != nullptr && IsWindow(window_) != 0) {
@@ -319,7 +318,8 @@ public:
             window_ = nullptr;
         }
         RestoreOwnerFocus();
-        return result_;
+        // An app quit or a window destroyed under the pump is not a pick.
+        return exit == EditorModalLoopExit::Completed ? result_ : AssetPickerResult{};
     }
 
 private:
