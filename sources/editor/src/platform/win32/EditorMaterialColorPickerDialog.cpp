@@ -1,6 +1,8 @@
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorDebugLogGate.hpp"
+#include "platform/win32/EditorModalMessageLoop.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
@@ -267,7 +269,18 @@ void DrawBorderOnly(HDC dc, const RECT& rect, COLORREF border) {
     return path;
 }
 
+// Off unless KB_MATERIAL_COLOR_PICKER_LOG says otherwise. This trace opens an ofstream per line and calls
+// OutputDebugStringA from the constructor, from every paint and from mouse-move - file I/O on the UI thread
+// in the middle of a colour drag. It is a debugging tool, so it is kept, but it must cost nothing by default.
+[[nodiscard]] bool ColorPickerLoggingEnabled() noexcept {
+    static const bool enabled = EditorDebugLogVariableEnabled("KB_MATERIAL_COLOR_PICKER_LOG");
+    return enabled;
+}
+
 void ColorPickerLogRaw(std::string_view message, std::ios_base::openmode mode = std::ios::app) {
+    if (!ColorPickerLoggingEnabled()) {
+        return;
+    }
     static const std::string path = ColorPickerLogPath();
     {
         std::ofstream log(path, mode);
@@ -288,7 +301,13 @@ void ColorPickerLogReset() {
     ColorPickerLog("path=" + ColorPickerLogPath());
 }
 
+// Gated here as well as in ColorPickerLogRaw, and deliberately so: every throttled call site builds its
+// message by string concatenation before calling the logger, so short-circuiting at the throttle is what
+// actually removes the per-event cost.
 [[nodiscard]] bool ShouldLog(int& counter, int first, int every) noexcept {
+    if (!ColorPickerLoggingEnabled()) {
+        return false;
+    }
     ++counter;
     return counter <= first || (every > 0 && (counter % every) == 0);
 }
@@ -420,6 +439,7 @@ public:
         }
         const RECT bounds = anchorScreenPoint == nullptr ? CenteredWindowRect(owner) : AnchoredWindowRect(*anchorScreenPoint);
         ColorPickerLog("show owner=" + IntText(owner_ != nullptr ? 1 : 0) + " bounds=" + RectText(bounds));
+        EditorModalLoopExit exit = EditorModalLoopExit::Completed;
         {
             const EditorModalWindowScope modal{ window_ };
             SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds), SWP_SHOWWINDOW);
@@ -427,18 +447,19 @@ public:
             InvalidateRect(window_, nullptr, FALSE);
             UpdateWindow(window_);
 
-            MSG message{};
-            while (running_ && GetMessageW(&message, nullptr, 0, 0) > 0) {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
+            // No dialog navigation: the picker handles its own keys, and IsDialogMessageW would eat them.
+            exit = RunEditorModalMessageLoop(window_, false, [this]() noexcept { return !running_; });
         }
 
         if (window_ != nullptr && IsWindow(window_) != 0) {
             DestroyWindow(window_);
             window_ = nullptr;
         }
-        return accepted_ ? std::optional<std::array<float, 4U>>{ rgba_ } : std::nullopt;
+        // A colour is only picked when the dialog closed itself; an app quit or a window that went away
+        // under the pump must not commit an edit the user never confirmed.
+        return exit == EditorModalLoopExit::Completed && accepted_
+            ? std::optional<std::array<float, 4U>>{ rgba_ }
+            : std::nullopt;
     }
 
 private:

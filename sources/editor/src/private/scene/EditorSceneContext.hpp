@@ -440,6 +440,15 @@ public:
     [[nodiscard]] std::uint64_t MaterialGraphViewSignature(kb::assets::AssetId assetId) const noexcept;
     void CancelMaterialGraphWorkingCopyTransaction();
     [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
+    // True while a graph gesture owns the working copy: a comment drag or a pin rewire has already edited the
+    // document, or a node drag is holding the "before" snapshot its undo record will use. Editing, undoing or
+    // saving during that window corrupts either the file or the history.
+    [[nodiscard]] bool HasMaterialGraphGestureInFlight() const noexcept;
+    // Ends whatever gesture is in flight the way a mouse-up would: a drag is committed, so its move is
+    // recorded, counts as unsaved work and stays undoable; a wire still in mid-air is cancelled, because it
+    // was never dropped on a pin. Close/quit paths call this before they read the document, so a prompt or a
+    // save never sees a half-finished gesture. Returns whether anything had to be settled.
+    bool SettleMaterialGraphGesture();
     [[nodiscard]] bool SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId);
     [[nodiscard]] bool SetMaterialGraphConstantColorValue(kb::assets::AssetId id, std::uint32_t nodeId, const std::array<float, 4U>& color);
     [[nodiscard]] bool SetMaterialGraphNodeColorPropertyValue(
