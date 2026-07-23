@@ -368,10 +368,16 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialAssetGraphDiagn
         const RenderMaterialParameterSchema* parameter = FindMaterialParameter(graphSchema, value.stableId);
         const RenderMaterialTextureSlotSchema* texture = FindMaterialTextureSlot(graphSchema, value.stableId);
         if (parameter == nullptr && texture == nullptr) {
+            // The parameter schema only covers nodes reachable from Material Output, so a value left over from a
+            // node that is currently disconnected (or was removed) has no declaration here. That is harmless -
+            // shader generation walks the graph, not the value list, so the value is simply unused - and it is
+            // dropped by the schema reconciliation on save/reopen. Flag it as a Warning, not a blocking
+            // shader_generation_failed Error, so a WIP graph with a disconnected texture node doesn't read as broken.
             diagnostics.push_back(RenderMaterialGraphDiagnostic{
-                .severity = RenderMaterialGraphDiagnosticSeverity::Error,
-                .kind = RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
-                .message = "Material graph parameter value '" + value.stableId + "' does not match a declared graph parameter or texture slot.",
+                .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+                .kind = RenderMaterialGraphDiagnosticKind::UnusedParameterValue,
+                .message = "Material graph parameter value '" + value.stableId +
+                    "' is unused: its node is not connected to the Material Output. It is cleaned up when you save.",
             });
             continue;
         }

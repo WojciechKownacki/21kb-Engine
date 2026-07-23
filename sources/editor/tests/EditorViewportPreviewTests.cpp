@@ -11,14 +11,22 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
+#include "engine/assets/AssetMetadata.hpp"
+
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -467,11 +475,82 @@ void RunToolbarHudLabelFormatTest() {
     kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, false, 0.0) == "ECS --", "ECS label must fall back to \"ECS --\" when no ECS frame is present");
 }
 
+// Guards the LockBits fast path in EditorTexturePreviewService::DecodeGdiplus, which replaced a
+// per-pixel Gdiplus::Bitmap::GetPixel() loop (4.2M COM calls / ~1.3s on a 2048^2 texture, run on the
+// GDI paint thread = the measured "wmpaint" stall). LockBits + per-row memcpy must reproduce the exact
+// same BGRA output: correct channel order (GDI+ 32bppARGB is B,G,R,A in memory = our 0xAARRGGBB uint32)
+// and correct row stride (top-down orientation). A stride/order regression would either scramble
+// channels or collapse rows to a constant; the four distinct corner colors below catch both.
+void RunTexturePreviewLockBitsDecodeTest() {
+    const int width = 2;
+    const int height = 2;
+    // 24bpp BGR, bottom-up, rows padded to a 4-byte boundary (2px * 3B = 6B -> 8B stride).
+    const std::array<std::uint8_t, 16> pixelData{
+        // bottom row (y=1): blue (0,1), white (1,1), 2 padding bytes
+        255U, 0U, 0U, 255U, 255U, 255U, 0U, 0U,
+        // top row (y=0): red (0,0), green (1,0), 2 padding bytes
+        0U, 0U, 255U, 0U, 255U, 0U, 0U, 0U,
+    };
+    const std::uint32_t pixelBytes = static_cast<std::uint32_t>(pixelData.size());
+    const std::uint32_t offsetBits = 14U + 40U;
+    const std::uint32_t fileSize = offsetBits + pixelBytes;
+
+    std::vector<std::uint8_t> bmp;
+    bmp.reserve(fileSize);
+    const auto put16 = [&bmp](std::uint16_t v) { bmp.push_back(static_cast<std::uint8_t>(v & 0xFFU)); bmp.push_back(static_cast<std::uint8_t>((v >> 8U) & 0xFFU)); };
+    const auto put32 = [&bmp](std::uint32_t v) { for (int i = 0; i < 4; ++i) bmp.push_back(static_cast<std::uint8_t>((v >> (8U * static_cast<std::uint32_t>(i))) & 0xFFU)); };
+    // BITMAPFILEHEADER
+    bmp.push_back('B'); bmp.push_back('M');
+    put32(fileSize); put16(0U); put16(0U); put32(offsetBits);
+    // BITMAPINFOHEADER
+    put32(40U); put32(static_cast<std::uint32_t>(width)); put32(static_cast<std::uint32_t>(height));
+    put16(1U); put16(24U); put32(0U); put32(pixelBytes); put32(0U); put32(0U); put32(0U); put32(0U);
+    bmp.insert(bmp.end(), pixelData.begin(), pixelData.end());
+
+    // PreviewFor reads the engine's imported-asset container ("21KBAST\0" + 24-byte header + two
+    // length-prefixed strings + raw payload), not a bare image file, so wrap the BMP accordingly.
+    std::vector<std::uint8_t> container{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
+    container.resize(32U, 0U);           // 24-byte header region (skipped to offset 32)
+    for (int i = 0; i < 8; ++i) container.push_back(0U);  // two 4-byte LE string lengths, both 0
+    container.insert(container.end(), bmp.begin(), bmp.end());
+
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_texture_preview_lockbits_test.21kbast";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(container.data()), static_cast<std::streamsize>(container.size()));
+    }
+
+    kb::assets::AssetMetadata metadata;
+    metadata.type = "Texture";
+    metadata.physicalPath = path;
+    metadata.id.value = 0x1234ABCDU;
+    metadata.contentHash = 0xFEEDFACEU;
+
+    const kb::editor::EditorTexturePreviewImage* image = kb::editor::EditorTexturePreviewService::PreviewFor(metadata);
+    kb::editor::tests::Require(image != nullptr, "LockBits decode must return a preview image for a valid BMP");
+    kb::editor::tests::Require(image->width == width && image->height == height, "Decoded preview must preserve source dimensions");
+    kb::editor::tests::Require(image->bgra.size() == static_cast<std::size_t>(width) * static_cast<std::size_t>(height), "Decoded preview must have width*height pixels");
+
+    // Exact channel-order + row-stride verification (top-down): index = y*width + x.
+    kb::editor::tests::Require(image->bgra[0] == 0xFFFF0000U, "Top-left must decode to opaque red (channel order/stride)");
+    kb::editor::tests::Require(image->bgra[1] == 0xFF00FF00U, "Top-right must decode to opaque green");
+    kb::editor::tests::Require(image->bgra[2] == 0xFF0000FFU, "Bottom-left must decode to opaque blue (row stride)");
+    kb::editor::tests::Require(image->bgra[3] == 0xFFFFFFFFU, "Bottom-right must decode to opaque white");
+
+    // Negative control: a stride/constant-fill regression would collapse distinct corners to one value.
+    kb::editor::tests::Require(image->bgra[0] != image->bgra[1], "Distinct source colors must stay distinct (no constant fill)");
+    kb::editor::tests::Require(image->bgra[0] != image->bgra[2], "Top and bottom rows must differ (no row-stride collapse)");
+
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();

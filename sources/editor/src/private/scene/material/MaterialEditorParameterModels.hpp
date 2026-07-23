@@ -34,6 +34,9 @@ struct MaterialEditorParameterValue {
     std::uint64_t assetId = 0;
     bool boolValue = false;
     std::string text;
+    // Human-readable name of the referenced texture asset, resolved for display so a slot reads "Grass_Albedo"
+    // instead of a raw 64-bit id. Empty until resolved from the asset registry.
+    std::string assetName;
 };
 
 struct MaterialEditorParameter {

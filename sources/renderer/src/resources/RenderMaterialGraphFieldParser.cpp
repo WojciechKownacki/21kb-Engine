@@ -10,6 +10,13 @@
 namespace kb::render {
 namespace {
 
+// A layer-stack index comes straight from the file, and the parser used to resize() the entry vector to
+// index+1 with no upper bound - a single crafted line (index = 4 billion) allocated tens of GB and crashed
+// the whole project on load. Real layer stacks are a handful of entries; this cap is absurdly generous while
+// keeping a hostile index from being a denial of service. An index at or above it fails the line, fail-closed
+// like every other malformed field.
+constexpr std::uint32_t kMaxRenderMaterialGraphLayerStackEntries = 1024U;
+
 [[nodiscard]] bool ParseUInt32(std::string_view text, std::uint32_t& output) noexcept {
     const char* begin = text.data();
     const char* end = text.data() + text.size();
@@ -660,6 +667,10 @@ void AddGraphMigrationDiagnostic(
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackEntry", "Material graph layer stack entry must reference an existing LayerStack node.", nodeIdText);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
+    if (index >= kMaxRenderMaterialGraphLayerStackEntries) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackEntry", "Material graph layer stack entry index is out of range.", indexText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
 
     if (node->layerStack.size() <= index) {
         node->layerStack.resize(static_cast<std::size_t>(index) + 1U);
@@ -712,6 +723,10 @@ void AddGraphMigrationDiagnostic(
     RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
     if (node == nullptr || node->kind != RenderMaterialGraphNodeKind::LayerStack) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter must reference an existing LayerStack node.", nodeIdText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (index >= kMaxRenderMaterialGraphLayerStackEntries) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter index is out of range.", indexText);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     if (node->layerStack.size() <= index) {
