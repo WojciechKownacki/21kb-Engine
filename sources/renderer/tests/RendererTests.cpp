@@ -20,6 +20,7 @@ void RunRenderSceneSyncTests();
 void RunSceneRenderTargetFormatTests();
 void RunSceneRenderExtractorTests();
 void RunShaderManifestTests();
+void RunShaderPrewarmParseTests();
 }
 
 int main() {
@@ -42,5 +43,6 @@ int main() {
     kb::render::tests::RunSceneRenderTargetFormatTests();
     kb::render::tests::RunSceneRenderExtractorTests();
     kb::render::tests::RunShaderManifestTests();
+    kb::render::tests::RunShaderPrewarmParseTests();
     return EXIT_SUCCESS;
 }

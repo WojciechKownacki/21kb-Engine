@@ -1,3 +1,4 @@
+#include <array>
 #include "app/EditorPaintDispatcher.hpp"
 
 #if defined(_WIN32)
@@ -59,7 +60,8 @@ namespace {
     std::uint32_t renderHeight,
     const EditorMaterialPreviewSceneSettings& settings) noexcept {
     kb::render::SceneRenderCamera camera{};
-    bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -settings.cameraDistance}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
+    const std::array<float, 3U> eye = settings.CameraEye();
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{eye[0], eye[1], eye[2]}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
     kb::render::SceneDepthPolicy::MakePerspective(
         camera.projection.data(),
         settings.verticalFovDegrees,

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
+#include <memory>
 #include <optional>
 #include <typeindex>
 #include <vector>
@@ -51,8 +52,28 @@ public:
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
 
+    // LoadTexture(path) decodes through a process-wide cache keyed by (path, last-write-time, size): a file is
+    // decoded to RGBA8 at most once while unchanged on disk, no matter how many scenes reference it. The stream
+    // overload is uncached (no path to key on). A changed file is a cache miss, so hot-reload still works.
     [[nodiscard]] static std::optional<RenderTextureAssetData> LoadTexture(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderTextureAssetData> LoadTexture(std::istream& input);
+
+    // Count of real decodes performed (cache misses) for cacheable paths. Test/telemetry hook: lets a caller
+    // prove that a repeated load of an unchanged file did not re-decode.
+    [[nodiscard]] static std::uint64_t DebugDecodeCount() noexcept;
+
+    // Non-blocking texture streaming. TryAcquireDecodedTexture returns the decoded pixels only if they are
+    // already cached (never decodes on the calling thread); on a miss the caller queues RequestAsyncTextureDecode
+    // and retries a later frame, so a large first decode streams in on a background worker instead of freezing
+    // the render thread. Both are safe to call from the render thread.
+    [[nodiscard]] static std::shared_ptr<const RenderTextureAssetData> TryAcquireDecodedTexture(const std::filesystem::path& path);
+    static void RequestAsyncTextureDecode(const std::filesystem::path& path);
+
+    // Off by default. The runtime texture ensurer streams textures (non-blocking) only when enabled, which the
+    // editor app turns on at startup. Left off, textures decode synchronously in the submit (deterministic for
+    // tests and one-shot render/thumbnail captures).
+    static void SetAsyncTextureDecodeEnabled(bool enabled) noexcept;
+    [[nodiscard]] static bool IsAsyncTextureDecodeEnabled() noexcept;
 };
 
 } // namespace kb::render

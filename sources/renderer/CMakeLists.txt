@@ -170,6 +170,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialGraphEnumStrings.cpp
     src/resources/RenderMaterialGraphRuntimeState.cpp
     src/resources/RenderMaterialGraphArtifactCache.cpp
+    src/resources/RenderMaterialGraphShaderPrewarmer.cpp
     src/resources/RenderMaterialGraphPinTypes.cpp
     src/resources/RenderMaterialGraphPinIds.cpp
     src/resources/RenderMaterialParameterCollection.cpp
@@ -553,6 +554,7 @@ if(BUILD_TESTING)
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
+        tests/ShaderPrewarmParseTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests

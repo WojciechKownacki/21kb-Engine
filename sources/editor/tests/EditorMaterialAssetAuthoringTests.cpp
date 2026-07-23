@@ -5435,10 +5435,10 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     const kb::editor::MaterialEditorPanelDetailsRows rows =
         kb::editor::MaterialEditorPanelRenderer::DetailsRows(editor.Parameters(), editor.SelectedNodeId(), {});
     const bool hasInstanceOverrideRow = std::ranges::any_of(rows.parameterRows, [](const std::string& row) {
-        return row.find("Tint") != std::string::npos && row.find("instance override") != std::string::npos;
+        return row.find("Tint") != std::string::npos && row.find("(overridden)") != std::string::npos;
     });
     const bool hasTextureOverrideRow = std::ranges::any_of(rows.textureSlotRows, [](const std::string& row) {
-        return row.find("Paint") != std::string::npos && row.find("instance override") != std::string::npos;
+        return row.find("Paint") != std::string::npos && row.find("(overridden)") != std::string::npos;
     });
     kb::editor::tests::Require(hasInstanceOverrideRow && hasTextureOverrideRow,
         "MAT-40 instance editor details panel should label active scalar/color/texture overrides");

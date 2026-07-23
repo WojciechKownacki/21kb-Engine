@@ -1,6 +1,7 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
 #include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 
 #include <bgfx/bgfx.h>
@@ -341,6 +342,18 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
             allCacheHit = false;
         }
         result.passes.push_back(std::move(passResult));
+    }
+
+    // Off-thread shader warm: this runs on the cook worker thread, before the result is published to
+    // the render thread. Creating the freshly cooked DXBC on the live D3D11 device here forces the
+    // driver's DXBC->ISA compile to happen *now* (invisibly, off the render thread) instead of inside
+    // the next bgfx::frame() when the preview first draws with it -- which otherwise froze the whole
+    // editor UI for ~2s per new graph shader (the shared bgfx frame stall). No-op on non-D3D11
+    // backends; deduped by bytecode so repeated cooks of the same shader stay cheap.
+    for (const EditorMaterialGraphCookPassResult& passResult : result.passes) {
+        if (passResult.succeeded && !passResult.binaryPath.empty()) {
+            static_cast<void>(kb::render::PrewarmGraphShaderFile(passResult.binaryPath));
+        }
     }
 
     result.status = anyFailure

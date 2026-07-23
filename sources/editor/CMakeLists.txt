@@ -959,6 +959,8 @@ if(BUILD_TESTING)
         tests/ScriptEditorTests.cpp
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
+        src/rendering/EditorTexturePreviewService.cpp
+        src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
         src/rendering/script_editor/LuaSyntaxHighlighter.cpp
@@ -1094,6 +1096,8 @@ if(BUILD_TESTING)
         PRIVATE
             kb_engine
             kb_renderer
+            gdiplus
+            ole32
     )
 
     kb_apply_editor_graph_cook_defs(kb_editor_tests)

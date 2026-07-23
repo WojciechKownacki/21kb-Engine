@@ -133,6 +133,27 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (sceneContext_.IsMaterialPreviewOrbiting()) {
+        if (!leftButtonDown) {
+            // Gesture ended without a WM_LBUTTONUP reaching us (rare). Repaint the panel once so any
+            // active-state chrome resets; this is a one-shot transition, not the hot path.
+            static_cast<void>(sceneContext_.EndMaterialPreviewOrbit());
+            ReleaseCapture();
+            InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+            return;
+        }
+        static_cast<void>(sceneContext_.DragMaterialPreviewOrbit(x, y));
+        // The preview is a REAL-TIME bgfx child surface (presented every frame by TickEditorFrame),
+        // NOT a GDI-drawn widget like the graph nodes. Orbiting therefore needs only a viewport present
+        // - never a Material Editor panel repaint. Repainting the whole panel (graph nodes + chrome) on
+        // every mouse pixel ran at the raw mouse-move rate and starved the preview's per-frame present:
+        // THAT was the orbit lag, not GPU re-sync. This mirrors UE exactly - FEditorViewportClient orbit
+        // ends in Invalidate(false, false) -> Viewport->InvalidateDisplay(), i.e. the viewport's display
+        // pixels only, leaving the surrounding editor UI (graph, details, toolbars) untouched.
+        sceneViewport_.RequestPresent();
+        return;
+    }
+
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
         bool changed = false;
         if (!leftButtonDown) {
@@ -169,7 +190,13 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
-    if (sceneContext_.HasMaterialGraphPinConnection()) {
+    // While the "what do you want to connect?" menu is parked open (a wire was dropped on empty canvas),
+    // the pending connection is deliberately kept so picking a node connects it - exactly like UE, where a
+    // pin drag-drop opens a filtered action menu that remembers the from-pin. It is NOT an active drag, so
+    // this branch must be skipped: otherwise the first mouse move toward the menu (button up) would hit the
+    // !leftButtonDown path and cancel the pending connection, and the pick would then create nothing
+    // (AddMaterialGraphNodeForPendingConnection finds no pending pin) - the "selecting just cancels" bug.
+    if (sceneContext_.HasMaterialGraphPinConnection() && !sceneContext_.IsMaterialGraphContextMenuOpen()) {
         if (!leftButtonDown) {
             static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
             ReleaseCapture();

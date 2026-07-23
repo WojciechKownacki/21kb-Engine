@@ -6,6 +6,7 @@
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
+#include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 
@@ -77,6 +78,29 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
                         sceneContext_);
                     if (compositeRect.has_value() && MaterialEditorPanelPointInRect(*compositeRect, x, y) &&
                         sceneContext_.ExpandMaterialGraphComposite(materialId, it->id)) {
+                        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                        return true;
+                    }
+                }
+
+                // Double-click an empty part of a comment (not over a node) to edit its label, the way a
+                // node is renamed. Nodes sit above comments, so a node under the cursor wins.
+                if (!MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y).has_value()) {
+                    if (const std::optional<std::uint32_t> commentId =
+                            MaterialEditorPanelRenderer::GraphCommentAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y);
+                        commentId.has_value()) {
+                        const kb::render::RenderMaterialGraphCommentBox* comment = nullptr;
+                        for (const kb::render::RenderMaterialGraphCommentBox& candidate : material->graph.comments) {
+                            if (candidate.id == *commentId) {
+                                comment = &candidate;
+                                break;
+                            }
+                        }
+                        const std::optional<std::string> text = EditorMaterialParameterValueDialog::Show(
+                            messageWindow, "Comment", comment != nullptr ? comment->text : std::string{});
+                        if (text.has_value()) {
+                            static_cast<void>(sceneContext_.SetMaterialGraphCommentText(materialId, *commentId, *text));
+                        }
                         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                         return true;
                     }

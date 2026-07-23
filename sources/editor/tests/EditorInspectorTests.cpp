@@ -802,16 +802,23 @@ void RunMaterialEditorGraphBackedSchemaParameterModelTest() {
         "KBMAT-GRAPH-0302: Material Editor should expose graph texture role/color policy");
 
     const kb::editor::MaterialEditorPanelDetailsRows rows = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 0U);
+    // Inspector-style rows: "Name = value", no "Surface  Color" type prefix, no always-on "default"/"override"
+    // vocabulary. The row still carries the value; the debug annotations are gone.
     kb::editor::tests::Require(std::ranges::any_of(rows.parameterRows, [](const std::string& row) {
-            return row.find("Surface  Color  Tint Color") != std::string::npos &&
-                row.find("default 0.25, 0.5, 0.75") != std::string::npos &&
-                row.find("override disabled") != std::string::npos;
+            // New clean format shows the current value ("= 0.8, 0.7, 0.6"), not the schema default, and drops
+            // the "Surface  Color" type prefix and the always-on override vocabulary.
+            return row.find("Tint Color = ") != std::string::npos &&
+                row.find("0.8, 0.7, 0.6") != std::string::npos &&
+                row.find("override") == std::string::npos &&
+                row.find("Surface  Color") == std::string::npos;
         }),
         "KBMAT-GRAPH-0302: Material Editor details should render graph parameter group, default and override flag");
     kb::editor::tests::Require(std::ranges::any_of(rows.textureSlotRows, [](const std::string& row) {
-            return row.find("Texture  Albedo  sRGB") != std::string::npos &&
-                row.find("albedoTextureAssetId") != std::string::npos &&
-                row.find("override on") != std::string::npos;
+            return row.find("Albedo") != std::string::npos &&
+                row.find("(sRGB)") != std::string::npos &&
+                row.find("= ") != std::string::npos &&
+                row.find("albedoTextureAssetId") == std::string::npos &&
+                row.find("override on") == std::string::npos;
         }),
         "KBMAT-GRAPH-0302: Material Editor details should render graph texture role/color policy and override flag");
 }
@@ -1175,6 +1182,64 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     static_cast<void>(dependencyPreview.SceneFor(source, materialId, &workingCopyMaterial));
     kb::editor::tests::Require(dependencyPreview.Revision() > functionDependencyRevision,
         "P1.15: changing a Material Parameter Collection content hash must invalidate working-copy preview");
+
+    // Post-connect freeze fix (2026-07-22): editing the graph while the SAME material stays open must
+    // reuse the underlying kb::scene::Scene (same Scene::Id()) instead of recreating it, because the
+    // runtime texture/material resource caches are keyed by scene id - a fresh Scene::Id() on every edit
+    // forced every referenced texture to be re-decoded from disk on every single connect/create/disconnect
+    // (measured ~1.1s for a 2048x2048 texture in Debug, the actual multi-second stall).
+    kb::editor::EditorMaterialPreviewScene identityPreview;
+    const std::uint64_t identitySceneId = identityPreview.SceneFor(source, materialId, &workingCopyMaterial).Id();
+    workingCopyMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 30U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 200,
+        .positionY = 200,
+    });
+    const std::uint64_t identityRevisionBeforeContentEdit = identityPreview.Revision();
+    const kb::scene::Scene& identitySceneAfterContentEdit = identityPreview.SceneFor(source, materialId, &workingCopyMaterial);
+    kb::editor::tests::Require(identityPreview.Revision() > identityRevisionBeforeContentEdit,
+        "Post-connect freeze fix: a genuine content edit on the same material still bumps the preview revision");
+    kb::editor::tests::Require(identitySceneAfterContentEdit.Id() == identitySceneId,
+        "Post-connect freeze fix: editing the same open material's graph reuses the preview Scene (same Scene::Id, caches survive) instead of recreating it");
+    // Negative control: switching to a genuinely DIFFERENT material must still take the full rebuild path
+    // (a new Scene::Id) - proving the fix does not just always reuse the scene unconditionally.
+    const kb::assets::AssetId otherMaterialId{ 5153U };
+    kb::editor::tests::Require(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = otherMaterialId,
+                     .type = "RenderMaterial",
+                     .name = "OtherPreviewMaterial",
+                     .virtualPath = "/Game/Materials/OtherPreviewMaterial.kbmat",
+                     .contentHash = 1U,
+                     .runtimeLoadable = true,
+                 }),
+        "Post-connect freeze fix: register a second material asset for the negative control");
+    const kb::scene::Scene& identitySceneAfterMaterialSwitch = identityPreview.SceneFor(source, otherMaterialId, &workingCopyMaterial);
+    kb::editor::tests::Require(identitySceneAfterMaterialSwitch.Id() != identitySceneId,
+        "Negative control: switching to a different material still rebuilds the preview Scene from scratch");
+
+    // Per-frame content-hash gate (2026-07-22): with a material open the editor calls SceneFor every frame at
+    // up to 180 Hz. An unchanged previewInputRevision must short-circuit BEFORE recomputing the content hash,
+    // so an idle frame neither rebuilds the scene nor re-serializes the whole material (the work that was
+    // saturating a core). Proven here by mutating the document but keeping the revision fixed: no rebuild.
+    kb::editor::EditorMaterialPreviewScene gatedPreview;
+    static_cast<void>(gatedPreview.SceneFor(source, materialId, &workingCopyMaterial, 4242ULL));
+    const std::uint64_t gatedRevisionAfterBuild = gatedPreview.Revision();
+    kb::render::RenderMaterialAssetData gatedEditedCopy = workingCopyMaterial;
+    gatedEditedCopy.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 31U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 260,
+        .positionY = 260,
+    });
+    static_cast<void>(gatedPreview.SceneFor(source, materialId, &gatedEditedCopy, 4242ULL));
+    kb::editor::tests::Require(gatedPreview.Revision() == gatedRevisionAfterBuild,
+        "Per-frame preview gate: an unchanged previewInputRevision skips recompute even when the document content changed");
+    // Negative control: bump the revision and the very same edit is now applied - the gate is a freshness
+    // check, not a permanent freeze.
+    static_cast<void>(gatedPreview.SceneFor(source, materialId, &gatedEditedCopy, 4243ULL));
+    kb::editor::tests::Require(gatedPreview.Revision() > gatedRevisionAfterBuild,
+        "Per-frame preview gate negative control: bumping previewInputRevision lets a genuine content change rebuild the preview");
 
     kb::render::RenderScene renderScene;
     kb::render::EcsRenderSceneSynchronizer{}.Sync(previewScene, renderScene);
@@ -1765,7 +1830,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     materialEditor.Open(kb::assets::AssetId{ 0x4D4154455249414CULL }, kb::render::RenderMaterialAssetData{});
     const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 1U);
     kb::editor::tests::Require(details.title.find("Selected Node #1") != std::string::npos, "Material Editor details should describe selected graph node context");
-    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos && row.find("default") != std::string::npos; }), "Material Editor details should expose metadata-driven baseColor parameter with default value");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos && row.find(" = ") != std::string::npos; }), "Material Editor details should expose metadata-driven baseColor parameter with default value");
     kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose metadata-driven Base Color texture slot");
     kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Normal") != std::string::npos && row.find("Linear") != std::string::npos; }), "Material Editor details should expose metadata-driven texture color policy");

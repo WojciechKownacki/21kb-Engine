@@ -131,6 +131,16 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (materialEditorContent.has_value() && x >= materialEditorContent->left && x < materialEditorContent->right && y >= materialEditorContent->top && y < materialEditorContent->bottom) {
+        // A right-click while the node palette / wire-drop menu is open dismisses it (UE-style) instead of
+        // beginning a canvas pan. Panning under the open, screen-anchored palette slid the whole graph
+        // around beneath it, which reads as "the dropdown can be dragged". Drop any parked wire too, so a
+        // dismissed wire-drop menu leaves the pin unplugged rather than half-connected.
+        if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
+            static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
+            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (sceneContext_.MaterialEditor().InfoPanelVisible() &&
             MaterialEditorPanelRectWidth(layout.detailsPanel) >= 220 &&
