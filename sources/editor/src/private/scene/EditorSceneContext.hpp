@@ -327,6 +327,10 @@ public:
     [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
+    // Orbit (drag) and dolly (wheel) the material preview camera around the framed object, Unreal-style.
+    // Camera-only: no re-cook, no scene rebuild.
+    [[nodiscard]] bool OrbitMaterialPreviewCamera(float deltaYawDegrees, float deltaPitchDegrees);
+    [[nodiscard]] bool ZoomMaterialPreviewCamera(float scale);
     [[nodiscard]] bool CycleMaterialPreviewSceneLightingPreset();
     [[nodiscard]] bool CycleMaterialPreviewQualityLevel();
     [[nodiscard]] bool MaterialPreviewNodePreviewEnabled() const noexcept;
@@ -382,6 +386,8 @@ public:
     [[nodiscard]] int MaterialEditorDetailsScrollOffset() const noexcept;
     [[nodiscard]] bool SetMaterialEditorDetailsScrollOffset(int offset, int maxOffset) noexcept;
     [[nodiscard]] bool ScrollMaterialEditorDetails(int wheelDelta, int maxOffset) noexcept;
+    // Select a node and centre the graph view on it. Used to jump to a diagnostic's offending node.
+    [[nodiscard]] bool FocusMaterialGraphNode(std::uint32_t nodeId);
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
     [[nodiscard]] bool SelectMaterialGraphUpstream();
@@ -416,6 +422,11 @@ public:
     [[nodiscard]] bool DragMaterialGraphPan(int x, int y) noexcept;
     [[nodiscard]] bool EndMaterialGraphPan() noexcept;
     [[nodiscard]] bool IsMaterialGraphPanning() const noexcept;
+    // Orbit gesture on the preview overlay: LMB-down begins, mouse-move drags (yaw/pitch), LMB-up ends.
+    [[nodiscard]] bool BeginMaterialPreviewOrbit(int x, int y) noexcept;
+    [[nodiscard]] bool DragMaterialPreviewOrbit(int x, int y);
+    [[nodiscard]] bool EndMaterialPreviewOrbit() noexcept;
+    [[nodiscard]] bool IsMaterialPreviewOrbiting() const noexcept;
     [[nodiscard]] bool HasMaterialGraphPanMoved() const noexcept;
     [[nodiscard]] int MaterialGraphNodeOffsetX(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept;
     [[nodiscard]] int MaterialGraphNodeOffsetY(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept;
@@ -429,6 +440,8 @@ public:
     [[nodiscard]] bool ExpandMaterialGraphComposite(kb::assets::AssetId id, std::uint32_t compositeId);
     [[nodiscard]] bool DeleteSelectedMaterialGraphNode(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteSelectedMaterialGraphComment(kb::assets::AssetId id);
+    [[nodiscard]] bool SetMaterialGraphCommentText(kb::assets::AssetId id, std::uint32_t commentId, std::string_view text);
+    [[nodiscard]] bool SetMaterialGraphCommentColor(kb::assets::AssetId id, std::uint32_t commentId, std::uint32_t color);
     [[nodiscard]] bool DisconnectSelectedMaterialGraphNodeLinks(kb::assets::AssetId id);
     [[nodiscard]] bool CopySelectedMaterialGraphNodes();
     [[nodiscard]] bool PasteMaterialGraphNodes(kb::assets::AssetId id, int offsetX, int offsetY);
@@ -438,6 +451,12 @@ public:
     [[nodiscard]] bool AbandonMaterialGraphPinConnection();
     [[nodiscard]] bool IsMaterialGraphPinConnectionDetach() const noexcept;
     [[nodiscard]] std::uint64_t MaterialGraphViewSignature(kb::assets::AssetId assetId) const noexcept;
+    // Everything the DRAWN graph content depends on (the view signature plus selection, preview-selected node,
+    // comment selection, per-node diagnostic markers, and the asset registry generation for texture previews).
+    // The panel caches the rendered graph bitmap keyed by this, so overlay-only repaints - navigating the node
+    // palette, dragging a selection box or an unconnected wire - blit the cached graph instead of redrawing
+    // every node. Deliberately excludes hover: the graph body/pins/links draw identically regardless of hover.
+    [[nodiscard]] std::uint64_t MaterialGraphContentDrawSignature(kb::assets::AssetId assetId) const noexcept;
     void CancelMaterialGraphWorkingCopyTransaction();
     [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
     // True while a graph gesture owns the working copy: a comment drag or a pin rewire has already edited the
@@ -459,6 +478,10 @@ public:
     [[nodiscard]] bool SetMaterialGraphNodeEnumValue(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view propertyId, std::string_view value);
     void ToggleMaterialGraphNodeEnumDropdown(std::uint32_t nodeId, std::string propertyId);
     void CloseMaterialGraphNodeEnumDropdown() noexcept;
+    // Material-level settings (domain / shading model / blend mode). The document owns the values; these
+    // write through the same working-copy edit path as everything else, so undo/dirty/cook all apply.
+    [[nodiscard]] bool SetMaterialGraphSetting(kb::assets::AssetId id, std::string_view propertyId, std::string_view value);
+    void ToggleMaterialGraphSettingDropdown(std::string propertyId);
     [[nodiscard]] bool BeginMaterialGraphPinConnection(kb::assets::AssetId id, std::uint32_t nodeId, std::string pin);
     [[nodiscard]] bool BeginMaterialGraphPinConnection(
         kb::assets::AssetId id,
@@ -734,6 +757,13 @@ private:
     void ClearMaterialGraphPinConnectionState() noexcept;
     [[nodiscard]] bool AddMaterialGraphNodeForPendingConnection(kb::assets::AssetId id, MaterialEditorGraphMenuCommand command, int graphX, int graphY);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> MaterialSourceForEdit(kb::assets::AssetId id) const;
+    // A material graph edit only changes ONE material asset; a full MarkSceneRenderDirty() forces a full
+    // resync of every mesh in the scene (a multi-second stall in Debug on any non-trivial scene). This marks
+    // dirty only the scene's mesh-renderer entities that actually reference `id` (primary slot or override),
+    // via the same incremental MarkSceneEntitiesRenderDirty path transform/object edits already use - and
+    // does nothing at all (no revision bump, no resync) when the edited material isn't equipped on any scene
+    // mesh, which is the common case while authoring a graph in the Material Editor's own preview.
+    void MarkMaterialAssetRenderDirty(kb::assets::AssetId id);
     [[nodiscard]] bool ApplyPatchToMaterialEditorWorkingCopy(kb::assets::AssetId id, IEditorMaterialAssetPropertyEdit& edit);
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
     [[nodiscard]] bool CopyWorkingMaterialInstanceToSource(kb::assets::AssetId id);
@@ -874,6 +904,9 @@ private:
     int materialGraphPanStartOffsetY_ = 0;
     bool materialGraphPanning_ = false;
     bool materialGraphPanMoved_ = false;
+    bool materialPreviewOrbitDragging_ = false;
+    int materialPreviewOrbitLastX_ = 0;
+    int materialPreviewOrbitLastY_ = 0;
     kb::assets::AssetId materialGraphPendingConnectionAssetId_{};
     std::uint32_t materialGraphPendingConnectionNodeId_ = 0U;
     std::string materialGraphPendingConnectionPin_;

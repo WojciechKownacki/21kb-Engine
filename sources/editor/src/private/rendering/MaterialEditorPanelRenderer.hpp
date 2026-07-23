@@ -6,6 +6,7 @@
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "platform/win32/EditorDebugLogGate.hpp"
 #include "rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -154,6 +155,10 @@ struct MaterialEditorPanelDetailsRows {
     bool findFocused = false;
     std::vector<MaterialEditorFindResult> findResults;
     std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
+    // True when nodePropertyRows holds the material-level settings (node id 0) rather than a selected node's
+    // properties, so the section is headed "Material" instead of "Node Properties". The two are mutually
+    // exclusive - a node is selected, or it is not - so they share one vector.
+    bool nodePropertiesAreMaterialSettings = false;
     std::vector<std::string> materialDiffRows;
     std::vector<MaterialDebugChannelRow> debugChannelRows;
     std::vector<MaterialEditorParameter> parameterModels;
@@ -331,8 +336,8 @@ namespace MaterialEditorPanelMetrics {
 inline constexpr int HeaderHeight = 42;
 inline constexpr int Padding = 10;
 inline constexpr int RowHeight = 18;
-inline constexpr int PreviewWidth = 154;
-inline constexpr int PreviewHeight = 104;
+inline constexpr int PreviewWidth = 268;
+inline constexpr int PreviewHeight = 208;
 inline constexpr int GraphNodeWidth = 240;
 inline constexpr int GraphNodeHeight = 160;
 inline constexpr int GraphNodeHeaderHeight = 30;
@@ -359,6 +364,7 @@ enum class MaterialEditorDetailsSection : std::uint8_t {
     StaticSwitches,
     LayerStack,
     FindResults,
+    MaterialSettings,
     NodeProperties,
     MaterialDiff,
     DebugChannels,
@@ -624,6 +630,11 @@ public:
 #if defined(_WIN32)
     void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
 
+    // Number of times the graph content bitmap was actually (re)rendered rather than served from the retained
+    // cache. Test/telemetry hook: proves an overlay-only repaint (palette navigation, box select, wire drag)
+    // reused the cached graph instead of redrawing every node.
+    [[nodiscard]] static std::uint64_t DebugGraphContentRenderCount() noexcept;
+
     [[nodiscard]] static MaterialEditorPanelLayout ResolveLayout(const RECT& content) noexcept;
 
     /// Live material preview target rect (sphere) inside this panel's content area, or
@@ -641,6 +652,9 @@ public:
         const EditorSceneContext& sceneContext,
         const kb::render::RenderMaterialAssetData& material,
         bool materialInstance);
+    // Asset name for a texture id, or empty. Defined in the .cpp because resolving it needs the full
+    // SceneAssets/AssetManager types this header only forward-declares.
+    [[nodiscard]] static std::string TextureAssetDisplayName(const EditorSceneContext& sceneContext, std::uint64_t assetId);
     [[nodiscard]] static MaterialEditorDetailsLayout ResolveDetailsLayout(
         const RECT& content,
         const MaterialEditorPanelDetailsRows& rows,
@@ -753,6 +767,12 @@ public:
     [[nodiscard]] static RECT GraphContextMenuRect(const EditorSceneContext& sceneContext);
     [[nodiscard]] static MaterialEditorGraphContextMenuHit GraphContextMenuHit(const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static MaterialEditorOpaqueOverlayHit OpaqueOverlayAt(
+        const RECT& content,
+        const EditorSceneContext& sceneContext,
+        int x,
+        int y);
+    // The graph node id of the diagnostics-panel row under (x, y), or 0 if none / the row is not node-tied.
+    [[nodiscard]] static std::uint32_t DiagnosticsRowNodeAt(
         const RECT& content,
         const EditorSceneContext& sceneContext,
         int x,
@@ -895,7 +915,12 @@ inline std::string MaterialEditorPanelParameterValueText(const MaterialEditorPar
     case MaterialEditorParameterValueKind::Bool:
         return value.boolValue ? "true" : "false";
     case MaterialEditorParameterValueKind::TextureAsset:
-        return value.assetId == 0U ? "None" : std::to_string(value.assetId);
+        if (value.assetId == 0U) {
+            return "None";
+        }
+        // Prefer the resolved asset name; fall back to the id only when it has not been resolved yet, never
+        // showing a raw 64-bit id as the primary label.
+        return value.assetName.empty() ? std::to_string(value.assetId) : value.assetName;
     case MaterialEditorParameterValueKind::None:
         return "";
     }
@@ -918,33 +943,21 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
             continue;
         }
         rows.parameterModels.push_back(parameter);
-        std::string row{ MaterialEditorPanelParameterGroupName(parameter.group) };
-        row += "  ";
-        row += MaterialEditorPanelParameterTypeName(parameter.type);
-        row += "  ";
-        row += parameter.displayName.empty() ? parameter.stableId : parameter.displayName;
+        // "Name = value", the way an Inspector reads - not "Core Scalar alphaCutoff = 0.5 0..1 default 0.5
+        // override on". The group/type belong to a header, not every row; range and default are shown only
+        // when they add information, and the override/instance vocabulary appears only when it is actually
+        // meaningful (an instance override, or a disabled row), never as always-on noise on a base material.
+        std::string row{ parameter.displayName.empty() ? parameter.stableId : parameter.displayName };
         const std::string value = MaterialEditorPanelParameterValueText(parameter.value);
         if (!value.empty()) {
             row += " = ";
             row += value;
         }
-        if (parameter.range.has_value()) {
-            row += " ";
-            row += MaterialEditorPanelFloat(parameter.range->min);
-            row += "..";
-            row += MaterialEditorPanelFloat(parameter.range->max);
-        }
-        const std::string defaultValue = MaterialEditorPanelParameterValueText(parameter.defaultValue);
-        if (!defaultValue.empty()) {
-            row += " default ";
-            row += defaultValue;
-        }
-        row += parameter.overrideEnabled ? " override on" : " override disabled";
         if (parameter.overrideActive) {
-            row += " instance override";
+            row += "  (overridden)";
         }
         if (!parameter.enabled) {
-            row += " disabled";
+            row += "  (disabled)";
         }
         rows.parameterRows.push_back(std::move(row));
     }
@@ -953,23 +966,22 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
             continue;
         }
         rows.textureSlotModels.push_back(parameter);
-        std::string row{ MaterialEditorPanelParameterGroupName(parameter.group) };
-        row += "  ";
-        row += parameter.displayName.empty() ? parameter.stableId : parameter.displayName;
+        // "Name = TextureName", not "Core Base Color Linear albedoTextureAssetId = 13802394082". The raw
+        // stableId and 64-bit asset id are gone; the colour-space hint stays because it tells the user how
+        // the texture is interpreted.
+        std::string row{ parameter.displayName.empty() ? parameter.stableId : parameter.displayName };
         if (parameter.expectedTextureColorSpace.has_value()) {
-            row += "  ";
+            row += "  (";
             row += MaterialEditorPanelColorSpaceName(*parameter.expectedTextureColorSpace);
+            row += ")";
         }
-        row += "  ";
-        row += parameter.stableId;
         row += " = ";
         row += MaterialEditorPanelParameterValueText(parameter.value);
-        row += parameter.overrideEnabled ? " override on" : " override disabled";
         if (parameter.overrideActive) {
-            row += " instance override";
+            row += "  (overridden)";
         }
         if (!parameter.enabled) {
-            row += " disabled";
+            row += "  (disabled)";
         }
         rows.textureSlotRows.push_back(std::move(row));
     }
@@ -980,15 +992,28 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRowsFo
     const EditorSceneContext& sceneContext,
     const kb::render::RenderMaterialAssetData& material,
     bool materialInstance) {
+    // A selected node shows its own properties; with nothing selected a plain material shows its material-level
+    // settings in the same rows (an instance has its own override model, so it shows neither).
+    const std::uint32_t selectedNodeId = sceneContext.MaterialEditor().SelectedNodeId();
+    const bool showMaterialSettings = !materialInstance && selectedNodeId == 0U;
     const std::vector<MaterialEditorGraphNodeProperty> nodeProperties = materialInstance
         ? std::vector<MaterialEditorGraphNodeProperty>{}
-        : sceneContext.MaterialEditor().GraphNodeProperties(sceneContext.MaterialEditor().SelectedNodeId());
-    MaterialEditorPanelDetailsRows rows = DetailsRows(
-        sceneContext.MaterialEditor().Parameters(),
-        sceneContext.MaterialEditor().SelectedNodeId(),
-        nodeProperties);
-    if (sceneContext.MaterialEditor().SelectedNodeId() != 0U) {
-        rows.title = sceneContext.MaterialEditor().GraphNodeDisplayName(sceneContext.MaterialEditor().SelectedNodeId());
+        : (showMaterialSettings
+              ? sceneContext.MaterialEditor().MaterialSettingsProperties()
+              : sceneContext.MaterialEditor().GraphNodeProperties(selectedNodeId));
+    // Resolve texture asset ids to their asset name for display, so a slot reads "Grass_Albedo" rather than
+    // a raw 64-bit id. Done here because this is where the asset registry is reachable; the parameter list
+    // itself carries no name.
+    std::vector<MaterialEditorParameter> resolvedParameters = sceneContext.MaterialEditor().Parameters();
+    for (MaterialEditorParameter& parameter : resolvedParameters) {
+        if (parameter.value.kind == MaterialEditorParameterValueKind::TextureAsset && parameter.value.assetId != 0U) {
+            parameter.value.assetName = TextureAssetDisplayName(sceneContext, parameter.value.assetId);
+        }
+    }
+    MaterialEditorPanelDetailsRows rows = DetailsRows(resolvedParameters, selectedNodeId, nodeProperties);
+    rows.nodePropertiesAreMaterialSettings = showMaterialSettings;
+    if (selectedNodeId != 0U) {
+        rows.title = sceneContext.MaterialEditor().GraphNodeDisplayName(selectedNodeId);
     }
     rows.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
     rows.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
@@ -999,10 +1024,17 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRowsFo
     rows.findQuery = std::string{ sceneContext.MaterialEditor().FindQuery() };
     rows.findFocused = sceneContext.MaterialEditor().IsFindFocused();
     rows.findResults = sceneContext.MaterialEditor().FindResults();
-    rows.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
-    rows.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(
-        material.desc,
-        sceneContext.MaterialEditor().OpenAssetId().value);
+    // Material Diff (unsaved-change dump) and Debug Channels (resolved-descriptor dump) are developer
+    // diagnostics with no Unreal Details-panel counterpart - they were the bulk of the noise the panel used
+    // to show. Off by default so the panel reads like a real Inspector; a developer opts back in with
+    // KB_MATERIAL_EDITOR_DEBUG_DETAILS, and the flag is read once per process.
+    static const bool showDebugDetails = EditorDebugLogVariableEnabled("KB_MATERIAL_EDITOR_DEBUG_DETAILS");
+    if (showDebugDetails) {
+        rows.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
+        rows.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(
+            material.desc,
+            sceneContext.MaterialEditor().OpenAssetId().value);
+    }
     if (materialInstance) {
         rows.title = "Material Instance Overrides";
     }
@@ -1102,14 +1134,17 @@ inline MaterialEditorDetailsLayout MaterialEditorPanelRenderer::ResolveDetailsLa
         gap();
     }
     if (!rows.nodePropertyRows.empty()) {
-        header(MaterialEditorDetailsSection::NodeProperties);
+        const MaterialEditorDetailsSection propertySection = rows.nodePropertiesAreMaterialSettings
+            ? MaterialEditorDetailsSection::MaterialSettings
+            : MaterialEditorDetailsSection::NodeProperties;
+        header(propertySection);
         for (std::size_t index = 0U; index < rows.nodePropertyRows.size(); ++index) {
             const MaterialEditorGraphNodeProperty& property = rows.nodePropertyRows[index];
-            emit(MaterialEditorDetailsItemKind::NodePropertyRow, MaterialEditorDetailsSection::NodeProperties, index,
+            emit(MaterialEditorDetailsItemKind::NodePropertyRow, propertySection, index,
                 MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight, 12);
             if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
                 for (std::size_t optionIndex = 0U; optionIndex < property.options.size(); ++optionIndex) {
-                    emit(MaterialEditorDetailsItemKind::NodePropertyOptionRow, MaterialEditorDetailsSection::NodeProperties, index,
+                    emit(MaterialEditorDetailsItemKind::NodePropertyOptionRow, propertySection, index,
                         MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight, 28, optionIndex);
                 }
             }
@@ -2984,6 +3019,10 @@ inline constexpr int kMaterialEditorGraphMenuCategoryHeight = 22;
 inline constexpr int kMaterialEditorGraphMenuCommandHeight = 22;
 inline constexpr int kMaterialEditorGraphMenuPadding = 8;
 inline constexpr int kMaterialEditorGraphMenuMaxHeight = 420;
+// Smallest strip of the palette that must stay visible: when the drop/cursor point is near the very
+// bottom of the canvas the palette is allowed to shift up by at most this much, so it still opens at
+// (not far above) the cursor while keeping enough rows on screen to be usable.
+inline constexpr int kMaterialEditorGraphMenuMinHeight = 150;
 
 inline constexpr std::size_t kMaterialEditorGraphBaseCategoryCount = 11U;
 
@@ -3841,25 +3880,103 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     return filtered;
 }
 
+// The palette is "filtering" whenever a search query is typed or it was opened by dropping a wire (pin
+// filter). While filtering, the palette keeps its category grouping - categories are shown force-expanded and
+// categories with no surviving command are hidden - instead of collapsing every match into one flat list.
+[[nodiscard]] inline bool MaterialEditorGraphContextMenuIsFiltering(const EditorSceneContext& sceneContext) noexcept {
+    return !sceneContext.MaterialGraphContextMenuSearchQuery().empty() || sceneContext.IsMaterialGraphContextMenuPinFiltered();
+}
+
+// The commands to display under one category given the active filter. No filter -> that category's full command
+// list (unchanged behaviour). Filtering -> only the category's commands that match the search query and, for a
+// wire-drop, are pin-compatible. Every site that walks the palette (draw, hit-test, height, keyboard) goes
+// through this so a searched result always renders under - and hit-tests as part of - its real category.
+[[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuVisibleCommands(
+    const EditorSceneContext& sceneContext,
+    std::size_t categoryIndex) {
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
+    std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favorites);
+    if (!MaterialEditorGraphContextMenuIsFiltering(sceneContext)) {
+        return commands;
+    }
+    const std::string_view query = sceneContext.MaterialGraphContextMenuSearchQuery();
+    const bool pinFiltered = sceneContext.IsMaterialGraphContextMenuPinFiltered();
+    std::vector<MaterialEditorGraphMenuCommand> pinCompatible;
+    if (pinFiltered) {
+        if (const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = sceneContext.MaterialEditor().WorkingCopy();
+            workingCopy.has_value()) {
+            pinCompatible = MaterialEditorGraphCompatibleCommands(
+                workingCopy->graph,
+                sceneContext.MaterialGraphContextMenuPinFilterNodeId(),
+                sceneContext.MaterialGraphContextMenuPinFilterPin(),
+                sceneContext.MaterialGraphContextMenuPinFilterIsOutput());
+        }
+    }
+    std::vector<MaterialEditorGraphMenuCommand> visible;
+    visible.reserve(commands.size());
+    for (const MaterialEditorGraphMenuCommand command : commands) {
+        if (!MaterialEditorGraphPaletteCommandMatches(command, query)) {
+            continue;
+        }
+        if (pinFiltered && !MaterialEditorGraphCommandInList(pinCompatible, command)) {
+            continue;
+        }
+        visible.push_back(command);
+    }
+    return visible;
+}
+
+// The category order the palette actually shows, shared by every site that walks categories (draw, hit
+// test, height, keyboard) so they stay in lockstep. Favorites floats to the very top - but only when the
+// user has favourited something; an empty Favorites section is hidden entirely rather than sitting as a
+// dead header above the useful categories.
+inline std::vector<std::size_t> MaterialEditorGraphContextMenuCategoryOrder(const EditorSceneContext& sceneContext) {
+    std::vector<std::size_t> order;
+    order.reserve(MaterialEditorGraphContextMenuCategoryCount());
+    if (!sceneContext.MaterialGraphPaletteFavoriteCommands().empty()) {
+        order.push_back(MaterialEditorGraphContextMenuFavoritesCategoryIndex());
+    }
+    for (std::size_t index = 0U; index < kMaterialEditorGraphBaseCategoryCount; ++index) {
+        order.push_back(index);
+    }
+    return order;
+}
+
 inline int MaterialEditorGraphContextMenuFullHeight(const EditorSceneContext& sceneContext) {
     int height = kMaterialEditorGraphMenuPadding + kMaterialEditorGraphMenuSearchHeight + kMaterialEditorGraphMenuPadding;
-    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
-        return height + static_cast<int>(MaterialEditorGraphContextMenuFilteredCommands(sceneContext).size()) * kMaterialEditorGraphMenuCommandHeight +
-            kMaterialEditorGraphMenuPadding;
-    }
-    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
-    for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
+    const bool filtering = MaterialEditorGraphContextMenuIsFiltering(sceneContext);
+    for (const std::size_t categoryIndex : MaterialEditorGraphContextMenuCategoryOrder(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> visible = MaterialEditorGraphContextMenuVisibleCommands(sceneContext, categoryIndex);
+        if (filtering && visible.empty()) {
+            continue;
+        }
         height += kMaterialEditorGraphMenuCategoryHeight;
-        if (sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
-            height += static_cast<int>(MaterialEditorGraphContextMenuCommands(categoryIndex, favorites).size()) * kMaterialEditorGraphMenuCommandHeight;
+        if (filtering || sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
+            height += static_cast<int>(visible.size()) * kMaterialEditorGraphMenuCommandHeight;
         }
     }
     return height + kMaterialEditorGraphMenuPadding;
 }
 
+// The vertical anchor of the palette: the drop/cursor Y, kept inside the canvas but only shifted up far
+// enough to keep kMaterialEditorGraphMenuMinHeight on screen. This is what stops a tall (filtered /
+// wire-drop) palette from snapping to the top of the canvas instead of appearing where the wire was
+// dropped -- the previous code sized the menu to nearly the whole canvas height, which left no room
+// below the cursor and forced the top clamp all the way up.
+inline int MaterialEditorGraphContextMenuAnchoredTop(const EditorSceneContext& sceneContext) noexcept {
+    const int canvasTop = sceneContext.MaterialGraphCanvasTop();
+    const int canvasBottom = canvasTop + std::max(0, sceneContext.MaterialGraphCanvasHeight());
+    const int lowestTop = std::max(canvasTop, canvasBottom - kMaterialEditorGraphMenuMinHeight);
+    return std::clamp(sceneContext.MaterialGraphContextMenuY(), canvasTop, lowestTop);
+}
+
 inline int MaterialEditorGraphContextMenuHeight(const EditorSceneContext& sceneContext) {
-    const int canvasHeight = std::max(0, sceneContext.MaterialGraphCanvasHeight());
-    const int availableHeight = std::min(kMaterialEditorGraphMenuMaxHeight, canvasHeight);
+    const int canvasTop = sceneContext.MaterialGraphCanvasTop();
+    const int canvasBottom = canvasTop + std::max(0, sceneContext.MaterialGraphCanvasHeight());
+    // Grow downward from the anchor; never past the canvas bottom (so the menu always fits) nor the
+    // absolute max height. If the full content is taller, the surplus scrolls inside the viewport.
+    const int availableBelow = std::max(0, canvasBottom - MaterialEditorGraphContextMenuAnchoredTop(sceneContext));
+    const int availableHeight = std::min(kMaterialEditorGraphMenuMaxHeight, availableBelow);
     if (availableHeight <= 0) {
         return 0;
     }
@@ -3894,13 +4011,21 @@ inline int MaterialEditorGraphContextMenuMaxScroll(const EditorSceneContext& sce
 }
 
 inline RECT MaterialEditorPanelRenderer::GraphContextMenuRect(const EditorSceneContext& sceneContext) {
-    const int left = sceneContext.MaterialGraphContextMenuX();
-    const int top = sceneContext.MaterialGraphContextMenuY();
+    // Re-fit the menu onto the canvas EVERY frame. The height is sized to fit downward from the anchored
+    // top (the drop/cursor Y), and the top is that same anchor - so the palette opens AT the cursor and
+    // grows down, scrolling internally when the (search / wire-drop expanded) content is taller. Earlier
+    // this sized the menu to nearly the whole canvas height and then clamped the top, which yanked a tall
+    // palette to the top-left of the canvas instead of leaving it at the wire-drop point.
+    const int height = MaterialEditorGraphContextMenuHeight(sceneContext);
+    const int canvasLeft = sceneContext.MaterialGraphCanvasLeft();
+    const int canvasRight = canvasLeft + std::max(0, sceneContext.MaterialGraphCanvasWidth());
+    const int left = std::clamp(sceneContext.MaterialGraphContextMenuX(), canvasLeft, std::max(canvasLeft, canvasRight - kMaterialEditorGraphMenuWidth));
+    const int top = MaterialEditorGraphContextMenuAnchoredTop(sceneContext);
     return RECT{
         left,
         top,
         left + kMaterialEditorGraphMenuWidth,
-        top + MaterialEditorGraphContextMenuHeight(sceneContext),
+        top + height,
     };
 }
 
@@ -3926,25 +4051,12 @@ inline MaterialEditorGraphContextMenuHit MaterialEditorPanelRenderer::GraphConte
         return {};
     }
     int rowTop = viewport.top - std::clamp(sceneContext.MaterialGraphContextMenuScrollOffset(), 0, MaterialEditorGraphContextMenuMaxScroll(sceneContext));
-    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
-        for (const MaterialEditorGraphMenuCommand command : commands) {
-            const RECT commandRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCommandHeight };
-            if (MaterialEditorPanelPointInRect(commandRect, x, y)) {
-                const RECT favoriteRect{ menu.left + 10, rowTop + 4, menu.left + 24, rowTop + 18 };
-                return MaterialEditorGraphContextMenuHit{
-                    .kind = MaterialEditorPanelPointInRect(favoriteRect, x, y)
-                        ? MaterialEditorGraphContextMenuHitKind::FavoriteToggle
-                        : MaterialEditorGraphContextMenuHitKind::Command,
-                    .command = command,
-                };
-            }
-            rowTop += kMaterialEditorGraphMenuCommandHeight;
+    const bool filtering = MaterialEditorGraphContextMenuIsFiltering(sceneContext);
+    for (const std::size_t categoryIndex : MaterialEditorGraphContextMenuCategoryOrder(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuVisibleCommands(sceneContext, categoryIndex);
+        if (filtering && commands.empty()) {
+            continue;
         }
-        return {};
-    }
-    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
-    for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
         const RECT categoryRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCategoryHeight };
         if (MaterialEditorPanelPointInRect(categoryRect, x, y)) {
             return MaterialEditorGraphContextMenuHit{
@@ -3953,10 +4065,9 @@ inline MaterialEditorGraphContextMenuHit MaterialEditorPanelRenderer::GraphConte
             };
         }
         rowTop += kMaterialEditorGraphMenuCategoryHeight;
-        if (!sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
+        if (!filtering && !sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
             continue;
         }
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favorites);
         for (const MaterialEditorGraphMenuCommand command : commands) {
             const RECT commandRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCommandHeight };
             if (MaterialEditorPanelPointInRect(commandRect, x, y)) {

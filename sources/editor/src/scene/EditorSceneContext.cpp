@@ -144,38 +144,29 @@ struct MaterialGraphContextMenuKeyboardRow {
     int contentTop = 0;
     const std::size_t selectedGraphNodeCount = sceneContext.SelectedMaterialGraphNodeIds().size();
     const bool hasSelectedGraphComment = sceneContext.SelectedMaterialGraphCommentId() != 0U;
-    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
-        rows.reserve(commands.size());
-        for (const MaterialEditorGraphMenuCommand command : commands) {
-            if (MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment)) {
-                rows.push_back(MaterialGraphContextMenuKeyboardRow{
-                    .category = false,
-                    .categoryIndex = 0U,
-                    .command = command,
-                    .contentTop = contentTop,
-                    .height = kMaterialEditorGraphMenuCommandHeight,
-                });
-            }
-            contentTop += kMaterialEditorGraphMenuCommandHeight;
-        }
-        return rows;
-    }
-
-    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
-    for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
-        rows.push_back(MaterialGraphContextMenuKeyboardRow{
-            .category = true,
-            .categoryIndex = categoryIndex,
-            .command = MaterialEditorGraphMenuCommand::None,
-            .contentTop = contentTop,
-            .height = kMaterialEditorGraphMenuCategoryHeight,
-        });
-        contentTop += kMaterialEditorGraphMenuCategoryHeight;
-        if (!sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
+    // Same grouped walk the palette draws. When filtering (search / wire-drop) the category headers are still
+    // drawn (so contentTop stays in step with the rendered rows) but are NOT emitted as keyboard rows: they are
+    // force-expanded, so keyboard focus moves command-to-command and Enter creates the first matching node
+    // instead of toggling a category.
+    const bool filtering = MaterialEditorGraphContextMenuIsFiltering(sceneContext);
+    for (const std::size_t categoryIndex : MaterialEditorGraphContextMenuCategoryOrder(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuVisibleCommands(sceneContext, categoryIndex);
+        if (filtering && commands.empty()) {
             continue;
         }
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favorites);
+        if (!filtering) {
+            rows.push_back(MaterialGraphContextMenuKeyboardRow{
+                .category = true,
+                .categoryIndex = categoryIndex,
+                .command = MaterialEditorGraphMenuCommand::None,
+                .contentTop = contentTop,
+                .height = kMaterialEditorGraphMenuCategoryHeight,
+            });
+        }
+        contentTop += kMaterialEditorGraphMenuCategoryHeight;
+        if (!filtering && !sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
+            continue;
+        }
         for (const MaterialEditorGraphMenuCommand command : commands) {
             if (MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment)) {
                 rows.push_back(MaterialGraphContextMenuKeyboardRow{
@@ -1445,6 +1436,34 @@ void EditorSceneContext::MarkSceneEntitiesRenderDirty(std::span<const kb::scene:
     for (const kb::scene::SceneEntity entity : entities) {
         AppendEntityBranchRenderDirty(*scene_, entity, sceneRenderDirtyEntityIds_);
     }
+}
+
+void EditorSceneContext::MarkMaterialAssetRenderDirty(kb::assets::AssetId id) {
+    if (scene_ == nullptr || !id.IsValid()) {
+        return;
+    }
+    struct Context {
+        std::uint64_t targetAssetId;
+        std::vector<kb::scene::SceneEntity> entities;
+    } context{ id.value, {} };
+    scene_->Components().Visitors().ForEachMeshRenderer(
+        [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& renderer, void* opaque) {
+            auto& ctx = *static_cast<Context*>(opaque);
+            bool referencesTarget = renderer.materialAssetId == ctx.targetAssetId;
+            const std::uint32_t slotCount = std::min(renderer.materialSlotOverrideCount, kb::scene::kMaxMeshRendererMaterialSlotOverrides);
+            for (std::uint32_t slot = 0U; !referencesTarget && slot < slotCount; ++slot) {
+                referencesTarget = renderer.materialSlotAssetIds[slot] == ctx.targetAssetId;
+            }
+            if (referencesTarget) {
+                ctx.entities.push_back(entity);
+            }
+        },
+        &context);
+    // No scene mesh uses this material (the common case while authoring a graph against the Material
+    // Editor's own preview scene, which has its own independent revision counter): do nothing at all,
+    // not even an incremental mark, so the main scene panel's render loop sees no revision change and
+    // performs zero resync work for this edit.
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ context.entities.data(), context.entities.size() });
 }
 
 void EditorSceneContext::AcknowledgeSceneRenderSubmitted() noexcept {
@@ -2890,10 +2909,34 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
         materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()
         ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
         : kb::render::RenderMaterialGraphVariantUsage::Preview;
+    // Cheap "did anything feeding the preview change?" key so SceneFor can skip the full content-hash recompute
+    // on steady-state frames (see SceneFor). Combines the asset registry generation (external texture/material
+    // changes) with the material editor document revision (in-editor edits) and, when node preview is on, the
+    // selected node + variant usage that pick which derived working copy is shown.
+    const auto mixRevision = [](std::uint64_t seed, std::uint64_t value) noexcept {
+        return seed ^ (value + 0x9E3779B97F4A7C15ULL + (seed << 6U) + (seed >> 2U));
+    };
+    std::uint64_t previewInputRevision = mixRevision(0x21B7C0DEULL, scene_->Assets().Manager().Registry().Generation());
+    if (workingCopy != nullptr) {
+        previewInputRevision = mixRevision(previewInputRevision, materialEditor_.DocumentRevision());
+        if (materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()) {
+            previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(materialEditor_.SelectedNodeId()) + 1U);
+            previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(usage));
+        }
+    }
     const std::uint64_t revisionBefore = materialPreviewScene_->Revision();
-    const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy);
-    if (workingCopy != nullptr && materialGraphCookService_ != nullptr &&
-        materialPreviewScene_->Revision() != revisionBefore) {
+    const auto resolveStart = std::chrono::steady_clock::now();
+    const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy, previewInputRevision);
+    const bool previewRebuilt = materialPreviewScene_->Revision() != revisionBefore;
+    if (previewRebuilt) {
+        // [perf] One-shot log: only fires when the preview scene actually rebuilds (i.e. after an edit), never
+        // on a steady frame. This is the synchronous resolve/flatten cost of reflecting a graph edit.
+        const double resolveMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - resolveStart).count();
+        std::ostringstream row;
+        row << "[perf] preview resolve after edit: " << resolveMs << " ms (material=" << id.value << ")";
+        console_.Info("MaterialPerf", row.str());
+    }
+    if (workingCopy != nullptr && materialGraphCookService_ != nullptr && previewRebuilt) {
         static_cast<void>(materialGraphCookService_->RequestCook(
             id,
             *workingCopy,
@@ -2942,8 +2985,13 @@ const kb::scene::Scene& EditorSceneContext::MaterialThumbnailScene(kb::assets::A
     }
     // Thumbnails show the material as saved on disk, so no working copy is passed: a tile must not change
     // while an unrelated edit is open in the Material Editor.
+    // On-disk material, so the only thing that can change a tile is an asset registry mutation (reimport,
+    // discovery, edit-then-save). Gate on the registry generation so a visible-but-unchanged tile stops
+    // re-resolving (and re-decoding its textures) every frame the Project Files panel drains its queue.
+    const std::uint64_t thumbnailInputRevision =
+        0x7C0FFEEULL ^ (scene_->Assets().Manager().Registry().Generation() + 0x9E3779B97F4A7C15ULL);
     const std::uint64_t revisionBefore = materialThumbnailScene_->Revision();
-    const kb::scene::Scene& thumbnailScene = materialThumbnailScene_->SceneFor(*scene_, id, nullptr);
+    const kb::scene::Scene& thumbnailScene = materialThumbnailScene_->SceneFor(*scene_, id, nullptr, thumbnailInputRevision);
     // A graph-backed material needs its graph program, or the thumbnail would render the fallback instead
     // of the material. Only on a rebuild, so this costs one cook per thumbnail at most.
     if (materialGraphCookService_ != nullptr && materialThumbnailScene_->Revision() != revisionBefore) {
@@ -3000,6 +3048,32 @@ bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSc
         MarkSceneRenderDirty();
     }
     return changed;
+}
+
+bool EditorSceneContext::OrbitMaterialPreviewCamera(float deltaYawDegrees, float deltaPitchDegrees) {
+    const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
+    // A pure camera move: no cook, no scene rebuild - just the next present. That is why it goes through the
+    // scene's camera-only path rather than SetMaterialPreviewSceneSettings (which re-cooks the shader).
+    if (!materialPreviewScene_->SetCameraOrbit(
+            current.orbitYawDegrees + deltaYawDegrees,
+            current.orbitPitchDegrees + deltaPitchDegrees,
+            current.cameraDistance)) {
+        return false;
+    }
+    // No MarkSceneRenderDirty(): that re-syncs the main scene to the GPU, and the preview repaints every
+    // frame anyway (the pointer routers also invalidate the panel), so a camera move stays cheap.
+    return true;
+}
+
+bool EditorSceneContext::ZoomMaterialPreviewCamera(float scale) {
+    const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
+    if (!materialPreviewScene_->SetCameraOrbit(
+            current.orbitYawDegrees,
+            current.orbitPitchDegrees,
+            current.cameraDistance * scale)) {
+        return false;
+    }
+    return true;
 }
 
 bool EditorSceneContext::CycleMaterialPreviewSceneLightingPreset() {
@@ -3093,6 +3167,7 @@ std::size_t EditorSceneContext::PumpMaterialGraphCookResults() {
         sceneGraphCookPending_ = false;
         CookSceneGraphMaterials();
     }
+    const auto pumpStart = std::chrono::steady_clock::now();
     const std::vector<EditorMaterialGraphCookResult> results = materialGraphCookService_->DrainResults();
     for (const EditorMaterialGraphCookResult& result : results) {
         {
@@ -3146,10 +3221,30 @@ std::size_t EditorSceneContext::PumpMaterialGraphCookResults() {
                 std::move(passTelemetry));
         }
     }
-    // A freshly cooked program is picked up by the renderer's MaterialProgramRegistry on the next
-    // frame via the shared cache root + runtime asset reload; surface that the preview must refresh.
+    // A freshly cooked program is picked up by the renderer's MaterialProgramRegistry on the next frame via the
+    // shared cache root + runtime asset reload; surface that the affected entities must refresh. Only the
+    // entities that use the just-cooked material changed, so re-sync JUST those - a full MarkSceneRenderDirty()
+    // here forced a whole-scene GPU resync every time an async cook landed, i.e. ~1-2s after every single graph
+    // edit on a content-heavy scene. The synchronous edit/resolve itself is ~2ms (measured: 0.4ms edit + ~1ms
+    // resolve + 0.2ms codegen), so this deferred full resync was the real "adding a node lags" stall. Mirrors
+    // the same full->incremental fix already applied to the edit path (see MarkMaterialAssetRenderDirty).
     if (!results.empty()) {
-        MarkSceneRenderDirty();
+        std::vector<std::uint64_t> cookedMaterials;
+        cookedMaterials.reserve(results.size());
+        for (const EditorMaterialGraphCookResult& result : results) {
+            if (result.materialAssetId.IsValid() &&
+                std::find(cookedMaterials.begin(), cookedMaterials.end(), result.materialAssetId.value) == cookedMaterials.end()) {
+                cookedMaterials.push_back(result.materialAssetId.value);
+                MarkMaterialAssetRenderDirty(result.materialAssetId);
+            }
+        }
+        // [perf] One-shot log when cook results land (only when an async shaderc cook finishes, never on an idle
+        // frame). Shows how long draining + applying the result + marking the affected entities took.
+        const double pumpMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
+        std::ostringstream row;
+        row << "[perf] cook results applied: " << results.size() << " result(s), " << cookedMaterials.size()
+            << " material(s) re-synced incrementally, in " << pumpMs << " ms";
+        console_.Info("MaterialPerf", row.str());
     }
     return results.size();
 }
@@ -3375,6 +3470,24 @@ bool EditorSceneContext::FocusMaterialEditorFindResult(std::size_t resultIndex, 
     return true;
 }
 
+bool EditorSceneContext::FocusMaterialGraphNode(std::uint32_t nodeId) {
+    if (nodeId == 0U || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    const kb::render::RenderMaterialGraphNode* node =
+        kb::render::FindRenderMaterialGraphNode(materialEditor_.WorkingCopy()->graph, nodeId);
+    if (node == nullptr) {
+        return false;
+    }
+    static_cast<void>(SelectMaterialGraphNode(nodeId));
+    materialGraphPanX_ = (materialGraphCanvasWidth_ / 2) -
+        static_cast<int>(std::lround(static_cast<float>(node->positionX) * materialGraphZoom_));
+    materialGraphPanY_ = (materialGraphCanvasHeight_ / 2) -
+        static_cast<int>(std::lround(static_cast<float>(node->positionY) * materialGraphZoom_));
+    materialGraphFocused_ = true;
+    return true;
+}
+
 bool EditorSceneContext::FrameSelectedMaterialGraphNodes() {
     return FrameSelectedMaterialGraphNodes(materialGraphCanvasWidth_, materialGraphCanvasHeight_);
 }
@@ -3580,6 +3693,35 @@ std::uint64_t EditorSceneContext::MaterialGraphViewSignature(kb::assets::AssetId
             hash = fold(hash, start.nodeId);
         }
     }
+    return hash;
+}
+
+std::uint64_t EditorSceneContext::MaterialGraphContentDrawSignature(kb::assets::AssetId assetId) const noexcept {
+    const auto fold = [](std::uint64_t hash, std::uint64_t value) noexcept {
+        hash ^= value + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
+        return hash;
+    };
+    // Start from the view signature (document revision + transform + live drag) and add everything else the
+    // node/link/comment drawing reads. Selection changes a node's border/glow; the preview-selected node is
+    // highlighted; comment selection changes the comment box chrome; diagnostic markers are drawn per node and
+    // can change from an async cook without a document edit; the registry generation covers texture previews.
+    std::uint64_t hash = MaterialGraphViewSignature(assetId);
+    hash = fold(hash, static_cast<std::uint64_t>(SelectedMaterialGraphNodeId()));
+    for (const std::uint32_t nodeId : SelectedMaterialGraphNodeIds()) {
+        hash = fold(hash, static_cast<std::uint64_t>(nodeId) | 0x100000000ULL);
+    }
+    if (materialEditor_.WorkingCopy().has_value()) {
+        for (const kb::render::RenderMaterialGraphCommentBox& comment : materialEditor_.WorkingCopy()->graph.comments) {
+            if (IsMaterialGraphCommentSelected(comment.id)) {
+                hash = fold(hash, static_cast<std::uint64_t>(comment.id) | 0x200000000ULL);
+            }
+        }
+    }
+    for (const MaterialEditorGraphDiagnosticMarker& marker : materialEditor_.GraphDiagnosticMarkers()) {
+        hash = fold(hash, static_cast<std::uint64_t>(marker.nodeId));
+        hash = fold(hash, static_cast<std::uint64_t>(marker.severity));
+    }
+    hash = fold(hash, scene_->Assets().Manager().Registry().Generation());
     return hash;
 }
 
@@ -4044,6 +4186,40 @@ bool EditorSceneContext::IsMaterialGraphPanning() const noexcept {
     return materialGraphPanning_;
 }
 
+bool EditorSceneContext::BeginMaterialPreviewOrbit(int x, int y) noexcept {
+    materialPreviewOrbitDragging_ = true;
+    materialPreviewOrbitLastX_ = x;
+    materialPreviewOrbitLastY_ = y;
+    return true;
+}
+
+bool EditorSceneContext::DragMaterialPreviewOrbit(int x, int y) {
+    if (!materialPreviewOrbitDragging_) {
+        return false;
+    }
+    // Screen-pixel drag to degrees: a horizontal drag swings yaw, vertical drag swings pitch. Dragging right
+    // rotates the object so its right side turns toward the viewer (yaw decreases), the Unreal convention -
+    // the horizontal axis is negated so left/right feels like grabbing and turning the object.
+    constexpr float degreesPerPixel = 0.4F;
+    const float deltaYaw = -static_cast<float>(x - materialPreviewOrbitLastX_) * degreesPerPixel;
+    const float deltaPitch = static_cast<float>(y - materialPreviewOrbitLastY_) * degreesPerPixel;
+    materialPreviewOrbitLastX_ = x;
+    materialPreviewOrbitLastY_ = y;
+    return OrbitMaterialPreviewCamera(deltaYaw, deltaPitch);
+}
+
+bool EditorSceneContext::EndMaterialPreviewOrbit() noexcept {
+    if (!materialPreviewOrbitDragging_) {
+        return false;
+    }
+    materialPreviewOrbitDragging_ = false;
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialPreviewOrbiting() const noexcept {
+    return materialPreviewOrbitDragging_;
+}
+
 bool EditorSceneContext::HasMaterialGraphPanMoved() const noexcept {
     return materialGraphPanMoved_;
 }
@@ -4306,6 +4482,48 @@ bool EditorSceneContext::DeleteSelectedMaterialGraphComment(kb::assets::AssetId 
         return false;
     }
     console_.Info("Materials", "Deleted material graph comment.");
+    return true;
+}
+
+bool EditorSceneContext::SetMaterialGraphCommentText(kb::assets::AssetId id, std::uint32_t commentId, std::string_view text) {
+    if (materialEditor_.OpenAssetId() != id || commentId == 0U || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    if (HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.SetGraphCommentText(commentId, text)) {
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Edit Material Graph Comment Text", std::move(before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds), beforeSelectedCommentId)) {
+        return false;
+    }
+    console_.Info("Materials", "Edited material graph comment.");
+    return true;
+}
+
+bool EditorSceneContext::SetMaterialGraphCommentColor(kb::assets::AssetId id, std::uint32_t commentId, std::uint32_t color) {
+    if (materialEditor_.OpenAssetId() != id || commentId == 0U || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    if (HasMaterialGraphGestureInFlight()) {
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.SetGraphCommentColor(commentId, color)) {
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Edit Material Graph Comment Color", std::move(before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds), beforeSelectedCommentId)) {
+        return false;
+    }
+    console_.Info("Materials", "Recolored material graph comment.");
     return true;
 }
 
@@ -4622,6 +4840,27 @@ bool EditorSceneContext::SetMaterialGraphNodeEnumValue(
 
 void EditorSceneContext::ToggleMaterialGraphNodeEnumDropdown(std::uint32_t nodeId, std::string propertyId) {
     materialEditor_.ToggleGraphNodeEnumDropdown(nodeId, std::move(propertyId));
+}
+
+bool EditorSceneContext::SetMaterialGraphSetting(kb::assets::AssetId id, std::string_view propertyId, std::string_view value) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
+        console_.Error("Materials", "Open the material in Material Editor before editing its settings.");
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    if (!materialEditor_.SetGraphMaterialSetting(propertyId, value)) {
+        return false; // no-op or invalid value: the setter already declined, nothing to record
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Edit Material Setting", std::move(before), beforeSelectedNodeId)) {
+        return false;
+    }
+    console_.Info("Materials", "Edited material setting '" + std::string{ propertyId } + "'.");
+    return true;
+}
+
+void EditorSceneContext::ToggleMaterialGraphSettingDropdown(std::string propertyId) {
+    materialEditor_.ToggleMaterialSettingDropdown(std::move(propertyId));
 }
 
 void EditorSceneContext::CloseMaterialGraphNodeEnumDropdown() noexcept {
@@ -5152,8 +5391,16 @@ bool EditorSceneContext::CancelMaterialGraphInteractions() {
         changed = true;
     }
     if (HasMaterialGraphPinConnection()) {
-        static_cast<void>(CancelMaterialGraphPinConnection());
-        changed = true;
+        // A pin connection parked behind an OPEN palette menu is intentional: a wire was dropped on empty
+        // canvas and is waiting for the user to pick a node to auto-connect. Do NOT tear it down here.
+        // CancelMaterialGraphInteractions fires from WM_CAPTURECHANGED / WM_CANCELMODE, and the wire-drop
+        // path legitimately calls ReleaseCapture() right after opening the menu - which synchronously sends
+        // WM_CAPTURECHANGED and used to cancel the parked connection before the pick could use it (pendingNode
+        // reset to 0 -> "pick a node and nothing appears"). Only cancel when there is no menu holding it.
+        if (!IsMaterialGraphContextMenuOpen()) {
+            static_cast<void>(CancelMaterialGraphPinConnection());
+            changed = true;
+        }
     } else if (HasMaterialGraphWorkingCopyTransaction()) {
         CancelMaterialGraphWorkingCopyTransaction();
         changed = true;
@@ -5169,8 +5416,11 @@ void EditorSceneContext::ResetMaterialGraphTransientState() {
             .panY = materialGraphPanY_,
         });
     }
-    static_cast<void>(CancelMaterialGraphInteractions());
+    // Close the menu BEFORE cancelling interactions: CancelMaterialGraphInteractions now deliberately leaves
+    // a pin connection parked behind an open menu alone, so the menu must be gone first for the reset to also
+    // tear down any pending connection.
     static_cast<void>(CloseMaterialGraphContextMenu());
+    static_cast<void>(CancelMaterialGraphInteractions());
     static_cast<void>(CloseMaterialGraphTexturePicker());
     materialEditor_.CloseGraphNodeEnumDropdown();
     materialEditor_.CancelGraphConstantInlineEdit();
@@ -5229,7 +5479,11 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     materialGraphContextMenuGraphX_ = graphX;
     materialGraphContextMenuGraphY_ = graphY;
     materialGraphContextMenuScrollOffset_ = 0;
-    materialGraphContextMenuExpandedMask_ = 0U;
+    // Favorites lives at the top of the palette; open it expanded when it has entries so the user's picks
+    // are visible immediately, otherwise start fully collapsed.
+    materialGraphContextMenuExpandedMask_ = materialGraphPaletteFavorites_.empty()
+        ? 0U
+        : (1U << MaterialEditorGraphContextMenuFavoritesCategoryIndex());
     materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
     materialGraphContextMenuSearchQuery_.clear();
@@ -5237,9 +5491,10 @@ bool EditorSceneContext::OpenMaterialGraphContextMenu(kb::assets::AssetId id, in
     materialGraphContextMenuPinFilterNodeId_ = 0U;
     materialGraphContextMenuPinFilterPin_.clear();
     materialGraphContextMenuPinFilterOutput_ = true;
-    const int menuHeight = MaterialEditorGraphContextMenuHeight(*this);
+    // Anchor at the raw cursor Y; GraphContextMenuRect fits the height downward from here each frame so
+    // the palette opens at the click point rather than being pulled up to the canvas top when it is tall.
     const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
-    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - menuHeight);
+    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - kMaterialEditorGraphMenuMinHeight);
     materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
     materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
     return true;
@@ -5256,7 +5511,11 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
     materialGraphContextMenuGraphX_ = graphX;
     materialGraphContextMenuGraphY_ = graphY;
     materialGraphContextMenuScrollOffset_ = 0;
-    materialGraphContextMenuExpandedMask_ = 0U;
+    // Favorites lives at the top of the palette; open it expanded when it has entries so the user's picks
+    // are visible immediately, otherwise start fully collapsed.
+    materialGraphContextMenuExpandedMask_ = materialGraphPaletteFavorites_.empty()
+        ? 0U
+        : (1U << MaterialEditorGraphContextMenuFavoritesCategoryIndex());
     materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
     materialGraphContextMenuSearchQuery_.clear();
@@ -5264,9 +5523,11 @@ bool EditorSceneContext::OpenMaterialGraphContextMenuForPinConnection(kb::assets
     materialGraphContextMenuPinFilterPin_ = materialGraphPendingConnectionPin_;
     materialGraphContextMenuPinFilterOutput_ = materialGraphPendingConnectionOutput_;
     materialGraphContextMenuPinFilterActive_ = true;
-    const int menuHeight = MaterialEditorGraphContextMenuHeight(*this);
+    // Keep the raw drop Y as the anchor (only shifted up enough to keep a minimal strip on screen).
+    // GraphContextMenuRect fits the palette height downward from here each frame, so a tall filtered
+    // wire-drop palette opens AT the drop point instead of snapping to the top of the canvas.
     const int menuLeftMax = materialGraphCanvasLeft_ + std::max(0, materialGraphCanvasWidth_ - kMaterialEditorGraphMenuWidth);
-    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - menuHeight);
+    const int menuTopMax = materialGraphCanvasTop_ + std::max(0, materialGraphCanvasHeight_ - kMaterialEditorGraphMenuMinHeight);
     materialGraphContextMenuX_ = std::clamp(x, materialGraphCanvasLeft_, menuLeftMax);
     materialGraphContextMenuY_ = std::clamp(y, materialGraphCanvasTop_, menuTopMax);
     return true;
@@ -7838,6 +8099,23 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
         LogMaterialGraphDebug(console_, "record-edit-rejected label=" + label + " material=" + std::to_string(id.value));
         return false;
     }
+    // [perf] One-shot log per edit: fires when a single graph edit (add/connect/delete a node) takes long
+    // enough to feel. It brackets SetWorkingCopy + the runtime-preview sync (disk write + cook request); the
+    // preview resolve on the next frame is timed separately in MaterialPreviewScene. Lets us tell whether an
+    // "adding a node lags" report is the edit itself or the frame after it.
+    struct EditPerfTimer {
+        EditorConsoleState& console;
+        std::string label;
+        std::chrono::steady_clock::time_point start;
+        ~EditPerfTimer() {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (ms >= 2.0) {
+                std::ostringstream row;
+                row << "[perf] material edit '" << label << "': " << ms << " ms";
+                console.Info("MaterialPerf", row.str());
+            }
+        }
+    } editPerfTimer{ console_, label, std::chrono::steady_clock::now() };
     const std::string debugLabel = label;
 
     if (HasMaterialGraphWorkingCopyTransaction()) {
@@ -7857,9 +8135,16 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
         if (runtimeChanged) {
             materialEditor_.ClearDiagnostics();
             SyncMaterialEditorWorkingCopyRuntimePreview();
-            sceneGraphCookPending_ = true;
+            // An edit only changes the OPEN material, and RequestOpenMaterialSceneGraphCook (below) already
+            // re-cooks it (with scene context) so meshes using it update. Re-arming sceneGraphCookPending_
+            // here forced CookSceneGraphMaterials on the next frame, which re-reads and re-parses EVERY
+            // material the scene references from disk, uncached - a multi-second stall on content-heavy
+            // scenes. The scene-wide batch cook belongs to scene (re)load, not to a single-material edit.
             RequestOpenMaterialSceneGraphCook();
-            MarkSceneRenderDirty();
+            // Likewise, a full MarkSceneRenderDirty() here forced a full-scene GPU resync on every single
+            // graph edit (connect/create/disconnect) regardless of whether this material is even used by
+            // the open scene - see MarkMaterialAssetRenderDirty's comment for the full rationale.
+            MarkMaterialAssetRenderDirty(id);
         }
         return true;
     }
@@ -7906,9 +8191,11 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
     }
     if (runtimeChanged) {
         SyncMaterialEditorWorkingCopyRuntimePreview();
-        sceneGraphCookPending_ = true;
+        // Re-cook only the open material (below); do NOT re-arm the scene-wide sceneGraphCookPending_ here -
+        // that made every edit re-read+re-parse all scene materials from disk next frame (the multi-second
+        // stall). See the transaction path above for the full rationale.
         RequestOpenMaterialSceneGraphCook();
-        MarkSceneRenderDirty();
+        MarkMaterialAssetRenderDirty(id);
     }
     return true;
 }
@@ -7946,9 +8233,10 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
     }
     if (runtimeChanged) {
         SyncMaterialEditorWorkingCopyRuntimePreview();
-        sceneGraphCookPending_ = true;
+        // Re-cook only the open material (below); no scene-wide sceneGraphCookPending_ re-arm - see
+        // RecordMaterialGraphWorkingCopyEdit for why that caused a multi-second per-edit disk stall.
         RequestOpenMaterialSceneGraphCook();
-        MarkSceneRenderDirty();
+        MarkMaterialAssetRenderDirty(id);
     }
     return true;
 }

@@ -19,12 +19,14 @@ bool AssetRegistry::Upsert(AssetMetadata metadata) {
         byPath_.erase(NormalizeAssetPath(assets_[existing->second].virtualPath));
         assets_[existing->second] = std::move(metadata);
         byPath_[NormalizeAssetPath(assets_[existing->second].virtualPath)] = assets_[existing->second].id.value;
+        ++generation_;
         return true;
     }
 
     byPath_[NormalizeAssetPath(metadata.virtualPath)] = metadata.id.value;
     byId_[metadata.id.value] = assets_.size();
     assets_.push_back(std::move(metadata));
+    ++generation_;
     return true;
 }
 
@@ -44,6 +46,7 @@ bool AssetRegistry::Remove(AssetId id) noexcept {
         byPath_[NormalizeAssetPath(assets_[index].virtualPath)] = assets_[index].id.value;
     }
     assets_.pop_back();
+    ++generation_;
     return true;
 }
 
@@ -84,6 +87,7 @@ void AssetRegistry::Clear() noexcept {
     assets_.clear();
     byId_.clear();
     byPath_.clear();
+    ++generation_;
 }
 
 } // namespace kb::assets

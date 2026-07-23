@@ -58,6 +58,8 @@ std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagno
         return "unsupported_blend_mode";
     case RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed:
         return "shader_generation_failed";
+    case RenderMaterialGraphDiagnosticKind::UnusedParameterValue:
+        return "unused_parameter_value";
     case RenderMaterialGraphDiagnosticKind::DuplicateParameterStableId:
         return "duplicate_parameter_stable_id";
     case RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode:

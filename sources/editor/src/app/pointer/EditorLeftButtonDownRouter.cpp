@@ -443,7 +443,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     menuHit.command,
                     sceneContext_.SelectedMaterialGraphNodeIds().size(),
                     sceneContext_.SelectedMaterialGraphCommentId() != 0U);
-                if (commandEnabled && MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command)) {
+                // The deferred pointer-drag path exists only for the "drag a palette command onto the canvas
+                // to drop it there" gesture. When the menu was opened by dropping a wire (pin-filtered), there
+                // is no drop-placement to choose - the node goes at the wire's drop point and auto-connects -
+                // so execute it immediately on press. Deferring to mouse-up left the pick at the mercy of the
+                // pin-connection release branch (which reopened the menu) and of any micro-movement flipping
+                // the drag to "active" (which skipped the mouse-up executor): both made "pick a node -> nothing
+                // appears". Immediate execution here removes that whole fragile path for the wire-drop case.
+                const bool takesDeferredPath = commandEnabled &&
+                    MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command) &&
+                    !sceneContext_.IsMaterialGraphContextMenuPinFiltered();
+                if (takesDeferredPath) {
                     pointerDrag_.Clear();
                     pointerDrag_.kind = EditorPointerDragKind::MaterialGraphPaletteCommand;
                     pointerDrag_.materialGraphAssetId = materialId;
@@ -480,6 +490,24 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         const MaterialEditorOpaqueOverlayHit opaqueOverlay =
             MaterialEditorPanelRenderer::OpaqueOverlayAt(*materialEditorContent, sceneContext_, x, y);
+        if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Diagnostics) {
+            // A diagnostic tied to a node jumps to it; otherwise the click is swallowed by the overlay.
+            if (const std::uint32_t nodeId =
+                    MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(*materialEditorContent, sceneContext_, x, y);
+                nodeId != 0U) {
+                static_cast<void>(sceneContext_.FocusMaterialGraphNode(nodeId));
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Preview) {
+            // Drag the preview to orbit the object around it, Unreal-style. Capture so the drag continues
+            // even as the cursor leaves the small overlay.
+            static_cast<void>(sceneContext_.BeginMaterialPreviewOrbit(x, y));
+            SetCapture(messageWindow);
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::None &&
             opaqueOverlay.kind != MaterialEditorOpaqueOverlayKind::Details) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -521,7 +549,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     }
                     if (detailsHit.kind == MaterialEditorDetailsHitKind::NodeProperty) {
                         const MaterialEditorGraphNodePropertyHit& property = detailsHit.nodeProperty;
-                        static_cast<void>(sceneContext_.SelectMaterialGraphNode(property.nodeId));
+                        // Node id 0 means the material-settings rows, which are not a node; only sync the
+                        // selection for a real node.
+                        if (property.nodeId != 0U) {
+                            static_cast<void>(sceneContext_.SelectMaterialGraphNode(property.nodeId));
+                        }
                         switch (property.kind) {
                         case MaterialEditorGraphNodePropertyHitKind::TextField:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
@@ -555,10 +587,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, property.nodeId));
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::EnumField:
-                            sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
+                            // Node id 0 is the material itself (domain / shading model / blend mode), which
+                            // uses its own dropdown-state slot; a real node uses the node-keyed one.
+                            if (property.nodeId == 0U) {
+                                sceneContext_.ToggleMaterialGraphSettingDropdown(property.stableId);
+                            } else {
+                                sceneContext_.ToggleMaterialGraphNodeEnumDropdown(property.nodeId, property.stableId);
+                            }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::EnumOption:
-                            static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property.nodeId, property.stableId, property.optionValue));
+                            if (property.nodeId == 0U) {
+                                static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, property.optionValue));
+                            } else {
+                                static_cast<void>(sceneContext_.SetMaterialGraphNodeEnumValue(materialId, property.nodeId, property.stableId, property.optionValue));
+                            }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::TexturePicker:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();

@@ -2,6 +2,9 @@
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <string_view>
 
@@ -13,11 +16,21 @@ enum class EditorMaterialPreviewLightingPreset : std::uint8_t {
     HighContrast,
 };
 
+// Camera orbit limits, mirroring the feel of Unreal's material-preview viewport: the object stays framed
+// while the user swings the camera around it and dollies in/out with the wheel.
+inline constexpr float kEditorMaterialPreviewMinCameraDistance = 1.4F;
+inline constexpr float kEditorMaterialPreviewMaxCameraDistance = 18.0F;
+inline constexpr float kEditorMaterialPreviewMaxPitchDegrees = 85.0F;
+
 struct EditorMaterialPreviewSceneSettings {
     EditorMaterialPreviewLightingPreset lightingPreset = EditorMaterialPreviewLightingPreset::Studio;
     kb::render::RenderMaterialGraphQualityLevel qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High;
     float cameraDistance = 4.0F;
     float verticalFovDegrees = 38.0F;
+    // Orbit angles around the framed object (degrees). Yaw swings horizontally, pitch vertically; 0/0 looks
+    // straight down -Z at the object, matching the historic fixed camera so thumbnails are unchanged.
+    float orbitYawDegrees = 0.0F;
+    float orbitPitchDegrees = 0.0F;
     float keyLightIntensity = 1.35F;
     float ambientIntensity = 0.70F;
     float environmentDiffuseIntensity = 0.65F;
@@ -28,6 +41,20 @@ struct EditorMaterialPreviewSceneSettings {
 
     [[nodiscard]] static EditorMaterialPreviewSceneSettings Defaults() noexcept {
         return EditorMaterialPreviewSceneSettings{};
+    }
+
+    // The camera eye position for the current orbit, on a sphere of radius cameraDistance around the object
+    // at the origin. Single source of truth so every camera build (preview panel, thumbnail capture) agrees.
+    [[nodiscard]] std::array<float, 3U> CameraEye() const noexcept {
+        constexpr float degToRad = 3.14159265358979323846F / 180.0F;
+        const float yaw = orbitYawDegrees * degToRad;
+        const float pitch = std::clamp(orbitPitchDegrees, -kEditorMaterialPreviewMaxPitchDegrees, kEditorMaterialPreviewMaxPitchDegrees) * degToRad;
+        const float cosPitch = std::cos(pitch);
+        return {
+            cameraDistance * cosPitch * std::sin(yaw),
+            cameraDistance * std::sin(pitch),
+            -cameraDistance * cosPitch * std::cos(yaw),
+        };
     }
 };
 

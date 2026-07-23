@@ -1,3 +1,4 @@
+#include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
 
 #if defined(_WIN32)
@@ -26,14 +27,36 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <vector>
 
 #include <bx/math.h>
 
 namespace kb::editor {
 namespace {
+
+// [perf] Slow-frame trace: only writes when a loop iteration exceeds a threshold, so it adds no per-frame cost
+// on healthy frames. It pins down whether an "action stutters 1-2s" is the GDI message pump (panel repaints) or
+// the editor tick (bgfx present + cook-result apply). Written to Saved/Logs/editor-frame-perf.log.
+void WriteFramePerf(std::string_view line) {
+    static std::ofstream stream = [] {
+        std::error_code error;
+        const std::filesystem::path path = std::filesystem::current_path() / "Saved" / "Logs" / "editor-frame-perf.log";
+        std::filesystem::create_directories(path.parent_path(), error);
+        return std::ofstream{ path, std::ios::out | std::ios::app };
+    }();
+    if (!stream.is_open()) {
+        return;
+    }
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    stream << millis << ' ' << line << '\n';
+    stream.flush();
+}
 
 constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
 constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
@@ -84,7 +107,8 @@ constexpr int kMaxMessagesPerPump = 128;
     std::uint32_t renderHeight,
     const EditorMaterialPreviewSceneSettings& settings) noexcept {
     kb::render::SceneRenderCamera camera{};
-    bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -settings.cameraDistance}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
+    const std::array<float, 3U> eye = settings.CameraEye();
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{eye[0], eye[1], eye[2]}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
     kb::render::SceneDepthPolicy::MakePerspective(
         camera.projection.data(),
         settings.verticalFovDegrees,
@@ -372,12 +396,30 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
     state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
-    static_cast<void>(state.sceneContext.PumpMaterialGraphCookResults());
+    const auto cookStart = std::chrono::steady_clock::now();
+    const std::size_t cookResults = state.sceneContext.PumpMaterialGraphCookResults();
+    const double cookMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
     bool scenePresented = false;
+    const auto beginStart = std::chrono::steady_clock::now();
     state.sceneViewport.BeginPaintLayout(state.window);
+    const double beginMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - beginStart).count();
+    const auto mainStart = std::chrono::steady_clock::now();
     const bool mainPresented = QueueMainHost(state, refreshToolbar, scenePresented);
+    const double mainMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mainStart).count();
+    const auto floatStart = std::chrono::steady_clock::now();
     const bool floatingPresented = QueueFloatingHosts(state, refreshToolbar, scenePresented);
+    const double floatMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - floatStart).count();
+    const auto endStart = std::chrono::steady_clock::now();
     state.sceneViewport.EndPaintLayout();
+    const double endMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - endStart).count();
+    const double presentMs = beginMs + mainMs + floatMs + endMs;
+    if (cookMs > 25.0 || presentMs > 25.0) {
+        std::ostringstream row;
+        row << "[present] cook=" << cookMs << "ms(r=" << cookResults << ") begin=" << beginMs
+            << "ms mainHost=" << mainMs << "ms floatHost=" << floatMs << "ms endFrame=" << endMs
+            << "ms scene=" << (scenePresented ? 1 : 0);
+        WriteFramePerf(row.str());
+    }
     if (mainPresented || floatingPresented) {
         state.sceneViewport.ClearPresentRequest();
     }
@@ -539,23 +581,39 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
     auto nextEditorFrame = previousTick;
     const auto editorFrameInterval = EditorFrameInterval();
     while (state.running) {
+        const auto pumpStart = std::chrono::steady_clock::now();
         int pumpedMessages = 0;
+        bool dispatchedPaint = false;
+        double paintMs = 0.0;
         while (pumpedMessages < kMaxMessagesPerPump && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != 0) {
             ++pumpedMessages;
             if (message.message == WM_QUIT) {
                 state.running = false;
                 break;
             }
+            const bool isPaint = message.message == WM_PAINT;
+            dispatchedPaint = dispatchedPaint || isPaint;
             CoalesceConsecutiveMouseMoveMessages(message);
             TranslateMessage(&message);
+            const auto dispatchStart = std::chrono::steady_clock::now();
             DispatchMessageW(&message);
+            if (isPaint) {
+                paintMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dispatchStart).count();
+            }
         }
+        const double pumpMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
         if (!state.running) {
             break;
         }
 
         const auto currentTick = std::chrono::steady_clock::now();
         if (!state.playMode.IsPaused() && currentTick < nextEditorFrame) {
+            if (pumpMs > 40.0) {
+                std::ostringstream row;
+                row << "[frame] pump=" << pumpMs << "ms wmpaint=" << paintMs << "ms(" << (dispatchedPaint ? 1 : 0)
+                    << ") msgs=" << pumpedMessages << " tick=0ms (paced-wait)";
+                WriteFramePerf(row.str());
+            }
             const DWORD waitMs = FrameWaitMilliseconds(currentTick, nextEditorFrame);
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT));
             continue;
@@ -563,9 +621,17 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
 
         const float deltaSeconds = RuntimeDeltaSeconds(previousTick, currentTick);
         previousTick = currentTick;
+        const auto tickStart = std::chrono::steady_clock::now();
         TickPlayMode(state, deltaSeconds);
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
+        const double tickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tickStart).count();
+        if (pumpMs > 40.0 || tickMs > 40.0) {
+            std::ostringstream row;
+            row << "[frame] pump=" << pumpMs << "ms wmpaint=" << paintMs << "ms(" << (dispatchedPaint ? 1 : 0)
+                << ") msgs=" << pumpedMessages << " tick=" << tickMs << "ms";
+            WriteFramePerf(row.str());
+        }
         nextEditorFrame = currentTick + editorFrameInterval;
 
         if (state.playMode.IsPaused()) {

@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -34,6 +35,34 @@ struct MaterialGraphRuntimeValue;
 
 [[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
     return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
+
+// Process-wide memo for the shader-source codegen. The runtime resolves the SAME material up to three times per
+// single graph edit - the material-preview scene rebuild, the preview-scene material ensurer, and the main-scene
+// material ensurer - each synchronously on the main thread. Without this, every one of them re-ran
+// CompileRenderMaterialGraphToShaderSource, a ~4,900-line string-heavy shader-source generator that is the
+// dominant Debug-build cost behind "adding a node lags for 1-2s" (and it is node-type-agnostic: even a
+// disconnected RGB/constant node re-resolves the whole material). The artifact cache key folds the inlined graph
+// + its function-library dependency content hashes + the switch-node context fields that change the emitted
+// source, so any two resolves that would emit byte-identical shader source share a single codegen; different
+// materials or a genuine edit produce a different key and recompile. Guarded by a mutex because material resolves
+// can run from more than one thread (scene submit vs. preview build). This is the same cache mechanism the
+// renderer unit tests exercise for the on-disk artifact cache - only now shared process-wide by the resolver.
+[[nodiscard]] RenderMaterialGraphCompileResult CompileRenderMaterialGraphMemoized(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphBuildContext context) {
+    static RenderMaterialGraphCompileArtifactCache cache;
+    static std::mutex cacheMutex;
+    std::lock_guard<std::mutex> lock{ cacheMutex };
+    static bool capacityConfigured = false;
+    if (!capacityConfigured) {
+        // Bound memory: the cache would otherwise accumulate one shader artifact per distinct graph edited this
+        // session. 256 keeps the working set of recently-edited materials resident while capping growth; LRU-ish
+        // eviction (oldest first) drops long-untouched variants.
+        cache.SetCapacity(256U);
+        capacityConfigured = true;
+    }
+    return CompileRenderMaterialGraphWithArtifactCache(cache, graph, std::move(context)).compile;
 }
 
 [[nodiscard]] std::filesystem::path ResolveAssetPhysicalPath(
@@ -1905,7 +1934,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
         graphContext.assetId = materialMetadata.id.value;
         graphContext.sourcePath = materialMetadata.virtualPath.generic_string();
         graphContext.functionLibrary = &functionLibrary.library;
-        const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
+        const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphMemoized(
             materialAsset.graph,
             graphContext);
         resolved.graphDiagnostics.insert(

@@ -6,16 +6,25 @@
 #include <bimg/decode.h>
 #include <bx/allocator.h>
 
+#include <atomic>
 #include <cstddef>
 #include <charconv>
 #include <cctype>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <istream>
 #include <limits>
+#include <list>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
+#include <unordered_set>
 
 namespace kb::render {
 namespace {
@@ -338,6 +347,204 @@ template <typename T>
     return LoadImageBytes(imported->payload.data(), imported->payload.size());
 }
 
+// ---- Decoded-texture cache ---------------------------------------------------------------------------
+// Decoding an image to RGBA8 (bimg PNG/DDS decode + the mip/copy loops) is expensive: a single 2048x2048
+// texture measured ~1.1s in a Debug build. Worse, the runtime GPU-handle caches are keyed per kb::scene::Scene,
+// so the SAME file is decoded from scratch again by every scene that references it - the main scene, the
+// material preview scene, and every thumbnail scene - and again every time the material preview scene is
+// rebuilt. This process-wide cache keys the DECODED pixels by (path, last-write-time, size) so a texture is
+// decoded at most once while it stays unchanged on disk. That is what turns "open the Material Editor for a
+// material already used in the scene" from a multi-second re-decode into an instant reuse. Least-recently-used
+// entries are dropped once the retained bytes or entry count exceed their caps. A changed file (different
+// write-time or size) is treated as a miss, so on-disk edits/reimports still hot-reload correctly.
+constexpr std::size_t kDecodedTextureCacheByteCap = 512U * 1024U * 1024U;
+constexpr std::size_t kDecodedTextureCacheEntryCap = 512U;
+
+struct DecodedTextureCacheSlot {
+    std::string path;
+    std::filesystem::file_time_type writeTime{};
+    std::uintmax_t fileSize = 0U;
+    std::shared_ptr<const RenderTextureAssetData> data;
+    std::size_t bytes = 0U;
+};
+
+std::mutex& DecodedTextureCacheMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+// Most-recently-used at the front. Every access below must hold DecodedTextureCacheMutex().
+std::list<DecodedTextureCacheSlot>& DecodedTextureCacheEntries() {
+    static std::list<DecodedTextureCacheSlot> entries;
+    return entries;
+}
+
+std::size_t& DecodedTextureCacheBytes() {
+    static std::size_t bytes = 0U;
+    return bytes;
+}
+
+std::uint64_t& DecodedTextureDecodeCounter() {
+    static std::uint64_t count = 0U;
+    return count;
+}
+
+[[nodiscard]] std::shared_ptr<const RenderTextureAssetData> LookupDecodedTexture(
+    const std::string& path, std::filesystem::file_time_type writeTime, std::uintmax_t fileSize) {
+    std::lock_guard lock{ DecodedTextureCacheMutex() };
+    std::list<DecodedTextureCacheSlot>& entries = DecodedTextureCacheEntries();
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->path != path) {
+            continue;
+        }
+        if (it->writeTime != writeTime || it->fileSize != fileSize) {
+            // The file changed on disk since we cached it - drop the stale decode and force a re-decode.
+            DecodedTextureCacheBytes() -= it->bytes;
+            entries.erase(it);
+            return nullptr;
+        }
+        entries.splice(entries.begin(), entries, it);
+        return entries.front().data;
+    }
+    return nullptr;
+}
+
+void StoreDecodedTexture(
+    const std::string& path,
+    std::filesystem::file_time_type writeTime,
+    std::uintmax_t fileSize,
+    std::shared_ptr<const RenderTextureAssetData> data,
+    std::size_t bytes) {
+    std::lock_guard lock{ DecodedTextureCacheMutex() };
+    std::list<DecodedTextureCacheSlot>& entries = DecodedTextureCacheEntries();
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->path == path) {
+            // A concurrent decode of the same file may have inserted first; replace instead of duplicating.
+            DecodedTextureCacheBytes() -= it->bytes;
+            entries.erase(it);
+            break;
+        }
+    }
+    entries.push_front(DecodedTextureCacheSlot{
+        .path = path,
+        .writeTime = writeTime,
+        .fileSize = fileSize,
+        .data = std::move(data),
+        .bytes = bytes,
+    });
+    DecodedTextureCacheBytes() += bytes;
+    while ((DecodedTextureCacheBytes() > kDecodedTextureCacheByteCap || entries.size() > kDecodedTextureCacheEntryCap) &&
+        entries.size() > 1U) {
+        DecodedTextureCacheBytes() -= entries.back().bytes;
+        entries.pop_back();
+    }
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureFile(const std::filesystem::path& path) {
+    if (LowerExtension(path) == ".21kb") {
+        return LoadImportedTextureContainer(path);
+    }
+    if (LowerExtension(path) != ".kbtex") {
+        return LoadImageFile(path);
+    }
+    std::ifstream input{ path };
+    if (!input) {
+        return std::nullopt;
+    }
+    return RenderTextureAssetLoader::LoadTexture(input);
+}
+
+// ---- Async decode worker -------------------------------------------------------------------------------
+// Decoding a large image is ~1s in a Debug build, and it used to happen synchronously on the render thread the
+// first time a texture was referenced (opening a material, or picking a texture in the Image Texture node) -
+// that was the 1-2s freeze. The decode now runs on a single background worker that just populates the cache
+// above; the render thread asks TryAcquireDecodedTexture and, on a miss, queues the decode and carries on, so
+// the texture streams in a frame or two later instead of stalling. One worker keeps decodes serialized (they are
+// bimg-bound, not parallelism-bound) and the cache mutex already makes the hand-off safe.
+struct AsyncTextureDecodeState {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<std::string> queue;
+    std::unordered_set<std::string> pending;
+    std::thread worker;
+    bool stop = false;
+};
+
+void AsyncTextureDecodeWork(AsyncTextureDecodeState* state) {
+    for (;;) {
+        std::string path;
+        {
+            std::unique_lock<std::mutex> lock{ state->mutex };
+            state->wake.wait(lock, [state] { return state->stop || !state->queue.empty(); });
+            if (state->stop) {
+                return;
+            }
+            path = std::move(state->queue.front());
+            state->queue.pop_front();
+        }
+        std::error_code writeTimeError;
+        const std::filesystem::path fsPath{ path };
+        const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(fsPath, writeTimeError);
+        std::error_code sizeError;
+        const std::uintmax_t fileSize = std::filesystem::file_size(fsPath, sizeError);
+        if (!writeTimeError && !sizeError && fileSize > 0U && !LookupDecodedTexture(path, writeTime, fileSize)) {
+            if (std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(fsPath); decoded.has_value()) {
+                {
+                    std::lock_guard<std::mutex> lock{ DecodedTextureCacheMutex() };
+                    ++DecodedTextureDecodeCounter();
+                }
+                StoreDecodedTexture(
+                    path, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded), decoded->rgba8.size());
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock{ state->mutex };
+            state->pending.erase(path);
+        }
+    }
+}
+
+AsyncTextureDecodeState& AsyncTextureDecode() {
+    static AsyncTextureDecodeState* state = [] {
+        // Force the decoded-texture cache singletons to exist BEFORE this atexit is registered, so at process
+        // exit the handler (which stops+joins the worker) runs before those cache singletons are torn down -
+        // the worker touches the cache, so it must be stopped first.
+        static_cast<void>(DecodedTextureCacheMutex());
+        auto* created = new AsyncTextureDecodeState(); // process-lifetime; the worker is joined by the atexit below
+        created->worker = std::thread(AsyncTextureDecodeWork, created);
+        static_cast<void>(std::atexit([] {
+            AsyncTextureDecodeState& live = AsyncTextureDecode();
+            {
+                std::lock_guard<std::mutex> lock{ live.mutex };
+                live.stop = true;
+            }
+            live.wake.notify_all();
+            if (live.worker.joinable()) {
+                live.worker.join();
+            }
+        }));
+        return created;
+    }();
+    return *state;
+}
+
+void QueueAsyncTextureDecode(const std::string& key) {
+    AsyncTextureDecodeState& state = AsyncTextureDecode();
+    std::lock_guard<std::mutex> lock{ state.mutex };
+    if (state.pending.insert(key).second) {
+        state.queue.push_back(key);
+        state.wake.notify_one();
+    }
+}
+
+// Opt-in, off by default. The runtime texture ensurer only streams (async) when this is set - which the editor
+// APP turns on at startup. Tests, headless self-tests and one-shot render/GPU proofs keep the deterministic
+// synchronous decode (a texture is bound in the same submit), so they are not perturbed by streaming timing.
+std::atomic<bool>& AsyncTextureDecodeEnabledFlag() noexcept {
+    static std::atomic<bool> enabled{ false };
+    return enabled;
+}
+
 } // namespace
 
 RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace runtimeColorSpace) const noexcept {
@@ -379,18 +586,65 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
 }
 
 std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(const std::filesystem::path& path) {
-    if (LowerExtension(path) == ".21kb") {
-        return LoadImportedTextureContainer(path);
-    }
-    if (LowerExtension(path) != ".kbtex") {
-        return LoadImageFile(path);
+    // Freshness key: two cheap stats, never a decode. If either fails (missing file, virtual path) the texture
+    // is treated as uncacheable and decoded straight through, so behaviour is unchanged for those.
+    std::error_code writeTimeError;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(path, writeTimeError);
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(path, sizeError);
+    const bool cacheable = !writeTimeError && !sizeError && fileSize > 0U;
+    const std::string key = cacheable ? path.generic_string() : std::string{};
+
+    if (cacheable) {
+        if (const std::shared_ptr<const RenderTextureAssetData> hit = LookupDecodedTexture(key, writeTime, fileSize)) {
+            return *hit;
+        }
     }
 
-    std::ifstream input{ path };
-    if (!input) {
-        return std::nullopt;
+    std::optional<RenderTextureAssetData> decoded = DecodeTextureFile(path);
+    if (cacheable && decoded.has_value()) {
+        {
+            std::lock_guard lock{ DecodedTextureCacheMutex() };
+            ++DecodedTextureDecodeCounter();
+        }
+        StoreDecodedTexture(
+            key, writeTime, fileSize, std::make_shared<const RenderTextureAssetData>(*decoded), decoded->rgba8.size());
     }
-    return LoadTexture(input);
+    return decoded;
+}
+
+std::uint64_t RenderTextureAssetLoader::DebugDecodeCount() noexcept {
+    std::lock_guard lock{ DecodedTextureCacheMutex() };
+    return DecodedTextureDecodeCounter();
+}
+
+std::shared_ptr<const RenderTextureAssetData> RenderTextureAssetLoader::TryAcquireDecodedTexture(const std::filesystem::path& path) {
+    // Non-blocking: return the decoded texture ONLY if it is already cached (and still fresh on disk). Never
+    // decodes here - that is the whole point, so the render thread never stalls.
+    std::error_code writeTimeError;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(path, writeTimeError);
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(path, sizeError);
+    if (writeTimeError || sizeError || fileSize == 0U) {
+        return nullptr;
+    }
+    return LookupDecodedTexture(path.generic_string(), writeTime, fileSize);
+}
+
+void RenderTextureAssetLoader::RequestAsyncTextureDecode(const std::filesystem::path& path) {
+    std::error_code error;
+    if (path.empty() || !std::filesystem::exists(path, error)) {
+        return;
+    }
+    QueueAsyncTextureDecode(path.generic_string());
+}
+
+void RenderTextureAssetLoader::SetAsyncTextureDecodeEnabled(bool enabled) noexcept {
+    AsyncTextureDecodeEnabledFlag().store(enabled, std::memory_order_relaxed);
+}
+
+bool RenderTextureAssetLoader::IsAsyncTextureDecodeEnabled() noexcept {
+    return AsyncTextureDecodeEnabledFlag().load(std::memory_order_relaxed);
 }
 
 std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(std::istream& input) {

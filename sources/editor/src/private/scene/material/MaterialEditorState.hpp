@@ -221,6 +221,12 @@ public:
         return diagnostics_;
     }
 
+    // The graph node each diagnostic line points at, strictly parallel to Diagnostics() (0 = not node-tied).
+    [[nodiscard]] const std::vector<std::uint32_t>& DiagnosticNodeIds() const {
+        EnsureGraphDiagnostics();
+        return diagnosticNodeIds_;
+    }
+
     [[nodiscard]] bool DiagnosticsHaveError() const {
         EnsureGraphDiagnostics();
         return diagnosticsHaveError_;
@@ -1691,12 +1697,87 @@ public:
     void CloseGraphNodeEnumDropdown() noexcept {
         graphNodeEnumDropdownNodeId_ = 0U;
         graphNodeEnumDropdownPropertyId_.clear();
+        // The material-settings dropdown is the same kind of transient UI state; closing "the enum dropdown"
+        // closes it too, so every reset site (material switch, close, revert) already covers it and it can
+        // never survive into another document.
+        materialSettingDropdownPropertyId_.clear();
     }
 
     [[nodiscard]] bool IsGraphNodeEnumDropdownOpen(std::uint32_t nodeId, std::string_view propertyId) const noexcept {
         return nodeId != 0U &&
             graphNodeEnumDropdownNodeId_ == nodeId &&
             graphNodeEnumDropdownPropertyId_ == propertyId;
+    }
+
+    // Material-level settings (domain / shading model / blend mode) reuse the graph node enum-row machinery
+    // with a pseudo node id of 0, so its dropdown-open flag needs its own slot - node id 0 is the "no node"
+    // sentinel the node-keyed state deliberately refuses.
+    [[nodiscard]] bool IsMaterialSettingDropdownOpen(std::string_view propertyId) const noexcept {
+        return !propertyId.empty() && materialSettingDropdownPropertyId_ == propertyId;
+    }
+
+    void ToggleMaterialSettingDropdown(std::string propertyId) {
+        if (propertyId.empty() || materialSettingDropdownPropertyId_ == propertyId) {
+            CloseGraphNodeEnumDropdown();
+            return;
+        }
+        CloseGraphNodeEnumDropdown();
+        materialSettingDropdownPropertyId_ = std::move(propertyId);
+    }
+
+    // The document is the single source of truth for these values; this returns the current ones as enum
+    // rows for the Inspector. The set of *selectable* options is derived from the renderer's production
+    // predicates (IsRenderMaterial*Production), not hard-coded here, so the editor can never offer a value
+    // the compiler rejects and never drifts from the runtime.
+    [[nodiscard]] std::vector<MaterialEditorGraphNodeProperty> MaterialSettingsProperties() const {
+        std::vector<MaterialEditorGraphNodeProperty> properties;
+        if (!workingCopy_.has_value()) {
+            return properties;
+        }
+        const auto makeRow = [this](std::string_view propertyId, std::string_view displayName, const std::string& current) {
+            return MaterialEditorGraphNodeProperty{
+                .nodeId = 0U,
+                .stableId = std::string{ propertyId },
+                .displayName = std::string{ displayName },
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(MaterialSettingDisplayLabel(propertyId, current)),
+                .options = MaterialSettingOptions(propertyId),
+                .dropdownOpen = IsMaterialSettingDropdownOpen(propertyId),
+            };
+        };
+        properties.push_back(makeRow("material.domain", "Domain", workingCopy_->graph.materialDomain));
+        properties.push_back(makeRow("material.shadingModel", "Shading Model", workingCopy_->graph.shadingModel));
+        properties.push_back(makeRow("material.blendMode", "Blend Mode", workingCopy_->graph.blendMode));
+        return properties;
+    }
+
+    [[nodiscard]] bool SetGraphMaterialSetting(std::string_view propertyId, std::string_view value) {
+        if (!workingCopy_.has_value() || propertyId.empty()) {
+            return false;
+        }
+        const std::vector<MaterialEditorGraphNodePropertyOption>& options = MaterialSettingOptions(propertyId);
+        if (std::ranges::none_of(options, [value](const MaterialEditorGraphNodePropertyOption& option) {
+                return option.value == value;
+            })) {
+            return false;
+        }
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        std::string* field = nullptr;
+        if (propertyId == "material.domain") {
+            field = &document.graph.materialDomain;
+        } else if (propertyId == "material.shadingModel") {
+            field = &document.graph.shadingModel;
+        } else if (propertyId == "material.blendMode") {
+            field = &document.graph.blendMode;
+        }
+        if (field == nullptr || *field == value) {
+            return false;
+        }
+        *field = std::string{ value };
+        SetWorkingCopy(std::move(document)); // recomputes dirty, invalidates diagnostics, keeps selection
+        CloseGraphNodeEnumDropdown();
+        return true;
     }
 
     [[nodiscard]] bool BeginGraphConstantInlineEdit(std::uint32_t nodeId) {
@@ -2129,6 +2210,40 @@ public:
             }
         }
         ++documentRevision_;
+        return true;
+    }
+
+    [[nodiscard]] bool SetGraphCommentText(std::uint32_t commentId, std::string_view text) {
+        if (!workingCopy_.has_value() || commentId == 0U) {
+            return false;
+        }
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphCommentBox* comment = FindMutableGraphComment(document.graph, commentId);
+        if (comment == nullptr) {
+            return false;
+        }
+        std::string next{ text };
+        if (comment->text == next) {
+            return false;
+        }
+        comment->text = std::move(next);
+        SetWorkingCopy(std::move(document));
+        SelectComment(commentId);
+        return true;
+    }
+
+    [[nodiscard]] bool SetGraphCommentColor(std::uint32_t commentId, std::uint32_t color) {
+        if (!workingCopy_.has_value() || commentId == 0U) {
+            return false;
+        }
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphCommentBox* comment = FindMutableGraphComment(document.graph, commentId);
+        if (comment == nullptr || comment->color == color) {
+            return false;
+        }
+        comment->color = color;
+        SetWorkingCopy(std::move(document));
+        SelectComment(commentId);
         return true;
     }
 
@@ -2724,7 +2839,11 @@ public:
     void ClearDiagnostics() {
         externalDiagnostics_.clear();
         externalDiagnosticsHaveError_ = false;
-        RefreshGraphDiagnostics();
+        // Defer the heavy graph validate + shader-source compile (RefreshGraphDiagnostics) to the next
+        // diagnostics read via EnsureGraphDiagnostics, instead of running it inline on every edit. Every
+        // diagnostics accessor is lazy, so a batch of edits collapses to one recompute and the synchronous
+        // compile - work the async cook service already does - no longer blocks the connect/create gesture.
+        graphDiagnosticsStale_ = true;
     }
 
 private:
@@ -2875,6 +2994,108 @@ private:
             .kind = MaterialEditorParameterValueKind::Enum,
             .text = std::move(value),
         };
+    }
+
+    // "defaultLit" -> "Default Lit", "alphaComposite" -> "Alpha Composite". Pure presentation, so a value
+    // with no dedicated label still reads sensibly instead of showing a raw camelCase identifier.
+    [[nodiscard]] static std::string PrettifyCanonicalName(std::string_view name) {
+        std::string label;
+        label.reserve(name.size() + 2U);
+        for (std::size_t index = 0U; index < name.size(); ++index) {
+            const char ch = name[index];
+            if (index == 0U) {
+                label.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+            } else if (ch >= 'A' && ch <= 'Z') {
+                label.push_back(' ');
+                label.push_back(ch);
+            } else {
+                label.push_back(ch);
+            }
+        }
+        return label;
+    }
+
+    // The selectable options for a material setting, derived from the renderer enums filtered by the
+    // production predicates - the compiler rejects non-production values, so they must never be offered.
+    [[nodiscard]] static const std::vector<MaterialEditorGraphNodePropertyOption>& MaterialSettingOptions(
+        std::string_view propertyId) {
+        static const std::vector<MaterialEditorGraphNodePropertyOption> domain = []() {
+            std::vector<MaterialEditorGraphNodePropertyOption> options;
+            for (const kb::render::RenderMaterialDomain value : {
+                     kb::render::RenderMaterialDomain::Surface,
+                     kb::render::RenderMaterialDomain::DeferredDecal,
+                     kb::render::RenderMaterialDomain::LightFunction,
+                     kb::render::RenderMaterialDomain::Volume,
+                     kb::render::RenderMaterialDomain::PostProcess,
+                     kb::render::RenderMaterialDomain::UserInterface }) {
+                if (kb::render::IsRenderMaterialDomainProduction(value)) {
+                    const std::string name{ kb::render::RenderMaterialDomainName(value) };
+                    options.push_back({ name, PrettifyCanonicalName(name) });
+                }
+            }
+            return options;
+        }();
+        static const std::vector<MaterialEditorGraphNodePropertyOption> shadingModel = []() {
+            std::vector<MaterialEditorGraphNodePropertyOption> options;
+            for (const kb::render::RenderMaterialShadingModel value : {
+                     kb::render::RenderMaterialShadingModel::Unlit,
+                     kb::render::RenderMaterialShadingModel::DefaultLit,
+                     kb::render::RenderMaterialShadingModel::Subsurface,
+                     kb::render::RenderMaterialShadingModel::ClearCoat,
+                     kb::render::RenderMaterialShadingModel::Cloth,
+                     kb::render::RenderMaterialShadingModel::Hair,
+                     kb::render::RenderMaterialShadingModel::Eye,
+                     kb::render::RenderMaterialShadingModel::SingleLayerWater,
+                     kb::render::RenderMaterialShadingModel::ThinTranslucent }) {
+                if (kb::render::IsRenderMaterialShadingModelProduction(value)) {
+                    const std::string name{ kb::render::RenderMaterialShadingModelName(value) };
+                    options.push_back({ name, PrettifyCanonicalName(name) });
+                }
+            }
+            return options;
+        }();
+        static const std::vector<MaterialEditorGraphNodePropertyOption> blendMode = []() {
+            std::vector<MaterialEditorGraphNodePropertyOption> options;
+            for (const kb::render::RenderMaterialGraphBlendMode value : {
+                     kb::render::RenderMaterialGraphBlendMode::Opaque,
+                     kb::render::RenderMaterialGraphBlendMode::Masked,
+                     kb::render::RenderMaterialGraphBlendMode::Translucent,
+                     kb::render::RenderMaterialGraphBlendMode::Additive,
+                     kb::render::RenderMaterialGraphBlendMode::Modulate,
+                     kb::render::RenderMaterialGraphBlendMode::AlphaComposite,
+                     kb::render::RenderMaterialGraphBlendMode::AlphaHoldout }) {
+                const std::string name{ kb::render::RenderMaterialGraphBlendModeName(value) };
+                options.push_back({ name, PrettifyCanonicalName(name) });
+            }
+            return options;
+        }();
+        static const std::vector<MaterialEditorGraphNodePropertyOption> none;
+        if (propertyId == "material.domain") {
+            return domain;
+        }
+        if (propertyId == "material.shadingModel") {
+            return shadingModel;
+        }
+        if (propertyId == "material.blendMode") {
+            return blendMode;
+        }
+        return none;
+    }
+
+    // The label shown in the field: the option label when the stored value is one of them, otherwise the
+    // prettified raw value plus "(unsupported)" so a hand-authored non-production value reads as the reason
+    // its material fails to compile rather than looking like a normal choice.
+    [[nodiscard]] static std::string MaterialSettingDisplayLabel(std::string_view propertyId, const std::string& value) {
+        const std::vector<MaterialEditorGraphNodePropertyOption>& options = MaterialSettingOptions(propertyId);
+        for (const MaterialEditorGraphNodePropertyOption& option : options) {
+            if (option.value == value) {
+                return option.label;
+            }
+        }
+        if (value.empty()) {
+            return "(default)";
+        }
+        return PrettifyCanonicalName(value) + " (unsupported)";
     }
 
     [[nodiscard]] static MaterialEditorParameterValue TextureAssetValue(std::uint64_t assetId) {
@@ -5136,7 +5357,9 @@ private:
     // Everything a document change makes void. Cheap - it is all clears - so an edit still pays for it.
     void ClearDerivedGraphDiagnostics() {
         graphDiagnosticsLines_.clear();
+        graphDiagnosticLineNodeIds_.clear();
         compilerDiagnostics_.clear();
+        compilerDiagnosticLineNodeIds_.clear();
         graphDiagnosticMarkers_.clear();
         graphDiagnosticsHaveError_ = false;
         compilerDiagnosticsHaveError_ = false;
@@ -5180,6 +5403,7 @@ private:
         graphDiagnosticMarkers_.reserve(graphDiagnostics.size());
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : graphDiagnostics) {
             graphDiagnosticsLines_.push_back("[validator] " + GraphDiagnosticLine(diagnostic));
+            graphDiagnosticLineNodeIds_.push_back(diagnostic.nodeId);
             if (diagnostic.nodeId != 0U) {
                 graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
                     .nodeId = diagnostic.nodeId,
@@ -5205,6 +5429,7 @@ private:
             compileSucceeded = compile.Succeeded();
             for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compile.diagnostics) {
                 compilerDiagnostics_.push_back("[compiler] " + GraphDiagnosticLine(diagnostic));
+                compilerDiagnosticLineNodeIds_.push_back(diagnostic.nodeId);
                 compilerDiagnosticsHaveError_ = compilerDiagnosticsHaveError_ ||
                     diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
                 if (diagnostic.nodeId != 0U) {
@@ -5259,6 +5484,7 @@ private:
 
     void RebuildMergedDiagnostics() {
         diagnostics_.clear();
+        diagnosticNodeIds_.clear();
         const auto append = [this](const std::vector<std::string>& source) {
             diagnostics_.insert(diagnostics_.end(), source.begin(), source.end());
         };
@@ -5266,6 +5492,11 @@ private:
         append(compilerDiagnostics_);
         append(externalDiagnostics_);
         append(cookDiagnostics_);
+        // Keep the node-id list exactly parallel to diagnostics_: real ids for the graph/compiler lines,
+        // zero for the external/cook lines, which are not tied to a single node.
+        diagnosticNodeIds_.insert(diagnosticNodeIds_.end(), graphDiagnosticLineNodeIds_.begin(), graphDiagnosticLineNodeIds_.end());
+        diagnosticNodeIds_.insert(diagnosticNodeIds_.end(), compilerDiagnosticLineNodeIds_.begin(), compilerDiagnosticLineNodeIds_.end());
+        diagnosticNodeIds_.resize(diagnostics_.size(), 0U);
         diagnosticsHaveError_ = graphDiagnosticsHaveError_ || compilerDiagnosticsHaveError_ ||
             externalDiagnosticsHaveError_ || (!cookSucceeded_ && cookCompleted_);
     }
@@ -5384,8 +5615,13 @@ private:
     std::array<bool, 4U> instanceOverrideGroupExpanded_{ true, true, true, true };
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
+    // The graph node each merged diagnostic line points at (0 when the line is not tied to a node). Kept
+    // strictly parallel to diagnostics_ so the panel can jump to the offending node on click.
+    std::vector<std::uint32_t> diagnosticNodeIds_;
     std::vector<std::string> graphDiagnosticsLines_;
+    std::vector<std::uint32_t> graphDiagnosticLineNodeIds_;
     std::vector<std::string> compilerDiagnostics_;
+    std::vector<std::uint32_t> compilerDiagnosticLineNodeIds_;
     std::vector<std::string> externalDiagnostics_;
     std::vector<std::string> cookDiagnostics_;
     std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
@@ -5426,6 +5662,7 @@ private:
     bool renameSelectAll_ = false;
     std::uint32_t graphNodeEnumDropdownNodeId_ = 0U;
     std::string graphNodeEnumDropdownPropertyId_;
+    std::string materialSettingDropdownPropertyId_;
 };
 
 } // namespace kb::editor

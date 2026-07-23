@@ -299,6 +299,7 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     InvalidColorSpaceRole,
     UnsupportedBlendMode,
     ShaderGenerationFailed,
+    UnusedParameterValue,
     DuplicateParameterStableId,
     UnsupportedRenderPathNode,
     TextureSamplerLimitExceeded,
@@ -726,6 +727,7 @@ void StripRenderMaterialGraphEditorOnlyState(RenderMaterialGraphDocument& graph)
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});
 [[nodiscard]] std::uint64_t RenderMaterialGraphCompileInvocationCount() noexcept;
+[[nodiscard]] std::uint64_t RenderMaterialGraphCompileTotalMicroseconds() noexcept;
 [[nodiscard]] RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifactCacheKey(
     const RenderMaterialGraphDocument& graph,
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies = {},

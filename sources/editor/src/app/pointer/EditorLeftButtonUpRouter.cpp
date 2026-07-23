@@ -56,8 +56,31 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     static_cast<void>(y);
     shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
+
+    // A palette command armed by clicking the graph context menu (e.g. picking a node from the menu that
+    // opens when a wire is dropped on empty canvas) must run as a menu selection. The wire-drop case keeps
+    // a pin connection PARKED so the picked node can auto-connect, so this has to run BEFORE the pin-
+    // connection release branch below: otherwise that branch (HasMaterialGraphPinConnection is still true)
+    // treats this mouse-up as dropping the wire again and just reopens the menu, and the node is never
+    // created - the "pick anything from the list and nothing appears" bug.
+    if (pointerDrag_.kind == EditorPointerDragKind::MaterialGraphPaletteCommand && pointerDrag_.Potential() && !pointerDrag_.Active()) {
+        const MaterialEditorGraphMenuCommand command = pointerDrag_.materialGraphCommand;
+        pointerDrag_.Clear();
+        static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(command));
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         sceneContext_.EndHierarchyScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsMaterialPreviewOrbiting()) {
+        static_cast<void>(sceneContext_.EndMaterialPreviewOrbit());
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
@@ -130,7 +153,9 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
                 ? sceneContext_.MaterialEditor().WorkingCopy()
                 : sceneContext_.ReadMaterialDocumentAsset(materialId);
             if (material.has_value()) {
-                if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y);
+                const bool inCanvas = MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y);
+                if (pin.has_value()) {
                     if (!sceneContext_.CompleteMaterialGraphPinConnection(
                         materialId,
                         pin->nodeId,
@@ -142,10 +167,10 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
                     // A wire pulled off a connected pin is being unplugged: releasing it away from a pin
                     // finishes the disconnect. The "create a node here" menu belongs to the other gesture,
                     // dragging a new wire out of a pin.
-                    if (!sceneContext_.IsMaterialGraphPinConnectionDetach() &&
-                        MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
+                    if (!sceneContext_.IsMaterialGraphPinConnectionDetach() && inCanvas) {
                         const POINT graphPoint = MaterialGraphDocumentPointFromWindow(materialLayout, sceneContext_, x, y);
-                        if (!sceneContext_.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphPoint.x, graphPoint.y)) {
+                        const bool opened = sceneContext_.OpenMaterialGraphContextMenuForPinConnection(materialId, x, y, graphPoint.x, graphPoint.y);
+                        if (!opened) {
                             static_cast<void>(sceneContext_.AbandonMaterialGraphPinConnection());
                         }
                     } else {
@@ -189,14 +214,8 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (pointerDrag_.Potential()) {
-        if (pointerDrag_.kind == EditorPointerDragKind::MaterialGraphPaletteCommand && !pointerDrag_.Active()) {
-            const MaterialEditorGraphMenuCommand command = pointerDrag_.materialGraphCommand;
-            pointerDrag_.Clear();
-            static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(command));
-            ReleaseCapture();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return;
-        }
+        // Note: a MaterialGraphPaletteCommand click is handled at the very top of Handle(), before the pin-
+        // connection branch, so it is not repeated here.
         const bool wasDragging = pointerDrag_.Active();
         const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
         // A press without a drag is a plain click: commit the deferred asset

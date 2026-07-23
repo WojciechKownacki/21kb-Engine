@@ -51,6 +51,7 @@ constexpr int kGraphNodeBodyTopPadding = MaterialEditorPanelMetrics::GraphNodeBo
 constexpr int kGraphNodePinRowHeight = MaterialEditorPanelMetrics::GraphNodePinRowHeight;
 constexpr int kGraphNodePinRadius = 6;
 constexpr int kGraphNodeCornerDiameter = 14;
+constexpr int kGraphNodeSelectionGlowWidth = 6;
 constexpr int kGraphTitleFontSize = 11;
 constexpr int kGraphPinFontSize = 10;
 constexpr int kGraphMinTextPointSize = 1;
@@ -61,7 +62,18 @@ constexpr COLORREF NodeBodyBottom = RGB(23, 25, 30);
 constexpr COLORREF NodePanel = RGB(50, 54, 62);
 constexpr COLORREF NodePanelBorder = RGB(0, 0, 0);
 constexpr COLORREF NodeOutline = RGB(0, 0, 0);
-constexpr COLORREF NodeOutlineSelected = RGB(73, 221, 210);
+// Selection reads as a calm, subtle gray - a quiet highlight, not a loud saturated glow. It must stay
+// balanced across channels (a true gray) yet clearly lighter than the black unselected outline so a
+// selected node is still legible. The static_assert below is the guard; its negative control is the old
+// RGB(73, 221, 210) cyan, which fails it on the red channel (73 < 120).
+constexpr COLORREF NodeOutlineSelected = RGB(158, 162, 170);
+// Channels via bit masks (not the GetRValue/GetGValue/GetBValue macros, whose BYTE casts trip C4310 on a
+// constant). COLORREF from RGB(r,g,b) is r | (g<<8) | (b<<16).
+static_assert(
+    (NodeOutlineSelected & 0xFFU) >= 120U && (NodeOutlineSelected & 0xFFU) <= 205U &&
+    ((NodeOutlineSelected >> 8) & 0xFFU) >= 120U && ((NodeOutlineSelected >> 8) & 0xFFU) <= 205U &&
+    ((NodeOutlineSelected >> 16) & 0xFFU) >= 120U && ((NodeOutlineSelected >> 16) & 0xFFU) <= 205U,
+    "Selected node outline must be a subtle, balanced mid-gray, not a saturated highlight.");
 constexpr COLORREF NodeShadow = RGB(0, 0, 0);
 constexpr COLORREF NodeHeader = RGB(56, 77, 112);
 constexpr COLORREF NodeHeaderBottom = RGB(40, 55, 81);
@@ -367,6 +379,75 @@ void FillRoundedRectAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, 
     Gdiplus::Graphics graphics(dc);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     FillRoundedRectAlpha(graphics, rect, color, alpha, cornerDiameter);
+}
+
+// Alpha of the selection glow at `offset` pixels out from the node edge: `edgeAlpha` right at the edge
+// (offset 0), smoothly falling to zero at the outer rim (offset == glowWidth). Quadratic (gamma-2) falloff
+// so it is firm against the node and feathers softly outward. Pulled out as a pure, constexpr-checkable
+// function so the "smooth falloff to zero" contract is verified at compile time (see the static_asserts).
+[[nodiscard]] constexpr BYTE SelectionGlowAlpha(int offset, int glowWidth, int edgeAlpha) noexcept {
+    const int clampedEdge = edgeAlpha < 0 ? 0 : (edgeAlpha > 255 ? 255 : edgeAlpha);
+    if (glowWidth < 1 || offset >= glowWidth) {
+        return 0;
+    }
+    if (offset <= 0) {
+        return static_cast<BYTE>(clampedEdge);
+    }
+    const long long remaining = static_cast<long long>(glowWidth) - offset;   // glowWidth at edge, 0 outward
+    const long long scaled = static_cast<long long>(clampedEdge) * remaining * remaining /
+        (static_cast<long long>(glowWidth) * glowWidth);
+    return static_cast<BYTE>(scaled < 0 ? 0 : (scaled > 255 ? 255 : scaled));
+}
+static_assert(SelectionGlowAlpha(0, kGraphNodeSelectionGlowWidth, 205) == 205,
+    "selection glow is fully present at the node edge");
+static_assert(SelectionGlowAlpha(kGraphNodeSelectionGlowWidth, kGraphNodeSelectionGlowWidth, 205) == 0,
+    "selection glow fades to zero at the outer rim");
+static_assert(
+    SelectionGlowAlpha(1, kGraphNodeSelectionGlowWidth, 205) > SelectionGlowAlpha(3, kGraphNodeSelectionGlowWidth, 205) &&
+        SelectionGlowAlpha(3, kGraphNodeSelectionGlowWidth, 205) > SelectionGlowAlpha(5, kGraphNodeSelectionGlowWidth, 205),
+    "selection glow alpha falls off smoothly outward (strictly decreasing, not a constant band)");
+
+// A soft selection glow that hugs the node's rounded-rectangle silhouette: a `glowWidth`-pixel band whose
+// alpha falls off smoothly to zero outward from the node edge. Each ring is a concentric rounded-rect
+// outline whose corner radius grows with its offset, so the corners stay parallel to the node's own
+// rounding - a uniform-width band that follows the corners, never a hard square corner sticking out. Rings
+// are drawn outer (faint) to inner (bright); antialiased 1px-spaced strokes read as one continuous
+// gradient. Only the selected node draws this, once per repaint, so the per-call Graphics is fine.
+void DrawGraphNodeSelectionGlow(HDC dc, const RECT& rect, const RECT& clip, COLORREF color, float nodeRadius, int glowWidth) {
+    if (glowWidth < 1) {
+        return;
+    }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    graphics.SetClip(Gdiplus::Rect(
+        static_cast<INT>(clip.left),
+        static_cast<INT>(clip.top),
+        std::max(0, static_cast<int>(clip.right - clip.left)),
+        std::max(0, static_cast<int>(clip.bottom - clip.top))));
+
+    constexpr int kEdgeAlpha = 205;
+    const int width = std::max(0, static_cast<int>(rect.right - rect.left));
+    const int height = std::max(0, static_cast<int>(rect.bottom - rect.top));
+    for (int offset = glowWidth; offset >= 0; --offset) {
+        const BYTE alpha = SelectionGlowAlpha(offset, glowWidth, kEdgeAlpha);
+        if (alpha == 0U) {
+            continue;
+        }
+        Gdiplus::GraphicsPath path;
+        AddRoundedRectPath(
+            path,
+            Gdiplus::RectF{
+                static_cast<Gdiplus::REAL>(rect.left - offset),
+                static_cast<Gdiplus::REAL>(rect.top - offset),
+                static_cast<Gdiplus::REAL>(width + offset * 2),
+                static_cast<Gdiplus::REAL>(height + offset * 2),
+            },
+            nodeRadius + static_cast<float>(offset));
+        Gdiplus::Pen pen(ToGdiplusColor(color, alpha), 1.6F);
+        graphics.DrawPath(&pen, &path);
+    }
 }
 
 void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& clip, COLORREF top, COLORREF bottom, int cornerDiameter) {
@@ -2073,7 +2154,19 @@ void DrawGraphNodeDirect(
         DrawVerticalGradientClippedToRound(dc, bodyRect, inner, bodyTop, bodyBottom, std::max(2, cornerDiameter - 2));
         DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, inner.top, inner.right, rect.top + headerHeight }, inner, headerTop, headerBottom, std::max(2, cornerDiameter - 2));
         static_cast<void>(accent);
-        StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
+        if (selected) {
+            // A soft 10px glow that follows the node's rounded corners and feathers its alpha out to zero,
+            // instead of a hard 2px stroke that sat as a square corner over the node's rounding.
+            DrawGraphNodeSelectionGlow(
+                dc,
+                rect,
+                clip,
+                MaterialGraphTheme::NodeOutlineSelected,
+                static_cast<float>(cornerDiameter) * 0.5F,
+                ScaleMetric(kGraphNodeSelectionGlowWidth, scale));
+        } else {
+            StrokeRoundedRect(dc, rect, border, cornerDiameter, 1);
+        }
 
         std::string title = GraphNodeDisplayTitle(node);
         const std::string_view supportTag = kb::render::RenderMaterialGraphNodeSupportShortTag(node.kind);
@@ -2394,7 +2487,17 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
     const std::size_t selectedGraphNodeCount = sceneContext.SelectedMaterialGraphNodeIds().size();
     const bool hasSelectedGraphComment = sceneContext.SelectedMaterialGraphCommentId() != 0U;
     const std::vector<MaterialEditorGraphMenuCommand>& favoriteCommands = sceneContext.MaterialGraphPaletteFavoriteCommands();
+    // Virtualization: a row (category header or command) whose whole strip is above the viewport top or below
+    // its bottom is not drawn at all - only the handful of rows on screen do any GDI work, so a long search
+    // result or an expanded category costs the same as one screenful instead of hundreds of text draws.
+    const auto rowOnScreen = [&](int rowTop, int rowHeight) {
+        return rowTop + rowHeight > viewport.top && rowTop < viewport.bottom;
+    };
     const auto drawCommandRow = [&](MaterialEditorGraphMenuCommand command, std::size_t categoryIndex) {
+        if (!rowOnScreen(y, kMaterialEditorGraphMenuCommandHeight)) {
+            y += kMaterialEditorGraphMenuCommandHeight;
+            return;
+        }
         const bool enabled = MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment);
         const bool commandHovered = sceneContext.IsMaterialGraphContextMenuCommandHovered(categoryIndex, command);
         const bool favorite = sceneContext.IsMaterialGraphPaletteFavorite(command);
@@ -2423,46 +2526,37 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
 
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
-    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
-        for (const MaterialEditorGraphMenuCommand command : commands) {
-            drawCommandRow(command, 0U);
+    static_cast<void>(favoriteCommands);
+    // One grouped walk for both the plain palette and a filtered (search / wire-drop) palette: a filtered
+    // palette keeps its category headers, hides categories with no surviving match, and force-expands the rest
+    // so results stay grouped instead of collapsing to a flat list.
+    const bool filtering = MaterialEditorGraphContextMenuIsFiltering(sceneContext);
+    for (const std::size_t categoryIndex : MaterialEditorGraphContextMenuCategoryOrder(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuVisibleCommands(sceneContext, categoryIndex);
+        if (filtering && commands.empty()) {
+            continue;
         }
-        RestoreDC(dc, savedDc);
-        if (maxScroll > 0) {
-            const int trackLeft = menu.right - 7;
-            GdiDrawing::FillRectColor(dc, RECT{ trackLeft, viewport.top, trackLeft + 3, viewport.bottom }, RGB(36, 41, 49));
-            const int viewportHeight = std::max(1L, viewport.bottom - viewport.top);
-            const int contentHeight = std::max(1, MaterialEditorGraphContextMenuScrollableContentHeight(sceneContext));
-            const int thumbHeight = std::max(28, viewportHeight * viewportHeight / contentHeight);
-            const int thumbTop = viewport.top + (viewportHeight - thumbHeight) * scrollOffset / std::max(1, maxScroll);
-            GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
+        const bool expanded = filtering || sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex);
+        if (rowOnScreen(y, kMaterialEditorGraphMenuCategoryHeight)) {
+            const bool categoryHovered = sceneContext.IsMaterialGraphContextMenuCategoryHovered(categoryIndex);
+            const RECT categoryFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCategoryHeight };
+            GdiDrawing::FillRectColor(
+                dc,
+                categoryFill,
+                categoryHovered
+                    ? ProjectFilesPanelDrawing::Blend(RGB(31, 35, 42), RGB(166, 178, 193), 12)
+                    : RGB(31, 35, 42));
+            GdiDrawing::FillRectColor(dc, RECT{ categoryFill.left, categoryFill.bottom - 1, categoryFill.right, categoryFill.bottom }, RGB(20, 23, 28));
+            const RECT disclosure{ categoryFill.left + 4, categoryFill.top + 3, categoryFill.left + 18, categoryFill.bottom - 3 };
+            ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, disclosure, categoryHovered ? RGB(224, 235, 247) : RGB(180, 191, 206), expanded);
+            const RECT categoryText{ categoryFill.left + 22, categoryFill.top, categoryFill.right - 8, categoryFill.bottom };
+            const std::string label{ MaterialEditorGraphContextMenuCategoryName(categoryIndex) };
+            DrawText(dc, categoryText, label.c_str(), categoryHovered ? RGB(246, 249, 252) : RGB(231, 237, 245), 11, FW_SEMIBOLD);
         }
-        return;
-    }
-
-    for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
-        const bool expanded = sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex);
-        const bool categoryHovered = sceneContext.IsMaterialGraphContextMenuCategoryHovered(categoryIndex);
-        const RECT categoryFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCategoryHeight };
-        GdiDrawing::FillRectColor(
-            dc,
-            categoryFill,
-            categoryHovered
-                ? ProjectFilesPanelDrawing::Blend(RGB(31, 35, 42), RGB(166, 178, 193), 12)
-                : RGB(31, 35, 42));
-        GdiDrawing::FillRectColor(dc, RECT{ categoryFill.left, categoryFill.bottom - 1, categoryFill.right, categoryFill.bottom }, RGB(20, 23, 28));
-        const RECT disclosure{ categoryFill.left + 4, categoryFill.top + 3, categoryFill.left + 18, categoryFill.bottom - 3 };
-        ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, disclosure, categoryHovered ? RGB(224, 235, 247) : RGB(180, 191, 206), expanded);
-        const RECT categoryText{ categoryFill.left + 22, categoryFill.top, categoryFill.right - 8, categoryFill.bottom };
-        const std::string label{ MaterialEditorGraphContextMenuCategoryName(categoryIndex) };
-        DrawText(dc, categoryText, label.c_str(), categoryHovered ? RGB(246, 249, 252) : RGB(231, 237, 245), 11, FW_SEMIBOLD);
         y += kMaterialEditorGraphMenuCategoryHeight;
         if (!expanded) {
             continue;
         }
-
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favoriteCommands);
         for (const MaterialEditorGraphMenuCommand command : commands) {
             drawCommandRow(command, categoryIndex);
         }
@@ -2857,15 +2951,79 @@ void DrawMaterialGraphTexturePickerOverlay(
     }
 }
 
-void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMaterialAssetData& material, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, std::uint32_t selectedNodeId) {
-    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
-    DrawGraphGrid(dc, layout.graphCanvas, sceneContext.MaterialGraphZoom(), sceneContext.MaterialGraphPanX(), sceneContext.MaterialGraphPanY());
+// Retained bitmap of the drawn graph (grid + composites + comments + links + nodes), keyed by
+// MaterialGraphContentDrawSignature. The overlays that sit ON TOP of the graph - the node palette / context
+// menu, the rubber-band selection box, an in-flight unconnected wire - change on their own without touching
+// the graph, yet each of their mouse-move repaints used to redraw all ~40 nodes (~28 ms in Debug). Caching the
+// graph and only compositing the overlays turns those repaints into a single BitBlt. A node drag or a pan
+// changes the signature and correctly falls back to a full redraw, so nothing goes stale.
+struct GraphContentBitmapCache {
+    HDC memoryDc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ previousBitmap = nullptr;
+    int width = 0;
+    int height = 0;
+    std::uint64_t signature = 0U;
+    bool valid = false;
 
+    ~GraphContentBitmapCache() {
+        Release();
+    }
+    void Release() noexcept {
+        if (memoryDc != nullptr && previousBitmap != nullptr) {
+            SelectObject(memoryDc, previousBitmap);
+            previousBitmap = nullptr;
+        }
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+            bitmap = nullptr;
+        }
+        if (memoryDc != nullptr) {
+            DeleteDC(memoryDc);
+            memoryDc = nullptr;
+        }
+        width = 0;
+        height = 0;
+        valid = false;
+    }
+    [[nodiscard]] bool EnsureSurface(HDC referenceDc, int surfaceWidth, int surfaceHeight) {
+        if (memoryDc != nullptr && width == surfaceWidth && height == surfaceHeight) {
+            return true;
+        }
+        Release();
+        memoryDc = CreateCompatibleDC(referenceDc);
+        if (memoryDc == nullptr) {
+            return false;
+        }
+        bitmap = CreateCompatibleBitmap(referenceDc, surfaceWidth, surfaceHeight);
+        if (bitmap == nullptr) {
+            DeleteDC(memoryDc);
+            memoryDc = nullptr;
+            return false;
+        }
+        previousBitmap = SelectObject(memoryDc, bitmap);
+        width = surfaceWidth;
+        height = surfaceHeight;
+        return true;
+    }
+};
+
+std::uint64_t& GraphContentBitmapRenderCounter() noexcept {
+    static std::uint64_t counter = 0U;
+    return counter;
+}
+
+void DrawGraphCanvasContent(
+    HDC dc,
+    const RECT& content,
+    const MaterialEditorPanelLayout& layout,
+    const kb::render::RenderMaterialGraphDocument& graphView,
+    const kb::render::RenderMaterialAssetData& material,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    std::uint32_t selectedNodeId) {
     const kb::render::RenderMaterialGraphDocument& graph = material.graph;
-    const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
-        ? kb::render::MakeDefaultRenderMaterialGraphDocument()
-        : kb::render::RenderMaterialGraphDocument{};
-    const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+    DrawGraphGrid(dc, layout.graphCanvas, sceneContext.MaterialGraphZoom(), sceneContext.MaterialGraphPanX(), sceneContext.MaterialGraphPanY());
     const MaterialGraphCanvasDocumentBuildResult& canvasResult =
         MaterialEditorPanelBuildInteractiveGraphCanvas(content, graphView, sceneContext, assetId);
 
@@ -2944,10 +3102,50 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
                 sceneContext);
         }
     }
+    RestoreDC(dc, savedDc);
+}
+
+void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMaterialAssetData& material, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, std::uint32_t selectedNodeId) {
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    const kb::render::RenderMaterialGraphDocument& graph = material.graph;
+    const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
+        ? kb::render::MakeDefaultRenderMaterialGraphDocument()
+        : kb::render::RenderMaterialGraphDocument{};
+    const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+
+    const RECT& canvasRect = layout.graphCanvas;
+    const int canvasWidth = static_cast<int>(canvasRect.right) - static_cast<int>(canvasRect.left);
+    const int canvasHeight = static_cast<int>(canvasRect.bottom) - static_cast<int>(canvasRect.top);
+    const std::uint64_t signature = sceneContext.MaterialGraphContentDrawSignature(assetId);
+    thread_local GraphContentBitmapCache contentCache;
+    const bool canCache = canvasWidth > 0 && canvasHeight > 0;
+    const bool cacheHit = canCache && contentCache.valid && contentCache.signature == signature &&
+        contentCache.width == canvasWidth && contentCache.height == canvasHeight;
+
+    if (cacheHit) {
+        BitBlt(dc, canvasRect.left, canvasRect.top, canvasWidth, canvasHeight, contentCache.memoryDc, 0, 0, SRCCOPY);
+    } else {
+        ++GraphContentBitmapRenderCounter();
+        DrawGraphCanvasContent(dc, content, layout, graphView, material, sceneContext, assetId, selectedNodeId);
+        if (canCache && contentCache.EnsureSurface(dc, canvasWidth, canvasHeight)) {
+            // Snapshot the just-drawn graph (before any overlay) out of the back-buffer DC. The paint target is
+            // always a MainWindow/FloatingWindow back-buffer memory DC, so reading it back is well-defined.
+            BitBlt(contentCache.memoryDc, 0, 0, canvasWidth, canvasHeight, dc, canvasRect.left, canvasRect.top, SRCCOPY);
+            contentCache.signature = signature;
+            contentCache.valid = true;
+        } else {
+            contentCache.valid = false;
+        }
+    }
+
+    // Overlays are cheap and change independently of the graph, so they are always redrawn on top of the
+    // (cached or freshly drawn) graph, clipped to the canvas exactly as before.
+    const int savedOverlayDc = SaveDC(dc);
+    IntersectClipRect(dc, canvasRect.left, canvasRect.top, canvasRect.right, canvasRect.bottom);
     DrawGraphBoxSelection(dc, sceneContext);
     DrawPendingGraphConnection(dc, content, graphView, sceneContext, assetId);
     DrawGraphContextMenu(dc, sceneContext);
-    RestoreDC(dc, savedDc);
+    RestoreDC(dc, savedOverlayDc);
 }
 
 // The document the panel draws. For anything read off disk the view owns it; for the material that is
@@ -2963,6 +3161,9 @@ struct MaterialEditorDocumentView {
     std::string assetKind;
     kb::assets::AssetId parentMaterialAssetId{};
     std::vector<std::string> diagnostics;
+    // The node each diagnostic line points at (0 = none), parallel to diagnostics; only populated for the
+    // open material, so its diagnostics panel can jump to the offending node on click.
+    std::vector<std::uint32_t> diagnosticNodeIds;
     bool hasErrorDiagnostic = false;
 
     // Call once after building, so `material` points at whatever the view ended up owning.
@@ -3055,6 +3256,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .assetKind = "Material",
                 .parentMaterialAssetId = {},
                 .diagnostics = std::move(diagnostics),
+                .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
             }.Resolved();
         }
@@ -3083,6 +3285,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .assetKind = "Material Graph",
                 .parentMaterialAssetId = {},
                 .diagnostics = std::move(diagnostics),
+                .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
             }.Resolved();
         }
@@ -3209,7 +3412,11 @@ void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const
             layout.diagnosticsPanel.right - 10,
             rowTop + static_cast<int>(index + 1U) * rowHeight,
         };
-        DrawText(dc, row, document.diagnostics[index].c_str(), RGB(224, 220, 211), 10);
+        // A diagnostic tied to a node is clickable (jumps to it); mark it with a leading arrow and a brighter
+        // colour so the affordance is visible, the way Unreal's error list reads as clickable.
+        const bool clickable = index < document.diagnosticNodeIds.size() && document.diagnosticNodeIds[index] != 0U;
+        const std::string text = clickable ? "\xE2\x86\x92 " + document.diagnostics[index] : document.diagnostics[index];
+        DrawText(dc, row, text.c_str(), clickable ? RGB(150, 197, 236) : RGB(224, 220, 211), 10);
     }
     if (document.diagnostics.size() > count && count > 0U) {
         const std::string more = "+" + std::to_string(document.diagnostics.size() - count) + " more";
@@ -3240,6 +3447,7 @@ void DrawDetailsPanel(
         case MaterialEditorDetailsSection::StaticSwitches: return "Static Switches";
         case MaterialEditorDetailsSection::LayerStack: return "Layer Stack";
         case MaterialEditorDetailsSection::FindResults: return "Find";
+        case MaterialEditorDetailsSection::MaterialSettings: return "Material";
         case MaterialEditorDetailsSection::NodeProperties: return "Node Properties";
         case MaterialEditorDetailsSection::MaterialDiff: return "Material Diff";
         case MaterialEditorDetailsSection::DebugChannels: return "Debug Channels";
@@ -3406,6 +3614,34 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 
 } // namespace
 
+std::uint32_t MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(
+    const RECT& content,
+    const EditorSceneContext& sceneContext,
+    int x,
+    int y) {
+    // Mirror DrawDiagnosticsPanel's geometry exactly so a click lands on the row that was drawn.
+    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    const RECT& panel = layout.diagnosticsPanel;
+    const std::vector<std::string>& diagnostics = sceneContext.MaterialEditor().Diagnostics();
+    const std::vector<std::uint32_t>& nodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds();
+    if (diagnostics.empty() || MaterialEditorPanelRectWidth(panel) < 160 || MaterialEditorPanelRectHeight(panel) < 72 ||
+        !MaterialEditorPanelPointInRect(panel, x, y)) {
+        return 0U;
+    }
+    const int rowTop = panel.top + 32;
+    const int rowHeight = 22;
+    const int availableRows = (static_cast<int>(panel.bottom) - rowTop - 8) / rowHeight;
+    const std::size_t count = std::min(static_cast<std::size_t>(std::max(0, availableRows)), diagnostics.size());
+    if (y < rowTop) {
+        return 0U;
+    }
+    const std::size_t index = static_cast<std::size_t>((y - rowTop) / rowHeight);
+    if (index >= count || index >= nodeIds.size()) {
+        return 0U;
+    }
+    return nodeIds[index];
+}
+
 MaterialEditorOpaqueOverlayHit MaterialEditorPanelRenderer::OpaqueOverlayAt(
     const RECT& content,
     const EditorSceneContext& sceneContext,
@@ -3502,6 +3738,15 @@ MaterialEditorGraphTexturePickerHit MaterialEditorPanelRenderer::GraphTexturePic
     return MaterialGraphTexturePickerHitImpl(content, sceneContext, x, y);
 }
 
+std::string MaterialEditorPanelRenderer::TextureAssetDisplayName(const EditorSceneContext& sceneContext, std::uint64_t assetId) {
+    if (assetId == 0U) {
+        return {};
+    }
+    const kb::assets::AssetMetadata* metadata =
+        sceneContext.Scene().Assets().Manager().Registry().Find(kb::assets::AssetId{ assetId });
+    return metadata == nullptr ? std::string{} : MaterialGraphTexturePickerDisplayName(*metadata);
+}
+
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
@@ -3519,6 +3764,10 @@ void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const Edito
     }
 
     DrawMaterialContent(dc, content, sceneContext, *metadata);
+}
+
+std::uint64_t MaterialEditorPanelRenderer::DebugGraphContentRenderCount() noexcept {
+    return GraphContentBitmapRenderCounter();
 }
 
 std::optional<RECT> MaterialEditorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {

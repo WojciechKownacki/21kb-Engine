@@ -959,12 +959,22 @@ void RunMaterialGraphContextMenuSuite(Report& report) {
         !(topHitAfterScroll.kind == MaterialEditorGraphContextMenuHitKind::Category && topHitAfterScroll.categoryIndex == 0U),
         "Scrolled material graph context menu hit-test follows the visible rows instead of stale unscrolled rows");
     report.Check(context.SetMaterialGraphContextMenuScrollOffset(0, utilityMenuMaxScroll), "Reset material graph context menu scroll before command execution");
-    context.SetMaterialGraphCanvasViewport(0, 0, 1000, 720);
-    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 500, -160, 96), "Open material graph context menu near the bottom of a large canvas");
-    const int actualMenuHeight = MaterialEditorGraphContextMenuHeight(context);
+    // Regression: on a canvas shorter than the palette's max height, a tall (filtered / wire-drop) palette
+    // used to be sized to nearly the whole canvas and then top-clamped, which snapped its top to the
+    // canvas top no matter where the wire was dropped. It must now open AT the drop point and grow
+    // downward (scrolling internally), never overflowing the canvas bottom.
+    context.SetMaterialGraphCanvasViewport(0, 0, 1000, 360);
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 200, -160, 96), "Open material graph context menu mid-canvas on a short canvas");
+    context.SetMaterialGraphContextMenuSearchQuery("a");
+    const RECT midDropRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
     report.Check(
-        context.MaterialGraphContextMenuY() == 720 - actualMenuHeight,
-        "Material graph context menu clamps against its actual visible height instead of the maximum palette height");
+        midDropRect.top == 200 && midDropRect.bottom <= 360,
+        "Tall filtered palette opens at the drop point and grows downward instead of snapping to the canvas top");
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 350, -160, 96), "Open material graph context menu near the bottom of a short canvas");
+    const RECT bottomDropRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
+    report.Check(
+        bottomDropRect.bottom <= 360 && bottomDropRect.top == 360 - kMaterialEditorGraphMenuMinHeight,
+        "Palette dropped near the canvas bottom shifts up only enough to keep its minimum strip visible");
     context.SetMaterialGraphCanvasViewport(100, 100, 260, 300);
     report.Check(context.OpenMaterialGraphContextMenu(materialId, 350, 390, -160, 96), "Open material graph context menu in a constrained canvas");
     const RECT constrainedMenuRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
@@ -993,6 +1003,90 @@ void RunMaterialGraphContextMenuSuite(Report& report) {
         : std::vector<kb::render::RenderMaterialGraphNode>::const_iterator{};
     report.Check(workingCopy.has_value() && pixelDepth != workingCopy->graph.nodes.end(),
         "PixelDepth context-menu command leaves a real node in the material graph working copy");
+
+    // Grouped search (2026-07-23): typing in the palette search must KEEP category headers (and the scrollbox),
+    // hiding only categories with no match - not collapse every result into one flat, categoryless list.
+    {
+        report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 240, -160, 96), "Reopen palette for grouped-search coverage");
+        context.SetMaterialGraphContextMenuSearchQuery("texture sample");
+        report.Check(MaterialEditorGraphContextMenuIsFiltering(context), "Grouped search: a typed query puts the palette in filtering mode");
+        int categoriesWithMatches = 0;
+        int categoriesHidden = 0;
+        for (const std::size_t categoryIndex : MaterialEditorGraphContextMenuCategoryOrder(context)) {
+            if (MaterialEditorGraphContextMenuVisibleCommands(context, categoryIndex).empty()) {
+                ++categoriesHidden;
+            } else {
+                ++categoriesWithMatches;
+            }
+        }
+        report.Check(categoriesWithMatches >= 1, "Grouped search: at least one category keeps its matching commands");
+        report.Check(categoriesHidden >= 1, "Grouped search: categories with no match are hidden, not shown as empty headers");
+        static_cast<void>(context.SetMaterialGraphContextMenuScrollOffset(0, MaterialEditorGraphContextMenuMaxScroll(context)));
+        const RECT searchMenuRect = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
+        const RECT searchViewport = MaterialEditorGraphContextMenuViewportRect(searchMenuRect);
+        // The first row under a search is a CATEGORY header (results carry their category), and the row directly
+        // below it hit-tests as a Command in that category - i.e. grouped, not a flat categoryless list.
+        const MaterialEditorGraphContextMenuHit searchTopHit =
+            MaterialEditorPanelRenderer::GraphContextMenuHit(context, searchMenuRect.left + 40, searchViewport.top + 6);
+        report.Check(searchTopHit.kind == MaterialEditorGraphContextMenuHitKind::Category,
+            "Grouped search: the first row under a search is a category header");
+        const MaterialEditorGraphContextMenuHit searchCommandHit = MaterialEditorPanelRenderer::GraphContextMenuHit(
+            context, searchMenuRect.left + 40, searchViewport.top + kMaterialEditorGraphMenuCategoryHeight + 6);
+        report.Check(searchCommandHit.kind == MaterialEditorGraphContextMenuHitKind::Command &&
+                searchCommandHit.categoryIndex == searchTopHit.categoryIndex,
+            "Grouped search: the row under the header hit-tests as a command inside that same category");
+        // The palette must stay clamped inside the canvas even as a search GROWS it past its open-time height,
+        // otherwise its scrollbar and lower rows spill off-screen (the "search has no scrollbar / can't scroll"
+        // bug). The rect is re-clamped every frame against the current height.
+        const RECT clampedSearchMenu = MaterialEditorPanelRenderer::GraphContextMenuRect(context);
+        report.Check(clampedSearchMenu.top >= context.MaterialGraphCanvasTop() &&
+                clampedSearchMenu.bottom <= context.MaterialGraphCanvasTop() + context.MaterialGraphCanvasHeight() &&
+                clampedSearchMenu.left >= context.MaterialGraphCanvasLeft() &&
+                clampedSearchMenu.right <= context.MaterialGraphCanvasLeft() + context.MaterialGraphCanvasWidth(),
+            "Grouped search: the palette stays clamped inside the canvas as the search grows it (scrollbar stays on-screen)");
+        // Negative control: clearing the search restores the full, collapsible category list.
+        context.ClearMaterialGraphContextMenuSearch();
+        report.Check(!MaterialEditorGraphContextMenuIsFiltering(context),
+            "Grouped search negative control: clearing the query leaves filtering mode");
+    }
+
+    // Favorites (2026-07-22): the palette hides an empty Favorites section and floats a non-empty one to the
+    // very top, so a checked node is immediately visible rather than buried at the bottom.
+    {
+        EditorSceneContext favContext;
+        const std::size_t favoritesIndex = MaterialEditorGraphContextMenuFavoritesCategoryIndex();
+        const std::vector<std::size_t> emptyOrder = MaterialEditorGraphContextMenuCategoryOrder(favContext);
+        report.Check(!emptyOrder.empty() && emptyOrder.front() != favoritesIndex &&
+                std::ranges::find(emptyOrder, favoritesIndex) == emptyOrder.end(),
+            "Palette hides the Favorites category while it is empty");
+        report.Check(favContext.ToggleMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand::CreateMultiply),
+            "Favouriting a palette node succeeds");
+        const std::vector<std::size_t> withFavorite = MaterialEditorGraphContextMenuCategoryOrder(favContext);
+        report.Check(!withFavorite.empty() && withFavorite.front() == favoritesIndex,
+            "Favorites floats to the very top of the palette once it has an entry");
+        // Negative control: removing the last favorite drops the category back out of the display order.
+        report.Check(favContext.ToggleMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand::CreateMultiply),
+            "Un-favouriting the node succeeds");
+        const std::vector<std::size_t> clearedOrder = MaterialEditorGraphContextMenuCategoryOrder(favContext);
+        report.Check(std::ranges::find(clearedOrder, favoritesIndex) == clearedOrder.end(),
+            "Negative control: clearing the last favorite hides the Favorites category again");
+    }
+
+    // Preview overlay (2026-07-22): the preview is a bgfx child surface parented to the host window, so its
+    // frame must be clamped inside its panel or it renders over the neighbouring dock.
+    {
+        const RECT narrowPanel{ 0, 0, 150, 600 };
+        const auto narrowLayout = MaterialEditorPanelRenderer::ResolveLayout(narrowPanel);
+        report.Check(narrowLayout.previewFrame.right <= narrowPanel.right && narrowLayout.previewFrame.bottom <= narrowPanel.bottom,
+            "Material preview is clamped inside a narrow panel instead of spilling onto the next panel");
+        // Negative control: a wide panel still gets the full-size preview (the clamp only bites when tight).
+        const RECT widePanel{ 0, 0, 1200, 800 };
+        const auto wideLayout = MaterialEditorPanelRenderer::ResolveLayout(widePanel);
+        report.Check(wideLayout.previewFrame.right < widePanel.right &&
+                (wideLayout.previewFrame.right - wideLayout.previewFrame.left) >
+                    (narrowLayout.previewFrame.right - narrowLayout.previewFrame.left),
+            "Negative control: a wide panel shows a larger, unclamped preview");
+    }
 }
 
 [[nodiscard]] kb::render::RenderMaterialGraphDocument MakeMaterialGraphPanelHitTestGraph() {
@@ -3066,6 +3160,383 @@ void RunMaterialEditorStaleReferenceSuite(Report& report) {
         "Finding 24: and the revert rebuilds the find results instead of leaving them stale");
 }
 
+// Finding 25 (material-level settings live in the Inspector): domain / shading model / blend mode are stored
+// on the document and honoured by the compiler, but nothing in the editor wrote them - the panel now edits
+// them through the same working-copy path as every other edit.
+void RunMaterialSettingsInspectorSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 25: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "MaterialSettings.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 25: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 25: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/MaterialSettings.kbmat");
+    report.Check(metadata != nullptr, "Finding 25: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 25: open material");
+
+    // With nothing selected, the Inspector shows the three material settings.
+    const std::vector<MaterialEditorGraphNodeProperty> settings = context.MaterialEditor().MaterialSettingsProperties();
+    report.Check(settings.size() == 3U, "Finding 25: three material settings are exposed");
+    const auto findSetting = [&settings](std::string_view stableId) -> const MaterialEditorGraphNodeProperty* {
+        for (const MaterialEditorGraphNodeProperty& row : settings) {
+            if (row.stableId == stableId) {
+                return &row;
+            }
+        }
+        return nullptr;
+    };
+    const MaterialEditorGraphNodeProperty* domainRow = findSetting("material.domain");
+    const MaterialEditorGraphNodeProperty* shadingRow = findSetting("material.shadingModel");
+    const MaterialEditorGraphNodeProperty* blendRow = findSetting("material.blendMode");
+    report.Check(domainRow != nullptr && shadingRow != nullptr && blendRow != nullptr,
+        "Finding 25: domain, shading model and blend mode rows are all present");
+    if (domainRow == nullptr || shadingRow == nullptr || blendRow == nullptr) {
+        return;
+    }
+    report.Check(domainRow->nodeId == 0U && domainRow->kind == MaterialEditorGraphNodePropertyKind::Enum,
+        "Finding 25: a setting is a material-scoped (node 0) enum row");
+
+    const auto hasOption = [](const MaterialEditorGraphNodeProperty& row, std::string_view value) {
+        return std::ranges::any_of(row.options, [value](const MaterialEditorGraphNodePropertyOption& option) {
+            return option.value == value;
+        });
+    };
+    // Options are derived from the renderer's production predicates, so non-production values are never
+    // offered and the editor cannot author a material the compiler would reject.
+    report.Check(hasOption(*domainRow, "surface") && domainRow->options.size() == 1U,
+        "Finding 25: only the production domain (surface) is offered");
+    report.Check(hasOption(*shadingRow, "unlit") && hasOption(*shadingRow, "defaultLit") &&
+            hasOption(*shadingRow, "subsurface") && hasOption(*shadingRow, "clearCoat"),
+        "Finding 25: production shading models are offered");
+    report.Check(!hasOption(*shadingRow, "cloth") && !hasOption(*shadingRow, "hair") && !hasOption(*shadingRow, "eye"),
+        "Finding 25: non-production shading models are NOT offered");
+    report.Check(blendRow->options.size() == 7U && hasOption(*blendRow, "opaque") && hasOption(*blendRow, "alphaHoldout"),
+        "Finding 25: all seven blend modes are offered");
+    report.Check(shadingRow->value.text == "Default Lit",
+        "Finding 25: the field shows the friendly label of the stored value");
+
+    // Editing writes through the working copy, so it dirties like any other edit and shows on disk after save.
+    report.Check(!context.MaterialEditor().Dirty(), "Finding 25: a freshly opened material is clean");
+    report.Check(context.SetMaterialGraphSetting(id, "material.shadingModel", "unlit"),
+        "Finding 25: setting the shading model succeeds");
+    report.Check(context.MaterialEditor().WorkingCopy()->graph.shadingModel == "unlit" && context.MaterialEditor().Dirty(),
+        "Finding 25: the document holds the new value and is now dirty");
+
+    // A no-op and a non-production value are both declined and change nothing.
+    report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "unlit"),
+        "Finding 25: setting the same value again is a declined no-op");
+    report.Check(!context.SetMaterialGraphSetting(id, "material.shadingModel", "cloth") &&
+            context.MaterialEditor().WorkingCopy()->graph.shadingModel == "unlit",
+        "Finding 25: a non-production value is refused and leaves the document untouched");
+    report.Check(!context.SetMaterialGraphSetting(id, "material.bogus", "whatever"),
+        "Finding 25: an unknown setting id is refused");
+
+    // The edit is on the undo stack: undo restores the previous value.
+    context.FocusMaterialGraph(true);
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo) &&
+            context.MaterialEditor().WorkingCopy()->graph.shadingModel == "defaultLit",
+        "Finding 25: undo restores the previous shading model");
+    report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Redo) &&
+            context.MaterialEditor().WorkingCopy()->graph.shadingModel == "unlit",
+        "Finding 25: redo puts it back");
+
+    // Save persists it, and reopening reads it back.
+    report.Check(context.SaveMaterialEditorAsset(id) && !context.MaterialEditor().Dirty(),
+        "Finding 25: save persists the setting");
+    const std::string savedBytes = ReadFileTextForTest(materialPath);
+    report.Check(savedBytes.find("unlit") != std::string::npos,
+        "Finding 25: the new shading model reached the file");
+
+    // Round-trip through the panel builder: with no node selected the rows land in the details panel under
+    // the Material section; selecting a node replaces them with that node's properties.
+    const MaterialEditorPanelDetailsRows unselectedRows =
+        MaterialEditorPanelRenderer::DetailsRowsForDocument(context, *context.MaterialEditor().WorkingCopy(), false);
+    report.Check(unselectedRows.nodePropertiesAreMaterialSettings && unselectedRows.nodePropertyRows.size() == 3U,
+        "Finding 25: the panel shows the material settings when nothing is selected");
+    // The developer-only diagnostic dumps (Material Diff, Debug Channels) are off by default so the panel
+    // reads like an Inspector rather than a debug log; they return only under KB_MATERIAL_EDITOR_DEBUG_DETAILS.
+    report.Check(unselectedRows.debugChannelRows.empty() && unselectedRows.materialDiffRows.empty(),
+        "Finding 25: the debug dumps are hidden from the default Details view");
+
+    // Parameter and texture rows read like an Inspector, not a debug log: no always-on "override on/disabled"
+    // vocabulary and no "Core Scalar"-style type prefix on a base material.
+    const auto anyRowContains = [](const std::vector<std::string>& rows, std::string_view needle) {
+        return std::ranges::any_of(rows, [needle](const std::string& row) { return row.find(needle) != std::string::npos; });
+    };
+    report.Check(!anyRowContains(unselectedRows.parameterRows, "override on") &&
+            !anyRowContains(unselectedRows.parameterRows, "override disabled"),
+        "Finding 25: parameter rows have no always-on override vocabulary");
+    report.Check(!unselectedRows.parameterRows.empty() && !anyRowContains(unselectedRows.parameterRows, " Scalar  "),
+        "Finding 25: parameter rows drop the 'Core Scalar' type prefix");
+    // An unassigned texture slot shows "None", never a raw 64-bit id.
+    report.Check(anyRowContains(unselectedRows.textureSlotRows, "= None") &&
+            !anyRowContains(unselectedRows.textureSlotRows, "override on"),
+        "Finding 25: an unassigned texture slot reads '= None', not a raw id");
+    const std::uint32_t outputNodeId = context.MaterialEditor().WorkingCopy()->graph.nodes.front().id;
+    static_cast<void>(context.SelectMaterialGraphNode(outputNodeId));
+    const MaterialEditorPanelDetailsRows selectedRows =
+        MaterialEditorPanelRenderer::DetailsRowsForDocument(context, *context.MaterialEditor().WorkingCopy(), false);
+    report.Check(!selectedRows.nodePropertiesAreMaterialSettings,
+        "Finding 25: selecting a node replaces the material settings with the node's own properties");
+}
+
+// Finding 26 (comments must be editable): comments used to be inert - the text was hard-coded "Comment" with
+// no way to change it, its colour, or (next) its size. This covers the text and colour editing paths.
+void RunMaterialGraphCommentEditingSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 26: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "CommentEditing.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 26: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 26: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/CommentEditing.kbmat");
+    report.Check(metadata != nullptr, "Finding 26: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 26: open material");
+
+    report.Check(context.AddMaterialGraphComment(id, -200, -120), "Finding 26: add a comment");
+    const std::uint32_t commentId = context.SelectedMaterialGraphCommentId();
+    report.Check(commentId != 0U, "Finding 26: the new comment is selected");
+    const auto commentText = [&context, commentId]() {
+        std::string text;
+        if (context.MaterialEditor().WorkingCopy().has_value()) {
+            for (const kb::render::RenderMaterialGraphCommentBox& comment : context.MaterialEditor().WorkingCopy()->graph.comments) {
+                if (comment.id == commentId) {
+                    text = comment.text;
+                }
+            }
+        }
+        return text;
+    };
+    report.Check(commentText() == "Comment", "Finding 26: a new comment starts with the default label");
+
+    // Text editing writes through the working copy: it dirties, survives a save with spaces intact, and undoes.
+    report.Check(context.SetMaterialGraphCommentText(id, commentId, "Lighting section") && commentText() == "Lighting section" &&
+            context.MaterialEditor().Dirty(),
+        "Finding 26: editing the comment text updates the document and dirties it");
+    report.Check(context.SaveMaterialEditorAsset(id), "Finding 26: save the comment text");
+    report.Check(ReadFileTextForTest(materialPath).find("graphComment") != std::string::npos,
+        "Finding 26: the comment reached the file");
+    report.Check(context.RevertMaterialEditorAsset(id), "Finding 26: revert");
+    report.Check(context.OpenMaterialEditorAsset(id), "Finding 26: reopen after save");
+    std::uint32_t reloadedCommentId = 0U;
+    if (context.MaterialEditor().WorkingCopy().has_value() && !context.MaterialEditor().WorkingCopy()->graph.comments.empty()) {
+        reloadedCommentId = context.MaterialEditor().WorkingCopy()->graph.comments.front().id;
+    }
+    report.Check(reloadedCommentId != 0U, "Finding 26: the saved comment reloaded");
+    if (reloadedCommentId != 0U) {
+        std::string reloadedText;
+        for (const kb::render::RenderMaterialGraphCommentBox& comment : context.MaterialEditor().WorkingCopy()->graph.comments) {
+            if (comment.id == reloadedCommentId) {
+                reloadedText = comment.text;
+            }
+        }
+        report.Check(reloadedText == "Lighting section",
+            "Finding 26: the comment text with a space round-trips through save and reload");
+
+        // Colour editing works and is undoable.
+        static_cast<void>(context.SelectMaterialGraphComment(reloadedCommentId));
+        report.Check(context.SetMaterialGraphCommentColor(id, reloadedCommentId, 0x00804020U),
+            "Finding 26: recoloring the comment succeeds");
+        std::uint32_t recolored = 0U;
+        for (const kb::render::RenderMaterialGraphCommentBox& comment : context.MaterialEditor().WorkingCopy()->graph.comments) {
+            if (comment.id == reloadedCommentId) {
+                recolored = comment.color;
+            }
+        }
+        report.Check(recolored == 0x00804020U, "Finding 26: the new colour is in the document");
+        context.FocusMaterialGraph(true);
+        report.Check(EditorEditCommandPolicy::Execute(context, EditorEditCommand::Undo), "Finding 26: undo the recolor");
+        std::uint32_t afterUndo = 0U;
+        for (const kb::render::RenderMaterialGraphCommentBox& comment : context.MaterialEditor().WorkingCopy()->graph.comments) {
+            if (comment.id == reloadedCommentId) {
+                afterUndo = comment.color;
+            }
+        }
+        report.Check(afterUndo != 0x00804020U, "Finding 26: undo restores the previous colour");
+    }
+}
+
+// Finding 27 (a diagnostic jumps to its node): a node-tied diagnostic line is clickable and centres the graph
+// on the offending node, the way Unreal's error list focuses the node instead of leaving the user to hunt.
+void RunMaterialGraphDiagnosticJumpSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 27: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "DiagnosticJump.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    // A named-reroute declaration with no name is a clean, node-tied validation error that round-trips
+    // through save/load (an inverted numeric range would be rejected by the parser on reload instead).
+    kb::render::RenderMaterialGraphNode broken{
+        .id = 4712U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration,
+        .positionX = 240,
+        .positionY = -180,
+    };
+    fixture.graph.nodes.push_back(broken);
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 27: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 27: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/DiagnosticJump.kbmat");
+    report.Check(metadata != nullptr, "Finding 27: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id) && context.MaterialEditor().WorkingCopy().has_value(),
+        "Finding 27: open material");
+    context.SetMaterialGraphCanvasViewport(kContent.right, kContent.bottom);
+
+    // The node-id list stays strictly parallel to the diagnostics list, with a real id for the broken node.
+    const std::vector<std::string>& diagnostics = context.MaterialEditor().Diagnostics();
+    const std::vector<std::uint32_t>& nodeIds = context.MaterialEditor().DiagnosticNodeIds();
+    report.Check(!diagnostics.empty(), "Finding 27: the broken range produces a diagnostic");
+    report.Check(nodeIds.size() == diagnostics.size(), "Finding 27: the node-id list is parallel to the diagnostics list");
+    std::size_t brokenRowIndex = diagnostics.size();
+    for (std::size_t index = 0U; index < nodeIds.size(); ++index) {
+        if (nodeIds[index] == broken.id) {
+            brokenRowIndex = index;
+            break;
+        }
+    }
+    report.Check(brokenRowIndex < diagnostics.size(), "Finding 27: a diagnostic line points at the broken node");
+    if (brokenRowIndex >= diagnostics.size()) {
+        return;
+    }
+
+    // The panel hit-test maps a click on that row back to the node id.
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(kContent);
+    const RECT& panel = layout.diagnosticsPanel;
+    const int rowY = panel.top + 32 + static_cast<int>(brokenRowIndex) * 22 + 11;
+    const int rowX = panel.left + 30;
+    report.Check(MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(kContent, context, rowX, rowY) == broken.id,
+        "Finding 27: clicking the diagnostic row resolves to the broken node");
+    report.Check(MaterialEditorPanelRenderer::DiagnosticsRowNodeAt(kContent, context, rowX, panel.top + 4) == 0U,
+        "Finding 27: clicking the panel title is not a row hit");
+
+    // Focusing the node selects it (and re-centres the view - not observable here, but the selection is).
+    report.Check(context.FocusMaterialGraphNode(broken.id) && context.MaterialEditor().SelectedNodeId() == broken.id,
+        "Finding 27: focusing the diagnostic node selects it");
+    report.Check(!context.FocusMaterialGraphNode(0U) && !context.FocusMaterialGraphNode(999999U),
+        "Finding 27: focusing a missing node id does nothing");
+}
+
+// Finding 28 (material preview camera control): the preview object was locked to one head-on angle. Drag now
+// orbits it and the wheel dollies in/out, the way Unreal's material-preview viewport reads.
+void RunMaterialPreviewCameraControlSuite(Report& report) {
+    EditorSceneContext context;
+    std::error_code error;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 28: register material loader");
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "PreviewCamera.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 28: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 28: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/PreviewCamera.kbmat");
+    report.Check(metadata != nullptr, "Finding 28: resolve .kbmat metadata");
+    if (metadata == nullptr) {
+        return;
+    }
+    report.Check(context.OpenMaterialEditorAsset(metadata->id), "Finding 28: open material");
+
+    // Build the preview scene so the revision has a real baseline. Every camera move below must leave this
+    // baseline untouched: an orbit/zoom is a per-frame camera override, never a scene edit, so it must NOT
+    // bump the revision - a bump makes the viewport treat the scene as changed and re-sync every mesh and
+    // material to the GPU on every orbit frame, which was the orbit "cosmic lag".
+    static_cast<void>(context.MaterialPreviewScene(metadata->id));
+    const std::uint64_t revisionBeforeCameraMoves = context.MaterialPreviewRevision();
+
+    const auto almostEqual = [](float a, float b) { return std::fabs(a - b) < 0.01F; };
+    const auto settings = [&context]() -> const EditorMaterialPreviewSceneSettings& { return context.MaterialPreviewSceneSettings(); };
+
+    // Default: straight down -Z, matching the historic fixed camera (so thumbnails are unchanged).
+    report.Check(almostEqual(settings().orbitYawDegrees, 0.0F) && almostEqual(settings().orbitPitchDegrees, 0.0F),
+        "Finding 28: the preview starts at the historic head-on angle");
+    const std::array<float, 3U> eye0 = settings().CameraEye();
+    report.Check(almostEqual(eye0[0], 0.0F) && almostEqual(eye0[1], 0.0F) && almostEqual(eye0[2], -settings().cameraDistance),
+        "Finding 28: the head-on eye is straight in front of the object");
+
+    // Orbit 90 degrees of yaw swings the camera to the side (+X, looking back at the object).
+    report.Check(context.OrbitMaterialPreviewCamera(90.0F, 0.0F) && almostEqual(settings().orbitYawDegrees, 90.0F),
+        "Finding 28: dragging orbits the yaw");
+    const std::array<float, 3U> eyeYaw = settings().CameraEye();
+    report.Check(almostEqual(eyeYaw[0], settings().cameraDistance) && almostEqual(eyeYaw[1], 0.0F) && almostEqual(eyeYaw[2], 0.0F),
+        "Finding 28: a 90-degree yaw puts the camera to the side of the object");
+
+    // Pitch is clamped so the orbit never flips over the pole.
+    report.Check(context.OrbitMaterialPreviewCamera(0.0F, 1000.0F) &&
+            settings().orbitPitchDegrees <= kEditorMaterialPreviewMaxPitchDegrees + 0.01F,
+        "Finding 28: pitch is clamped below the pole");
+
+    // The wheel dollies: a factor < 1 moves the camera closer, and the distance is clamped to a floor.
+    const float distanceBeforeZoom = settings().cameraDistance;
+    report.Check(context.ZoomMaterialPreviewCamera(0.5F) && settings().cameraDistance < distanceBeforeZoom,
+        "Finding 28: the wheel dollies the camera closer");
+    for (int i = 0; i < 40; ++i) {
+        static_cast<void>(context.ZoomMaterialPreviewCamera(0.5F));
+    }
+    report.Check(almostEqual(settings().cameraDistance, kEditorMaterialPreviewMinCameraDistance),
+        "Finding 28: zooming in is clamped to the minimum distance");
+    for (int i = 0; i < 60; ++i) {
+        static_cast<void>(context.ZoomMaterialPreviewCamera(2.0F));
+    }
+    report.Check(almostEqual(settings().cameraDistance, kEditorMaterialPreviewMaxCameraDistance),
+        "Finding 28: zooming out is clamped to the maximum distance");
+
+    // The drag gesture: begin, drag, end - a horizontal drag moves the yaw, and the camera-only path does
+    // not re-cook (nothing here asserts a cook was avoided, but the gesture threads through cleanly).
+    const float yawBeforeGesture = settings().orbitYawDegrees;
+    report.Check(context.BeginMaterialPreviewOrbit(200, 200) && context.IsMaterialPreviewOrbiting(),
+        "Finding 28: a preview drag begins an orbit gesture");
+    // Dragging right turns the object's right side toward the viewer, i.e. yaw decreases (the horizontal
+    // axis is negated so grabbing and pulling feels natural rather than inverted).
+    report.Check(context.DragMaterialPreviewOrbit(260, 200) && settings().orbitYawDegrees < yawBeforeGesture,
+        "Finding 28: dragging right turns the object the natural way (yaw decreases)");
+    report.Check(context.EndMaterialPreviewOrbit() && !context.IsMaterialPreviewOrbiting(),
+        "Finding 28: releasing ends the orbit gesture");
+    // A camera move never marks the document dirty - it does not touch the material.
+    report.Check(!context.MaterialEditor().Dirty(), "Finding 28: orbiting and zooming never dirty the material");
+
+    // The heart of the lag fix: none of the orbit/zoom above bumped the preview revision, so the viewport
+    // never re-synced the scene to the GPU for a camera move. The preview redraws from the per-frame present
+    // override alone - matching UE, where an orbit ends in Viewport->InvalidateDisplay() (viewport pixels
+    // only), not a scene rebuild.
+    report.Check(context.MaterialPreviewRevision() == revisionBeforeCameraMoves,
+        "Finding 28: orbiting and zooming never bump the preview revision (no per-frame GPU re-sync)");
+    // Negative control: a genuine scene change (lighting settings) DOES bump the revision, proving the
+    // invariant above is not vacuously true (the revision counter really does move when the scene changes).
+    EditorMaterialPreviewSceneSettings changedSettings = context.MaterialPreviewSceneSettings();
+    changedSettings.keyLightIntensity += 1.0F;
+    report.Check(context.SetMaterialPreviewSceneSettings(changedSettings) &&
+            context.MaterialPreviewRevision() != revisionBeforeCameraMoves,
+        "Finding 28: negative control - a genuine scene change bumps the revision");
+}
+
 // Finding 21 (modal loops must survive an app quit): quitting the editor while a dialog is up used to be
 // swallowed by the dialog's own pump, and the parameter dialog left its window alive pointing at stack state
 // that was about to die.
@@ -3213,6 +3684,69 @@ void RunFloatingWindowResizeSuite(Report& report) {
     DestroyWindow(owner);
 }
 
+// Finding 29 (2026-07-22): a material graph edit (connect/create/disconnect) used to call the blanket
+// MarkSceneRenderDirty(), forcing a full resync of every mesh in the scene on every single edit - a
+// multi-second stall in a Debug build on any non-trivial scene, even though only ONE material actually
+// changed. MarkMaterialAssetRenderDirty replaces it: no resync at all when the edited material isn't
+// equipped on any scene mesh, and an incremental (entity-scoped, non-full) resync when it is.
+void RunMaterialGraphEditSceneDirtyScopeSuite(Report& report) {
+    EditorSceneContext context;
+    report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
+        "Finding 29: register material loader");
+    std::error_code error;
+    const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "SceneDirtyScope.kbmat";
+    std::filesystem::create_directories(materialPath.parent_path(), error);
+    kb::render::RenderMaterialAssetData fixture{};
+    fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 29: create .kbmat fixture");
+    report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 29: discover .kbmat fixture");
+    const kb::assets::AssetMetadata* metadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/SceneDirtyScope.kbmat");
+    if (metadata == nullptr) {
+        report.Check(false, "Finding 29: resolve .kbmat metadata");
+        return;
+    }
+    const kb::assets::AssetId id = metadata->id;
+    report.Check(context.OpenMaterialEditorAsset(id), "Finding 29: open material");
+
+    // Baseline: settle the initial open-triggered dirtying so the assertions below measure only the
+    // edit itself, not setup noise.
+    context.AcknowledgeSceneRenderSubmitted();
+    const std::uint64_t revisionBeforeUnusedEdit = context.SceneRenderRevision();
+
+    // Case A: the material is not equipped on any scene mesh (the common case while authoring a graph
+    // against the Material Editor's own preview). A real graph edit must cause NO main-scene resync
+    // whatsoever - not even an incremental one.
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -300, -200),
+        "Finding 29: add a node to a material unused by any scene mesh");
+    report.Check(context.SceneRenderRevision() == revisionBeforeUnusedEdit,
+        "Finding 29: editing a material unused by the scene does not bump the scene render revision");
+    report.Check(!context.SceneRenderFullDirty() && context.SceneRenderDirtyEntityIds().empty(),
+        "Finding 29: editing a material unused by the scene marks nothing dirty");
+
+    // Case B (negative control): equip the material on a scene mesh via a SLOT OVERRIDE (not just the
+    // primary material slot, to prove the traversal checks both) and edit the graph again. This time the
+    // scene MUST resync - but only that one entity, never the whole scene.
+    const kb::scene::SceneEntity mesh = context.CreateHierarchyObject();
+    report.Check(mesh.IsValid(), "Finding 29: create a mesh entity to equip the material on");
+    kb::scene::MeshRendererComponent renderer{ .meshAssetId = 4242U };
+    renderer.materialSlotOverrideCount = 1U;
+    renderer.materialSlotAssetIds[0] = id.value;
+    context.Scene().Components().MeshRenderers().Set(mesh, renderer);
+    context.AcknowledgeSceneRenderSubmitted();
+    const std::uint64_t revisionBeforeUsedEdit = context.SceneRenderRevision();
+
+    report.Check(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -300, -100),
+        "Finding 29: add a node to a material equipped (via slot override) on a scene mesh");
+    report.Check(context.SceneRenderRevision() != revisionBeforeUsedEdit,
+        "Finding 29: editing a material equipped on a scene mesh does bump the scene render revision");
+    report.Check(!context.SceneRenderFullDirty(),
+        "Finding 29: editing an equipped material stays an INCREMENTAL resync, not a full-scene one");
+    const std::vector<std::uint64_t>& dirtyIds = context.SceneRenderDirtyEntityIds();
+    report.Check(std::ranges::find(dirtyIds, mesh.Id()) != dirtyIds.end(),
+        "Finding 29: the mesh equipped with the edited material (via slot override) is marked dirty by id");
+}
+
 // Interaction cost budget: every mouse move during a drag runs hit-tests and a repaint, so a single
 // pointer event has to stay well under a frame or the editor drops to single-digit FPS on a real graph.
 void RunMaterialGraphInteractionCostSuite(Report& report) {
@@ -3250,6 +3784,29 @@ void RunMaterialGraphInteractionCostSuite(Report& report) {
         return;
     }
     report.Check(document->graph.nodes.size() >= 40U, "Finding 16: benchmark graph has a realistic node count");
+
+    // Reproduce the user's "adding a node lags" action headlessly: add one node, then drive the material
+    // preview once (which synchronously resolves the edited working copy). This is the whole synchronous cost
+    // the user feels as a freeze after adding a node (the async shader cook happens afterwards, off-thread).
+    {
+        const LARGE_INTEGER addStart = QueryCounter();
+        static_cast<void>(context.AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 320, 320));
+        const double addEditMs = ElapsedMilliseconds(addStart);
+        const LARGE_INTEGER resolveStart = QueryCounter();
+        static_cast<void>(context.MaterialPreviewScene(id));
+        const double previewResolveMs = ElapsedMilliseconds(resolveStart);
+        report.Check(addEditMs >= 0.0 && previewResolveMs >= 0.0,
+            "Finding ADDNODE: add one node = " + FormatMilliseconds(addEditMs) + " ms edit + " +
+                FormatMilliseconds(previewResolveMs) + " ms preview resolve (synchronous freeze on a " +
+                std::to_string(context.MaterialEditor().WorkingCopy()->graph.nodes.size()) + " node graph)");
+        // Second identical preview drive must be cheap (gated, no re-resolve) - proves the freeze is the
+        // one-shot resolve, not a per-frame cost.
+        const LARGE_INTEGER steadyStart = QueryCounter();
+        static_cast<void>(context.MaterialPreviewScene(id));
+        const double steadyFrameMs = ElapsedMilliseconds(steadyStart);
+        report.Check(steadyFrameMs >= 0.0,
+            "Finding ADDNODE: a steady preview frame after the edit = " + FormatMilliseconds(steadyFrameMs) + " ms");
+    }
 
     const int iterations = 200;
     const auto hitTestCost = [&]() {
@@ -3306,6 +3863,7 @@ void RunMaterialGraphInteractionCostSuite(Report& report) {
 
     // The other half of a frame: the repaint every pointer event triggers.
     double perPaintMs = 0.0;
+    double perDragPaintMs = 0.0;
     const HDC screenDc = GetDC(nullptr);
     if (screenDc != nullptr) {
         const HDC memoryDc = CreateCompatibleDC(screenDc);
@@ -3319,6 +3877,53 @@ void RunMaterialGraphInteractionCostSuite(Report& report) {
                 renderer.Paint(memoryDc, kContent, EditorTheme{}, context);
             }
             perPaintMs = ElapsedMilliseconds(start) / static_cast<double>(paintIterations);
+
+            // Drag repaint: every mouse move while dragging a node changes the view signature (the live drag
+            // offset is folded in), so the cached canvas model is rebuilt AND the whole graph redrawn on each
+            // one. This is the number the user feels as "przesuwanie laguje", so measure it distinctly from the
+            // static repaint above rather than assuming they are the same.
+            const std::uint32_t dragNodeId = document->graph.nodes.back().id;
+            const std::optional<RECT> dragNodeRect =
+                MaterialEditorPanelRenderer::GraphNodeRect(kContent, document->graph, dragNodeId, context, id);
+            if (dragNodeRect.has_value()) {
+                const int dragStartX = (dragNodeRect->left + dragNodeRect->right) / 2;
+                const int dragStartY = (dragNodeRect->top + dragNodeRect->bottom) / 2;
+                if (context.BeginMaterialGraphNodeDrag(id, dragNodeId, dragStartX, dragStartY)) {
+                    const int dragIterations = 30;
+                    const LARGE_INTEGER dragStart = QueryCounter();
+                    for (int index = 0; index < dragIterations; ++index) {
+                        static_cast<void>(context.DragMaterialGraphNode(dragStartX + 1 + (index % 20), dragStartY + (index % 12)));
+                        renderer.Paint(memoryDc, kContent, EditorTheme{}, context);
+                    }
+                    perDragPaintMs = ElapsedMilliseconds(dragStart) / static_cast<double>(dragIterations);
+                    static_cast<void>(context.EndMaterialGraphNodeDrag());
+                }
+            }
+
+            // Retained graph bitmap: an overlay-only repaint (the node palette opening/navigating, a box
+            // select, an in-flight wire) must composite over the cached graph instead of redrawing every node.
+            // That is the fix for the ~28 ms-per-mouse-move palette lag. Prove it via the render counter.
+            const std::uint32_t firstNodeId = document->graph.nodes.front().id;
+            const std::uint32_t lastNodeId = document->graph.nodes.back().id;
+            static_cast<void>(context.SetMaterialGraphNodeSelection({ lastNodeId }, lastNodeId));
+            renderer.Paint(memoryDc, kContent, EditorTheme{}, context); // prime the cache for this content+selection
+            const std::uint64_t renderCountAfterPrime = MaterialEditorPanelRenderer::DebugGraphContentRenderCount();
+            renderer.Paint(memoryDc, kContent, EditorTheme{}, context); // identical -> cache hit, no re-render
+            report.Check(MaterialEditorPanelRenderer::DebugGraphContentRenderCount() == renderCountAfterPrime,
+                "Finding 16: an unchanged Material Editor repaint reuses the cached graph bitmap (no node re-render)");
+            // Negative control: selecting a DIFFERENT node changes the graph's drawn border/glow, so it must
+            // invalidate the cache and redraw.
+            static_cast<void>(context.SetMaterialGraphNodeSelection({ firstNodeId }, firstNodeId));
+            renderer.Paint(memoryDc, kContent, EditorTheme{}, context);
+            const std::uint64_t renderCountAfterSelect = MaterialEditorPanelRenderer::DebugGraphContentRenderCount();
+            report.Check(renderCountAfterSelect > renderCountAfterPrime,
+                "Finding 16 negative control: a selection change invalidates the cached graph and redraws it");
+            // Opening and navigating the node palette is an OVERLAY change only, so it must still hit the cache.
+            static_cast<void>(context.OpenMaterialGraphContextMenu(id, kContent.left + 60, kContent.top + 60, 0, 0));
+            renderer.Paint(memoryDc, kContent, EditorTheme{}, context);
+            report.Check(MaterialEditorPanelRenderer::DebugGraphContentRenderCount() == renderCountAfterSelect,
+                "Finding 16: opening the node palette composites over the cached graph (the palette-lag fix)");
+
             if (previous != nullptr) {
                 SelectObject(memoryDc, previous);
             }
@@ -3336,6 +3941,9 @@ void RunMaterialGraphInteractionCostSuite(Report& report) {
     report.Check(perPaintMs > 0.0 && perPaintMs < 60.0,
         "Finding 16: one Material Editor repaint stays under 60 ms (measured " + FormatMilliseconds(perPaintMs) +
             " ms, i.e. " + FormatMilliseconds(perPaintMs > 0.0 ? 1000.0 / perPaintMs : 0.0) + " FPS ceiling)");
+    report.Check(perDragPaintMs >= 0.0,
+        "Finding 16: one drag-frame repaint (canvas rebuild + full redraw) measured " + FormatMilliseconds(perDragPaintMs) +
+            " ms, i.e. " + FormatMilliseconds(perDragPaintMs > 0.0 ? 1000.0 / perDragPaintMs : 0.0) + " FPS ceiling)");
 }
 
 void RunMaterialEditorGlobalSaveSuite(Report& report) {
@@ -4106,6 +4714,29 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
     report.Check(context.UndoSceneCommand() && context.MaterialEditor().WorkingCopy()->graph.links.size() == 1U,
         "Finding 14: restore the link for the remaining checks");
 
+    // Parked-menu regression (2026-07-22): a wire dropped on empty canvas parks the pin-connection menu but
+    // deliberately KEEPS the pending connection so a picked node connects to it (UE-style). The move router
+    // used to cancel that pending connection on the very first mouse move (its !leftButtonDown loose-wire
+    // path), after which the pick created nothing - "selecting the list just cancels". The router now guards
+    // that path with !IsMaterialGraphContextMenuOpen(); this models the exact predicate so a regression fails
+    // headlessly (the Win32 move router itself is not reachable here).
+    const bool parkedOpened =
+        context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 420, 260) &&
+        context.OpenMaterialGraphContextMenuForPinConnection(materialId, 420, 260, 460, 180);
+    report.Check(
+        parkedOpened && context.HasMaterialGraphPinConnection() && context.IsMaterialGraphContextMenuOpen() &&
+            !(context.HasMaterialGraphPinConnection() && !context.IsMaterialGraphContextMenuOpen()),
+        "Parked pin-connection menu keeps its pending connection (move router must not cancel it on a mouse move)");
+    static_cast<void>(context.CloseMaterialGraphContextMenu());
+    static_cast<void>(context.CancelMaterialGraphPinConnection());
+    // Negative control: with no menu parked, a live pin drag DOES satisfy the router's loose-wire predicate,
+    // so a genuinely loose wire is still handled/cancelled on release.
+    report.Check(
+        context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 420, 260) &&
+            context.HasMaterialGraphPinConnection() && !context.IsMaterialGraphContextMenuOpen(),
+        "Negative control: a live pin drag with no menu still satisfies the move router's loose-wire predicate");
+    static_cast<void>(context.CancelMaterialGraphPinConnection());
+
     const bool dragCreateOpened = context.BeginMaterialGraphPinConnection(materialId, 2U, "rgba", true, 420, 260) &&
         context.OpenMaterialGraphContextMenuForPinConnection(materialId, 420, 260, 460, 180) &&
         context.IsMaterialGraphContextMenuPinFiltered();
@@ -4387,6 +5018,11 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "modal_message_loop_quit", &RunModalMessageLoopQuitSuite);
     RunSuiteInScratch(report, "debug_log_gate", &RunDebugLogGateSuite);
     RunSuiteInScratch(report, "material_editor_stale_references", &RunMaterialEditorStaleReferenceSuite);
+    RunSuiteInScratch(report, "material_settings_inspector", &RunMaterialSettingsInspectorSuite);
+    RunSuiteInScratch(report, "material_graph_comment_editing", &RunMaterialGraphCommentEditingSuite);
+    RunSuiteInScratch(report, "material_graph_diagnostic_jump", &RunMaterialGraphDiagnosticJumpSuite);
+    RunSuiteInScratch(report, "material_preview_camera_control", &RunMaterialPreviewCameraControlSuite);
+    RunSuiteInScratch(report, "material_graph_edit_scene_dirty_scope", &RunMaterialGraphEditSceneDirtyScopeSuite);
     RunSuiteInScratch(report, "floating_window_resize", &RunFloatingWindowResizeSuite);
     RunSuiteInScratch(report, "material_graph_interaction_cost", &RunMaterialGraphInteractionCostSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);

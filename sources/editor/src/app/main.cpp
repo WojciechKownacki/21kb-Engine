@@ -3,6 +3,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorSelfTest.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
 #include <filesystem>
 #include <string_view>
@@ -80,6 +81,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         kb::editor::EditorCrashBreadcrumbs::Write("app", "selftest enter");
         return kb::editor::EditorSelfTest::Run(reportPath);
     }
+    // Interactive editor: stream textures in the background so picking a texture / opening a material never
+    // freezes the render thread on a first-time decode. (Off in the self-test above and in tests, where
+    // synchronous, deterministic binding is wanted.)
+    kb::render::RenderTextureAssetLoader::SetAsyncTextureDecodeEnabled(true);
     return RunEditor();
 }
 #else
@@ -88,6 +93,7 @@ int main(int argc, char** argv) {
     kb::editor::EditorCrashBreadcrumbs::Reset();
     kb::editor::EditorCrashBreadcrumbs::InstallUnhandledExceptionLogger();
     kb::editor::EditorCrashBreadcrumbs::Write("app", "main enter");
+    kb::render::RenderTextureAssetLoader::SetAsyncTextureDecodeEnabled(true);
     return RunEditor();
 }
 #endif
