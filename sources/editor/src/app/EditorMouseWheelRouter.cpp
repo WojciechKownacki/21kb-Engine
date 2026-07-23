@@ -140,6 +140,18 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
             }
             return true;
         }
+        // The preview overlay sits inside the graph canvas, so it must be tested first: the wheel dollies the
+        // preview camera there, not the graph zoom.
+        if (Contains(layout.previewFrame, x, y)) {
+            const float scale = wheelDelta > 0 ? 0.9F : (wheelDelta < 0 ? 1.0F / 0.9F : 1.0F);
+            if (sceneContext_.ZoomMaterialPreviewCamera(scale)) {
+                InvalidateRect(messageWindow_, nullptr, FALSE);
+                if (messageWindow_ != mainWindow_) {
+                    InvalidateRect(mainWindow_, nullptr, FALSE);
+                }
+            }
+            return true;
+        }
         if (Contains(layout.graphCanvas, x, y)) {
             sceneContext_.SetMaterialGraphCanvasViewport(
                 layout.graphCanvas.left,

@@ -256,17 +256,19 @@ void RegisterWorkingCopyMaterial(
     static_cast<void>(targetManager.RegisterAsset(metadata));
 }
 
-void AddPreviewMesh(kb::scene::Scene& scene, kb::assets::AssetId materialAssetId, bool materialLoaded, const EditorMaterialPreviewPrimitivePolicy& policy) {
+[[nodiscard]] kb::scene::SceneEntity AddPreviewMesh(kb::scene::Scene& scene, kb::assets::AssetId materialAssetId, bool materialLoaded, const EditorMaterialPreviewPrimitivePolicy& policy) {
     const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = "Material Preview Mesh"});
     scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
         .meshAssetId = policy.meshAssetId.value,
         .materialAssetId = materialLoaded ? materialAssetId.value : 0U,
     });
+    return mesh;
 }
 
 void AddPreviewCamera(kb::scene::Scene& scene, const EditorMaterialPreviewSceneSettings& settings) {
     kb::scene::SceneObjectDesc cameraDesc{.name = "Material Preview Camera"};
-    cameraDesc.transform.localPosition = kb::scene::Vec3{0.0F, 0.0F, -settings.cameraDistance};
+    const std::array<float, 3U> eye = settings.CameraEye();
+    cameraDesc.transform.localPosition = kb::scene::Vec3{eye[0], eye[1], eye[2]};
     const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(cameraDesc);
     scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
         .verticalFovDegrees = settings.verticalFovDegrees,
@@ -289,8 +291,20 @@ EditorMaterialPreviewScene::~EditorMaterialPreviewScene() {
 const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(
     const kb::scene::Scene& sourceScene,
     kb::assets::AssetId materialAssetId,
-    const kb::render::RenderMaterialAssetData* workingCopy) {
+    const kb::render::RenderMaterialAssetData* workingCopy,
+    std::uint64_t previewInputRevision) {
+    // Fast path: nothing that feeds the preview has changed since the last call for this same material, so the
+    // scene is already up to date. This skips MaterialPreviewContentHash entirely (a full material deep-copy +
+    // text serialization + dependency traversal) on the overwhelmingly common steady-state frame. A 0 revision
+    // means the caller opted out of the gate (unit tests), so it never takes this path.
+    if (previewInputRevision != 0U && previewInputCacheValid_ && scene_ != nullptr &&
+        materialAssetId_.value == materialAssetId.value && lastPreviewInputRevision_ == previewInputRevision) {
+        return *scene_;
+    }
+
     const std::uint64_t contentHash = MaterialPreviewContentHash(sourceScene, materialAssetId, workingCopy);
+    lastPreviewInputRevision_ = previewInputRevision;
+    previewInputCacheValid_ = previewInputRevision != 0U;
     if (scene_ == nullptr || materialAssetId_.value != materialAssetId.value || materialContentHash_ != contentHash) {
         Rebuild(sourceScene, materialAssetId, workingCopy, contentHash);
     }
@@ -353,6 +367,23 @@ bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSett
     return true;
 }
 
+bool EditorMaterialPreviewScene::SetCameraOrbit(float yawDegrees, float pitchDegrees, float cameraDistance) noexcept {
+    const float clampedPitch = std::clamp(pitchDegrees, -kEditorMaterialPreviewMaxPitchDegrees, kEditorMaterialPreviewMaxPitchDegrees);
+    const float clampedDistance = std::clamp(cameraDistance, kEditorMaterialPreviewMinCameraDistance, kEditorMaterialPreviewMaxCameraDistance);
+    if (sceneSettings_.orbitYawDegrees == yawDegrees && sceneSettings_.orbitPitchDegrees == clampedPitch &&
+        sceneSettings_.cameraDistance == clampedDistance) {
+        return false;
+    }
+    sceneSettings_.orbitYawDegrees = yawDegrees;
+    sceneSettings_.orbitPitchDegrees = clampedPitch;
+    sceneSettings_.cameraDistance = clampedDistance;
+    // Deliberately does NOT bump revision_: the camera is read fresh as a per-frame present override, so the
+    // orbit shows up on the next frame for free. Bumping the revision would make the viewport treat the scene
+    // as changed and re-sync every mesh/material to the GPU on every orbit frame - the "cosmic lag". A pure
+    // camera move must be as cheap as dragging a node.
+    return true;
+}
+
 const EditorMaterialPreviewTelemetry& EditorMaterialPreviewScene::Telemetry() const noexcept {
     return telemetry_;
 }
@@ -363,6 +394,7 @@ std::uint64_t EditorMaterialPreviewScene::Revision() const noexcept {
 
 void EditorMaterialPreviewScene::Clear() noexcept {
     scene_.reset();
+    previewMeshEntity_ = {};
     if (!workingCopyPath_.empty()) {
         std::error_code error;
         std::filesystem::remove(workingCopyPath_, error);
@@ -379,6 +411,75 @@ void EditorMaterialPreviewScene::Rebuild(
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* workingCopy,
     std::uint64_t contentHash) {
+    // Editing the graph changes the working copy's content hash on almost every edit (connect/create/
+    // disconnect), so this runs on nearly every edit. The old code always fell through to the full path
+    // below, which replaces scene_ with a BRAND NEW Scene - a new Scene::Id() - which resets every
+    // per-scene runtime resource cache keyed by that id (RuntimeTextureResourceMap in particular), forcing
+    // every texture the material references to be re-decoded from disk from scratch on every single edit.
+    // Measured cost: a 2048x2048 texture decode alone took ~1.1s in Debug - the actual "freeze after every
+    // connection". When it's still the SAME material and the scene already exists, only the material's
+    // content changed - the mesh/camera/lighting entities and the asset registry are unaffected - so
+    // refresh just the material in place and keep the Scene (and its caches) alive.
+    if (scene_ != nullptr && materialAssetId_.value == materialAssetId.value) {
+        kb::assets::AssetManager& targetManager = scene_->Assets().Manager();
+        if (!workingCopyPath_.empty()) {
+            std::error_code error;
+            std::filesystem::remove(workingCopyPath_, error);
+            workingCopyPath_.clear();
+        }
+        if (workingCopy != nullptr) {
+            workingCopyPath_ = WorkingCopyPreviewPath(
+                sourceScene,
+                materialAssetId,
+                contentHash,
+                sceneSettings_.qualityLevel,
+                this);
+            std::error_code directoryError;
+            std::filesystem::create_directories(workingCopyPath_.parent_path(), directoryError);
+            RegisterWorkingCopyMaterial(sourceScene.Assets().Manager(), targetManager, materialAssetId, *workingCopy, workingCopyPath_, contentHash);
+        } else if (const kb::assets::AssetMetadata* sourceMetadata = sourceScene.Assets().Manager().Registry().Find(materialAssetId)) {
+            // No working copy (e.g. right after Save clears it): re-sync this one asset's registry entry
+            // from the source scene - a reused targetManager otherwise keeps serving the STALE metadata it
+            // was copied with at the last full rebuild, so a Save's new contentHash/physicalPath would never
+            // be picked up. Force-unload so the resolver re-reads the just-saved content from disk.
+            static_cast<void>(targetManager.RegisterAsset(*sourceMetadata));
+            static_cast<void>(targetManager.Unload(materialAssetId));
+        }
+
+        kb::render::RenderMaterialGraphBuildContext graphContext{};
+        graphContext.assetId = materialAssetId.value;
+        graphContext.qualityLevel = sceneSettings_.qualityLevel;
+        graphContext.variantUsage = kb::render::RenderMaterialGraphVariantUsage::Preview;
+        const kb::render::ResolvedRuntimeMaterialAsset resolved =
+            kb::render::RuntimeMaterialResolver{ graphContext }.ResolveAsset(targetManager, materialAssetId);
+        kb::render::RenderMaterialAssetData telemetryMaterial{};
+        if (resolved.resolved) {
+            telemetryMaterial.desc = resolved.material.desc;
+            if (workingCopy != nullptr) {
+                telemetryMaterial.graph = workingCopy->graph;
+                telemetryMaterial.materialTypeVersion = workingCopy->materialTypeVersion;
+            }
+        }
+
+        if (previewMeshEntity_.IsValid()) {
+            if (const kb::scene::MeshRendererComponent* existing = scene_->Components().MeshRenderers().TryGet(previewMeshEntity_)) {
+                kb::scene::MeshRendererComponent updated = *existing;
+                updated.materialAssetId = resolved.resolved ? materialAssetId.value : 0U;
+                scene_->Components().MeshRenderers().Set(previewMeshEntity_, updated);
+            }
+        }
+
+        telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(
+            targetManager,
+            materialAssetId,
+            resolved.resolved ? &telemetryMaterial : nullptr,
+            true,
+            graphContext);
+        materialContentHash_ = contentHash;
+        ++revision_;
+        return;
+    }
+
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     kb::assets::AssetManager& targetManager = scene_->Assets().Manager();
     RegisterPreviewLoaders(targetManager);
@@ -421,7 +522,7 @@ void EditorMaterialPreviewScene::Rebuild(
         }
     }
 
-    AddPreviewMesh(*scene_, materialAssetId, resolved.resolved, effectivePolicy);
+    previewMeshEntity_ = AddPreviewMesh(*scene_, materialAssetId, resolved.resolved, effectivePolicy);
     AddPreviewCamera(*scene_, sceneSettings_);
     AddPreviewLighting(*scene_);
     scene_->Runtime().SynchronizeTransforms();

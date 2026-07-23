@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,10 @@ namespace kb::render {
 namespace {
 
 std::atomic<std::uint64_t> g_renderMaterialGraphCompileInvocationCount{ 0U };
+// Total wall-clock microseconds spent inside CompileRenderMaterialGraphToShaderSource (the string-heavy shader
+// codegen). Paired with the invocation count so a caller can derive the average per-compile cost and confirm
+// how expensive one codegen actually is in a Debug build.
+std::atomic<std::uint64_t> g_renderMaterialGraphCompileTotalMicros{ 0U };
 
 [[nodiscard]] bool EqualsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept {
     if (lhs.size() != rhs.size()) {
@@ -3578,6 +3583,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     const RenderMaterialGraphDocument& sourceGraph,
     RenderMaterialGraphBuildContext context) {
     g_renderMaterialGraphCompileInvocationCount.fetch_add(1U, std::memory_order_relaxed);
+    struct CompileTimeAccumulator {
+        std::chrono::steady_clock::time_point start;
+        ~CompileTimeAccumulator() {
+            const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            g_renderMaterialGraphCompileTotalMicros.fetch_add(static_cast<std::uint64_t>(micros), std::memory_order_relaxed);
+        }
+    } compileTimeAccumulator{ std::chrono::steady_clock::now() };
     {
         std::ostringstream row;
         row << "compile-start asset=" << context.assetId
@@ -4284,6 +4297,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
 
 std::uint64_t RenderMaterialGraphCompileInvocationCount() noexcept {
     return g_renderMaterialGraphCompileInvocationCount.load(std::memory_order_relaxed);
+}
+
+std::uint64_t RenderMaterialGraphCompileTotalMicroseconds() noexcept {
+    return g_renderMaterialGraphCompileTotalMicros.load(std::memory_order_relaxed);
 }
 
 void ValidateCustomCodePin(

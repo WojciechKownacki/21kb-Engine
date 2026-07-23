@@ -67,7 +67,16 @@ MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT&
     layout.graphCanvas = RECT{ content.left, content.top + layout.headerHeight, content.right, content.bottom };
     const int overlayLeft = layout.graphCanvas.left + MaterialEditorPanelMetrics::Padding;
     const int overlayTop = layout.graphCanvas.top + MaterialEditorPanelMetrics::Padding;
-    layout.previewFrame = RECT{ overlayLeft, overlayTop, overlayLeft + (layout.compactToolbar ? 116 : MaterialEditorPanelMetrics::PreviewWidth), overlayTop + (layout.compactToolbar ? 76 : MaterialEditorPanelMetrics::PreviewHeight) };
+    const int previewDesiredWidth = layout.compactToolbar ? 176 : MaterialEditorPanelMetrics::PreviewWidth;
+    const int previewDesiredHeight = layout.compactToolbar ? 140 : MaterialEditorPanelMetrics::PreviewHeight;
+    // Clamp the preview to this panel's own content. The preview is a bgfx child surface parented to the
+    // host window, NOT to this GDI panel, so a fixed-size frame that runs past the panel's right/bottom edge
+    // would render OVER the neighbouring docked panel (a narrow Material Editor dock showed the sphere
+    // spilling onto the Inspector). Never let it exceed the graph canvas bounds; if the panel is too narrow
+    // to hold it, the frame collapses to empty and the preview simply isn't presented.
+    const int previewRight = std::min(overlayLeft + previewDesiredWidth, static_cast<int>(layout.graphCanvas.right) - MaterialEditorPanelMetrics::Padding);
+    const int previewBottom = std::min(overlayTop + previewDesiredHeight, static_cast<int>(layout.graphCanvas.bottom) - MaterialEditorPanelMetrics::Padding);
+    layout.previewFrame = RECT{ overlayLeft, overlayTop, std::max(overlayLeft, previewRight), std::max(overlayTop, previewBottom) };
     layout.diagnosticsPanel = RECT{ std::max(layout.previewFrame.right + MaterialEditorPanelMetrics::Padding, layout.graphCanvas.right - 372), overlayTop, layout.graphCanvas.right - MaterialEditorPanelMetrics::Padding, std::min(static_cast<int>(layout.graphCanvas.bottom - MaterialEditorPanelMetrics::Padding), overlayTop + 132) };
     layout.detailsPanel = RECT{ layout.diagnosticsPanel.left, layout.diagnosticsPanel.bottom + MaterialEditorPanelMetrics::Padding, layout.diagnosticsPanel.right, layout.graphCanvas.bottom - MaterialEditorPanelMetrics::Padding };
     return layout;
