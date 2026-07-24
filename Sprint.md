@@ -4968,6 +4968,226 @@
 - [ ] Add crowd-animation performance stress tests
 - [ ] Add import round-trip validation tests
 
+## Animation Graph Node Library
+
+- [ ] Add a sequence-player node
+- [ ] Add a sequence-evaluator node driven by an explicit time
+- [ ] Add a random-sequence player node
+- [ ] Add a blend-space player node
+- [ ] Add a blend-space evaluator node
+- [ ] Add a two-way blend node
+- [ ] Add a multi-way blend node
+- [ ] Add a blend-by-boolean node
+- [ ] Add a blend-by-enum node
+- [ ] Add a blend-by-integer node
+- [ ] Add an apply-additive node
+- [ ] Add a mesh-space additive node
+- [ ] Add a make-dynamic-additive node
+- [ ] Add a layered-bone-blend node
+- [ ] Add a blend-bone-by-channel node
+- [ ] Add a copy-pose-from-another-mesh node
+- [ ] Add a reference-pose and identity-pose node
+- [ ] Add a modify-bone node
+- [ ] Add a rotate-root-bone node
+- [ ] Add a slot node for layered playback requests
+- [ ] Add a cached-pose node with named references
+- [ ] Add a sub-graph and linked-layer node
+- [ ] Add a call-function node that invokes graph functions
+- [ ] Add a modify-curve node
+- [ ] Add per-node relevancy and short-circuiting
+
+## Inertialization & Transition Blending
+
+- [ ] Add inertialization for source-free transition blending
+- [ ] Add dead-blending as an alternative smoothing method
+- [ ] Add per-bone inertialization
+- [ ] Add curve and attribute inertialization
+- [ ] Add inertialization requests raised by transitions
+- [ ] Add configurable inertialization duration and easing
+- [ ] Add pose-snapshot capture and blend-from-snapshot
+- [ ] Add handling of teleports and discontinuities
+- [ ] Add inertialization interaction with additive layers
+- [ ] Add inertialization cost budgets
+- [ ] Add inertialization debug visualization
+
+## Animation Warping
+
+- [ ] Add stride warping to match foot speed to movement speed
+- [ ] Add orientation warping to lean animation toward the movement direction
+- [ ] Add slope warping to adapt legs and body to terrain incline
+- [ ] Add motion warping that aligns root motion to target points
+- [ ] Add named warp targets updated from gameplay
+- [ ] Add warp windows scoped to time ranges in a clip
+- [ ] Add per-warp masks and per-bone influence
+- [ ] Add curve-driven warp strength
+- [ ] Add warping applied on top of the graph output
+- [ ] Add combination of multiple warps in a defined order
+- [ ] Add stability and clamping to avoid over-warping
+- [ ] Add warping determinism for replay
+- [ ] Add warp-target and warped-pose debug visualization
+
+## Motion Trajectory & Locomotion
+
+- [ ] Add sampling of past motion history into a trajectory
+- [ ] Add prediction of a future trajectory from input and velocity
+- [ ] Add smoothing and resampling of trajectories
+- [ ] Add distance-to-marker matching for starts, stops, and pivots
+- [ ] Add distance matching that syncs animation time to travelled distance
+- [ ] Add turn-in-place detection and playback
+- [ ] Add stride adjustment tied to movement speed
+- [ ] Add a locomotion helper library of common nodes
+- [ ] Add automatic blend-space sample placement from root-motion analysis
+- [ ] Add foot-lock curves that pin feet during ground contact
+- [ ] Add automatic foot-sync-marker generation
+- [ ] Add ground alignment combining foot IK and slope warping
+- [ ] Add a locomotion state model (idle, start, loop, stop, pivot)
+- [ ] Add trajectory feeding into the motion-matching query
+- [ ] Add locomotion-authoring previews
+- [ ] Add trajectory and locomotion debug visualization
+
+## Contextual & Interaction Animation
+
+- [ ] Add multi-actor synchronized interaction scenes
+- [ ] Add role assignment for participants in an interaction
+- [ ] Add alignment of participants to an interaction anchor
+- [ ] Add per-role animation and warp points
+- [ ] Add synchronized start and phase across participants
+- [ ] Add branching and variant selection within an interaction
+- [ ] Add interruption and early-exit handling
+- [ ] Add entry and exit transitions to and from gameplay
+- [ ] Add attachment and prop handling during interactions
+- [ ] Add networked synchronization of interactions
+- [ ] Add contextual-interaction authoring tools
+- [ ] Add validation of participant compatibility
+- [ ] Add interaction debug visualization
+
+## Data-Driven Animation Selection
+
+- [ ] Add selection tables that map conditions to animations
+- [ ] Add typed input columns (state, tags, floats, enums)
+- [ ] Add output columns for animations, blend spaces, and assets
+- [ ] Add first-match and weighted selection modes
+- [ ] Add fallback rows for unmatched conditions
+- [ ] Add nested and chained selection tables
+- [ ] Add runtime evaluation from graph and gameplay
+- [ ] Add integration with the motion-matching database
+- [ ] Add hot-reload of selection tables
+- [ ] Add authoring UI for selection tables
+- [ ] Add validation of coverage and conflicts
+- [ ] Add selection debug output
+
+## Pose Assets & Drivers
+
+- [ ] Add a pose-asset holding named poses
+- [ ] Add a pose-by-name evaluation node
+- [ ] Add weighted blending of multiple named poses
+- [ ] Add curve-driven pose weights
+- [ ] Add a radial-basis pose driver from bone transforms
+- [ ] Add corrective poses driven by joint angles
+- [ ] Add facial and expression pose sets
+- [ ] Add extraction of poses from animation frames
+- [ ] Add pose-asset authoring and preview
+- [ ] Add pose-asset validation against the skeleton
+- [ ] Add pose-driver debug visualization
+
+## Custom Attributes & Curve Pipeline
+
+- [ ] Add scalar animation curves alongside bone tracks
+- [ ] Add per-bone custom attributes on clips
+- [ ] Add per-pose custom attributes carried through evaluation
+- [ ] Add typed attribute values (float, int, vector, string)
+- [ ] Add curve metadata and naming
+- [ ] Add a curve-source interface for external drivers
+- [ ] Add bulk curve storage and evaluation
+- [ ] Add a time-stretch curve for non-uniform retiming
+- [ ] Add attribute and curve blending across layers
+- [ ] Add gameplay data authored on the animation timeline
+- [ ] Add curve and attribute filters
+- [ ] Add attribute and curve debug inspection
+
+## Animation Modifiers & Asset Processing
+
+- [ ] Add reusable animation modifiers applied to clips
+- [ ] Add automatic foot-sync-marker generation
+- [ ] Add automatic foot-lock curve generation
+- [ ] Add motion-curve extraction (speed, direction, distance)
+- [ ] Add root-motion generation and cleanup modifiers
+- [ ] Add curve creation and remapping modifiers
+- [ ] Add notification and event insertion modifiers
+- [ ] Add batch application across many clips
+- [ ] Add re-application on re-import
+- [ ] Add a modifier library and custom modifiers
+- [ ] Add preview of modifier results
+- [ ] Add validation and reporting for modifiers
+
+## GPU Deformer Graph & ML Deformation
+
+- [ ] Add a node-based GPU mesh-deformation graph
+- [ ] Add a linear-blend-skinning deformer node
+- [ ] Add morph and blend-shape deformer nodes
+- [ ] Add cloth and simulation read-back deformer nodes
+- [ ] Add spline, lattice, and cage deformer nodes
+- [ ] Add custom compute-kernel deformer nodes
+- [ ] Add mesh-deformer hooks with geometry read-back
+- [ ] Add per-LOD deformer configuration
+- [ ] Add alternate skin-weight profiles per LOD
+- [ ] Add a machine-learning deformer that approximates high-fidelity results
+- [ ] Add a training pipeline for ML deformers
+- [ ] Add a fallback to standard skinning where unsupported
+- [ ] Add deformer-graph authoring and preview
+- [ ] Add deformer cost budgets and diagnostics
+- [ ] Add deformer-graph debug visualization
+
+## Vertex Animation & Crowd Baking
+
+- [ ] Add baking of skeletal animation into vertex-position textures
+- [ ] Add baking of animated normals into textures
+- [ ] Add playback of vertex-animation textures on instanced meshes
+- [ ] Add crowd rendering driven entirely by baked animation
+- [ ] Add per-instance time offset and animation variation
+- [ ] Add blending between baked animation states
+- [ ] Add sharing and instancing of animation across many crowd actors
+- [ ] Add a distance transition from baked to fully skinned
+- [ ] Add a bake pipeline with resolution and quality settings
+- [ ] Add memory and texture budgets for baked animation
+- [ ] Add validation of baked-animation fidelity
+- [ ] Add crowd-animation debug visualization
+
+## Live Animation Streaming
+
+- [ ] Add a live data-source abstraction for external capture
+- [ ] Add subjects for skeletons, cameras, faces, and transforms
+- [ ] Add real-time streaming into the running engine
+- [ ] Add mapping of live subjects onto project rigs
+- [ ] Add retargeting of live data to project skeletons
+- [ ] Add interpolation and latency compensation for live data
+- [ ] Add timecode synchronization across subjects
+- [ ] Add recording of live streams into clips and takes
+- [ ] Add multiple simultaneous live sources
+- [ ] Add live facial and finger capture
+- [ ] Add a live preview in the editor and in play
+- [ ] Add reconnection and dropout handling
+- [ ] Add live-stream diagnostics
+- [ ] Add validation of subject-to-rig mapping
+
+## Sequence Editor Advanced Tracks & Bindings
+
+- [ ] Add an attach track that parents an object over time
+- [ ] Add a path-follow track along a spline
+- [ ] Add a constraint track (aim, position, parent) over time
+- [ ] Add a console-variable track driven by the sequence
+- [ ] Add a streaming-level and data-layer visibility track
+- [ ] Add camera-shake source and trigger tracks
+- [ ] Add material-parameter-collection tracks
+- [ ] Add custom-primitive-data tracks
+- [ ] Add typed property tracks (bool, enum, int, float, vector, color, rotation, string, object reference)
+- [ ] Add dynamic bindings resolved at runtime
+- [ ] Add binding overrides per instance
+- [ ] Add marked frames and time retiming
+- [ ] Add per-track and per-section conditions and variants
+- [ ] Add layered animation mixing within the sequence
+- [ ] Add pose-search and motion-matching tracks
+
 # 14 · Physics / Simulation
 
 ## Physics Core & World
@@ -5682,6 +5902,240 @@
 - [ ] Add memory-budget and leak tests
 - [ ] Add golden-scenario regression tests
 
+## Collision Detection Pipeline
+
+- [ ] Add a broadphase using an AABB tree
+- [ ] Add a dirty-grid incremental broadphase for dynamic bodies
+- [ ] Add a bounding-volume-hierarchy acceleration option
+- [ ] Add a brute-force and particle-pair broadphase for small scenes
+- [ ] Add narrowphase contact-generation dispatch
+- [ ] Add a midphase for triangle-mesh contacts
+- [ ] Add GJK distance queries between convex shapes
+- [ ] Add EPA penetration-depth resolution
+- [ ] Add SAT contact generation for boxes and convex shapes
+- [ ] Add per-shape-pair contact-point generators
+- [ ] Add contact-manifold generation and reduction
+- [ ] Add redundant-contact pruning
+- [ ] Add speculative contacts to prevent tunneling
+- [ ] Add bit-based collision filtering in the broadphase
+- [ ] Add incremental refit as bodies move
+- [ ] Add collision-detection debug visualization
+
+## Solver Internals & Islands
+
+- [ ] Add a position-based-dynamics rigid solver
+- [ ] Add a temporal Gauss-Seidel solver option
+- [ ] Add island partitioning of interacting bodies
+- [ ] Add parallel island grouping across the worker pool
+- [ ] Add constraint-graph coloring for parallel-safe solving
+- [ ] Add configurable position and velocity iteration counts
+- [ ] Add warm-starting of the solver from the previous frame
+- [ ] Add a moving simulation-space (relative-frame) mode
+- [ ] Add structure-of-arrays body storage for cache efficiency
+- [ ] Add deterministic body and constraint ordering
+- [ ] Add sleeping and waking per island
+- [ ] Add per-island solver-iteration overrides
+- [ ] Add a solver validation and A/B harness
+- [ ] Add solver-internals diagnostics
+
+## Advanced Colliders & Implicit Shapes
+
+- [ ] Add level-set (signed-distance) volumetric colliders
+- [ ] Add skinned-mesh-driven colliders that deform with animation
+- [ ] Add skinned level-set colliders
+- [ ] Add implicit-shape union composition
+- [ ] Add implicit-shape scaled and transformed wrappers
+- [ ] Add implicit-shape intersection composition
+- [ ] Add a bounding hierarchy over composed implicits
+- [ ] Add runtime welding of bodies into one simulated proxy
+- [ ] Add splitting of merged bodies back apart
+- [ ] Add per-piece convex collision generation
+- [ ] Add cooked collision-data caching
+- [ ] Add tapered-capsule and tapered-cylinder shapes
+- [ ] Add optional neural signed-distance colliders
+- [ ] Add advanced-collider validation and preview
+
+## Collision Channels, Presets & Profiles
+
+- [ ] Add object channels describing what a body is
+- [ ] Add trace channels for queries
+- [ ] Add per-channel response (block, overlap, ignore)
+- [ ] Add named collision presets combining object type and responses
+- [ ] Add a collision-profile asset
+- [ ] Add distinct query and simulation filtering
+- [ ] Add per-shape channel overrides
+- [ ] Add default presets for common object types
+- [ ] Add a collision-preset editor
+- [ ] Add validation of preset and channel setup
+- [ ] Add migration of collision settings across versions
+- [ ] Add a collision-response matrix visualization
+
+## Physics Fields
+
+- [ ] Add a physics-field system evaluated over bodies
+- [ ] Add radial falloff fields
+- [ ] Add plane and box falloff fields
+- [ ] Add noise fields
+- [ ] Add wave fields with configurable wave functions
+- [ ] Add uniform and radial vector fields
+- [ ] Add linear-force and linear-impulse targets
+- [ ] Add angular-torque and angular-velocity targets
+- [ ] Add linear-velocity and initial-velocity targets
+- [ ] Add position and position-target drivers
+- [ ] Add dynamic-state targets that switch kinematic and dynamic
+- [ ] Add activation and disable-threshold targets
+- [ ] Add sleeping-threshold targets
+- [ ] Add kill and cull targets
+- [ ] Add internal- and external-cluster-strain targets for fracture
+- [ ] Add field operators (add, multiply, divide, subtract)
+- [ ] Add field filters by object type and group
+- [ ] Add field presets, authoring, and debug visualization
+
+## Physics Interaction Components
+
+- [ ] Add a grab handle that moves a body toward a target transform
+- [ ] Add configurable handle stiffness, damping, and limits
+- [ ] Add a spring component connecting two bodies
+- [ ] Add a thruster component applying continuous force
+- [ ] Add a radial-force and radial-impulse component
+- [ ] Add an attractor and repulsor component
+- [ ] Add a constraint component authored on entities
+- [ ] Add a pickup-and-carry helper for gameplay
+- [ ] Add a throw helper with inherited velocity
+- [ ] Add a physics grab-and-manipulate gameplay helper
+- [ ] Add a scripting API for interaction components
+- [ ] Add interaction-component debug visualization
+
+## Fracture Patterns & Authoring Tools
+
+- [ ] Add uniform Voronoi fracturing
+- [ ] Add custom Voronoi with user-placed sites
+- [ ] Add radial and impact fracture patterns
+- [ ] Add grid slice fracturing
+- [ ] Add brick and bond patterns
+- [ ] Add a single planar cut
+- [ ] Add cutting by an arbitrary mesh
+- [ ] Add automatic clustering into a hierarchy
+- [ ] Add cluster-magnet and manual cluster tools
+- [ ] Add a proximity and connection graph for connectivity
+- [ ] Add anchoring so supported pieces stay in place
+- [ ] Add embedding of geometry into the fracture hierarchy
+- [ ] Add per-piece convex collision generation
+- [ ] Add cleanup tools (fix tiny geometry, resample, recompute normals, auto-UV)
+- [ ] Add a fracture-authoring mode with previews
+- [ ] Add interior-material assignment on fracture
+
+## Flesh & Muscle Simulation
+
+- [ ] Add a tetrahedral FEM deformable simulation
+- [ ] Add corotated and Neo-Hookean material models
+- [ ] Add muscle activation with fiber directions
+- [ ] Add a tetrahedral collection asset
+- [ ] Add binding of skin to the deformable volume
+- [ ] Add anatomical fat, muscle, and bone layering
+- [ ] Add collision of flesh with rigid bodies
+- [ ] Add self-collision for flesh
+- [ ] Add stiffness, damping, and incompressibility controls
+- [ ] Add flesh authoring and preview
+- [ ] Add flesh LOD and cost budgets
+- [ ] Add flesh determinism options
+
+## Physics-Based Character Movement
+
+- [ ] Add a dynamic-body character driven by physics
+- [ ] Add a character-ground constraint for slope and step handling
+- [ ] Add physics-based walking with acceleration and friction
+- [ ] Add physics-based falling with air control
+- [ ] Add physics-based flying and swimming modes
+- [ ] Add crouch, jump, land, and launch handling
+- [ ] Add water-entry detection and buoyant swimming
+- [ ] Add ground-versus-air state detection
+- [ ] Add path-following (spline, point, and route)
+- [ ] Add reaction to impacts and external forces
+- [ ] Add pushing and being pushed by dynamic bodies
+- [ ] Add moving-platform support for physics characters
+- [ ] Add a modular movement-mode framework with transitions
+- [ ] Add networked movement prediction and reconciliation
+- [ ] Add a choice between kinematic and physics character modes
+- [ ] Add physics-character debug visualization
+
+## Physical Animation Control
+
+- [ ] Add physical-animation control driving bones toward an animated pose
+- [ ] Add per-body and per-limb drive strength
+- [ ] Add named control profiles (relaxed, braced, hit-reaction)
+- [ ] Add blend weights between animation and physics per body
+- [ ] Add smooth ramping of control strength over time
+- [ ] Add impulse-driven hit reactions layered on animation
+- [ ] Add masking so only chosen limbs go physical
+- [ ] Add spring and damping control per body
+- [ ] Add a control record for gameplay-driven changes
+- [ ] Add a physics-with-control animation node
+- [ ] Add integration with the animation graph output
+- [ ] Add a runtime API for control profiles
+- [ ] Add control-profile authoring and preview
+- [ ] Add physical-animation-control debug visualization
+
+## Physics Caching & Playback
+
+- [ ] Add recording of physics simulation to a cache
+- [ ] Add playback of a physics cache
+- [ ] Add scrubbing and seeking within a cache
+- [ ] Add caching of destruction and cloth results
+- [ ] Add a cache asset format
+- [ ] Add streaming of large caches
+- [ ] Add blending from cache playback into live simulation
+- [ ] Add deterministic re-recording
+- [ ] Add cache compression
+- [ ] Add interchange import and export of caches
+- [ ] Add cache authoring and preview
+- [ ] Add cache validation and diagnostics
+
+## Buoyancy & Water Physics
+
+- [ ] Add multi-point pontoon buoyancy on rigid bodies
+- [ ] Add buoyancy sampled from the water surface
+- [ ] Add a batched buoyancy manager for many floaters
+- [ ] Add water drag and damping on submerged bodies
+- [ ] Add water-current and flow forces on bodies
+- [ ] Add floating stability and self-righting
+- [ ] Add wave-driven bobbing tied to the water system
+- [ ] Add splash and impact response entering water
+- [ ] Add boat, raft, and buoy helpers
+- [ ] Add enter-water and exit-water events
+- [ ] Add buoyancy authoring and tuning
+- [ ] Add buoyancy debug visualization
+
+## Physics Recording & Visual Debugger
+
+- [ ] Add recording of full physics state each frame
+- [ ] Add replay and scrubbing of recorded physics
+- [ ] Add inspection of bodies, shapes, and transforms in a recording
+- [ ] Add inspection of contacts and contact points
+- [ ] Add inspection of constraints and joints
+- [ ] Add inspection of islands and solver state
+- [ ] Add query and event overlays in the recording
+- [ ] Add headless capture of physics recordings
+- [ ] Add sharing and loading of recordings
+- [ ] Add comparison of two recordings
+- [ ] Add filtering and search within a recording
+- [ ] Add export of recordings for bug reports
+
+## Modular Vehicle Assembly
+
+- [ ] Add component-based modular vehicle assembly
+- [ ] Add an engine module with a torque curve
+- [ ] Add clutch and transmission modules
+- [ ] Add wheel and suspension modules
+- [ ] Add aerofoil and downforce modules
+- [ ] Add thruster and propulsion modules
+- [ ] Add a chassis module with merged-body support
+- [ ] Add wiring of modules into a drivetrain
+- [ ] Add runtime attach and detach of modules
+- [ ] Add per-module tuning and telemetry
+- [ ] Add modular-vehicle presets
+- [ ] Add modular-vehicle validation
+
 # 15 · Input / Audio / Media
 
 ## Input Core & Devices
@@ -6212,3 +6666,3226 @@
 - [ ] Add voice spatialization and mixing tests
 - [ ] Add latency and budget stress tests
 - [ ] Add cross-platform device and format tests
+
+## Procedural Audio & Node-Based Sound Graphs
+
+- [ ] Add a node-based procedural audio graph
+- [ ] Add a runtime graph execution engine for audio
+- [ ] Add a playable procedural-audio source asset
+- [ ] Add reusable sub-patches and presets
+- [ ] Add runtime and scripted graph construction
+- [ ] Add oscillator nodes (sine, saw, square, additive, supersaw)
+- [ ] Add noise nodes (white, Perlin, low-frequency)
+- [ ] Add filter nodes (low-pass, high-pass, band-pass, band-split, dynamic)
+- [ ] Add envelope nodes (attack-decay, ADSR, follower)
+- [ ] Add delay nodes (mono, stereo, grain, tap)
+- [ ] Add reverb and diffuser nodes
+- [ ] Add distortion, bitcrusher, and waveshaper nodes
+- [ ] Add modulation nodes (ring mod, flanger, chorus, phaser)
+- [ ] Add pitch-shift and Doppler nodes
+- [ ] Add panner, mid/side, and crossfade nodes
+- [ ] Add sample-and-hold and mixer nodes
+- [ ] Add trigger and control nodes (sequence, repeat, counter, gate, compare, select)
+- [ ] Add music-theory nodes (note-to-frequency, note quantizer, scale-to-array, tempo-to-seconds)
+- [ ] Add graph input and output parameters exposed to gameplay
+- [ ] Add a wave-writer node for capturing output
+- [ ] Add a node library with search and metadata
+- [ ] Add graph authoring, preview, and debugging
+
+## Sound Cue Graphs, Classes & Submixes
+
+- [ ] Add a sound-cue graph assembling sounds from nodes
+- [ ] Add random, weighted, and shuffle selection nodes
+- [ ] Add concatenate and sequence nodes
+- [ ] Add mixer and layering nodes
+- [ ] Add modulator nodes (pitch, volume, continuous)
+- [ ] Add attenuation and distance-crossfade nodes
+- [ ] Add branch, switch, and quality-level nodes
+- [ ] Add delay and looping nodes
+- [ ] Add a sound-class hierarchy for grouped control
+- [ ] Add runtime sound mixes that adjust classes
+- [ ] Add a submix graph with sends and returns
+- [ ] Add per-submix effect chains
+- [ ] Add cue templates and presets
+- [ ] Add sound-cue authoring and preview
+- [ ] Add sound-cue validation
+
+## Audio Modulation & Control Buses
+
+- [ ] Add audio control buses
+- [ ] Add modulation patches driving parameters
+- [ ] Add bus mixes that combine modulation sources
+- [ ] Add modulation destinations (volume, pitch, effect parameters)
+- [ ] Add curve-shaped modulation response
+- [ ] Add real-time parameter routing from gameplay
+- [ ] Add layered and priority modulation
+- [ ] Add modulation presets
+- [ ] Add modulation authoring and preview
+- [ ] Add modulation debug inspection
+
+## Real-Time Audio Analysis
+
+- [ ] Add real-time loudness and broadcast-loudness metering
+- [ ] Add a real-time spectrum analyzer
+- [ ] Add constant-Q log-frequency analysis
+- [ ] Add onset and beat detection
+- [ ] Add peak and RMS metering
+- [ ] Add both real-time and offline analysis paths
+- [ ] Add analysis output routed to gameplay and visuals
+- [ ] Add music-reactive parameter feeds
+- [ ] Add per-source and per-submix analysis
+- [ ] Add analysis widgets (meter, oscilloscope, spectrum)
+- [ ] Add analysis cost budgets
+- [ ] Add analysis debug visualization
+
+## Sample-Accurate Music Clock & Quantization
+
+- [ ] Add a sample-accurate musical clock
+- [ ] Add a configurable metronome with tempo and meter
+- [ ] Add quantized event scheduling to beats and bars
+- [ ] Add beat-locked playback of sounds and music
+- [ ] Add a quantized command queue on the audio thread
+- [ ] Add game-thread notifications on beats and bars
+- [ ] Add multiple synchronized clocks
+- [ ] Add tempo changes and ramps
+- [ ] Add quantization boundaries (beat, bar, phrase)
+- [ ] Add clock debug readouts
+
+## Procedural Synthesis & Motor Synth
+
+- [ ] Add a subtractive virtual-analog synth component
+- [ ] Add a granular-synthesis component
+- [ ] Add a wavetable-synth component
+- [ ] Add a tone and test-signal generator
+- [ ] Add polyphony and voice management for synths
+- [ ] Add MIDI and parameter control of synths
+- [ ] Add a procedural engine/motor synthesizer driven by RPM
+- [ ] Add grain-table authoring for motor synthesis
+- [ ] Add load, throttle, and gear response for motor synth
+- [ ] Add synth presets
+- [ ] Add synth authoring and preview
+- [ ] Add synth cost budgets
+
+## Procedural Ambience & Soundscape
+
+- [ ] Add a data-driven procedural ambience system
+- [ ] Add placement points and palettes for ambient sounds
+- [ ] Add rules for density, spacing, and timing of one-shots
+- [ ] Add layered ambient beds with blending
+- [ ] Add zone-driven ambience selection
+- [ ] Add time-of-day and weather-driven ambience
+- [ ] Add randomized non-repeating playback
+- [ ] Add soundscape authoring and preview
+- [ ] Add soundscape budgets and diagnostics
+- [ ] Add soundscape debug visualization
+
+## Spatialization Plugins, Soundfield & External Routing
+
+- [ ] Add a spatialization plugin interface
+- [ ] Add binaural HRTF spatialization backends
+- [ ] Add a soundfield (ambisonic) format
+- [ ] Add ambisonic encoding and decoding
+- [ ] Add soundfield endpoints and rendering
+- [ ] Add an occlusion and reverb plugin interface
+- [ ] Add routing of audio into external engines at the mixer boundary
+- [ ] Add offline and faster-than-real-time audio rendering
+- [ ] Add platform spatial-audio endpoint support
+- [ ] Add plugin capability negotiation and fallback
+- [ ] Add spatialization debug visualization
+
+## Interactive Music & MIDI
+
+- [ ] Add MIDI file import and parsing
+- [ ] Add a music map with tempo and timeline
+- [ ] Add a MIDI clock synchronized to the music clock
+- [ ] Add a MIDI-driven sampler with stems
+- [ ] Add interactive stem mixing by intensity
+- [ ] Add quantized transitions between music sections
+- [ ] Add stingers and fills triggered on beats
+- [ ] Add a music sequencer for interactive scores
+- [ ] Add real-time parameters driving the score
+- [ ] Add MIDI-controller input to music
+- [ ] Add interactive-music authoring and preview
+- [ ] Add interactive-music validation
+
+## Audio Gameplay Volumes & Reverb Zones
+
+- [ ] Add audio gameplay volumes that override audio in a region
+- [ ] Add per-volume reverb settings
+- [ ] Add per-volume occlusion and attenuation overrides
+- [ ] Add per-volume submix routing
+- [ ] Add blending between overlapping volumes
+- [ ] Add priority and layering of volumes
+- [ ] Add interior and exterior transitions
+- [ ] Add modular audio gameplay components
+- [ ] Add volume authoring tools
+- [ ] Add volume debug visualization
+
+## Media Framework, Sources & Playlists
+
+- [ ] Add a media-player facade over multiple backends
+- [ ] Add media sources for files, streams, and platform inputs
+- [ ] Add time-synchronizable media sources
+- [ ] Add a media texture for rendering video
+- [ ] Add a media sound component for video audio
+- [ ] Add media playlists with ordering and looping
+- [ ] Add a media clock and track model
+- [ ] Add multiple simultaneous media players
+- [ ] Add pluggable platform and codec backends
+- [ ] Add hardware-accelerated video decoders
+- [ ] Add image-sequence and high-dynamic-range frame playback
+- [ ] Add GPU tiled and mipped frame playback for large plates
+- [ ] Add media events and state callbacks
+- [ ] Add a media preview and inspection tool
+- [ ] Add media-framework diagnostics
+
+## Professional Video I/O & Timecode
+
+- [ ] Add a capture-card abstraction for professional video
+- [ ] Add serial-digital video capture and output
+- [ ] Add network video input and output
+- [ ] Add genlock synchronization
+- [ ] Add timecode sources and synchronization
+- [ ] Add multi-source timecode alignment
+- [ ] Add frame-accurate capture and output
+- [ ] Add color-space and format conversion for I/O
+- [ ] Add audio embedding and de-embedding with video
+- [ ] Add hardware capability detection
+- [ ] Add a professional-I/O configuration UI
+- [ ] Add professional-I/O diagnostics
+
+## Game Capture, Encoding & Frame Streaming
+
+- [ ] Add a hardware video and audio encoder abstraction
+- [ ] Add capture of the game framebuffer to encoded video
+- [ ] Add capture of game audio synchronized to video
+- [ ] Add replay and highlight export to video files
+- [ ] Add configurable resolution, bitrate, and codec
+- [ ] Add a rendered-frame streaming pipeline over the network
+- [ ] Add remote input injection from streamed clients
+- [ ] Add cloud and browser play of streamed frames
+- [ ] Add low-latency streaming transport
+- [ ] Add adaptive quality for streamed frames
+- [ ] Add multiple concurrent streaming sessions
+- [ ] Add a frame-capture pipeline feeding encoders and streaming
+- [ ] Add screenshot and clip-capture helpers
+- [ ] Add capture and streaming budgets
+- [ ] Add capture and streaming diagnostics
+
+## Advanced Input: Device Properties, UI Navigation & External Devices
+
+- [ ] Add a device-property system for output effects
+- [ ] Add per-device LED color control
+- [ ] Add adaptive-trigger resistance and effects
+- [ ] Add spatialized and parameterized force feedback
+- [ ] Add curve- and buffer-driven haptic effects
+- [ ] Add player-mappable input configurations
+- [ ] Add input injection for automation and replay
+- [ ] Add a query for which contexts and keys map to an action
+- [ ] Add a UI input-routing and focus-navigation layer
+- [ ] Add gamepad, mouse, and touch input-method switching
+- [ ] Add an action bar and activatable widget input stack
+- [ ] Add directional UI navigation
+- [ ] Add an external input-device plugin interface
+- [ ] Add MIDI-controller input
+- [ ] Add remote-control protocol bindings
+- [ ] Add advanced-input debug tooling
+
+# 16 · UI / Text / Localization / Accessibility
+
+## UI Core & Widget Framework
+
+- [ ] Add a retained-mode widget tree with a hierarchy
+- [ ] Add widget lifecycle (construct, mount, update, unmount, destroy)
+- [ ] Add parent/child slots and slot properties
+- [ ] Add per-widget visibility modes (visible, hidden, collapsed, hit-test-invisible)
+- [ ] Add enable and disable states
+- [ ] Add render transform, opacity, and pivot per widget
+- [ ] Add z-order and layering within a parent
+- [ ] Add invalidation of layout and paint on change
+- [ ] Add a dirty-tracking and rebuild pipeline
+- [ ] Add widget identity and stable ids
+- [ ] Add a widget registry and factory
+- [ ] Add clipping and content culling
+- [ ] Add hit-testing against the widget tree
+- [ ] Add per-widget user data linking to gameplay
+- [ ] Add a data-driven widget asset format
+- [ ] Add widget asset versioning and migration
+- [ ] Add a scripting API to build and query widgets
+- [ ] Add widget-tree debug inspection
+
+## Layout System
+
+- [ ] Add a canvas panel with absolute positioning and anchors
+- [ ] Add anchor points and offsets relative to the parent
+- [ ] Add a horizontal and vertical box (stack) panel
+- [ ] Add a grid panel with rows and columns
+- [ ] Add a uniform grid panel
+- [ ] Add a wrap panel that flows children
+- [ ] Add an overlay panel that stacks children
+- [ ] Add a scroll box with vertical and horizontal scrolling
+- [ ] Add a size box with fixed and min/max sizing
+- [ ] Add a spacer and separator
+- [ ] Add a border and padding container
+- [ ] Add margins, padding, and content alignment
+- [ ] Add horizontal and vertical alignment per slot
+- [ ] Add fill, auto, and fixed sizing rules
+- [ ] Add aspect-ratio and constraint containers
+- [ ] Add a two-pass measure-and-arrange layout
+- [ ] Add flow direction (left-to-right and right-to-left)
+- [ ] Add responsive breakpoints and adaptive layouts
+- [ ] Add a safe-zone-aware layout container
+- [ ] Add layout debug visualization
+
+## UI Rendering & Draw
+
+- [ ] Add a draw-element list per frame
+- [ ] Add batching of draw elements by material and texture
+- [ ] Add brushes for solid color, image, and nine-slice
+- [ ] Add gradient and rounded-rectangle brushes
+- [ ] Add custom material support on widgets
+- [ ] Add clipping regions and scissor rectangles
+- [ ] Add retained-mode caching of static sub-trees
+- [ ] Add invalidation panels for partial redraw
+- [ ] Add blur and backdrop effects
+- [ ] Add per-widget custom draw callbacks
+- [ ] Add render-target rendering of widgets
+- [ ] Add draw-call and batch statistics
+- [ ] Add pixel-snapping for crisp edges
+- [ ] Add UI rendering debug overlay
+
+## Input, Focus & Interaction
+
+- [ ] Add mouse input (move, buttons, wheel, hover)
+- [ ] Add touch input with multi-touch
+- [ ] Add keyboard input and shortcuts
+- [ ] Add gamepad navigation and activation
+- [ ] Add a focus system with a focused-widget path
+- [ ] Add directional navigation between widgets
+- [ ] Add tab-order navigation
+- [ ] Add event bubbling and tunneling
+- [ ] Add pointer capture and release
+- [ ] Add hover, press, and release states
+- [ ] Add drag-and-drop with payloads and drop targets
+- [ ] Add gesture recognition (tap, long-press, swipe, pinch)
+- [ ] Add input routing between UI and gameplay
+- [ ] Add input consumption and pass-through rules
+- [ ] Add focus-visible indicators
+- [ ] Add on-screen virtual cursor for gamepad
+- [ ] Add repeat and hold input handling
+- [ ] Add interaction debug visualization
+
+## Widget Library — Common Controls
+
+- [ ] Add a button with click and hold events
+- [ ] Add a text label
+- [ ] Add an image and icon widget
+- [ ] Add a checkbox
+- [ ] Add a radio button group
+- [ ] Add a toggle switch
+- [ ] Add a slider
+- [ ] Add a range (dual-handle) slider
+- [ ] Add a progress bar
+- [ ] Add a spinner and busy indicator
+- [ ] Add a single-line text field
+- [ ] Add a multi-line text area
+- [ ] Add a password field
+- [ ] Add a numeric spin box
+- [ ] Add a dropdown and combo box
+- [ ] Add a list view with selection
+- [ ] Add a tile and grid view
+- [ ] Add a tree view
+- [ ] Add a data table with columns
+- [ ] Add a scrollbar
+- [ ] Add a tab control
+- [ ] Add an accordion and expander
+- [ ] Add a menu bar and submenus
+- [ ] Add a context menu
+- [ ] Add a tooltip
+- [ ] Add a modal dialog and message box
+- [ ] Add a window and panel container
+- [ ] Add a breadcrumb and pagination control
+
+## Advanced & Composite Widgets
+
+- [ ] Add a color picker
+- [ ] Add a date and time picker
+- [ ] Add a virtualized list for very large data sets
+- [ ] Add a carousel and page viewer
+- [ ] Add dockable and resizable panels
+- [ ] Add a tree-table hybrid
+- [ ] Add a property grid
+- [ ] Add chart and graph widgets
+- [ ] Add a minimap widget
+- [ ] Add a radial and pie menu
+- [ ] Add an on-screen virtual keyboard
+- [ ] Add a rich item card widget
+- [ ] Add a tag and chip input
+- [ ] Add a split-view with draggable dividers
+
+## Data Binding & View Models
+
+- [ ] Add one-way data binding to widget properties
+- [ ] Add two-way binding for input widgets
+- [ ] Add view models separating data from presentation
+- [ ] Add property-change notification
+- [ ] Add collection and list binding with change tracking
+- [ ] Add value converters and formatters in bindings
+- [ ] Add command binding for actions
+- [ ] Add binding to gameplay and entity data
+- [ ] Add binding expressions and paths
+- [ ] Add fallback and default values in bindings
+- [ ] Add binding validation and error reporting
+- [ ] Add lazy and batched binding updates
+- [ ] Add debounced bindings for frequent changes
+- [ ] Add a binding editor in the designer
+- [ ] Add binding debug inspection
+- [ ] Add compiled bindings for performance
+
+## Styling & Theming
+
+- [ ] Add reusable style assets for widgets
+- [ ] Add per-state styles (normal, hover, pressed, disabled, focused)
+- [ ] Add themes grouping styles and colors
+- [ ] Add color schemes and palettes
+- [ ] Add typography scales and text styles
+- [ ] Add design tokens for spacing, radius, and color
+- [ ] Add style inheritance and overrides
+- [ ] Add light and dark theme variants
+- [ ] Add runtime theme switching
+- [ ] Add per-widget style overrides
+- [ ] Add nine-slice and stateful brush styling
+- [ ] Add a style editor with live preview
+- [ ] Add high-contrast theme variants
+- [ ] Add theme validation and coverage checks
+- [ ] Add import and export of themes
+- [ ] Add a default theme that looks good out of the box
+
+## UI Animation & Transitions
+
+- [ ] Add widget animation timelines
+- [ ] Add property tweens (position, size, opacity, color, rotation)
+- [ ] Add easing curves and custom curves
+- [ ] Add enter and exit animations
+- [ ] Add state-transition animations
+- [ ] Add sequenced and parallel animations
+- [ ] Add looping and ping-pong animations
+- [ ] Add animation events and callbacks
+- [ ] Add play, pause, reverse, and scrub control
+- [ ] Add data-driven and scripted animations
+- [ ] Add a timeline editor for widget animations
+- [ ] Add reduced-motion respect in animations
+- [ ] Add animation performance budgets
+- [ ] Add animation preview in the designer
+
+## Visual UI Designer
+
+- [ ] Add a WYSIWYG design canvas
+- [ ] Add drag-and-drop placement of widgets
+- [ ] Add a hierarchy outliner of the widget tree
+- [ ] Add a property panel for the selected widget
+- [ ] Add live preview with sample data
+- [ ] Add multi-resolution and device preview
+- [ ] Add alignment, snapping, and distribution guides
+- [ ] Add rulers, grid, and measurement overlays
+- [ ] Add copy, paste, and duplicate of widgets
+- [ ] Add undo and redo across design edits
+- [ ] Add reusable component creation from a selection
+- [ ] Add a component and template library
+- [ ] Add a binding editor integrated in the designer
+- [ ] Add a style and theme editor
+- [ ] Add an animation timeline editor
+- [ ] Add responsive-layout editing with breakpoints
+- [ ] Add a preview of different cultures and text lengths
+- [ ] Add an accessibility preview and checker
+- [ ] Add zoom, pan, and isolation of sub-trees
+- [ ] Add a widget palette with categories and search
+- [ ] Add starter templates for menus, HUDs, and dialogs
+- [ ] Add a gallery of example UIs to open and learn from
+
+## UserWidget Authoring & Reusable Components
+
+- [ ] Add user-defined composite widgets
+- [ ] Add named content slots for injected children
+- [ ] Add exposed properties on custom widgets
+- [ ] Add exposed events and callbacks
+- [ ] Add default values and property metadata
+- [ ] Add nesting of custom widgets
+- [ ] Add widget variants and overrides
+- [ ] Add a reusable-component library
+- [ ] Add instancing with per-instance overrides
+- [ ] Add versioning and migration of custom widgets
+- [ ] Add validation of component interfaces
+- [ ] Add packaging and sharing of components
+- [ ] Add live-reload of edited widgets
+- [ ] Add documentation and previews for components
+
+## UI Logic & Scripting
+
+- [ ] Add event handlers bound to widget events
+- [ ] Add binding of buttons and inputs to gameplay actions
+- [ ] Add a scripting API for widget logic
+- [ ] Add visual scripting nodes for UI logic
+- [ ] Add UI state machines for screen flow
+- [ ] Add conditions and data-driven visibility
+- [ ] Add timers and delays in UI logic
+- [ ] Add navigation and routing between screens
+- [ ] Add form validation and submission logic
+- [ ] Add localized dynamic content in logic
+- [ ] Add UI-logic debugging and step-through
+- [ ] Add deterministic UI logic for tests
+
+## HUD & Game UI Layers
+
+- [ ] Add a HUD system rendered over the game
+- [ ] Add UI layers with ordering (background, HUD, menus, overlays, tooltips)
+- [ ] Add a screen stack with push and pop
+- [ ] Add modal and blocking-screen management
+- [ ] Add screen transitions and fades
+- [ ] Add world-to-screen markers and waypoints
+- [ ] Add floating damage and status numbers
+- [ ] Add health, resource, and status bars
+- [ ] Add a minimap and radar
+- [ ] Add notification and toast system
+- [ ] Add an objective and quest tracker UI
+- [ ] Add an inventory and menu framework
+- [ ] Add pause-menu and settings-menu scaffolding
+- [ ] Add per-player HUD for local multiplayer
+
+## World-Space & 3D UI
+
+- [ ] Add widgets rendered on surfaces in the world
+- [ ] Add interaction with world-space widgets via rays and cursors
+- [ ] Add curved and cylindrical UI surfaces
+- [ ] Add depth, occlusion, and sorting for world UI
+- [ ] Add billboard and face-camera UI
+- [ ] Add XR and VR UI panels and pointers
+- [ ] Add hand and controller interaction with UI
+- [ ] Add gaze and dwell selection
+- [ ] Add distance-based scaling and fading
+- [ ] Add world-UI performance budgets
+- [ ] Add stereo-correct UI rendering
+- [ ] Add world-UI debug visualization
+
+## UI Scaling, DPI & Safe Area
+
+- [ ] Add DPI awareness and per-monitor scaling
+- [ ] Add a reference resolution and scale rules
+- [ ] Add resolution-independent layout units
+- [ ] Add safe-area handling for notches and rounded corners
+- [ ] Add TV overscan safe zones
+- [ ] Add aspect-ratio adaptation
+- [ ] Add a global UI scale setting
+- [ ] Add per-widget scaling overrides
+- [ ] Add crisp rendering across scales
+- [ ] Add multi-display support
+- [ ] Add orientation change handling
+- [ ] Add scaling debug visualization
+
+## Font Assets & Loading
+
+- [ ] Add import of vector fonts
+- [ ] Add font families with weights and styles
+- [ ] Add signed-distance-field font generation
+- [ ] Add multi-channel signed-distance-field fonts
+- [ ] Add bitmap and pixel fonts
+- [ ] Add a dynamic glyph atlas
+- [ ] Add on-demand glyph rasterization
+- [ ] Add font fallback chains for missing glyphs
+- [ ] Add script-specific fallback fonts
+- [ ] Add embedded and packaged fonts
+- [ ] Add variable-font axis support
+- [ ] Add font hinting and gamma settings
+- [ ] Add font asset validation
+- [ ] Add font memory budgets and eviction
+
+## Text Layout & Shaping
+
+- [ ] Add glyph shaping with kerning
+- [ ] Add ligatures and contextual forms
+- [ ] Add bidirectional text ordering
+- [ ] Add complex-script shaping (Arabic, Indic, Thai)
+- [ ] Add line breaking with language rules
+- [ ] Add word wrap and character wrap
+- [ ] Add justification and alignment
+- [ ] Add tab stops and indentation
+- [ ] Add letter and line spacing
+- [ ] Add vertical text layout
+- [ ] Add overflow handling (clip, ellipsis, scroll)
+- [ ] Add auto-sizing and shrink-to-fit text
+- [ ] Add mixed-font and mixed-size runs
+- [ ] Add text measurement and metrics queries
+- [ ] Add hit-testing from a point to a character
+- [ ] Add caret and selection geometry from indices
+- [ ] Add hyphenation
+- [ ] Add layout caching for unchanged text
+
+## Text Rendering & Effects
+
+- [ ] Add glyph-atlas caching and packing
+- [ ] Add signed-distance-field text rendering
+- [ ] Add subpixel and grayscale antialiasing
+- [ ] Add outlines and borders on text
+- [ ] Add drop shadows and glow
+- [ ] Add gradient and texture fill on text
+- [ ] Add per-character color and opacity
+- [ ] Add underline, strikethrough, and overline
+- [ ] Add scaling without re-rasterization via distance fields
+- [ ] Add crisp small-text rendering
+- [ ] Add emoji and color-glyph rendering
+- [ ] Add text material and shader customization
+- [ ] Add text rendering budgets
+- [ ] Add text rendering debug visualization
+
+## Rich Text & Markup
+
+- [ ] Add a rich-text markup language
+- [ ] Add inline style spans (bold, italic, color, size)
+- [ ] Add inline images and icons
+- [ ] Add hyperlinks with click handling
+- [ ] Add custom tags and decorators
+- [ ] Add named text styles referenced in markup
+- [ ] Add inline widgets embedded in text
+- [ ] Add a typewriter and reveal effect
+- [ ] Add animated and wavy text effects
+- [ ] Add localized rich text with placeholders
+- [ ] Add auto-linking of URLs and references
+- [ ] Add markup validation and error reporting
+- [ ] Add a rich-text editor preview
+- [ ] Add sanitization of untrusted markup
+
+## Text Input & Editing
+
+- [ ] Add a caret with blinking and positioning
+- [ ] Add text selection with mouse, touch, and keyboard
+- [ ] Add keyboard navigation (word, line, document)
+- [ ] Add input-method (IME) composition support
+- [ ] Add clipboard cut, copy, and paste
+- [ ] Add undo and redo of edits
+- [ ] Add multi-line editing with scrolling
+- [ ] Add auto-complete and suggestions
+- [ ] Add input validation and masking
+- [ ] Add character and length limits
+- [ ] Add password masking with reveal
+- [ ] Add placeholder and hint text
+- [ ] Add on-screen and platform virtual keyboards
+- [ ] Add rich-text editing controls
+- [ ] Add spell-check hooks
+- [ ] Add deterministic editing for tests
+
+## Localization — String Tables & Keys
+
+- [ ] Add localized string tables with keys
+- [ ] Add namespaces and grouping of keys
+- [ ] Add source-string gathering from content and code
+- [ ] Add localized text references usable in widgets
+- [ ] Add default and source-culture fallback text
+- [ ] Add missing-translation detection and reporting
+- [ ] Add key-collision detection
+- [ ] Add context and comments for translators
+- [ ] Add in-context localization editing
+- [ ] Add stable keys that survive source-text changes
+- [ ] Add per-key metadata (max length, do-not-translate)
+- [ ] Add string-table import and merge
+- [ ] Add string-table validation
+- [ ] Add a localization dashboard with coverage
+
+## Localization — Translation Pipeline
+
+- [ ] Add extraction and gathering of translatable text
+- [ ] Add export to standard translation formats
+- [ ] Add import of translated files
+- [ ] Add a translation-memory store
+- [ ] Add reuse of prior translations for matches
+- [ ] Add machine-translation hooks for drafts
+- [ ] Add a review and approval workflow
+- [ ] Add batch and incremental gathering
+- [ ] Add per-target and per-platform packaging
+- [ ] Add pluralization data in the pipeline
+- [ ] Add screenshots and context for translators
+- [ ] Add translation progress and status reporting
+- [ ] Add conflict resolution on re-import
+- [ ] Add pipeline validation and diagnostics
+
+## Localization — Formatting & Culture
+
+- [ ] Add culture and locale detection at startup
+- [ ] Add explicit culture selection and switching
+- [ ] Add culture fallback chains
+- [ ] Add number formatting per culture
+- [ ] Add date and time formatting per culture
+- [ ] Add currency and percent formatting
+- [ ] Add plural-rule selection per culture
+- [ ] Add gendered and inflected text handling
+- [ ] Add a message-format with named placeholders
+- [ ] Add ordinal and cardinal formatting
+- [ ] Add unit and measurement-system formatting
+- [ ] Add list and conjunction formatting
+- [ ] Add time-zone-aware formatting
+- [ ] Add relative-time formatting (e.g. "3 minutes ago")
+- [ ] Add culture-aware sorting and collation
+- [ ] Add formatting validation and tests
+
+## Localization — Assets, Fonts & RTL
+
+- [ ] Add localized asset variants (textures, audio, video)
+- [ ] Add per-culture asset selection at runtime
+- [ ] Add per-culture and per-script fonts
+- [ ] Add automatic font fallback per language
+- [ ] Add right-to-left layout mirroring
+- [ ] Add mirroring of icons and directional elements
+- [ ] Add bidirectional mixed-content handling
+- [ ] Add text-expansion handling for longer translations
+- [ ] Add culture-specific styling overrides
+- [ ] Add localized input and keyboard layouts
+- [ ] Add pseudo-localization for testing
+- [ ] Add validation of RTL and expansion issues
+- [ ] Add per-culture number-input parsing
+- [ ] Add localized-asset packaging
+
+## Runtime Language Switching
+
+- [ ] Add live language switching without a restart
+- [ ] Add re-layout of UI on language change
+- [ ] Add reload of strings, assets, and fonts on switch
+- [ ] Add re-formatting of dynamic values on switch
+- [ ] Add persistence of the chosen language
+- [ ] Add a language-selection UI
+- [ ] Add editor preview of any culture
+- [ ] Add change notifications to widgets and gameplay
+- [ ] Add graceful handling of partial translations
+- [ ] Add language-switch performance budgets
+
+## Accessibility — Screen Reader & Semantics
+
+- [ ] Add an accessible widget tree parallel to the visual tree
+- [ ] Add roles for widgets (button, checkbox, list, heading, etc.)
+- [ ] Add accessible labels and descriptions
+- [ ] Add live regions for announcements
+- [ ] Add focus and selection reporting to assistive tech
+- [ ] Add a defined reading order
+- [ ] Add platform screen-reader integration
+- [ ] Add custom-semantics overrides per widget
+- [ ] Add state reporting (checked, expanded, disabled, busy)
+- [ ] Add value and range reporting for sliders and progress
+- [ ] Add grouping and landmark semantics
+- [ ] Add localized accessibility text
+- [ ] Add hints for available actions
+- [ ] Add automatic label inference from content
+- [ ] Add screen-reader testing hooks
+- [ ] Add semantics debug inspection
+
+## Accessibility — Visual & Motor
+
+- [ ] Add text-scaling that reflows layout
+- [ ] Add a global UI-scale accessibility option
+- [ ] Add high-contrast modes
+- [ ] Add colorblind-friendly palettes and filters
+- [ ] Add reduced-motion mode
+- [ ] Add strong focus indicators
+- [ ] Add enlarged hit targets
+- [ ] Add remappable UI navigation
+- [ ] Add hold-to-toggle and sticky-input options
+- [ ] Add dwell and one-switch scanning selection
+- [ ] Add adjustable input timing and repeat
+- [ ] Add cursor-size and pointer options
+- [ ] Add pause and slow-down assists
+- [ ] Add auto-advance and skip options for text
+- [ ] Add flashing and photosensitivity safeguards
+- [ ] Add motor-accessibility presets
+
+## Accessibility — Audio & Feedback
+
+- [ ] Add audio cues for UI focus and actions
+- [ ] Add spoken descriptions of on-screen content
+- [ ] Add haptic feedback for accessibility events
+- [ ] Add customizable subtitle and caption styling
+- [ ] Add a mono-audio option
+- [ ] Add visual indicators for important sounds
+- [ ] Add caption support for UI sounds
+- [ ] Add volume-independent accessibility cues
+- [ ] Add feedback-intensity settings
+- [ ] Add validation of audio-accessibility coverage
+
+## Accessibility — Settings & Compliance
+
+- [ ] Add an accessibility settings menu
+- [ ] Add accessibility presets and profiles
+- [ ] Add first-run accessibility setup
+- [ ] Add per-platform accessibility-API integration
+- [ ] Add a compliance checklist against common guidelines
+- [ ] Add an in-editor accessibility auditor
+- [ ] Add contrast and text-size checks in the designer
+- [ ] Add reporting of accessibility issues
+- [ ] Add persistence and sync of accessibility settings
+- [ ] Add documentation of accessibility features
+
+## UI Performance & Batching
+
+- [ ] Add draw-call batching across widgets
+- [ ] Add invalidation panels to limit redraw
+- [ ] Add retained-mode caching of static content
+- [ ] Add widget pooling and recycling
+- [ ] Add list and grid virtualization
+- [ ] Add async and incremental widget construction
+- [ ] Add layout caching for unchanged sub-trees
+- [ ] Add per-frame UI time budgets
+- [ ] Add texture-atlas usage for UI assets
+- [ ] Add profiling and cost attribution per widget
+- [ ] Add memory budgets for UI and fonts
+- [ ] Add over-budget diagnostics
+
+## UI Testing & Validation
+
+- [ ] Add widget unit tests
+- [ ] Add layout regression tests
+- [ ] Add golden-image UI tests across resolutions
+- [ ] Add input and navigation tests
+- [ ] Add focus-order and tab-order tests
+- [ ] Add data-binding correctness tests
+- [ ] Add text-shaping and layout tests
+- [ ] Add localization coverage and expansion tests
+- [ ] Add right-to-left layout tests
+- [ ] Add culture-formatting tests
+- [ ] Add accessibility-semantics audits
+- [ ] Add screen-reader announcement tests
+- [ ] Add DPI and scaling tests
+- [ ] Add UI performance stress tests
+
+# 17 · Networking / Multiplayer (Rust core)
+
+## Rust Networking Core & FFI Boundary
+
+- [ ] Add a Rust networking crate as the standalone network core
+- [ ] Add a stable C-ABI boundary between the Rust core and the C++ engine
+- [ ] Add a build integration that compiles the Rust crate into the engine
+- [ ] Add typed opaque handles for connections, channels, and sessions across the boundary
+- [ ] Add clear ownership and lifetime rules for buffers crossing the boundary
+- [ ] Add zero-copy buffer passing where possible
+- [ ] Add panic isolation so a Rust panic never unwinds into C++
+- [ ] Add an async runtime (Tokio) owned by the network core
+- [ ] Add a command queue from the engine thread into the network core
+- [ ] Add an event queue from the network core back to the engine
+- [ ] Add thread-safe, lock-light interchange between engine and network threads
+- [ ] Add ABI versioning and compatibility checks
+- [ ] Add error codes and diagnostics across the boundary
+- [ ] Add memory-tracker integration for Rust allocations
+- [ ] Add a headless build of the core for dedicated servers
+- [ ] Add a WebAssembly build of the core for browser clients
+- [ ] Add logging bridged from Rust into engine diagnostics
+- [ ] Add configuration passed from the engine to the core
+
+## Transport Layer
+
+- [ ] Add a QUIC transport as the primary protocol
+- [ ] Add TLS encryption and authentication via QUIC
+- [ ] Add multiple QUIC streams for independent channels
+- [ ] Add QUIC datagram support for unreliable traffic
+- [ ] Add congestion control and pacing
+- [ ] Add path-MTU discovery
+- [ ] Add segmentation-offload use where the platform supports it
+- [ ] Add a reliable-UDP transport as an alternative
+- [ ] Add a connection protocol with secure tokens and key exchange
+- [ ] Add a WebTransport backend for browser clients
+- [ ] Add a WebSocket fallback transport
+- [ ] Add a platform-socket backend (console and store networking)
+- [ ] Add NAT traversal and hole punching
+- [ ] Add relay and fallback routing when direct connection fails
+- [ ] Add per-transport capability negotiation
+- [ ] Add transport selection and automatic fallback
+- [ ] Add packet fragmentation and reassembly
+- [ ] Add transport-level statistics (throughput, loss, RTT)
+
+## Connection & Session Management
+
+- [ ] Add connect and disconnect flows
+- [ ] Add a handshake with version and capability exchange
+- [ ] Add authentication tokens and validation
+- [ ] Add session lifecycle and identifiers
+- [ ] Add keepalive and timeout handling
+- [ ] Add graceful and abrupt disconnect handling
+- [ ] Add automatic reconnection with backoff
+- [ ] Add connection-quality metrics (RTT, jitter, loss)
+- [ ] Add per-connection state and user data
+- [ ] Add connection limits and admission control
+- [ ] Add ban and kick support
+- [ ] Add session migration between transports
+- [ ] Add connection events surfaced to gameplay
+- [ ] Add connection debugging tools
+
+## Serialization & Wire Format
+
+- [ ] Add a compact binary wire format
+- [ ] Add zero-copy serialization for hot paths
+- [ ] Add bit-packing of small fields and flags
+- [ ] Add quantization of positions, rotations, and scales
+- [ ] Add delta encoding against a baseline
+- [ ] Add schema and version tags for messages
+- [ ] Add forward- and backward-compatible message evolution
+- [ ] Add endian-independent encoding
+- [ ] Add optional compression for large payloads
+- [ ] Add string interning and dictionary compression
+- [ ] Add a code-generated schema from component reflection
+- [ ] Add per-field precision and range annotations
+- [ ] Add validation and bounds checking on decode
+- [ ] Add fuzzing of the decoder against malformed input
+- [ ] Add serialization benchmarks
+- [ ] Add wire-format debugging and inspection
+
+## ECS Replication Integration
+
+- [ ] Map engine entities to stable network identifiers
+- [ ] Add a bidirectional mapping between network ids and flecs entities
+- [ ] Add server and client world roles
+- [ ] Drive replication from component-change tracking (modified flags and changed filters)
+- [ ] Add component observers feeding spawn, update, and despawn events
+- [ ] Enumerate replicated fields generically through component reflection
+- [ ] Add per-component replication opt-in and configuration
+- [ ] Apply remote changes through the deferred command buffer
+- [ ] Add deterministic entity-id remapping on the client
+- [ ] Reuse the chunked world-snapshot codec for baselines
+- [ ] Reuse delta snapshots for per-tick updates
+- [ ] Add parent and reference remapping across the network
+- [ ] Add replication of relationships, tags, and singletons
+- [ ] Add batched, chunk-friendly replication reads
+- [ ] Add SIMD-friendly packing of replicated component chunks
+- [ ] Add a replication schedule within the system scheduler
+- [ ] Add replication of structural changes (add/remove component)
+- [ ] Add server-side authoritative apply and validation
+- [ ] Add a replication registry mapping component types to codecs
+- [ ] Add replication configuration as a data asset
+
+## Entity & Component Replication
+
+- [ ] Add server-authoritative entity spawn replication
+- [ ] Add entity despawn replication
+- [ ] Add per-component state replication
+- [ ] Add replication groups and priorities
+- [ ] Add replicate-on-change versus replicate-every-tick modes
+- [ ] Add initial-state replication on join
+- [ ] Add late-join catch-up replication
+- [ ] Add replication of spawned prefabs and templates
+- [ ] Add ownership tags carried with entities
+- [ ] Add relevancy filtering per entity and client
+- [ ] Add replication of transform with quantization and smoothing
+- [ ] Add replication of animation and gameplay state
+- [ ] Add replication frequency per component
+- [ ] Add replication of arrays and dynamic buffers
+- [ ] Add conditional replication by role and authority
+- [ ] Add replication of destruction and pooled entities
+- [ ] Add replication conflict resolution
+- [ ] Add replication debugging per entity
+
+## Snapshots & Delta Compression
+
+- [ ] Add periodic world snapshots
+- [ ] Add per-entity and per-component deltas against a baseline
+- [ ] Add acknowledgement of received snapshots
+- [ ] Add baseline management from acked snapshots
+- [ ] Add a snapshot ring buffer of recent states
+- [ ] Add delta encoding of only changed fields
+- [ ] Add run-length and bit-mask encoding of change sets
+- [ ] Add priority-based partial snapshots under bandwidth limits
+- [ ] Add reliable baseline recovery after loss
+- [ ] Add compression of snapshot payloads
+- [ ] Add snapshot size budgets and diagnostics
+- [ ] Add snapshot history for lag compensation and rollback
+- [ ] Add deterministic snapshot ordering
+- [ ] Add snapshot debugging and inspection
+
+## Reliability Channels & Messaging
+
+- [ ] Add a reliable-ordered channel
+- [ ] Add a reliable-unordered channel
+- [ ] Add an unreliable channel
+- [ ] Add an unreliable-sequenced channel
+- [ ] Add per-channel configuration and priority
+- [ ] Add message fragmentation for large messages
+- [ ] Add message batching and coalescing
+- [ ] Add acknowledgement and retransmission for reliable channels
+- [ ] Add ordering guarantees per channel
+- [ ] Add flow control per channel
+- [ ] Add channel statistics and diagnostics
+- [ ] Add a typed message registry
+- [ ] Add message priority and starvation avoidance
+- [ ] Add channel debugging tools
+
+## RPC & Events
+
+- [ ] Add client-to-server remote procedure calls
+- [ ] Add server-to-client remote procedure calls
+- [ ] Add multicast remote procedure calls
+- [ ] Add typed RPC parameters from reflection
+- [ ] Add per-RPC reliability and channel selection
+- [ ] Add request and response RPCs with correlation
+- [ ] Add validation and rate limiting of incoming RPCs
+- [ ] Add ordering guarantees relative to replication
+- [ ] Add a scripting API for RPCs and network events
+- [ ] Add deterministic RPC handling for replay
+- [ ] Add RPC diagnostics and logging
+- [ ] Add RPC schema versioning
+
+## Input, Ticks & Clock Sync
+
+- [ ] Add a fixed network tick decoupled from frame rate
+- [ ] Add tick-buffered input channels
+- [ ] Add delivery of input at the matching server tick
+- [ ] Add input prediction and buffering
+- [ ] Add clock synchronization between client and server
+- [ ] Add round-trip and one-way delay estimation
+- [ ] Add time-offset smoothing and drift correction
+- [ ] Add tick adjustment to keep clients aligned
+- [ ] Add input redundancy against packet loss
+- [ ] Add input acknowledgement and resend
+- [ ] Add server-side input validation and clamping
+- [ ] Add deterministic input application order
+- [ ] Add input-timeline debugging
+- [ ] Add tick and clock diagnostics
+
+## Client-Side Prediction & Reconciliation
+
+- [ ] Add prediction of the locally controlled entity
+- [ ] Add application of local input immediately
+- [ ] Add storage of predicted state per tick
+- [ ] Add reconciliation against authoritative snapshots
+- [ ] Add rollback of predicted state on mismatch
+- [ ] Add re-simulation from the corrected state
+- [ ] Add prediction of owned non-player entities
+- [ ] Add predicted spawning with server confirmation
+- [ ] Add error smoothing to hide small corrections
+- [ ] Add snap thresholds for large corrections
+- [ ] Add prediction masks per component
+- [ ] Add prediction of physics-driven entities
+- [ ] Add reconciliation diagnostics and error metrics
+- [ ] Add prediction debugging visualization
+- [ ] Add deterministic prediction for tests
+- [ ] Add integration with the command buffer for predicted changes
+
+## Rollback Netcode
+
+- [ ] Add a rollback simulation model for deterministic games
+- [ ] Add input delay configuration
+- [ ] Add confirmed-frame tracking
+- [ ] Add save and restore of simulation state per frame
+- [ ] Reuse world snapshots for fast state save and restore
+- [ ] Add re-simulation on receiving remote input
+- [ ] Add prediction of remote input until confirmed
+- [ ] Add a rollback window and frame budget
+- [ ] Add peer-to-peer lockstep synchronization
+- [ ] Add a desync detection and sync-test mode
+- [ ] Add checksum comparison across peers
+- [ ] Add catch-up and frame-skipping under load
+- [ ] Add deterministic math and iteration ordering hooks
+- [ ] Add rollback of audio and visual effects
+- [ ] Add rollback diagnostics and replay
+- [ ] Add rollback determinism tests
+
+## Snapshot Interpolation
+
+- [ ] Add interpolation of remotely replicated entities
+- [ ] Add an interpolation delay and buffer
+- [ ] Add a snapshot buffer of recent remote states
+- [ ] Add hermite and linear interpolation of transforms
+- [ ] Add extrapolation when snapshots are late
+- [ ] Add clamping and blending of extrapolation error
+- [ ] Add per-entity interpolation configuration
+- [ ] Add interpolation of custom replicated fields
+- [ ] Add smoothing of teleports and discontinuities
+- [ ] Add interpolation for animation and gameplay state
+- [ ] Add interpolation diagnostics
+- [ ] Add interpolation debugging visualization
+
+## Authority & Ownership
+
+- [ ] Add server authority over entities by default
+- [ ] Add client authority for owned entities
+- [ ] Add per-component authority configuration
+- [ ] Add authority transfer between server and clients
+- [ ] Add ownership assignment on spawn
+- [ ] Add authority-aware replication and prediction
+- [ ] Add conflict resolution when authority changes
+- [ ] Add validation of client-authored state on the server
+- [ ] Add authority events surfaced to gameplay
+- [ ] Add authority debugging and inspection
+- [ ] Add ownership persistence across reconnection
+- [ ] Add authority tests
+
+## Interest Management & Relevancy
+
+- [ ] Add area-of-interest per client
+- [ ] Add spatial culling of replication by distance
+- [ ] Add relevancy queries integrated with the spatial structure
+- [ ] Add priority scoring per entity and client
+- [ ] Add streaming-integrated relevancy for large worlds
+- [ ] Add team and faction relevancy rules
+- [ ] Add always-relevant and never-relevant tagging
+- [ ] Add relevancy hysteresis to avoid churn
+- [ ] Add per-client relevancy budgets
+- [ ] Add relevancy updates spread across ticks
+- [ ] Add relevancy debugging visualization
+- [ ] Add relevancy performance budgets
+- [ ] Add scalable relevancy for many clients
+- [ ] Add relevancy tests
+
+## Bandwidth & Rate Control
+
+- [ ] Add a per-client bandwidth budget
+- [ ] Add a priority accumulator for fair replication
+- [ ] Add rate limiting and shaping of outgoing traffic
+- [ ] Add congestion-aware send scheduling
+- [ ] Add adaptive quality under constrained bandwidth
+- [ ] Add per-channel bandwidth allocation
+- [ ] Add drop and defer policies under pressure
+- [ ] Add measurement of available bandwidth
+- [ ] Add compression trade-off tuning
+- [ ] Add bandwidth statistics per client and channel
+- [ ] Add over-budget diagnostics
+- [ ] Add bandwidth stress tests
+
+## Lag Compensation
+
+- [ ] Add a historical state buffer for entities
+- [ ] Add server rewind to a client's perceived time
+- [ ] Add rewound hit detection for shooting
+- [ ] Add per-client latency estimation for rewind
+- [ ] Add rewound queries integrated with physics
+- [ ] Add configurable rewind window limits
+- [ ] Add favor-the-shooter and favor-the-target policies
+- [ ] Add interpolation-aware rewind
+- [ ] Add anti-abuse limits on rewind
+- [ ] Add lag-compensation debugging visualization
+- [ ] Add lag-compensation diagnostics
+- [ ] Add lag-compensation tests
+
+## Networked Physics
+
+- [ ] Add replication of physics body state
+- [ ] Add client prediction of physics
+- [ ] Add server reconciliation of physics
+- [ ] Add deterministic physics stepping for networked sim
+- [ ] Add rollback and re-simulation of physics
+- [ ] Add authority handling for physics objects
+- [ ] Add sleeping and relevancy for networked bodies
+- [ ] Add compressed physics-state encoding
+- [ ] Add reconciliation smoothing for physics
+- [ ] Add networked constraint and joint state
+- [ ] Add networked destruction and break events
+- [ ] Add networked-physics tests
+
+## Dedicated Servers & Hosting
+
+- [ ] Add a headless dedicated-server mode
+- [ ] Add server startup, configuration, and shutdown
+- [ ] Add multiple game instances per process
+- [ ] Add sharding and world instancing across servers
+- [ ] Add server discovery and registration
+- [ ] Add load balancing across server instances
+- [ ] Add container and orchestration friendliness
+- [ ] Add horizontal scaling and autoscaling hooks
+- [ ] Add server health checks and heartbeats
+- [ ] Add graceful drain and instance handoff
+- [ ] Add server-side logging and metrics export
+- [ ] Add hot-config and remote administration
+- [ ] Add crash recovery and instance restart
+- [ ] Add server-side determinism for authoritative sim
+- [ ] Add resource budgets per instance
+- [ ] Add server-side anti-cheat validation hooks
+
+## Listen Server, P2P & Host Migration
+
+- [ ] Add a listen-server mode where the host is a player
+- [ ] Add peer-to-peer connectivity
+- [ ] Add host election and migration on host loss
+- [ ] Add state transfer during host migration
+- [ ] Add relay fallback when direct P2P fails
+- [ ] Add mesh and star topologies
+- [ ] Add authority handling in P2P sessions
+- [ ] Add seamless client experience through migration
+- [ ] Add P2P security and validation
+- [ ] Add P2P and migration tests
+
+## Matchmaking, Lobbies & Sessions
+
+- [ ] Add lobby creation and joining
+- [ ] Add rooms with capacity and settings
+- [ ] Add ready-up and start flows
+- [ ] Add party and group support
+- [ ] Add skill-based matchmaking
+- [ ] Add region and latency-based matching
+- [ ] Add queue management and estimated wait
+- [ ] Add backfill for in-progress matches
+- [ ] Add dedicated-server allocation on match found
+- [ ] Add reconnection to an active match
+- [ ] Add invites and join-by-code
+- [ ] Add presence and friends integration hooks
+- [ ] Add session metadata and browsing
+- [ ] Add matchmaking rules configuration
+- [ ] Add matchmaking diagnostics
+- [ ] Add matchmaking tests
+
+## Security & Anti-Cheat
+
+- [ ] Add encryption and authentication on all traffic
+- [ ] Add server-side validation of all client inputs
+- [ ] Add authority checks so clients cannot mutate others
+- [ ] Add replay-attack protection with nonces and sequence checks
+- [ ] Add rate limiting and flood protection
+- [ ] Add packet sanity and bounds validation
+- [ ] Add movement and physics sanity checks
+- [ ] Add statistical cheat-detection hooks
+- [ ] Add integrity checks and tamper detection hooks
+- [ ] Add denial-of-service mitigation at the transport
+- [ ] Add connection throttling and blacklisting
+- [ ] Add secure token issuance and rotation
+- [ ] Add audit logging of suspicious activity
+- [ ] Add sandboxing of untrusted message handling
+- [ ] Add privacy handling of player data
+- [ ] Add security tests and fuzzing
+
+## Web & Cross-Platform Transport
+
+- [ ] Add a browser client over WebTransport
+- [ ] Add a browser fallback over WebSocket
+- [ ] Add a peer-to-peer browser path over web real-time transport
+- [ ] Add a shared code path across native and web builds
+- [ ] Add console and store platform networking backends
+- [ ] Add platform certificate and trust handling
+- [ ] Add cross-play between platforms
+- [ ] Add platform-specific NAT and relay handling
+- [ ] Add capability differences handled per platform
+- [ ] Add cross-platform networking tests
+
+## Voice & Media over Network
+
+- [ ] Add a transport path for encoded voice
+- [ ] Add positional voice synchronized with entities
+- [ ] Add voice channels tied to sessions and teams
+- [ ] Add jitter buffering for networked voice
+- [ ] Add bandwidth sharing between voice and gameplay
+- [ ] Add mute, block, and priority for voice
+- [ ] Add optional media and data-stream transport
+- [ ] Add voice-network diagnostics
+- [ ] Add voice-network security
+- [ ] Add voice-network tests
+
+## Network Simulation, Debugging & Metrics
+
+- [ ] Add a network simulator injecting latency, jitter, and loss
+- [ ] Add reorder and duplication injection
+- [ ] Add bandwidth throttling in the simulator
+- [ ] Add a packet inspector and logger
+- [ ] Add a replication visualizer per entity and client
+- [ ] Add per-client bandwidth and RTT dashboards
+- [ ] Add recording and replay of network sessions
+- [ ] Add deterministic replay from recorded traffic
+- [ ] Add a desync inspector for rollback and prediction
+- [ ] Add server and client profiling of network cost
+- [ ] Add machine-readable network metrics for CI
+- [ ] Add live network overlays in play
+- [ ] Add breadcrumb logging for connection issues
+- [ ] Add reproduction capture for bug reports
+- [ ] Add alerting hooks for server health
+- [ ] Add simulation presets (mobile, wifi, congested)
+
+## Testing & Validation
+
+- [ ] Add transport reliability and ordering tests
+- [ ] Add serialization round-trip and fuzz tests
+- [ ] Add replication correctness tests
+- [ ] Add entity-id mapping and remapping tests
+- [ ] Add prediction and reconciliation tests
+- [ ] Add rollback determinism and sync tests
+- [ ] Add snapshot and delta correctness tests
+- [ ] Add interest-management correctness tests
+- [ ] Add bandwidth and rate-control tests
+- [ ] Add lag-compensation tests
+- [ ] Add networked-physics tests
+- [ ] Add matchmaking and lobby tests
+- [ ] Add security and anti-cheat tests
+- [ ] Add cross-platform and web-client tests
+- [ ] Add latency, loss, and reorder soak tests
+- [ ] Add many-client scalability stress tests
+- [ ] Add host-migration and reconnection tests
+- [ ] Add FFI-boundary safety and leak tests
+
+# 18 · AI / Navigation / Behavior / Perception / Crowd
+
+## Navigation Mesh & Generation
+
+- [ ] Add a navigation mesh (navmesh): a polygon mesh of walkable surfaces generated from world geometry
+- [ ] Add voxel rasterization of collision geometry for navmesh building
+- [ ] Add walkable-surface filtering by slope and height
+- [ ] Add region and contour generation from voxels
+- [ ] Add convex-polygon and detail-mesh generation
+- [ ] Add a tiled navmesh for large worlds
+- [ ] Add per-tile build and streaming with the world
+- [ ] Add navmesh generation from terrain and heightfields
+- [ ] Add multiple navmeshes for different agent sizes
+- [ ] Add agent radius, height, step, and slope parameters
+- [ ] Add area types baked into the navmesh
+- [ ] Add navigation-bounds volumes defining where to build
+- [ ] Add exclude and include volumes
+- [ ] Add offline baking of static navmesh
+- [ ] Add runtime generation for dynamic worlds
+- [ ] Add incremental rebuild of changed tiles
+- [ ] Add navmesh serialization and streaming
+- [ ] Add navmesh validation and gap detection
+- [ ] Add a one-click bake with sensible defaults
+- [ ] Add navmesh generation diagnostics
+
+## Navigation Server & Runtime
+
+- [ ] Add a central navigation service that owns navmeshes and queries
+- [ ] Add path requests routed through the service
+- [ ] Add synchronous and asynchronous path queries
+- [ ] Add a query for the nearest point on the navmesh
+- [ ] Add reachability and connectivity queries
+- [ ] Add ray and walkability checks along the navmesh
+- [ ] Add multiple navigation maps (2D and 3D)
+- [ ] Add per-map configuration and layers
+- [ ] Add thread-safe query submission from gameplay
+- [ ] Add batched path queries across the worker pool
+- [ ] Add a query cache for repeated requests
+- [ ] Add navigation events surfaced to gameplay
+- [ ] Add a scripting API for navigation queries
+- [ ] Add navigation-service diagnostics
+
+## Pathfinding Algorithms
+
+- [ ] Add an A* pathfinder over the navmesh
+- [ ] Add configurable heuristics and cost functions
+- [ ] Add hierarchical pathfinding for long paths
+- [ ] Add path smoothing with the funnel (string-pulling) algorithm
+- [ ] Add any-angle pathfinding for open areas
+- [ ] Add partial paths when the goal is unreachable
+- [ ] Add path corridors that bound local steering
+- [ ] Add path re-planning on navmesh change
+- [ ] Add cost overrides and penalties per area
+- [ ] Add waypoint and graph-based navigation as an option
+- [ ] Add multi-goal and nearest-of-many queries
+- [ ] Add flow-field pathfinding for many agents to one goal
+- [ ] Add path budgets and time-sliced search
+- [ ] Add deterministic pathfinding for replay and tests
+- [ ] Add path caching and reuse
+- [ ] Add pathfinding diagnostics
+
+## Navigation Agents
+
+- [ ] Add a navigation-agent component that moves along paths
+- [ ] Add a move-to-location command
+- [ ] Add a move-to-and-follow-actor command
+- [ ] Add agent radius, height, and shape
+- [ ] Add speed, acceleration, and turning limits
+- [ ] Add stopping distance and arrival handling
+- [ ] Add path following with corner cutting
+- [ ] Add automatic re-path on blockage
+- [ ] Add binding of an agent to a specific navmesh
+- [ ] Add ground snapping and off-navmesh recovery
+- [ ] Add pause, resume, and stop of movement
+- [ ] Add velocity output consumed by movement and animation
+- [ ] Add root-motion and physics-movement reconciliation
+- [ ] Add agent state and events (moving, blocked, arrived)
+- [ ] Add a scripting API for agent movement
+- [ ] Add agent debug visualization
+
+## Dynamic Navigation & Obstacles
+
+- [ ] Add dynamic obstacles that carve the navmesh
+- [ ] Add navigation modifiers that change area cost at runtime
+- [ ] Add moving-obstacle handling with local avoidance
+- [ ] Add door and gate navigation state
+- [ ] Add dirty-region tracking for partial rebuilds
+- [ ] Add async rebuild of affected navmesh tiles
+- [ ] Add temporary blocking and unblocking of areas
+- [ ] Add obstacle shapes (box, cylinder, convex)
+- [ ] Add priority between carving and cost modifiers
+- [ ] Add rebuild budgets to avoid frame spikes
+- [ ] Add invalidation events to re-path affected agents
+- [ ] Add dynamic-navigation diagnostics
+- [ ] Add dynamic-navigation debug visualization
+- [ ] Add validation of navmesh consistency after edits
+
+## Off-Mesh Links & Traversal
+
+- [ ] Add off-mesh links connecting disconnected navmesh areas
+- [ ] Add jump and drop-down links
+- [ ] Add ladder and climb links
+- [ ] Add teleport and portal links
+- [ ] Add automatic link generation from geometry
+- [ ] Add hand-placed links in the editor
+- [ ] Add smart links that trigger traversal animations
+- [ ] Add per-link cost and agent filtering
+- [ ] Add one-way and bidirectional links
+- [ ] Add link entry and exit alignment
+- [ ] Add link traversal events for gameplay and animation
+- [ ] Add off-mesh-link debug visualization
+
+## Local Avoidance & Steering
+
+- [ ] Add reciprocal velocity-obstacle (RVO/ORCA) avoidance between agents
+- [ ] Add a seek steering behavior
+- [ ] Add flee and evade behaviors
+- [ ] Add arrive with deceleration
+- [ ] Add pursue and intercept behaviors
+- [ ] Add wander and patrol behaviors
+- [ ] Add separation, cohesion, and alignment (flocking)
+- [ ] Add obstacle-avoidance steering
+- [ ] Add wall-following and corridor-following
+- [ ] Add priority and weighting between behaviors
+- [ ] Add avoidance priority so important agents pass first
+- [ ] Add crowd-aware avoidance quality levels
+- [ ] Add avoidance of dynamic non-agent obstacles
+- [ ] Add smoothing to avoid jitter and deadlocks
+- [ ] Add deadlock detection and resolution
+- [ ] Add avoidance layers and masks
+- [ ] Add steering integration with animation and physics
+- [ ] Add avoidance debug visualization
+
+## Navigation Areas, Costs & Filters
+
+- [ ] Add named navigation area types (default, water, road, danger)
+- [ ] Add per-area traversal cost
+- [ ] Add painting of areas onto the navmesh
+- [ ] Add area assignment from surface materials and volumes
+- [ ] Add query filters selecting allowed areas per agent
+- [ ] Add per-agent cost multipliers
+- [ ] Add temporary cost overrides (avoid fire, prefer cover)
+- [ ] Add area-based include and exclude rules
+- [ ] Add flags for jump-required and swim areas
+- [ ] Add filter presets for common agent types
+- [ ] Add area and cost debug visualization
+- [ ] Add validation of area configuration
+
+## Behavior Trees
+
+- [ ] Add a behavior-tree asset and runtime
+- [ ] Add sequence and selector composite nodes
+- [ ] Add parallel composite nodes
+- [ ] Add a random and weighted selector
+- [ ] Add decorator nodes for conditions
+- [ ] Add loop, cooldown, and time-limit decorators
+- [ ] Add blackboard-based condition decorators
+- [ ] Add task (leaf) action nodes
+- [ ] Add latent tasks that run over multiple frames
+- [ ] Add service nodes that tick while a branch is active
+- [ ] Add lower-priority and self aborts
+- [ ] Add observer-driven aborts from blackboard changes
+- [ ] Add subtrees and reusable behavior modules
+- [ ] Add dynamic subtree injection
+- [ ] Add a task and node library
+- [ ] Add custom task and decorator authoring
+- [ ] Add per-node instance data
+- [ ] Add tree evaluation off the main thread
+- [ ] Add deterministic tree evaluation for tests
+- [ ] Add tree hot-reload
+- [ ] Add behavior-tree debugging (active path, node states)
+- [ ] Add behavior-tree authoring in a visual editor
+
+## Blackboard
+
+- [ ] Add a typed blackboard of key-value data
+- [ ] Add scalar, vector, entity, and enum key types
+- [ ] Add per-agent blackboard instances
+- [ ] Add a shared blackboard for groups
+- [ ] Add key observers that notify on change
+- [ ] Add default values and key metadata
+- [ ] Add writing from perception and gameplay
+- [ ] Add reading from behavior, utility, and planners
+- [ ] Add blackboard serialization for save and network
+- [ ] Add blackboard debugging and live inspection
+- [ ] Add blackboard validation
+- [ ] Add a scripting API for blackboard access
+
+## Utility AI
+
+- [ ] Add a utility-based decision system
+- [ ] Add actions with scored considerations
+- [ ] Add response curves mapping inputs to scores
+- [ ] Add weighting and combination of considerations
+- [ ] Add context and target scoring
+- [ ] Add highest-score and weighted-random selection
+- [ ] Add cooldowns and inertia to avoid thrashing
+- [ ] Add data-driven utility definitions
+- [ ] Add integration with behavior trees as a selector
+- [ ] Add per-agent utility tuning
+- [ ] Add authoring of considerations and curves
+- [ ] Add utility scoring debug visualization
+- [ ] Add deterministic utility evaluation
+- [ ] Add utility validation
+
+## Goal-Oriented Action Planning
+
+- [ ] Add goals with desired world-state conditions
+- [ ] Add actions with preconditions and effects
+- [ ] Add a symbolic world-state representation
+- [ ] Add a planner that searches action space with A*
+- [ ] Add action costs and plan optimization
+- [ ] Add dynamic replanning on world-state change
+- [ ] Add goal selection and prioritization
+- [ ] Add plan execution with per-action monitoring
+- [ ] Add plan invalidation and recovery
+- [ ] Add sensors feeding the world state
+- [ ] Add data-driven goals and actions
+- [ ] Add planning budgets and time-slicing
+- [ ] Add plan debugging and visualization
+- [ ] Add deterministic planning for tests
+
+## Hierarchical Task Networks
+
+- [ ] Add primitive and compound tasks
+- [ ] Add methods that decompose compound tasks
+- [ ] Add preconditions on methods and tasks
+- [ ] Add a planner that builds a task hierarchy
+- [ ] Add partial and re-planning support
+- [ ] Add world-state integration with sensors
+- [ ] Add domain authoring for task networks
+- [ ] Add plan execution and monitoring
+- [ ] Add planning budgets
+- [ ] Add planning diagnostics and visualization
+
+## AI State Machines
+
+- [ ] Add a reusable AI finite state machine
+- [ ] Add states with enter, update, and exit
+- [ ] Add condition- and event-driven transitions
+- [ ] Add a state stack for interruptions
+- [ ] Add hierarchical AI states
+- [ ] Add blackboard-driven transitions
+- [ ] Add integration with behavior trees and utility
+- [ ] Add state serialization for save and network
+- [ ] Add state debugging and visualization
+- [ ] Add deterministic state evaluation
+
+## Perception System
+
+- [ ] Add a perception component with configurable senses
+- [ ] Add a sight sense with range, cone, and line-of-sight
+- [ ] Add peripheral vision and central-focus falloff
+- [ ] Add a hearing sense with radius and loudness
+- [ ] Add a touch and collision sense
+- [ ] Add a damage sense reacting to being hit
+- [ ] Add a team and affiliation sense
+- [ ] Add stimuli sources that emit sight, sound, and events
+- [ ] Add line-of-sight checks against geometry
+- [ ] Add detection accumulation over time (awareness meter)
+- [ ] Add detection thresholds and states (unaware, suspicious, alert)
+- [ ] Add stealth interaction (light, cover, noise, crouch)
+- [ ] Add perception updates budgeted and time-sliced
+- [ ] Add async line-of-sight queries
+- [ ] Add perception events routed to behavior and blackboard
+- [ ] Add a scripting API for perception
+- [ ] Add perception debug visualization (cones, hearing radius)
+- [ ] Add perception validation
+
+## Sensory Memory & Awareness
+
+- [ ] Add memory of perceived targets
+- [ ] Add last-known-position tracking
+- [ ] Add forgetting over time
+- [ ] Add confidence and staleness of memories
+- [ ] Add threat assessment and target selection
+- [ ] Add group and shared perception memory
+- [ ] Add investigation of last-known positions
+- [ ] Add search behavior when a target is lost
+- [ ] Add alertness propagation between agents
+- [ ] Add reaction times and detection delays
+- [ ] Add memory serialization for save and network
+- [ ] Add awareness-state events for gameplay and UI
+- [ ] Add memory debugging and inspection
+- [ ] Add memory validation
+
+## Environment Queries & Spatial Reasoning
+
+- [ ] Add a spatial query system that scores locations and actors
+- [ ] Add grid, ring, and points-around generators
+- [ ] Add path-and-actor-based generators
+- [ ] Add distance and dot-product tests
+- [ ] Add line-of-sight and trace tests
+- [ ] Add overlap and clearance tests
+- [ ] Add navmesh-reachability tests
+- [ ] Add scoring, weighting, and normalization of results
+- [ ] Add best-single and best-N run modes
+- [ ] Add async query execution and time-slicing
+- [ ] Add query use inside behavior trees and utility
+- [ ] Add data-driven query definitions
+- [ ] Add caching of query results
+- [ ] Add query authoring tools
+- [ ] Add query debug visualization (scored points)
+- [ ] Add deterministic query evaluation
+
+## Influence Maps & Tactical Reasoning
+
+- [ ] Add influence maps of threat, presence, and control
+- [ ] Add propagation and decay of influence
+- [ ] Add multiple layers (danger, allies, objectives)
+- [ ] Add sampling of maps for decision inputs
+- [ ] Add a cover system with cover points and quality
+- [ ] Add tactical position selection (flank, retreat, advance)
+- [ ] Add interaction points and usable objects for AI
+- [ ] Add occupancy and reservation of positions and objects
+- [ ] Add group tactical coordination
+- [ ] Add influence-map budgets and resolution control
+- [ ] Add influence and cover debug visualization
+- [ ] Add tactical-reasoning authoring
+- [ ] Add deterministic tactical evaluation
+- [ ] Add tactical-reasoning validation
+
+## Crowd Simulation
+
+- [ ] Add a crowd manager coordinating many agents
+- [ ] Add shared local avoidance across the crowd
+- [ ] Add crowd flow and lane formation
+- [ ] Add density-aware movement and slowdown
+- [ ] Add goal and destination assignment for crowds
+- [ ] Add spawning and despawning of crowd agents
+- [ ] Add crowd navigation on the shared navmesh
+- [ ] Add priority and politeness rules
+- [ ] Add congestion and bottleneck handling
+- [ ] Add ambient crowd behaviors (idle, wander, react)
+- [ ] Add crowd reaction to events and hazards
+- [ ] Add crowd LOD by distance and visibility
+- [ ] Add crowd budgets and quality scaling
+- [ ] Add crowd debug visualization
+- [ ] Add crowd authoring and presets
+- [ ] Add crowd validation
+
+## Large-Scale / Mass AI
+
+- [ ] Add a data-oriented agent representation in chunk storage
+- [ ] Add processing of mass agents with SIMD kernels
+- [ ] Add parallel agent updates across the worker pool
+- [ ] Add behavior LOD (full behavior near, simplified far)
+- [ ] Add update-rate LOD by distance and visibility
+- [ ] Add representation LOD (full agent, proxy, static)
+- [ ] Add flow-field navigation for huge agent counts
+- [ ] Add shared and pooled behavior state
+- [ ] Add spatial partitioning of mass agents
+- [ ] Add promotion and demotion between detailed and mass agents
+- [ ] Add bulk spawn and despawn through the command buffer
+- [ ] Add zero-copy handoff of agent transforms to rendering
+- [ ] Add memory-traffic-aware batch sizes
+- [ ] Add deterministic parallel agent updates
+- [ ] Add scaling to hundreds of thousands of agents within budget
+- [ ] Add mass-AI throughput diagnostics
+- [ ] Add a mass-AI stress harness
+- [ ] Add mass-AI debug visualization
+
+## Formations & Group Behavior
+
+- [ ] Add formation definitions (line, column, wedge, circle)
+- [ ] Add slot assignment within a formation
+- [ ] Add leader-follower movement
+- [ ] Add formation maintenance while moving and turning
+- [ ] Add dynamic re-forming after obstacles
+- [ ] Add group goals and coordinated tasks
+- [ ] Add role assignment within a group
+- [ ] Add squad-level decision making
+- [ ] Add communication and shared blackboard for groups
+- [ ] Add formation authoring and presets
+- [ ] Add formation debug visualization
+- [ ] Add formation validation
+
+## AI Agent & Brain Components
+
+- [ ] Add an AI brain component that drives an agent
+- [ ] Add composition of navigation, perception, and behavior components
+- [ ] Add agent lifecycle (spawn, activate, deactivate, destroy)
+- [ ] Add per-agent configuration assets
+- [ ] Add agent templates and archetypes
+- [ ] Add agent teams, factions, and relationships
+- [ ] Add agent difficulty and skill parameters
+- [ ] Add agent state persistence for save and network
+- [ ] Add agent messaging and events
+- [ ] Add agent enable and disable by relevancy
+- [ ] Add a scripting API for agent control
+- [ ] Add agent debugging and inspection
+- [ ] Add reusable agent presets
+- [ ] Add agent validation
+
+## AI Authoring & Editor Tools
+
+- [ ] Add a behavior-tree visual editor
+- [ ] Add a utility and consideration editor
+- [ ] Add a planner domain editor for goals and actions
+- [ ] Add a blackboard editor
+- [ ] Add an environment-query editor
+- [ ] Add navmesh build settings and preview in the editor
+- [ ] Add area painting and link placement tools
+- [ ] Add perception setup and preview
+- [ ] Add crowd and formation authoring
+- [ ] Add agent template and preset authoring
+- [ ] Add live preview of AI in play
+- [ ] Add copy, paste, and reuse of AI assets
+- [ ] Add undo and redo across AI edits
+- [ ] Add templates and starting AI setups
+- [ ] Add a gallery of example AI to learn from
+- [ ] Add AI-asset validation and warnings
+
+## AI Scripting & Gameplay Integration
+
+- [ ] Add a scripting API for custom tasks and decorators
+- [ ] Add custom considerations and planner actions from script
+- [ ] Add AI events consumable by gameplay
+- [ ] Add gameplay commands to AI (move, attack, follow, flee)
+- [ ] Add integration with the gameplay component library
+- [ ] Add hooks into animation for AI-driven motion
+- [ ] Add integration with dialogue and interaction systems
+- [ ] Add data-driven AI configuration
+- [ ] Add deterministic AI for replay and tests
+- [ ] Add AI-scripting debugging
+- [ ] Add hot-reload of AI scripts
+- [ ] Add AI-scripting validation
+
+## AI Debugging & Visualization
+
+- [ ] Add a gameplay debugger overlay for selected agents
+- [ ] Add navmesh and path visualization
+- [ ] Add perception visualization (sight cones, hearing, stimuli)
+- [ ] Add behavior-tree active-path and node-state display
+- [ ] Add blackboard live values
+- [ ] Add planner and plan visualization
+- [ ] Add utility-score breakdown display
+- [ ] Add environment-query scored-point display
+- [ ] Add influence-map and cover visualization
+- [ ] Add avoidance and steering vectors
+- [ ] Add agent state and memory inspection
+- [ ] Add per-agent AI timing and cost
+- [ ] Add recording and replay of AI decisions
+- [ ] Add filtering and selection of debugged agents
+- [ ] Add a screenshot-friendly clean AI overlay
+- [ ] Add step-through of AI decisions
+
+## AI Performance & Scaling
+
+- [ ] Add time-slicing of AI updates across frames
+- [ ] Add per-agent and per-system update budgets
+- [ ] Add distance- and visibility-based AI LOD
+- [ ] Add parallel AI evaluation across the worker pool
+- [ ] Add job-graph scheduling of perception, planning, and navigation
+- [ ] Add pooling of AI state and query buffers
+- [ ] Add caching of paths, queries, and line-of-sight
+- [ ] Add async navigation and query execution
+- [ ] Add dormancy for off-screen and distant agents
+- [ ] Add memory budgets for AI data
+- [ ] Add profiling and cost attribution per AI subsystem
+- [ ] Add a headless AI benchmark harness
+- [ ] Add machine-readable AI metrics for CI
+- [ ] Add over-budget diagnostics with responsible agents
+
+## AI User-Friendly Setup
+
+- [ ] Add a one-click navmesh bake for a level
+- [ ] Add automatic agent setup from a character
+- [ ] Add ready-made behavior presets (patrol, guard, chase, flee, wander)
+- [ ] Add drag-and-drop AI behaviors onto agents
+- [ ] Add plain-language behavior and perception settings
+- [ ] Add sensible defaults so an agent walks and reacts immediately
+- [ ] Add a beginner mode that hides advanced tuning
+- [ ] Add guided setup for navigation, perception, and behavior
+- [ ] Add live preview and one-click test of AI
+- [ ] Add friendly warnings with one-click fixes
+- [ ] Add a gallery of example agents to open and tweak
+- [ ] Add consistent, reversible AI authoring
+
+## AI Testing & Validation
+
+- [ ] Add navmesh generation correctness tests
+- [ ] Add pathfinding correctness and determinism tests
+- [ ] Add path-smoothing and corridor tests
+- [ ] Add local-avoidance and deadlock tests
+- [ ] Add off-mesh-link traversal tests
+- [ ] Add behavior-tree execution and abort tests
+- [ ] Add utility and planner determinism tests
+- [ ] Add perception detection and line-of-sight tests
+- [ ] Add memory and awareness-state tests
+- [ ] Add environment-query correctness tests
+- [ ] Add crowd flow and congestion tests
+- [ ] Add mass-AI scale and performance stress tests
+- [ ] Add formation-maintenance tests
+- [ ] Add dynamic-navmesh rebuild tests
+- [ ] Add save and network state tests for AI
+- [ ] Add golden-scenario AI regression tests
+
+## 3D & Volumetric Navigation
+
+- [ ] Add volumetric navigation data for flying and swimming agents
+- [ ] Add a sparse voxel octree for the 3D navigation space
+- [ ] Add 3D pathfinding through open volumes
+- [ ] Add navigation volumes that bound where 3D nav is built
+- [ ] Add free-flight and tethered-flight movement
+- [ ] Add swimming navigation within water bodies
+- [ ] Add 3D local avoidance between flying agents
+- [ ] Add height and ceiling constraints for 3D agents
+- [ ] Add hybrid navigation switching between navmesh and volume
+- [ ] Add links between ground and air navigation
+- [ ] Add 3D path smoothing and corridors
+- [ ] Add streaming and rebuild of volumetric nav data
+- [ ] Add 3D navigation debug visualization
+- [ ] Add 3D navigation tests
+
+## Smart Objects & Environment Interaction
+
+- [ ] Add smart objects that advertise available actions
+- [ ] Add interaction slots with entry points and directions
+- [ ] Add contextual animations bound to smart-object use
+- [ ] Add querying of nearby smart objects by an agent
+- [ ] Add filtering of objects by tags, needs, and conditions
+- [ ] Add reservation and release of interaction slots
+- [ ] Add multi-agent interactions on shared objects
+- [ ] Add preconditions and gameplay effects on use
+- [ ] Add navigation to and alignment with interaction slots
+- [ ] Add interruption and abort of interactions
+- [ ] Add smart-object authoring and setup
+- [ ] Add runtime registration of smart objects
+- [ ] Add smart-object debug visualization
+- [ ] Add smart-object tests
+
+## Combat & Tactical AI
+
+- [ ] Add a combat behavior layer for engaging targets
+- [ ] Add target selection and threat prioritization
+- [ ] Add aiming with accuracy, spread, and skill
+- [ ] Add weapon handling (fire, reload, switch)
+- [ ] Add firing patterns (burst, suppressive, aimed)
+- [ ] Add taking and using cover during combat
+- [ ] Add peeking and blind-fire from cover
+- [ ] Add flanking and advancing maneuvers
+- [ ] Add retreat and disengage under pressure
+- [ ] Add grenade and ability usage decisions
+- [ ] Add reaction to incoming fire and suppression
+- [ ] Add coordinated squad fire and movement
+- [ ] Add engagement ranges and positioning
+- [ ] Add difficulty tuning of combat skill
+- [ ] Add combat-AI debug visualization
+- [ ] Add combat-AI tests
+
+## Vehicle & Traffic AI
+
+- [ ] Add AI drivers that control vehicles
+- [ ] Add path and racing-line following for vehicles
+- [ ] Add speed control for corners and obstacles
+- [ ] Add a road-network and lane graph for traffic
+- [ ] Add lane following and lane changing
+- [ ] Add intersection and right-of-way handling
+- [ ] Add traffic rules (signals, signs, speed limits)
+- [ ] Add obstacle and collision avoidance for vehicles
+- [ ] Add pedestrian and cross-traffic yielding
+- [ ] Add parking and pull-over behaviors
+- [ ] Add traffic density and spawning management
+- [ ] Add vehicle-AI difficulty and aggression
+- [ ] Add vehicle and traffic debug visualization
+- [ ] Add vehicle and traffic AI tests
+
+## AI Director & Encounter Management
+
+- [ ] Add an AI director that paces gameplay intensity
+- [ ] Add intensity build-up and relaxation cycles
+- [ ] Add dynamic difficulty adjustment
+- [ ] Add encounter and spawn scheduling
+- [ ] Add population budgets and caps
+- [ ] Add spawn points and reinforcement waves
+- [ ] Add relevancy-aware spawning around players
+- [ ] Add despawn of irrelevant and distant agents
+- [ ] Add encounter authoring and rules
+- [ ] Add adaptive spawning from player performance
+- [ ] Add director hooks for scripted moments
+- [ ] Add director state persistence
+- [ ] Add director debug visualization
+- [ ] Add director tests
+
+## NPC Schedules, Needs & Social AI
+
+- [ ] Add daily schedules and routines for NPCs
+- [ ] Add time-of-day-driven activity selection
+- [ ] Add a needs model (hunger, rest, social, hygiene)
+- [ ] Add utility-driven satisfaction of needs
+- [ ] Add ownership of homes, jobs, and locations
+- [ ] Add relationships and reputation between characters
+- [ ] Add mood and emotion affecting behavior
+- [ ] Add social interactions between NPCs
+- [ ] Add knowledge and gossip spreading between agents
+- [ ] Add reactions to player actions and world events
+- [ ] Add ambient settlement-life behaviors
+- [ ] Add schedule interruption and recovery
+- [ ] Add data-driven routine and needs authoring
+- [ ] Add schedule and needs persistence in saves
+- [ ] Add social-AI debug visualization
+- [ ] Add social-AI tests
+
+## Dialogue, Barks & Conversation AI
+
+- [ ] Add a bark system for contextual voice lines
+- [ ] Add trigger conditions for barks (combat, idle, reaction)
+- [ ] Add priority, cooldown, and deduplication of barks
+- [ ] Add group and call-and-response barks
+- [ ] Add conversation between two or more agents
+- [ ] Add turn-taking and response selection
+- [ ] Add interruption of conversation by events
+- [ ] Add subtitle and localization hooks for lines
+- [ ] Add lip-sync and facial-animation triggers
+- [ ] Add data-driven line banks and rules
+- [ ] Add bark and conversation debugging
+- [ ] Add dialogue-AI tests
+
+## Machine Learning & Learning Agents
+
+- [ ] Add a learning-agent framework for trained behaviors
+- [ ] Add sensor, action, and reward definitions
+- [ ] Add reinforcement-learning training support
+- [ ] Add imitation learning from recorded play
+- [ ] Add a neural-network inference runtime
+- [ ] Add on-device inference budgets and batching
+- [ ] Add hybrid behaviors combining learned and scripted logic
+- [ ] Add training-environment and episode management
+- [ ] Add model versioning and hot-swap
+- [ ] Add determinism and reproducibility controls
+- [ ] Add safety and fallback when a model misbehaves
+- [ ] Add learned navigation and locomotion policies
+- [ ] Add learning-agent diagnostics
+- [ ] Add learning-agent tests
+
+## AI Motion & Locomotion Integration
+
+- [ ] Add animation-driven movement for AI agents
+- [ ] Add motion-matching selection for AI locomotion
+- [ ] Add procedural locomotion for varied body types
+- [ ] Add foot placement and IK on uneven ground
+- [ ] Add turn-in-place and pivot handling
+- [ ] Add speed and stride warping to match path speed
+- [ ] Add contextual animation selection (walk, sneak, injured)
+- [ ] Add smooth start, stop, and direction changes
+- [ ] Add moving-platform and dynamic-surface handling
+- [ ] Add root-motion-and-navigation reconciliation
+- [ ] Add locomotion debug visualization
+- [ ] Add locomotion-integration tests
+
+## Reactions, Interrupts & Emotes
+
+- [ ] Add a reaction system for immediate responses
+- [ ] Add flinch, dodge, and stagger reactions
+- [ ] Add take-cover reflexes under fire
+- [ ] Add interruption of the current behavior by priority events
+- [ ] Add resumption of interrupted behavior
+- [ ] Add hit and damage reactions
+- [ ] Add alert and startle reactions
+- [ ] Add emotes and gestures for communication
+- [ ] Add reaction cooldowns and blending
+- [ ] Add reaction-system tests
+
+# 19 · Advanced Rendering & Ray Tracing
+
+## Ray-Tracing Foundation
+
+- [ ] Add ray-tracing acceleration structures (bottom-level and top-level)
+- [ ] Add build, refit, and compaction of acceleration structures
+- [ ] Add per-instance transforms and masks in the top-level structure
+- [ ] Add a ray-tracing pipeline with ray-generation, hit, and miss shaders
+- [ ] Add inline ray queries for lightweight tracing
+- [ ] Add ray payloads and recursion controls
+- [ ] Add alpha-tested and transparent hit handling
+- [ ] Add streaming and updating of acceleration structures for dynamic scenes
+- [ ] Add skinned-mesh acceleration-structure updates
+- [ ] Add a capability check and raster fallback where ray tracing is unavailable
+- [ ] Add ray-tracing cost budgets and diagnostics
+- [ ] Add ray-tracing debug visualization
+
+## Ray-Traced Lighting Effects
+
+- [ ] Add ray-traced reflections
+- [ ] Add ray-traced shadows with soft penumbra
+- [ ] Add ray-traced ambient occlusion
+- [ ] Add ray-traced global illumination
+- [ ] Add ray-traced translucency and refraction
+- [ ] Add hybrid ray-traced and screen-space composition
+- [ ] Add ray count and quality scaling
+- [ ] Add a reference path tracer for validation and cinematics
+- [ ] Add multi-bounce and importance sampling
+- [ ] Add ray-traced-lighting debug visualization
+
+## Ray-Traced Denoising
+
+- [ ] Add a spatiotemporal denoiser for ray-traced signals
+- [ ] Add separate denoisers for reflections, shadows, and global illumination
+- [ ] Add temporal accumulation with history rejection
+- [ ] Add variance-guided spatial filtering
+- [ ] Add disocclusion handling
+- [ ] Add firefly suppression
+- [ ] Add denoiser quality presets
+- [ ] Add denoiser debug visualization
+
+## Virtual Shadow Maps
+
+- [ ] Add virtual shadow maps with a page table
+- [ ] Add on-demand shadow page allocation and residency
+- [ ] Add per-pixel shadow resolution matched to screen density
+- [ ] Add caching of static shadow pages
+- [ ] Add invalidation on light or caster movement
+- [ ] Add clip-map or cascade integration for directional lights
+- [ ] Add page-pool budgets and eviction
+- [ ] Add virtual-shadow-map debug visualization
+
+## Advanced GPU Shading Features
+
+- [ ] Add variable-rate shading with per-tile and per-material rates
+- [ ] Add content-adaptive and motion-adaptive shading rates
+- [ ] Add a mesh and amplification shader pipeline
+- [ ] Add meshlet rendering through mesh shaders
+- [ ] Add GPU work graphs for GPU-driven work expansion
+- [ ] Add bindless resources and descriptor indexing
+- [ ] Add a wave and subgroup intrinsics abstraction
+- [ ] Add sampler-feedback-driven texture streaming
+- [ ] Add streaming virtual textures for large material sets
+- [ ] Add capability gating and fallbacks for each feature
+- [ ] Add advanced-feature diagnostics
+
+## Upscaling, Frame Generation & Reconstruction
+
+- [ ] Add temporal super-resolution upscaling
+- [ ] Add an integration layer for vendor hardware upscalers
+- [ ] Add frame generation and interpolation
+- [ ] Add reactive and transparency masks for reconstruction
+- [ ] Add motion-vector and depth inputs for upscalers
+- [ ] Add dynamic resolution feeding the upscaler
+- [ ] Add sharpening and post-upscale filters
+- [ ] Add latency management with frame generation
+- [ ] Add quality and performance presets
+- [ ] Add upscaling and frame-generation diagnostics
+
+## HDR Display Output & Wide Gamut
+
+- [ ] Add HDR display detection and capability query
+- [ ] Add HDR10 and perceptual-quantizer output
+- [ ] Add scRGB and extended-range output
+- [ ] Add wide-gamut (Rec.2020 and DCI-P3) handling
+- [ ] Add HDR tone-mapping and paper-white calibration
+- [ ] Add an in-game HDR calibration screen
+- [ ] Add UI and subtitle brightness handling in HDR
+- [ ] Add graceful fallback to standard-dynamic-range output
+- [ ] Add HDR-output validation and diagnostics
+
+# 20 · Core Services & Diagnostics
+
+## CPU Profiling, Tracing & Instrumentation
+
+- [ ] Add named CPU profiling scopes
+- [ ] Add a hierarchical frame timeline across subsystems
+- [ ] Add a flame-graph and call-tree view
+- [ ] Add per-thread timelines
+- [ ] Add counters and custom plot values
+- [ ] Add a low-overhead ring-buffer trace format
+- [ ] Add export to standard trace viewers
+- [ ] Add a live in-engine profiler overlay
+- [ ] Add markers correlated with GPU timings
+- [ ] Add allocation and lock instrumentation
+- [ ] Add sampling and instrumented profiling modes
+- [ ] Add profiler-cost budgets and toggles
+
+## Compression Codecs
+
+- [ ] Add a general-purpose fast compression codec
+- [ ] Add a high-ratio compression codec
+- [ ] Add streaming compression and decompression
+- [ ] Add block and chunked compression for random access
+- [ ] Add a codec abstraction with selectable backends
+- [ ] Add hardware-accelerated decompression where available
+- [ ] Add compression-level and dictionary configuration
+- [ ] Add integration with assets, streaming, saves, and networking
+- [ ] Add compression benchmarks and diagnostics
+
+## Cryptography & Secure Hashing
+
+- [ ] Add symmetric encryption for data at rest
+- [ ] Add authenticated encryption with integrity tags
+- [ ] Add secure cryptographic hashing
+- [ ] Add signing and signature verification
+- [ ] Add key derivation and secure random generation
+- [ ] Add certificate and token handling
+- [ ] Add tamper detection for saves and packaged content
+- [ ] Add a secure-storage abstraction for secrets
+- [ ] Add cryptography validation and test vectors
+
+## Random & Noise Utilities
+
+- [ ] Add a fast general-purpose pseudo-random generator
+- [ ] Add multiple seedable random streams
+- [ ] Add uniform, normal, and weighted distributions
+- [ ] Add deterministic and reproducible sequences
+- [ ] Add a shared noise library reused across systems
+- [ ] Add random utilities exposed to gameplay and scripting
+
+## Date, Time & Calendar
+
+- [ ] Add wall-clock date and time types
+- [ ] Add time-zone handling and conversion
+- [ ] Add durations and interval arithmetic
+- [ ] Add formatting and parsing of dates and times
+- [ ] Add culture-aware date and time formatting
+- [ ] Add real-world time queries for live features
+- [ ] Add monotonic and calendar clock separation
+
+## Unit-Test & Benchmark Framework
+
+- [ ] Add an engine-wide unit-test framework
+- [ ] Add assertions, fixtures, and parameterized tests
+- [ ] Add a micro-benchmark framework with statistics
+- [ ] Add a headless test runner
+- [ ] Add test discovery and filtering
+- [ ] Add golden-data and snapshot testing helpers
+- [ ] Add continuous-integration reporting output
+- [ ] Add flaky-test detection and retries
+- [ ] Add coverage instrumentation hooks
+
+## Task Dependency Graph
+
+- [ ] Add a declarative task dependency graph over the job system
+- [ ] Add fork-join and pipeline task patterns
+- [ ] Add cross-frame and persistent task graphs
+- [ ] Add priorities and affinities per task
+- [ ] Add cancellation and error propagation
+- [ ] Add graph visualization and profiling
+- [ ] Add deterministic scheduling for tests
+
+# 21 · Asset Pipeline & Content Management
+
+## Import Framework
+
+- [ ] Add a unified asset-import framework
+- [ ] Add mesh import from standard interchange formats
+- [ ] Add skeletal, animation, and morph import
+- [ ] Add texture and image import with format detection
+- [ ] Add audio and video import
+- [ ] Add material and scene import from interchange formats
+- [ ] Add per-importer settings and presets
+- [ ] Add re-import that preserves overrides
+- [ ] Add batch and folder import
+- [ ] Add import validation and error reporting
+- [ ] Add custom importer plugins
+- [ ] Add import diagnostics and previews
+
+## Asset Database & Registry
+
+- [ ] Add a central asset registry keyed by stable identifiers
+- [ ] Add identifier-to-asset resolution and loading
+- [ ] Add reference counting and lifetime management
+- [ ] Add dependency tracking between assets
+- [ ] Add reverse-dependency and usage queries
+- [ ] Add metadata and tags per asset
+- [ ] Add asset search and filtering
+- [ ] Add rename and move with reference fixup
+- [ ] Add missing-asset and redirect handling
+- [ ] Add asset validation and integrity checks
+- [ ] Add asset versioning and migration
+- [ ] Add registry diagnostics
+
+## Content Browser
+
+- [ ] Add a content browser with folders and thumbnails
+- [ ] Add asset creation, duplication, and deletion
+- [ ] Add drag-and-drop of assets into scenes and fields
+- [ ] Add search, filters, and collections
+- [ ] Add asset previews and inspection
+- [ ] Add dependency and reference viewers
+- [ ] Add favorites and recently used
+- [ ] Add bulk operations and metadata editing
+- [ ] Add source-control status indicators
+- [ ] Add a beginner-friendly starter-content library
+
+## Cooking & Build
+
+- [ ] Add a cooking step that converts source assets to runtime formats
+- [ ] Add per-platform asset cooking
+- [ ] Add incremental cooking of changed assets
+- [ ] Add a derived-data cache shared across builds
+- [ ] Add asset bundling and packaging for shipping
+- [ ] Add strip-and-optimize passes for runtime assets
+- [ ] Add cook validation and reporting
+- [ ] Add distributed and cached cooking
+
+## Hot-Reload & Live Content
+
+- [ ] Add source-asset file watching
+- [ ] Add automatic re-import on source change
+- [ ] Add hot-reload of textures, meshes, materials, and audio
+- [ ] Add hot-reload of scenes and prefabs
+- [ ] Add live update of running gameplay from asset changes
+- [ ] Add safe fallback when a hot-reload fails
+- [ ] Add hot-reload diagnostics
+
+# 22 · VFX / Particle System
+
+## Effect Graph & Emitters
+
+- [ ] Add a node-based effect graph
+- [ ] Add emitters with configurable spawn rate and bursts
+- [ ] Add emitter shapes (point, sphere, box, cone, mesh, spline)
+- [ ] Add multiple emitters per effect
+- [ ] Add sub-emitters spawned from particle events
+- [ ] Add exposed parameters driven by gameplay
+- [ ] Add reusable effect templates and presets
+- [ ] Add effect lifetime, looping, and one-shot modes
+- [ ] Add effect graph versioning and migration
+- [ ] Add effect-graph debugging
+
+## Particle Modules
+
+- [ ] Add initial and over-life position, velocity, and acceleration modules
+- [ ] Add color, opacity, and size-over-life modules
+- [ ] Add rotation and angular-velocity modules
+- [ ] Add force, drag, gravity, and turbulence modules
+- [ ] Add curl-noise and vector-field modules
+- [ ] Add collision modules against depth and the world
+- [ ] Add attractor and orbit modules
+- [ ] Add scale-by-speed and stretch modules
+- [ ] Add custom-expression modules
+- [ ] Add module ordering and stacking
+
+## GPU Particle Simulation
+
+- [ ] Add GPU-simulated particles with large counts
+- [ ] Add a CPU-simulated path for small or gameplay-critical effects
+- [ ] Add persistent particle buffers and pooling
+- [ ] Add GPU spawn and death lists
+- [ ] Add indirect draw from simulated particles
+- [ ] Add depth-buffer and distance-field collision on GPU
+- [ ] Add sorting for transparent particles
+- [ ] Add particle simulation budgets
+
+## Particle Renderers
+
+- [ ] Add sprite and billboard renderers
+- [ ] Add mesh-particle renderers
+- [ ] Add ribbon and trail renderers
+- [ ] Add beam renderers
+- [ ] Add light-emitting particles
+- [ ] Add decal-spawning particles
+- [ ] Add lit, unlit, and volumetric particle materials
+- [ ] Add motion blur and soft-particle depth fade
+- [ ] Add sprite-sheet and flipbook animation
+
+## VFX Runtime, LOD & Integration
+
+- [ ] Add effect spawning and pooling at runtime
+- [ ] Add effect LOD by distance and screen coverage
+- [ ] Add effect culling and budgets
+- [ ] Add fixed-cost and scalable-quality effects
+- [ ] Add attachment of effects to entities and sockets
+- [ ] Add effect events driving gameplay and audio
+- [ ] Add integration with physics, wind, and weather
+- [ ] Add a scripting API for spawning and controlling effects
+- [ ] Add an effect-authoring editor with live preview
+- [ ] Add effect performance profiling
+- [ ] Add effect debugging and visualization
+- [ ] Add effect tests
+
+# 23 · Camera System (Gameplay)
+
+## Camera Manager & Blending
+
+- [ ] Add a gameplay camera manager
+- [ ] Add a camera stack with priorities
+- [ ] Add smooth blends between active cameras
+- [ ] Add blend curves and durations
+- [ ] Add per-camera settings (field of view, offset, lag)
+- [ ] Add camera activation and deactivation events
+- [ ] Add handoff to and from cinematic cameras
+- [ ] Add multiple cameras for split-screen
+- [ ] Add camera debug visualization
+
+## Camera Modes
+
+- [ ] Add a first-person camera mode
+- [ ] Add a third-person follow camera
+- [ ] Add an orbit and free-look camera
+- [ ] Add a top-down and isometric camera
+- [ ] Add a side-scroll camera
+- [ ] Add a fixed and rail camera
+- [ ] Add a target-lock and look-at camera
+- [ ] Add smooth transitions between modes
+- [ ] Add per-mode tuning presets
+
+## Camera Rigs, Collision & Effects
+
+- [ ] Add a camera boom/arm with configurable length
+- [ ] Add camera collision that pulls in on obstacles
+- [ ] Add spring and lag smoothing
+- [ ] Add camera shake sources and profiles
+- [ ] Add recoil, impulse, and hit-reaction shake
+- [ ] Add auto-framing and composition rules
+- [ ] Add dynamic field-of-view by speed and state
+- [ ] Add camera-space screen effects (vignette on hit, speed lines)
+- [ ] Add zoom and aim-down-sights transitions
+- [ ] Add camera-rig authoring and presets
+- [ ] Add a scripting API for cameras
+- [ ] Add camera tests
+
+# 24 · XR / VR / AR
+
+## XR Runtime & Devices
+
+- [ ] Add an XR runtime integration through an open standard
+- [ ] Add headset detection, session, and lifecycle
+- [ ] Add head and device pose tracking
+- [ ] Add multiple XR device backends
+- [ ] Add reference spaces (seated, standing, room-scale)
+- [ ] Add recentering and origin management
+- [ ] Add XR capability negotiation
+- [ ] Add XR diagnostics
+
+## Stereo Rendering & Comfort
+
+- [ ] Add stereo rendering for two eyes
+- [ ] Add single-pass and instanced stereo
+- [ ] Add per-eye projection and lens correction
+- [ ] Add foveated rendering where supported
+- [ ] Add motion reprojection and late-latching
+- [ ] Add comfort vignetting during locomotion
+- [ ] Add stable framerate safeguards
+- [ ] Add stereo-rendering diagnostics
+
+## XR Input & Interaction
+
+- [ ] Add XR controller input and bindings
+- [ ] Add hand-tracking input
+- [ ] Add gaze and eye-tracking input
+- [ ] Add near and far interaction (grab, poke, ray)
+- [ ] Add XR UI panels and pointers
+- [ ] Add haptics for XR controllers
+- [ ] Add teleport and smooth XR locomotion
+- [ ] Add interaction debugging
+
+## AR & Spatial Mapping
+
+- [ ] Add camera passthrough for mixed reality
+- [ ] Add plane and surface detection
+- [ ] Add spatial anchors and persistence
+- [ ] Add environment meshing and occlusion
+- [ ] Add light estimation for AR
+- [ ] Add image and object tracking
+- [ ] Add AR content placement and scaling
+- [ ] Add AR debugging and tests
+
+# 25 · Online Services & Platform Backend
+
+## Accounts & Identity
+
+- [ ] Add a player account and identity service
+- [ ] Add authentication and login flows
+- [ ] Add linked platform identities
+- [ ] Add session tokens and refresh
+- [ ] Add user profiles and settings sync
+- [ ] Add privacy and data controls
+- [ ] Add account-service diagnostics
+
+## Achievements, Leaderboards & Progression
+
+- [ ] Add an achievements and trophies system
+- [ ] Add progress-based and incremental achievements
+- [ ] Add leaderboards with scopes (global, friends, region)
+- [ ] Add stats and progression persistence
+- [ ] Add player levels, unlocks, and rewards
+- [ ] Add cloud saves with conflict resolution
+- [ ] Add cross-device save sync
+- [ ] Add progression-service diagnostics
+
+## Presence, Friends & Social
+
+- [ ] Add a rich-presence service
+- [ ] Add a friends list and requests
+- [ ] Add party and group management
+- [ ] Add invites and join-in-progress
+- [ ] Add guilds, clans, and player groups
+- [ ] Add player mail and gifting
+- [ ] Add text chat channels
+- [ ] Add text and voice moderation and reporting
+- [ ] Add a reputation and trust service
+- [ ] Add blocking and privacy controls
+- [ ] Add social-service diagnostics
+
+## Commerce & Content Delivery
+
+- [ ] Add a storefront and catalog
+- [ ] Add in-app purchases and microtransactions
+- [ ] Add virtual currency and wallets
+- [ ] Add entitlements and ownership checks
+- [ ] Add downloadable-content management
+- [ ] Add receipt validation and fraud checks
+- [ ] Add a content-delivery and patching pipeline
+- [ ] Add delta and background updates
+- [ ] Add commerce diagnostics and compliance
+
+## Platform Integration & Backend
+
+- [ ] Add a platform online-services abstraction
+- [ ] Add integration adapters for each platform's services
+- [ ] Add a backend web-service layer (request/response APIs)
+- [ ] Add a persistence layer for accounts, inventory, and world state
+- [ ] Add server-authoritative validation of online actions
+- [ ] Add rate limiting and abuse protection
+- [ ] Add a fallback offline mode
+- [ ] Add backend scaling and health monitoring
+- [ ] Add online-services tests
+
+# 26 · LiveOps, Analytics & Telemetry
+
+## Analytics Pipeline
+
+- [ ] Add a game-event analytics pipeline
+- [ ] Add typed custom events with parameters
+- [ ] Add session, funnel, and retention tracking
+- [ ] Add batching and offline event queuing
+- [ ] Add sampling and rate control
+- [ ] Add live dashboards and reporting hooks
+- [ ] Add privacy, consent, and anonymization
+- [ ] Add analytics validation and diagnostics
+
+## Crash & Performance Reporting
+
+- [ ] Add crash reporting with minidumps
+- [ ] Add symbol upload and stack symbolication
+- [ ] Add breadcrumbs and context capture
+- [ ] Add automatic grouping and deduplication of crashes
+- [ ] Add non-fatal error and assertion reporting
+- [ ] Add performance telemetry (frame time, hitches, memory)
+- [ ] Add device and hardware reporting
+- [ ] Add a reporting dashboard and alerting
+
+## LiveOps & Remote Configuration
+
+- [ ] Add remote configuration and feature flags
+- [ ] Add A/B testing and experiment assignment
+- [ ] Add live-event scheduling and rotation
+- [ ] Add content hotfix and data-patch delivery
+- [ ] Add segmentation and targeting of players
+- [ ] Add kill switches for problematic features
+- [ ] Add remote-config rollout and rollback
+- [ ] Add LiveOps diagnostics and audit logging
+
+# 27 · Replay & Spectator
+
+## Replay Recording & Playback
+
+- [ ] Add deterministic game-state replay recording
+- [ ] Add a compact recorded-timeline format
+- [ ] Add playback with pause, scrub, and speed control
+- [ ] Add seeking with keyframes for fast navigation
+- [ ] Add recording of input, events, and cosmetic state
+- [ ] Add versioned replay compatibility handling
+- [ ] Add streaming of long replays
+- [ ] Add replay export and sharing
+- [ ] Add replay validation and diagnostics
+
+## Spectator & Broadcast
+
+- [ ] Add a spectator mode with free and follow cameras
+- [ ] Add observer delay for competitive integrity
+- [ ] Add player and event tracking cameras
+- [ ] Add a killcam and highlight capture
+- [ ] Add director and auto-spectator camera logic
+- [ ] Add broadcast overlays and data feeds
+- [ ] Add multi-viewer synchronized spectating
+- [ ] Add spectator and broadcast tests
+
+# 28 · Editor Framework & Tooling
+
+## Editor Shell & Framework
+
+- [ ] Add a shared editor shell with dockable panels
+- [ ] Add saved layouts and workspaces
+- [ ] Add a unified command and shortcut system
+- [ ] Add a central undo/redo command history
+- [ ] Add transactional multi-step edits
+- [ ] Add a property inspector driven by reflection
+- [ ] Add multi-object editing and reset-to-default
+- [ ] Add an editor notification and progress system
+- [ ] Add editor extensibility and plugin scripting
+- [ ] Add editor preferences and settings
+
+## Viewport Manipulation & Placement
+
+- [ ] Add transform gizmos for translate, rotate, and scale
+- [ ] Add world, local, and pivot space handling
+- [ ] Add selection, multi-selection, and picking
+- [ ] Add box and lasso selection
+- [ ] Add grid, vertex, and surface snapping
+- [ ] Add align, distribute, and pivot tools
+- [ ] Add duplicate, group, and parent operations
+- [ ] Add viewport navigation and camera controls
+- [ ] Add viewport bookmarks
+- [ ] Add measurement and ruler tools
+- [ ] Add blockout and greybox geometry authoring
+- [ ] Add a general spline and path authoring tool with mesh deformation
+
+## Debug Console & Developer Tools
+
+- [ ] Add an in-game developer console with command entry
+- [ ] Add a command and cheat registry
+- [ ] Add console-variable get and set at runtime
+- [ ] Add an in-game debug menu for toggles and tweaks
+- [ ] Add a unified gameplay debugger with per-entity inspection
+- [ ] Add a unified debug-draw API (lines, shapes, text, screen)
+- [ ] Add on-screen stat overlays and live graphs
+- [ ] Add an immediate-mode debug UI for tools and panels
+- [ ] Add spawn, teleport, and time controls
+- [ ] Add a screenshot and capture tool
+- [ ] Add debug-tool access control for shipping builds
+
+## Version Control & Collaboration
+
+- [ ] Add version-control integration for assets and code
+- [ ] Add source-control status and operations in the editor
+- [ ] Add asset locking to prevent conflicts
+- [ ] Add change visualization and history
+- [ ] Add merge and conflict-resolution tooling
+- [ ] Add a review and annotation workflow
+- [ ] Add multi-user live collaboration
+- [ ] Add team presence and edit awareness
+- [ ] Add collaboration diagnostics
+
+# 29 · Build, Packaging & Deployment
+
+## Build Pipeline
+
+- [ ] Add a build pipeline that produces runnable targets
+- [ ] Add configuration selection (debug, development, shipping)
+- [ ] Add incremental and cached builds
+- [ ] Add a data-cook and content-build stage
+- [ ] Add shader compilation for each target
+- [ ] Add build validation and pre-flight checks
+- [ ] Add build artifacts and manifests
+- [ ] Add reproducible builds
+
+## Platform Targets
+
+- [ ] Add desktop targets (Windows, Linux, macOS)
+- [ ] Add mobile targets
+- [ ] Add console targets
+- [ ] Add a web target
+- [ ] Add per-target feature and quality profiles
+- [ ] Add cross-compilation and toolchain management
+- [ ] Add per-platform packaging and installers
+- [ ] Add platform capability manifests
+
+## Packaging, Patching & Distribution
+
+- [ ] Add packaging into distributable builds
+- [ ] Add content pak and archive generation
+- [ ] Add delta patching and updates
+- [ ] Add downloadable-content packaging
+- [ ] Add code and package signing
+- [ ] Add store-submission preparation and metadata
+- [ ] Add a continuous-integration and delivery integration
+- [ ] Add automated smoke tests on packaged builds
+- [ ] Add packaging and patch diagnostics
+
+# 30 · Advanced Audio & Acoustics
+
+## Acoustics Simulation
+
+- [ ] Add ray-traced acoustics for reflections and occlusion
+- [ ] Add wave-based acoustics for low frequencies where affordable
+- [ ] Add precomputed and baked acoustic probes
+- [ ] Add baked reverb and decay per region
+- [ ] Add dynamic acoustic adaptation to geometry changes
+- [ ] Add acoustic materials and absorption per surface
+- [ ] Add acoustics cost budgets and quality scaling
+- [ ] Add acoustics debug visualization
+
+## Audio Scaling & Speech
+
+- [ ] Add audio source LOD tiers by distance and importance
+- [ ] Add aggregation of many sources into composite voices
+- [ ] Add text-to-speech synthesis for UI and accessibility
+- [ ] Add speech recognition and voice-command input
+- [ ] Add output-mode presets (headphones, TV, night mode)
+- [ ] Add dynamic-range compression profiles
+- [ ] Add personalized and head-tracked HRTF
+- [ ] Add directional sound indicators for accessibility
+- [ ] Add a mono downmix option
+- [ ] Add advanced-audio diagnostics and tests
+
+# 31 · Environment & Gameplay Extensions
+
+## Terrain Virtual Texturing & Runtime Deformation
+
+- [ ] Add runtime virtual texturing for terrain material layers
+- [ ] Add removal of the hard layer-count limit via virtual texturing
+- [ ] Add baked and procedural mega-texture paths
+- [ ] Add runtime terrain deformation (craters, tracks, footprints)
+- [ ] Add persistent displacement trails in snow and sand
+- [ ] Add hardware tessellation and adaptive displacement of terrain
+- [ ] Add baked terrain self-shadow and horizon maps
+- [ ] Add deformation networking and persistence
+- [ ] Add terrain-extension diagnostics
+
+## Foliage & Vegetation Extensions
+
+- [ ] Add a procedural plant and tree modeler
+- [ ] Add branch-hierarchy and pivot-painter wind baking
+- [ ] Add runtime growth, spreading, and regrowth over gameplay time
+- [ ] Add foliage contribution to global illumination and bounce
+- [ ] Add emissive and seasonal-fruit variation
+- [ ] Add foliage-extension diagnostics
+
+## Weather & Sky Extensions
+
+- [ ] Add severe-weather archetypes (tornado, sandstorm, blizzard whiteout)
+- [ ] Add atmospheric optical phenomena (rainbows, halos, sun dogs, glories)
+- [ ] Add from-orbit and space atmosphere transitions
+- [ ] Add localized extreme-weather hazards affecting gameplay
+- [ ] Add weather-extension diagnostics
+
+## Water Extensions
+
+- [ ] Add volumetric and dynamic-volume water (flooding, pouring, container fill)
+- [ ] Add rising water level from accumulation and drainage
+- [ ] Add wave-breaking and shorebreak geometry
+- [ ] Add hull hydrodynamics for boats and ships (planing, drag, wake)
+- [ ] Add coupling between the surface water and particle fluid simulation
+- [ ] Add water-extension diagnostics
+
+## Data & Narrative Procedural Generation
+
+- [ ] Add procedural quest and mission generation
+- [ ] Add procedural narrative and event generation
+- [ ] Add loot-table and reward generation
+- [ ] Add name, text, and lore generation
+- [ ] Add procedural character, face, and outfit generation
+- [ ] Add example-based and learned content synthesis
+- [ ] Add data-PCG authoring and validation
+
+## Gameplay Tags & Ability Framework
+
+- [ ] Add a hierarchical gameplay-tag registry and asset
+- [ ] Add tag containers and tag-query expressions
+- [ ] Add tag-based matching and filtering
+- [ ] Add a cohesive ability framework tying costs, cooldowns, and effects
+- [ ] Add gameplay-effect stacking, duration, and periodic application
+- [ ] Add attribute modification and clamping through effects
+- [ ] Add networked ability activation and prediction
+- [ ] Add ability and tag authoring tools
+- [ ] Add ability-framework tests
+
+# 32 · Asset Streaming, Packaging & Virtual Filesystem
+
+## Background Asset-Processing Service
+
+- [ ] Add a background asset-processing service that watches source content
+- [ ] Add automatic processing of source assets into cooked runtime formats
+- [ ] Add dependency-driven reprocessing when a source or dependency changes
+- [ ] Add a processing job queue with priorities
+- [ ] Add incremental processing of only changed assets
+- [ ] Add parallel processing across worker threads
+- [ ] Add distributed and shared processing across machines
+- [ ] Add a shared derived-data cache to skip redundant work
+- [ ] Add per-asset-type processors (mesh, texture, audio, material)
+- [ ] Add processing status, progress, and error reporting
+- [ ] Add retry and recovery for failed processing
+- [ ] Add processing diagnostics and logs
+
+## Asset Streaming, Loading & Handles
+
+- [ ] Add asynchronous asset loading off the main thread
+- [ ] Add addressable handles that reference assets by id or label
+- [ ] Add load-by-address and load-by-label requests
+- [ ] Add reference-counted load and release
+- [ ] Add automatic loading of an asset's dependencies
+- [ ] Add load priorities and queue ordering
+- [ ] Add load progress reporting and callbacks
+- [ ] Add cancellation of in-flight loads
+- [ ] Add preloading and warmup of critical assets
+- [ ] Add lazy and on-demand loading
+- [ ] Add sub-asset and partial loading
+- [ ] Add streaming of large assets (mesh, texture, audio) in chunks
+- [ ] Add memory budgets and residency tracking for loaded assets
+- [ ] Add eviction of unused assets under memory pressure
+- [ ] Add placeholder and fallback assets while loading
+- [ ] Add deterministic load ordering for tests
+- [ ] Add a scripting API for loading and releasing assets
+- [ ] Add streaming and loading diagnostics
+
+## Asset Groups & Bundles
+
+- [ ] Add asset groups that bundle related content
+- [ ] Add labels and tags for addressing groups
+- [ ] Add per-group build into loadable bundles
+- [ ] Add local and remote (downloadable) group placement
+- [ ] Add per-group compression and encryption settings
+- [ ] Add cross-group dependency handling and deduplication
+- [ ] Add a content catalog mapping addresses to bundles
+- [ ] Add catalog updates for downloadable and patched content
+- [ ] Add bundle load, unload, and reference counting
+- [ ] Add bundle versioning and compatibility checks
+- [ ] Add group and bundle authoring in the editor
+- [ ] Add bundle build diagnostics and size reports
+
+## Virtual Filesystem & Mounting
+
+- [ ] Add a virtual filesystem over loose files and archives
+- [ ] Add mount points with configurable priority
+- [ ] Add mounting of pak/pack archive files
+- [ ] Add overlay mounts where later mounts override earlier ones
+- [ ] Add virtual-path resolution across all mounts
+- [ ] Add loose-files-in-editor and archives-in-shipping modes
+- [ ] Add read-only and writable mounts
+- [ ] Add patch and downloadable-content overlay mounts
+- [ ] Add case-insensitive and normalized path handling
+- [ ] Add enumeration and globbing across mounts
+- [ ] Add async file reads through the virtual filesystem
+- [ ] Add memory-mapped reads for aligned archive entries
+- [ ] Add mount lifecycle and hot-mount at runtime
+- [ ] Add virtual-filesystem diagnostics
+
+## Packaging, Compression & Encryption
+
+- [ ] Add generation of pak/pack archive files from cooked content
+- [ ] Add a directory index for fast lookup within archives
+- [ ] Add per-file compression with selectable codecs
+- [ ] Add block-based compression for random access
+- [ ] Add entry alignment for memory-mapping
+- [ ] Add encryption and signing of packaged content
+- [ ] Add integrity checksums per entry and per archive
+- [ ] Add chunked archives split by size or content group
+- [ ] Add ordering of entries by load pattern for locality
+- [ ] Add delta and patch archive generation
+- [ ] Add on-demand and streamed archive download
+- [ ] Add package validation and repair
+- [ ] Add packaging size and compression reports
+- [ ] Add packaging diagnostics
+
+## Testing & Validation
+
+- [ ] Add asynchronous-load correctness and cancellation tests
+- [ ] Add reference-counting and eviction tests
+- [ ] Add bundle build and dependency-deduplication tests
+- [ ] Add virtual-filesystem path-resolution and override tests
+- [ ] Add compression and decompression round-trip tests
+- [ ] Add encryption and integrity-verification tests
+- [ ] Add patch-overlay and catalog-update tests
+- [ ] Add missing-asset and fallback-handling tests
+- [ ] Add streaming memory-budget stress tests
+- [ ] Add deterministic-load regression tests
+
+# 33 · Editor Tooling, Profiling & Automation
+
+## Editor Extensions & Custom Tools
+
+- [ ] Add custom editor windows and panels from plugins
+- [ ] Add custom property drawers per type in the inspector
+- [ ] Add custom asset editors for new asset types
+- [ ] Add menu, toolbar, and context-menu extension points
+- [ ] Add asset context actions and right-click commands
+- [ ] Add creation wizards and guided flows
+- [ ] Add editor modes with dedicated tools and viewport interaction
+- [ ] Add an editor scripting and automation API
+- [ ] Add editor commands registerable by tools
+- [ ] Add editor-tool packaging and distribution
+- [ ] Add reload of editor tools without a restart
+- [ ] Add discovery and enable/disable of editor extensions
+- [ ] Add documentation and metadata for custom tools
+- [ ] Add sandboxing so a broken tool cannot crash the editor
+
+## Live Coding & Native Hot-Reload
+
+- [ ] Add recompilation of changed native code while running
+- [ ] Add patching of the running process with new code
+- [ ] Add hot-reload of native gameplay and tool code
+- [ ] Add preservation of live state across a code patch
+- [ ] Add safe rollback when a patch fails to apply
+- [ ] Add incremental compile for fast iteration
+- [ ] Add function-level and object-level patching
+- [ ] Add integration with external compilers and IDEs
+- [ ] Add notification and status of live-coding sessions
+- [ ] Add exclusion of code that cannot be safely patched
+- [ ] Add live-coding diagnostics and logs
+- [ ] Add a fallback full-rebuild path
+
+## Memory Profiler
+
+- [ ] Add memory snapshots of the whole process
+- [ ] Add snapshot comparison and diff over time
+- [ ] Add per-tag and per-subsystem memory breakdown
+- [ ] Add per-asset and per-resource attribution
+- [ ] Add allocation call-stack capture
+- [ ] Add leak detection and unfreed-allocation reports
+- [ ] Add a live memory usage graph
+- [ ] Add allocation-count and fragmentation views
+- [ ] Add integration with memory budgets and warnings
+- [ ] Add export of memory reports
+- [ ] Add remote memory capture from a running game
+- [ ] Add memory-profiler diagnostics
+
+## Frame & Render Debugger
+
+- [ ] Add capture of a single rendered frame
+- [ ] Add a draw-call list with step-through
+- [ ] Add inspection of bound resources per draw
+- [ ] Add inspection of render targets and intermediate buffers
+- [ ] Add inspection of shaders, states, and bindings per draw
+- [ ] Add resource-content viewing (textures, buffers)
+- [ ] Add pixel history for a selected pixel
+- [ ] Add per-draw and per-pass timing
+- [ ] Add render-graph and pass visualization in the capture
+- [ ] Add shader input and output inspection
+- [ ] Add capture from a running device or remote build
+- [ ] Add comparison of two frame captures
+- [ ] Add export of captures for sharing
+- [ ] Add integration with external graphics debuggers
+
+## Unified Session Profiler & Trace Analysis
+
+- [ ] Add recording of a trace session across subsystems
+- [ ] Add correlated CPU, GPU, memory, and event timelines
+- [ ] Add network and asset-load events in the trace
+- [ ] Add loading and offline analysis of trace files
+- [ ] Add zoom, filter, and search across a trace
+- [ ] Add statistics, aggregation, and hot-path detection
+- [ ] Add comparison of two sessions for regressions
+- [ ] Add remote capture from a running game
+- [ ] Add markers and annotations from gameplay
+- [ ] Add continuous background tracing with a ring buffer
+- [ ] Add export and sharing of trace sessions
+- [ ] Add machine-readable trace output for CI
+
+## Functional & Automation Testing
+
+- [ ] Add a functional-test framework that drives the running game
+- [ ] Add headless execution of automated tests
+- [ ] Add scripted playthroughs with input injection
+- [ ] Add assertions on game and world state
+- [ ] Add screenshot and golden-image comparison tests
+- [ ] Add soak and endurance test automation
+- [ ] Add stress and load test scenarios
+- [ ] Add performance-regression gates in automation
+- [ ] Add replay-based deterministic tests
+- [ ] Add editor UI automation tests
+- [ ] Add multi-client and networked test orchestration
+- [ ] Add test scheduling across devices and platforms
+- [ ] Add test artifacts (logs, screenshots, traces, videos)
+- [ ] Add flaky-test detection and quarantine
+- [ ] Add continuous-integration orchestration and reporting
+- [ ] Add a test dashboard with history and trends
+
+## Version Control Depth
+
+- [ ] Add adapters for distributed and centralized version-control backends
+- [ ] Add checkout, add, delete, move, and revert of assets
+- [ ] Add changelists and grouped submissions
+- [ ] Add submit, sync, and update operations
+- [ ] Add history, blame, and revision inspection
+- [ ] Add binary-asset diff and visual comparison
+- [ ] Add merge and conflict resolution for assets
+- [ ] Add large-file and binary-asset handling
+- [ ] Add exclusive checkout and lock status
+- [ ] Add offline operation and later reconciliation
+
+## Testing & Validation
+
+- [ ] Add tests for editor commands and undo/redo integrity
+- [ ] Add tests for custom-tool registration and sandboxing
+- [ ] Add live-coding patch-and-rollback tests
+- [ ] Add memory-profiler snapshot and diff tests
+- [ ] Add frame-capture and inspection tests
+- [ ] Add trace-recording and analysis tests
+- [ ] Add version-control operation tests
+- [ ] Add functional-test-framework self-tests
+
+# 34 · Platform Support & Cross-Compilation
+
+## Platform Runtime Services
+
+- [ ] Add a per-platform application entry point and lifecycle
+- [ ] Add suspend, resume, focus-loss, and low-memory handling
+- [ ] Add per-platform user-data, config, cache, and temp paths
+- [ ] Add per-platform save-data storage and quotas
+- [ ] Add per-platform system dialogs and message boxes
+- [ ] Add per-platform clipboard and system integration
+- [ ] Add per-platform locale and region detection
+- [ ] Add per-platform power, thermal, and battery state
+- [ ] Add per-platform display, refresh-rate, and HDR capability query
+- [ ] Add per-platform network reachability
+- [ ] Add per-platform notifications and system events
+- [ ] Add a capability manifest per platform
+
+## Windows Platform
+
+- [ ] Add a Direct3D and Vulkan backend selection on Windows
+- [ ] Add window creation, DPI awareness, and multi-monitor
+- [ ] Add keyboard, mouse, and raw-input handling
+- [ ] Add controller support (XInput and general gamepad)
+- [ ] Add HDR output on capable displays
+- [ ] Add borderless, fullscreen-exclusive, and windowed modes
+- [ ] Add an installer package and silent-install support
+- [ ] Add executable and package code signing
+- [ ] Add crash minidump capture on Windows
+- [ ] Add save and config storage in the user profile
+- [ ] Add store-distribution packaging
+- [ ] Add Windows platform tests
+
+## Linux Platform
+
+- [ ] Add a Vulkan backend on Linux
+- [ ] Add X11 and Wayland windowing backends
+- [ ] Add controller support via evdev
+- [ ] Add file paths following the desktop base-directory spec
+- [ ] Add packaging as a portable archive
+- [ ] Add packaging as a self-contained app image
+- [ ] Add packaging for common distribution package managers
+- [ ] Add distribution and driver compatibility handling
+- [ ] Add crash reporting on Linux
+- [ ] Add fractional-scaling and multi-monitor support
+- [ ] Add Linux platform tests
+
+## macOS Platform
+
+- [ ] Add a Metal backend on macOS
+- [ ] Add Cocoa windowing and event handling
+- [ ] Add universal binaries for Apple Silicon and Intel
+- [ ] Add controller support via the platform game-controller framework
+- [ ] Add code signing and notarization
+- [ ] Add app sandbox and entitlements
+- [ ] Add packaging as a disk image and store build
+- [ ] Add Retina and multi-display handling
+- [ ] Add platform achievements and leaderboards integration
+- [ ] Add crash reporting on macOS
+- [ ] Add macOS platform tests
+
+## Android Platform
+
+- [ ] Add a Vulkan and OpenGL-ES backend on Android
+- [ ] Add app-bundle and split-ABI packaging
+- [ ] Add the native activity and lifecycle bridge
+- [ ] Add a native-to-Java interop layer
+- [ ] Add touch, gesture, and gamepad input
+- [ ] Add runtime permissions handling
+- [ ] Add scoped and external storage handling
+- [ ] Add the back-button and navigation handling
+- [ ] Add platform game-services integration
+- [ ] Add in-app-purchase billing integration
+- [ ] Add push notifications
+- [ ] Add device and GPU compatibility tiers
+- [ ] Add thermal throttling and sustained-performance handling
+- [ ] Add store-listing and asset-delivery packaging
+- [ ] Add Android platform tests
+
+## iOS Platform
+
+- [ ] Add a Metal backend on iOS
+- [ ] Add app packaging, provisioning, and signing
+- [ ] Add store and test-distribution builds
+- [ ] Add in-app-purchase integration
+- [ ] Add platform game-services integration
+- [ ] Add privacy and tracking-consent handling
+- [ ] Add touch, gesture, and controller input
+- [ ] Add the application lifecycle and background handling
+- [ ] Add device tiers and thermal management
+- [ ] Add safe-area and notch handling
+- [ ] Add entitlements and capability configuration
+- [ ] Add iOS platform tests
+
+## Console Platforms
+
+- [ ] Add a per-console graphics-backend integration
+- [ ] Add console platform-SDK integration behind the abstraction
+- [ ] Add controller and peripheral input per console
+- [ ] Add console save-data and storage APIs
+- [ ] Add user, account, and sign-in handling
+- [ ] Add trophies, achievements, and presence per console
+- [ ] Add suspend, resume, and quick-resume handling
+- [ ] Add memory and performance constraints per console
+- [ ] Add dev-kit deployment and debugging
+- [ ] Add certification-requirement checklists per console
+- [ ] Add store and package submission per console
+- [ ] Add console platform tests
+
+## Web & WebAssembly Platform
+
+- [ ] Add a WebGPU rendering backend
+- [ ] Add a WebGL fallback backend
+- [ ] Add a WebAssembly build of the engine
+- [ ] Add multi-threading via shared memory where available
+- [ ] Add SIMD acceleration in the web build
+- [ ] Add memory-limit handling and growth
+- [ ] Add async fetch-based asset loading
+- [ ] Add browser storage for saves and cache
+- [ ] Add gamepad, keyboard, mouse, and touch input on the web
+- [ ] Add fullscreen and pointer-lock handling
+- [ ] Add load-time reduction and progressive streaming
+- [ ] Add browser and device compatibility handling
+- [ ] Add web platform tests
+
+## Cross-Compilation & Toolchains
+
+- [ ] Add a build configuration per target platform
+- [ ] Add toolchain management for each platform
+- [ ] Add platform SDK discovery and versioning
+- [ ] Add conditional compilation per platform and feature
+- [ ] Add a platform abstraction that isolates platform code
+- [ ] Add cross-compilation from a single host where supported
+- [ ] Add per-platform dependency and third-party management
+- [ ] Add remote and cloud build execution
+- [ ] Add reproducible cross-platform builds
+- [ ] Add build caching across platforms
+- [ ] Add per-platform shader and asset cooking
+- [ ] Add automated multi-platform build verification
+
+## Platform Certification & Compliance
+
+- [ ] Add per-platform technical-requirement checklists
+- [ ] Add automated checks for common certification failures
+- [ ] Add age-rating and content-descriptor metadata
+- [ ] Add accessibility-compliance checks per platform
+- [ ] Add privacy and data-handling compliance
+- [ ] Add store-metadata and asset requirements
+- [ ] Add loading-time and performance requirement checks
+- [ ] Add controller and input requirement checks
+- [ ] Add a certification-readiness report
+
+# 35 · Monetization, Ads & Cloud Services
+
+## Mobile Ads & Mediation
+
+- [ ] Add a rewarded-video ad format
+- [ ] Add interstitial ads
+- [ ] Add banner ads
+- [ ] Add native and playable ad formats
+- [ ] Add an ad-mediation layer across networks
+- [ ] Add waterfall and in-app-bidding ordering
+- [ ] Add ad-network adapter integration
+- [ ] Add fill-rate and revenue reporting
+- [ ] Add ad frequency capping and pacing
+- [ ] Add consent and privacy handling for ads
+- [ ] Add child-directed and age-appropriate ad handling
+- [ ] Add reward delivery and verification
+- [ ] Add offline and no-fill fallback handling
+- [ ] Add ad diagnostics and test modes
+
+## In-App Purchases & Commerce Depth
+
+- [ ] Add consumable, non-consumable, and subscription products
+- [ ] Add a product catalog synced from the store
+- [ ] Add purchase, restore, and refund handling
+- [ ] Add receipt validation on a trusted backend
+- [ ] Add entitlement granting and revocation
+- [ ] Add subscription lifecycle and renewal handling
+- [ ] Add promotional offers and discounts
+- [ ] Add virtual-currency purchase and spend flows
+- [ ] Add price localization and tax handling
+- [ ] Add purchase-restoration across devices
+- [ ] Add fraud detection and chargeback handling
+- [ ] Add commerce analytics and reporting
+- [ ] Add store-compliance and disclosure handling
+- [ ] Add commerce test and sandbox modes
+
+## Cloud Build & CI/CD
+
+- [ ] Add cloud-hosted build execution
+- [ ] Add build triggers from source-control changes
+- [ ] Add parallel multi-platform build jobs
+- [ ] Add a shared build and derived-data cache in the cloud
+- [ ] Add artifact storage and retention
+- [ ] Add automated test runs in the pipeline
+- [ ] Add build status, notifications, and gating
+- [ ] Add distribution to test and store channels
+- [ ] Add versioning and build numbering
+- [ ] Add secrets and signing-key management
+- [ ] Add pipeline-as-code configuration
+- [ ] Add build metrics and history
+
+## Remote Rendering & Cloud Streaming
+
+- [ ] Add server-side rendering of frames
+- [ ] Add low-latency frame streaming to thin clients
+- [ ] Add remote input capture and injection
+- [ ] Add adaptive bitrate and resolution for streaming
+- [ ] Add session management and scaling of stream instances
+- [ ] Add browser and device clients for streamed play
+- [ ] Add multi-user shared streamed sessions
+- [ ] Add GPU allocation and pooling for stream servers
+- [ ] Add encoding and transport optimization
+- [ ] Add streaming diagnostics and quality metrics
+- [ ] Add cost and capacity management
+- [ ] Add streaming security and access control
+
+# 36 · 2D Subsystem
+
+## 2D Rendering & Sprites
+
+- [ ] Add a dedicated 2D rendering path
+- [ ] Add sprite rendering with batching
+- [ ] Add sprite pivots, flipping, and tinting
+- [ ] Add sprite sorting layers and in-layer order
+- [ ] Add a 2D draw order independent of 3D depth
+- [ ] Add nine-slice and tiled sprite rendering
+- [ ] Add sprite masking and stencil clipping
+- [ ] Add 2D material and shader support
+- [ ] Add additive, multiply, and custom 2D blend modes
+- [ ] Add screen-space and world-space 2D rendering
+- [ ] Add 2D render targets and post-processing
+- [ ] Add 2D batching statistics and diagnostics
+
+## Sprite Atlas & Assets
+
+- [ ] Add a sprite-atlas asset that packs many sprites
+- [ ] Add automatic atlas packing with padding
+- [ ] Add sprite slicing from sheets (grid and auto-detect)
+- [ ] Add per-sprite pivots, borders, and physics outlines
+- [ ] Add multiple-atlas support and variants
+- [ ] Add mip and filtering settings for pixel and smooth art
+- [ ] Add atlas rebuild on source change
+- [ ] Add atlas memory and packing reports
+
+## Tilemaps
+
+- [ ] Add a tilemap data structure and asset
+- [ ] Add a tile palette and brush painting
+- [ ] Add rectangular, isometric, and hexagonal grids
+- [ ] Add multiple tilemap layers with ordering
+- [ ] Add animated tiles
+- [ ] Add rule tiles and auto-tiling
+- [ ] Add random and weighted tile brushes
+- [ ] Add tilemap collision generation
+- [ ] Add chunked tilemaps for large levels
+- [ ] Add tilemap streaming with the world
+- [ ] Add a tilemap editor with paint, erase, fill, and select
+- [ ] Add tilemap import and export
+- [ ] Add tilemap rendering optimization and culling
+- [ ] Add tilemap diagnostics
+
+## 2D Lighting & Shadows
+
+- [ ] Add 2D light sources (point, spot, directional, freeform)
+- [ ] Add 2D normal-map lighting for sprites
+- [ ] Add 2D shadow casting from shapes and sprites
+- [ ] Add light blending and additive light layers
+- [ ] Add global 2D ambient and day-night tinting
+- [ ] Add light cookies and falloff shapes
+- [ ] Add sprite self-illumination and emissive
+- [ ] Add 2D lighting performance controls
+- [ ] Add 2D lighting debug visualization
+
+## 2D Cameras & Presentation
+
+- [ ] Add an orthographic 2D camera
+- [ ] Add pixel-perfect rendering and snapping
+- [ ] Add resolution-independent 2D scaling
+- [ ] Add camera follow, bounds, and dead zones
+- [ ] Add parallax background layers
+- [ ] Add 2D screen shake and effects
+- [ ] Add multiple 2D cameras and split-screen
+- [ ] Add safe-area handling for 2D UI overlap
+
+## 2D Physics, Animation & Effects Integration
+
+- [ ] Add integration with the 2D physics backend for sprites and tilemaps
+- [ ] Add 2D collider generation from sprite outlines
+- [ ] Add integration with 2D skeletal and cutout animation
+- [ ] Add sprite-sheet flipbook animation playback
+- [ ] Add 2D particle effects
+- [ ] Add 2D trails and ribbons
+- [ ] Add sorting integration between sprites, tilemaps, and particles
+- [ ] Add 2D effect authoring
+
+## 2D Authoring & Performance
+
+- [ ] Add a 2D scene-editing mode
+- [ ] Add sprite and tilemap placement tools
+- [ ] Add sorting and layer management UI
+- [ ] Add a 2D animation and state preview
+- [ ] Add starter templates for platformers and top-down games
+- [ ] Add 2D draw-call batching and atlas budgets
+- [ ] Add 2D culling and off-screen skipping
+- [ ] Add 2D performance profiling
+- [ ] Add 2D subsystem tests
+
+# 37 · GPU Compute & Machine Learning Inference
+
+## GPU Compute Framework
+
+- [ ] Add a general-purpose GPU compute dispatch API
+- [ ] Add compute shaders authored and compiled per backend
+- [ ] Add structured, raw, and typed compute buffers
+- [ ] Add read, write, and read-write resource binding
+- [ ] Add indirect dispatch from GPU-generated arguments
+- [ ] Add shared-memory and workgroup configuration
+- [ ] Add atomic operations and counters
+- [ ] Add async compute queues alongside graphics
+- [ ] Add barriers and resource-state transitions for compute
+- [ ] Add readback of compute results to the CPU
+- [ ] Add a capability check and CPU fallback
+- [ ] Add compute profiling and diagnostics
+- [ ] Add a scripting and gameplay API for compute jobs
+
+## GPGPU Utilities
+
+- [ ] Add parallel prefix-sum (scan)
+- [ ] Add GPU sorting (radix and bitonic)
+- [ ] Add parallel reduction
+- [ ] Add stream compaction
+- [ ] Add histogram generation
+- [ ] Add matrix and vector math kernels
+- [ ] Add image-processing kernels (blur, convolution, resample)
+- [ ] Add noise and procedural-generation kernels
+- [ ] Add a reusable compute-kernel library
+
+## ML Inference Runtime
+
+- [ ] Add a neural-network inference runtime
+- [ ] Add import of models from an open interchange format
+- [ ] Add a tensor type with shapes and data types
+- [ ] Add a broad operator set for common model layers
+- [ ] Add CPU inference with SIMD acceleration
+- [ ] Add GPU inference via compute shaders
+- [ ] Add hardware neural-accelerator use where available
+- [ ] Add batching and streaming inference
+- [ ] Add quantized and reduced-precision inference
+- [ ] Add model loading, caching, and hot-swap
+- [ ] Add async inference off the main thread
+- [ ] Add memory and cost budgets for inference
+- [ ] Add deterministic inference for tests
+- [ ] Add inference diagnostics and profiling
+
+## ML Integration & Use Cases
+
+- [ ] Add inference-driven animation and deformation
+- [ ] Add inference-driven behavior and decision making
+- [ ] Add upscaling and denoising via learned models
+- [ ] Add procedural content synthesis via models
+- [ ] Add speech, text, and vision model integration
+- [ ] Add a training and data-capture workflow
+- [ ] Add model versioning and validation
+- [ ] Add safety, fallback, and reproducibility controls
+- [ ] Add ML-integration tests
+
+# 38 · Photo Mode, Capture & Recording
+
+## Photo Mode
+
+- [ ] Add an in-game photo mode that pauses the world
+- [ ] Add a free-fly photo camera with limits
+- [ ] Add field-of-view, focal-length, and aperture controls
+- [ ] Add depth-of-field and focus-point control
+- [ ] Add exposure, white-balance, and color-grade controls
+- [ ] Add filters, frames, and vignette overlays
+- [ ] Add time-of-day and weather override in photo mode
+- [ ] Add character pose, expression, and hide-player options
+- [ ] Add composition guides (grid, level, horizon)
+- [ ] Add sticker, logo, and caption overlays
+- [ ] Add photo-mode presets and sharing
+- [ ] Add photo-mode UI and controls
+
+## Capture & Recording
+
+- [ ] Add high-resolution screenshot capture
+- [ ] Add super-resolution and multi-tile screenshots
+- [ ] Add HDR and raw screenshot output
+- [ ] Add video recording of gameplay
+- [ ] Add configurable resolution, framerate, and bitrate
+- [ ] Add audio capture synchronized with video
+- [ ] Add a rolling background buffer for instant-replay clips
+- [ ] Add highlight and clip capture triggered by events
+- [ ] Add capture from replays with free camera and time control
+- [ ] Add burst and timelapse capture
+- [ ] Add watermark and metadata embedding
+- [ ] Add export, gallery, and sharing
+- [ ] Add capture performance budgets
+- [ ] Add capture and recording tests
