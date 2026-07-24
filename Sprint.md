@@ -10238,3 +10238,157 @@
 - [ ] Implement a user-editable keymap that loads and saves keyboard bindings for every editor command to a config file and resolves conflicts, replacing the hard-coded shortcut policy.
 - [ ] Implement a transient toast notification service that surfaces non-blocking success, warning, and error messages with auto-dismiss so feedback no longer relies solely on the console log.
 - [ ] Implement entity tags and layers with a management panel, storing them on the scene document and enabling hierarchy filtering, bulk selection, and per-layer viewport visibility toggling.
+
+# 43 · Physics — Detailed Engineering Tasks
+
+## Collider Shapes & Geometry
+
+- [ ] Implement a triangle-mesh static collider that bakes a collider component's mesh reference into a Jolt mesh shape with indexed triangles so arbitrary static level geometry generates contacts, verified by a sphere resting on a concave imported mesh floor.
+- [ ] Implement a convex-hull dynamic collider that builds a Jolt convex-hull shape from a point cloud or source mesh vertices with vertex capping and simplification, verified by stacking two hull-shaped bodies that settle without interpenetration.
+- [ ] Implement a heightfield terrain collider backed by a Jolt heightfield shape fed from a height sample grid, verified by a raycast and a rolling sphere tracking the sampled terrain profile.
+- [ ] Add cylinder and tapered-capsule shape kinds mapping to the corresponding Jolt shapes, verified by creating each and confirming a body with the expected local bounds.
+- [ ] Implement multi-shape compound colliders by allowing an entity to own several child collider descriptors combined into a Jolt compound shape, verified by a single body whose L-shaped compound blocks a ray through the concave notch.
+- [ ] Rotate the collider center offset by the body rotation when composing the body position in body creation and debug draw so an off-center collider on a rotated entity is simulated at the correct world location, verified by a rotated box whose off-center shape contacts match its rendered wireframe.
+- [ ] Implement per-shape convex-radius and margin configuration on the collider component mapping to Jolt's convex radius, verified by a thin box that no longer jitters when configured with a reduced margin.
+
+## Rigid-Body Dynamics
+
+- [ ] Add linear-damping and angular-damping fields to the rigidbody component wired to the body creation settings, verified by a spinning body whose angular velocity decays to a measured fraction over a fixed number of steps.
+- [ ] Add per-axis position and rotation freeze flags mapped to individual allowed-degrees-of-freedom bits, replacing the all-or-nothing rotation lock, verified by a body that translates only on one axis while all rotation is locked.
+- [ ] Add a center-of-mass override applied via the mass-properties override with a shifted center of mass, verified by a box that tips predictably around its overridden center of mass.
+- [ ] Add an inertia-tensor and mass-distribution override so authored mass properties bypass automatic inertia calculation, verified by comparing angular response of a body with custom versus auto inertia under identical torque.
+- [ ] Add configurable maximum linear and angular velocity clamps mapped to the body's velocity caps, verified by an impulse that leaves the body at exactly the configured cap.
+- [ ] Implement a scene-gravity get and set API forwarding to the physics system, replacing the hardcoded gravity vector, verified by scripting zero gravity and observing a released body remain stationary.
+- [ ] Add per-body sleep-threshold and allow-sleep controls mapped to the body and system sleep settings, verified by a never-sleep body staying active indefinitely under a tiny sustained force.
+- [ ] Call the broad-phase optimization routine after a bulk static-body insertion batch so large static scenes get a balanced broad-phase tree, verified by a broad-phase quality assertion after adding thousands of static colliders.
+
+## Raycasts & Scene Queries
+
+- [ ] Route the raycast and raycast-all APIs through the Jolt narrow-phase cast-ray against real body shapes, replacing the current engine-geometry AABB and two-sphere approximation, so oriented boxes and true capsules are hit exactly, verified by a ray that misses a rotated box's AABB corner but correctly reports no hit on the real oriented shape.
+- [ ] Add oriented shape casts by threading a rotation quaternion into the shape-cast and overlap queries instead of an identity basis, verified by a box-cast that only fits through a diagonal gap when rotated forty-five degrees.
+- [ ] Return surface material, sub-shape id, and triangle or face index in the cast result from ray and shape casts so mesh-collider hits report which triangle and material was struck, verified by a ray into a two-material mesh reporting the correct material per face.
+- [ ] Implement a single-target ray and shape cast that tests only one specified entity's body, verified by a ray that ignores an occluder and reports the intended body's hit.
+- [ ] Implement a point-containment query that reports every body whose shape encloses a world point, verified by a point inside a box returning that box and a point just outside returning nothing.
+
+## Joints & Constraints
+
+- [ ] Implement a motorized and driven joint mode for the hinge and a new slider/prismatic constraint exposing target position, target velocity, and maximum motor force, verified by a hinge driven to and holding a commanded angle under gravity.
+- [ ] Implement a spring and soft-constraint mode with frequency and damping on the distance constraint and a new spring joint type, verified by a suspended body oscillating at the configured frequency before settling.
+- [ ] Implement a breakable-joint option with a break-force and break-torque threshold that removes the constraint and emits a break event when the applied impulse exceeds the limit, verified by a weight heavy enough to snap a fixed joint and fire the event.
+- [ ] Implement a cone-twist swing-twist constraint with swing and twist angle limits for ragdoll-style joints, verified by a limb pinned so its swing stays within the configured cone.
+- [ ] Implement a six-degrees-of-freedom configurable constraint exposing per-axis free, locked, and limited translation and rotation, verified by a body constrained to a one-axis rail with all other axes locked.
+- [ ] Add a per-joint enable-collision-between-linked-bodies toggle, verified by two jointed bodies that either overlap freely or block each other according to the flag.
+- [ ] Report live constraint reaction force and torque through the backend so gameplay can read joint stress, verified by a loaded joint reporting a reaction magnitude proportional to the hung mass.
+
+## Contact & Trigger Events
+
+- [ ] Include per-contact impulse magnitude and relative velocity in the collision event read from the accumulated manifold impulse so gameplay can scale impact effects, verified by a hard landing reporting a larger impulse than a gentle one.
+- [ ] Emit all manifold contact points or an averaged contact patch in the collision event instead of only the first point, verified by a face-to-face box landing reporting multiple distinct contact points.
+- [ ] Implement a contact-modification callback path that lets gameplay override per-contact friction and restitution or cancel a contact, verified by a one-way platform that passes upward but blocks downward via a cancelled contact.
+- [ ] Enable sensor-versus-static and sensor-versus-kinematic detection so a trigger volume detects a static collider entering it, verified by a trigger firing enter against a moved static body.
+- [ ] Emit body activation and deactivation wake and sleep events to script through a new pending-event channel, verified by a settling body producing exactly one sleep event.
+
+## Character Controller
+
+- [ ] Implement character crouch and shape-swap that live-switches the character shape with a penetration test before standing, verified by a character unable to stand under a low ceiling remaining crouched.
+- [ ] Wire character-to-dynamic-body pushing by applying impulses to bodies the character reports as active contacts, verified by a walking character shoving a light dynamic crate along the floor.
+- [ ] Implement character-versus-character collision by registering each character controller with the others, verified by two controllers unable to occupy the same space.
+- [ ] Add stick-to-ground and walk-down-stairs handling so a descending character hugs downward slopes instead of launching off ledges, verified by a character keeping grounded state while walking down a staircase.
+- [ ] Add a maximum-push-force limit and controlled slope-slide behavior so a character on a too-steep slope slides down at a controlled rate, verified by the steep-ground state producing downhill motion.
+
+## Physics Materials
+
+- [ ] Add friction-combine and restitution-combine modes (average, min, max, multiply) resolved between two contacting colliders via a contact callback, verified by a min-combine pair producing the lower of two friction values in the resulting deceleration.
+- [ ] Implement a reusable physics-material asset carrying friction, restitution, combine modes, and a surface tag, referenced by colliders and loaded through the asset manager, verified by two colliders sharing one material asset that hot-reloads to change both.
+- [ ] Implement per-triangle material assignment for mesh colliders via a material list on the mesh shape, verified by a raycast onto different triangles of one mesh returning different surface tags.
+
+## Layers & Filtering
+
+- [ ] Implement per-body ignore-pair collision filtering via a group and sub-group filter so two specific entities can ignore each other independent of layers, verified by two same-layer bodies passing through each other while still colliding with a third.
+
+## Determinism, Networking & Async
+
+- [ ] Implement physics state save and restore using Jolt's state serialization exposed as serialize and deserialize on the backend for rollback-netcode snapshots, verified by simulating, snapshotting, diverging, restoring, and reproducing bit-identical body poses.
+- [ ] Add a deterministic-simulation mode that fixes worker-thread count and sorts body creation and iteration by stable entity id so runs reproduce across machines, verified by two runs with identical inputs producing identical final poses.
+- [ ] Implement asynchronous physics stepping that launches the simulation update on the job system and reads results the following frame with interpolation so the main thread does not block on simulation, verified by main-thread step time dropping below the physics solve time under heavy body counts.
+
+## Debug Visualization & Profiling
+
+- [ ] Implement a Jolt debug-renderer backend that draws real simulated shapes, contact points, and constraint frames, replacing the hand-rolled wireframe approximations, verified by mesh and convex colliders rendering their actual triangles.
+- [ ] Add velocity, sleeping-state, and center-of-mass overlays to physics debug draw, verified by a moving body showing a velocity vector that shrinks to zero and recolors when it sleeps.
+- [ ] Expose per-step physics profiling stats (active body count, contact-constraint count, island count, solve time), verified by the active-body stat dropping as bodies fall asleep.
+
+## High-Level Physics Systems
+
+- [ ] Implement a wheeled-vehicle system backed by Jolt's vehicle constraint driven by throttle, brake, and steer inputs with per-wheel suspension and friction, verified by a four-wheel vehicle accelerating, steering, and settling on its suspension.
+- [ ] Implement a ragdoll system that builds a Jolt ragdoll from a skeleton with per-bone shapes and swing-twist constraints and drives skinned-mesh bone transforms from the simulated pose, verified by a character collapsing into a stable, non-exploding ragdoll on death.
+- [ ] Implement kinematic-to-ragdoll blending that pose-matches ragdoll bodies to an animated pose via motor-driven constraints, verified by a partially-driven ragdoll tracking an animation while reacting to an external shove.
+- [ ] Implement buoyancy and water volumes that apply a buoyancy impulse with configurable fluid density and drag to bodies inside a marked region, verified by a low-density box floating at a stable waterline and a dense one sinking.
+- [ ] Implement a soft-body and cloth system backed by Jolt's soft-body settings producing a simulated deformable mesh, verified by a pinned cloth draping over a sphere and coming to rest.
+- [ ] Implement directional and radial force-field volumes for wind, explosions, and attractors that accumulate forces on overlapping bodies each fixed step via an overlap query plus force application, verified by an explosion field launching nearby dynamic bodies radially outward with distance falloff.
+
+## 2D Physics (Box2D)
+
+- [ ] Implement a Box2D-backed 2D physics scene system parallel to the Jolt path, mapping 2D rigidbody and collider components to Box2D bodies and fixtures and stepping a Box2D world, verified by a 2D box falling and resting on a 2D static ground segment.
+- [ ] Implement 2D shape casts, overlaps, and contact-event routing for the Box2D backend mirroring the existing physics-backend query and event contract, verified by a 2D ray reporting the nearest fixture and a 2D trigger firing enter and exit.
+
+# 44 · Save, Prefab, Assets & Visual Scripting — Detailed Engineering Tasks
+
+## Save System
+
+- [ ] Implement an asynchronous save path that snapshots the save document into an immutable buffer on the calling thread and performs encode-plus-atomic-write on a background worker, returning a handle reporting pending, succeeded, or failed and invoking a completion callback, verified by a test that mutates the source immediately after issuing the save and confirms the written bytes match the pre-mutation snapshot.
+- [ ] Build a save-slot manager that stores each save as a slot directory under a configurable root, enumerable and creatable and deletable by slot id, verified by a test that creates three slots, lists them, deletes one, and confirms the remaining two enumerate correctly.
+- [ ] Add a per-slot metadata header written and readable without decoding the full payload, carrying at least save timestamp, accumulated playtime, a caller-supplied label, schema version, and an optional thumbnail blob, verified by a test that reads the metadata of a large save without materializing its entry table.
+- [ ] Implement an autosave and checkpoint scheduler that maintains a fixed-size ring of rotating autosave slots triggered on an interval or an explicit checkpoint event and evicts the oldest when full, verified by a test that fires more autosaves than the ring size and confirms exactly the most recent survive in newest-first order.
+- [ ] Implement a world-state-to-save bridge that captures a registered set of component types from selected live entities into a save document with stable per-entity save keys and restores them back into a scene, verified by a round-trip test that saves a populated scene, clears it, restores, and confirms component values and entity relationships match.
+- [ ] Add an optional compression stage that compresses the entry payload behind a format flag and transparently decompresses on load, verified by a test that a large save is smaller than its uncompressed encoding and round-trips to an identical entry table.
+- [ ] Add optional authenticated encryption of the payload with a per-save nonce and a tamper-detecting authentication tag behind a format flag, rejecting a modified file with a distinct authentication-failure status, verified by a test that flips one payload byte and confirms the load is rejected rather than silently decoded.
+- [ ] Append an integrity checksum of the payload to the file and verify it on load, surfacing a corrupt-checksum status distinct from structural corruption, verified by a test that corrupts a byte and confirms the checksum-specific status.
+- [ ] Extend the save value type into a recursive form that can hold ordered arrays and nested string-keyed maps in addition to the existing scalars, with a container tag and typed accessors, verified by a round-trip test that stores a nested object containing an array and reads every leaf back with correct types.
+- [ ] Add a binary-blob save value type for opaque payloads such as thumbnails and replay chunks with an enforced size bound and round-trip serialization, verified by a test that stores and reloads a multi-kilobyte blob unchanged.
+- [ ] Implement a keep-previous backup on overwrite that renames the prior file to a backup sibling on a successful new atomic write and transparently falls back to the backup when the primary fails verification on load, verified by a test that corrupts the primary and confirms the backup is loaded.
+- [ ] Add a non-loading save-inspection API that reports a file's magic validity, schema version, domain, and the exact migration chain that would run to reach the current version, verified by a test against an older-version file that lists the pending migration steps without decoding the payload.
+
+## Prefab System
+
+- [ ] Implement nested-prefab preservation at capture time so that when capture traverses a subtree that is itself a live instance of another registered prefab, it records that subtree as a nested-prefab reference plus its local overrides instead of flattening its nodes, verified by a test that captures a hierarchy containing an existing instance and confirms the resulting prefab holds a nested reference rather than duplicated nodes.
+- [ ] Build a reverse prefab-usage index that answers which scenes and which other prefabs reference a given prefab (including as a nested prefab), kept current as prefabs and scenes are registered and unregistered, verified by a test that registers a prefab used as a nested reference in two others and confirms both are reported as dependents.
+- [ ] Implement three-way conflict reporting on instance refresh and apply-override that, when a source property changed and the instance also overrides that same property, emits a conflict record carrying the base, source-new, and instance values instead of silently keeping one, verified by a test that changes a property on both source and instance and confirms a conflict is reported.
+- [ ] Add a removed-component override that represents a component present on the source node but deleted on an instance as a first-class override distinct from removed-object, serialized to the prefab asset and both revertible and applyable, verified by a round-trip test that removes a component on an instance, reloads, and confirms the removal is preserved and can be reverted.
+- [ ] Add an added-component override symmetrical to the existing added-child that represents a component added on an instance whose source node lacks it, tracked in the override report and both applyable-to-source and revertible, verified by a round-trip test.
+- [ ] Implement a sibling-order override that records a child reordered to a new index among its siblings within an instance and re-applies that ordering on instantiation and refresh, verified by a test that reorders two children on an instance, reloads, and confirms the order is preserved.
+- [ ] Add an apply-override variant that targets a chosen layer in the variant chain rather than a single asset path, verified by a test that applies an instance override to a mid-chain variant and confirms deeper variants and instances inherit it while the root template is unchanged.
+- [ ] Implement promotion of an instance's current override set into a new variant asset that bakes the instance divergence as the variant's override list against its source prefab, verified by a test that promotes an instance and confirms instantiating the new variant reproduces the instance's values.
+- [ ] Implement a serializable structural prefab diff between two prefab versions or a prefab and an instance that reports added, removed, and reparented nodes plus changed properties in a stable machine-readable form, verified by a test that diffs a known before-and-after pair and matches the expected delta.
+- [ ] Implement cascade refresh through nested-prefab boundaries so that when a base prefab changes, instances that embed it as a nested prefab are re-baked with their nested overrides re-applied, verified by a test that edits a base prefab and confirms an instance embedding it via a nested reference reflects the change while retaining its nested overrides.
+
+## Asset System
+
+- [ ] Implement asynchronous asset loading backed by a worker queue where a load request returns immediately with a handle transitioning through loading to loaded or failed and the payload is produced off the main thread, verified by a test that issues many loads, pumps completion, and confirms all payloads become available without a main-thread disk read.
+- [ ] Add per-request load priority and cancellation to the async queue so higher-priority requests are serviced first and a cancelled request never produces a payload, verified by a test that enqueues mixed-priority requests and confirms completion order follows priority and a cancelled id is dropped.
+- [ ] Implement a resident-memory budget with least-recently-used eviction that tracks each cached payload's byte cost and evicts unreferenced assets when a configurable budget is exceeded, verified by a test that loads past the budget and confirms the coldest unreferenced asset is evicted while referenced ones stay resident.
+- [ ] Implement content-hash payload deduplication so two registered assets with identical content hash and type share a single cached payload instance rather than being decoded twice, verified by a test that loads two duplicate-content assets and confirms one loader invocation and one shared payload pointer.
+- [ ] Add a reverse-dependency index to the registry built from each asset's dependencies and maintained on upsert, remove, and clear, exposing a constant-time query of assets that depend on a given asset, verified by a test that mutates dependencies and confirms the dependents query stays correct.
+- [ ] Implement topological dependency-first load ordering that, given a root asset, produces and executes a load order in which every dependency is resident before its dependents and reports a diagnostic on a dependency cycle, verified by a test over a diamond dependency graph confirming ordering and over a cyclic graph confirming a diagnosed failure.
+- [ ] Implement a hot-reload file watcher that monitors mounted physical paths, detects content changes via the content hash, reloads the changed payload in place, and notifies live holders through a reload callback and cache generation bump, verified by a test that rewrites a watched file and confirms holders observe the new payload.
+- [ ] Implement hot-reload propagation that, when a reloaded asset's content changes, transitively invalidates and reloads its dependents via the dependents index, verified by a test that edits a leaf asset and confirms a dependent asset two levels up is reloaded.
+- [ ] Implement a path-independent stable asset identifier generated once, persisted in a sidecar metadata file, and read back on discovery so the asset id no longer derives from the virtual path and survives a move or rename, verified by a test that moves an asset on disk and confirms its id is unchanged and all references still resolve.
+- [ ] Add identifier-collision detection on discovery and import that reports a diagnostic when two assets resolve to the same identifier instead of silently overwriting the registry entry, verified by a test that forces a collision and confirms the diagnostic and that neither asset is lost.
+- [ ] Implement a batch preloader that loads a named manifest of assets asynchronously while reporting progress as loaded-over-total count and bytes for a loading screen, verified by a test that preloads a manifest and confirms progress advances monotonically to completion and every asset ends resident.
+
+## Visual Scripting Graph
+
+- [ ] Add variable-get and variable-set node kinds with matching intermediate-representation opcodes that read and write a declared graph variable by name through the execution context, type-checked against the variable's declared type at compile time, verified by a round-trip test that sets a variable and a downstream get reads the same value.
+- [ ] Implement persistent per-instance variable storage that survives across lifecycle ticks rather than being cleared each pass and is serialized with the behaviour instance, verified by a test that increments a variable across multiple ticks and confirms accumulation and correct restore after serialization.
+- [ ] Add loop nodes — a counted for-loop with an index output, a while-loop with condition and completed pins, and a for-each over a collection — each with a bounded-iteration watchdog, verified by a test that a loop body executes exactly the expected number of times and a runaway loop is stopped with a diagnostic.
+- [ ] Add pure math nodes (add, subtract, multiply, divide, modulo, negate, min, max, clamp) for the integer and floating-point value types that expose a value output with no execution pin, verified by a test evaluating each against known operands.
+- [ ] Add logic and comparison nodes (and, or, not, xor, equal, not-equal, less, greater, less-equal, greater-equal) producing a boolean output, verified by a truth-table test covering each node.
+- [ ] Implement a wait and delay latent node that suspends the execution flow for a duration, frame count, or until a condition and resumes on a later tick, persisting its pending timer state so a save or load during the wait resumes correctly, verified by a test that confirms resumption after the specified ticks and after a serialize-deserialize mid-wait.
+- [ ] Implement user-defined function and subgraph nodes with typed input and output parameters and a local body, compiled once into a reusable intermediate-representation function and invoked from multiple call sites with an argument frame, verified by a test that calls a function with arguments from two sites and confirms each returns the correct result.
+- [ ] Add node canvas layout data (position on every node plus size and color for comment nodes) serialized in the graph asset, along with reroute nodes on data edges, so an editor can round-trip a graph's visual layout losslessly, verified by a test that saves and reloads a laid-out graph and confirms positions are stable.
+- [ ] Implement live graph debugging with per-node breakpoints, single-step, and pin-value watches that pause execution at a breakpoint and expose the stored pin values to an attached debugger, verified by a test that sets a breakpoint, runs, and confirms execution halts at the node and the expected pin values are readable.
+- [ ] Implement an execution-trace recorder that captures which nodes and edges fired during a pass with per-node timing for editor highlighting of the active path, verified by a test that runs a branching graph and confirms only the taken path is recorded.
+- [ ] Build a node-authoring SDK that lets external code register a new node kind with custom pins, a compile hook that emits intermediate representation, and a runtime execute hook, so gameplay code can add first-class control-flow or data nodes beyond the fixed built-in set, verified by a test that registers a custom node, compiles a graph using it, and executes it to the expected output.
+- [ ] Add an editor-facing graph mutation and validation API that adds and removes nodes, connects and disconnects pins with live type-checking that rejects incompatible connections and execution cycles, and supports undo and redo, verified by a test that an incompatible connection is rejected and a valid edit is undoable to the prior graph state.
+- [ ] Add a collection and array runtime value type and the nodes to operate on it (make-array, length, get, set, append, contains), verified by a test that builds an array, appends, and reads elements back with correct types.
+- [ ] Add explicit type-cast nodes and compile-time implicit numeric widening for pin connections so numeric conversions are well-defined rather than rejected or silently truncated, verified by a test that connects an integer output to a floating-point input and confirms the widened value at runtime.
