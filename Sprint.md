@@ -9889,3 +9889,352 @@
 - [ ] Add export, gallery, and sharing
 - [ ] Add capture performance budgets
 - [ ] Add capture and recording tests
+
+# 39 · Renderer — Detailed Engineering Tasks
+
+## GPU Foundation, RHI & Bindless
+
+- [ ] Implement a bindless resource layer that uploads all material albedo/normal/ORM textures into a single large descriptor array (or a texture-array atlas keyed by a per-instance texture index) so a full GBuffer pass can be drawn with one program and zero per-draw sampler rebinds, and report the achieved reduction in sampler-set calls in the submit stats.
+- [ ] Add a persistent per-frame structured instance-data GPU buffer holding model matrix, previous-frame matrix, material index, and bounds for every proxy, indexed by instance id, so vertex shaders read transforms from the buffer instead of per-draw uniforms and the per-instance uniform upload path is eliminated.
+- [ ] Introduce GPU timestamp query capture around each render-pass view and surface per-pass GPU milliseconds in the pass profile, so the pass-cost debug view reports measured GPU time rather than only estimated target bytes.
+- [ ] Implement double- and triple-buffered upload ring buffers for the instance, light, and cull buffers with explicit frame-fence tracking, so dynamic buffers are never CPU-stalled waiting on in-flight GPU reads.
+
+## GPU-Driven Rendering & Culling
+
+- [ ] Build a Hi-Z depth pyramid pass that seeds from the current depth buffer and downsamples into a full mip chain, exposing the pyramid as a graph resource consumed by the cull pass.
+- [ ] Implement a two-pass GPU occlusion cull that tests each instance's screen-space bounds against last frame's Hi-Z pyramid, draws the passing set, then re-tests false negatives against the current-frame Hi-Z and re-queues newly disoccluded instances so nothing pops in one frame.
+- [ ] Replace the CPU-parity stub in the GPU-driven recorder with a real indirect execution path that writes draw-indirect structs from the compute visible list and submits with an indirect buffer, so visible-instance counts drive draws entirely on the GPU with no CPU readback.
+- [ ] Implement GPU meshlet cluster culling by wiring the meshlet cull shader to test per-meshlet bounding cones and spheres against the frustum and Hi-Z, compacting surviving meshlets into an indirect draw list, and rasterizing them through the instanced path.
+- [ ] Add a compute LOD-selection pass that picks each instance's LOD index from projected screen-space bounds and writes it into the indirect draw arguments, replacing any CPU LOD choice and reporting the selection count from GPU results.
+- [ ] Implement per-instance GPU sorting of the visible list into front-to-back opaque and back-to-front transparent key order via a compute radix sort, so draw submission consumes an already-sorted indirect buffer instead of CPU sort keys.
+
+## Shadows
+
+- [ ] Implement cascaded shadow maps for the directional light by computing N log-uniform split frustums, rendering each into an atlas slice, and selecting/blending cascades per pixel in the deferred lighting shader, removing the current single-projection limitation.
+- [ ] Implement a virtual shadow map system that allocates small shadow tiles into a sparse page pool addressed by a clipmap, marks pages dirty from moved casters and lights, and re-renders only dirty pages so shadow resolution tracks screen pixels without a fixed map size.
+- [ ] Add point-light shadows via cube or dual-paraboloid depth rendering packed into the shadow atlas, and sample them in the lighting shader so point lights beyond the first slot cast shadows.
+- [ ] Add spot-light shadows by rendering a perspective depth map per shadowing spot into an atlas slot and applying filtering in the lighting pass, extending shadowing beyond the single directional light.
+- [ ] Implement the EVSM shadow filter path (currently only enumerated) by rendering moments into a float map, blurring them, and reconstructing visibility with Chebyshev bounds in the shader.
+- [ ] Implement contact-hardening (PCSS) shadows (currently only enumerated) with a blocker-search plus penumbra-estimate filter kernel driven by light size.
+- [ ] Implement screen-space contact shadows by ray-marching the depth buffer along the light vector for lights that request them, adding fine short-range occlusion the shadow map misses.
+
+## Clustered & Tiled Lighting
+
+- [ ] Implement a real clustered light-culling compute pass that builds a froxel grid, assigns each light to overlapping clusters into a per-cluster index list, and has the forward-plus and deferred shaders read the cluster list per pixel, so the clustered path culls lights instead of looping all of them.
+- [ ] Implement analytic area-light shading using linearly-transformed cosines for rectangle, disk, and tube lights, which are currently packed but shaded as point lights, so they produce correct soft specular.
+- [ ] Raise the light limit beyond the fixed uniform arrays by moving light data into a GPU structured buffer indexed by the cluster lists, so scenes with hundreds of lights render without the current cap.
+- [ ] Add light-cookie and IES-profile support by sampling a projected texture or IES intensity map per spot and point light in the lighting shader, driven by a per-light texture index.
+
+## Global Illumination & Reflections
+
+- [ ] Wire the existing prefiltered environment, irradiance map, and BRDF LUT into the deferred and forward shaders so specular reflections and diffuse ambient come from real image-based lighting instead of the analytic hemisphere.
+- [ ] Implement runtime prefiltering that convolves a captured or loaded cubemap into a GGX-prefiltered mip chain and an irradiance map on the GPU, and generate the split-sum BRDF LUT once at startup, producing the textures the IBL config expects.
+- [ ] Implement parallax-corrected local reflection-probe blending by ray-intersecting the reflection vector against each probe's proxy volume and blending the nearest probes per pixel.
+- [ ] Implement screen-space reflections as a Hi-Z ray-march over the GBuffer that produces a reflection color and confidence buffer and composites over IBL specular where the trace hits, falling back to probes on miss.
+- [ ] Implement dynamic diffuse global illumination via an irradiance probe volume that traces or gathers radiance per probe, stores spherical-harmonic or octahedral irradiance, and samples it for indirect diffuse.
+- [ ] Implement screen-space global illumination as a horizon-based indirect-bounce pass over the GBuffer that adds one bounce of colored indirect diffuse.
+- [ ] Implement a baked-lightmap sampling path that reads a per-instance lightmap UV set and atlas texture for static diffuse global illumination.
+- [ ] Implement ground-truth ambient occlusion as a compute pass over depth and normals producing a bent-normal and AO buffer that modulates IBL diffuse and specular.
+
+## Materials & Advanced Shading Models
+
+- [ ] Implement the subsurface-scattering shading model with a separable screen-space diffusion pass over a dedicated thickness/mask GBuffer channel, so skin and wax materials render translucently instead of as default-lit.
+- [ ] Implement the clear-coat shading model by adding a second specular lobe with its own roughness and normal in the lighting shader, honoring the encoded shading model that is currently decoded but unused.
+- [ ] Implement the cloth and hair shading models with sheen and Kajiya-Kay specular respectively, so the enumerated models produce distinct BRDFs instead of falling through to default-lit.
+- [ ] Implement order-independent transparency for the transparent pass using per-pixel linked lists or weighted-blended OIT, so overlapping transparent surfaces composite correctly without CPU depth sorting.
+- [ ] Add refraction and transmission for thin-translucent and single-layer-water models by sampling the scene color buffer with a roughness-driven blur offset by the surface normal, producing glass and water refraction.
+- [ ] Add GPU per-object material-batch sorting that groups draws by pipeline-state key into contiguous ranges and issues one multidraw-indirect per state bucket, minimizing state changes across the whole opaque pass.
+
+## Post-Processing, Anti-Aliasing & Upscaling
+
+- [ ] Implement a temporal super-resolution upscaler that renders the scene at a fraction of output resolution, accumulates jittered samples with the existing motion vectors, and reconstructs full-resolution output with disocclusion rejection.
+- [ ] Implement screen-space depth-of-field with a circle-of-confusion computation from the depth buffer plus a gather/bokeh blur pass driven by camera focal parameters.
+- [ ] Implement per-object and camera motion blur that reconstructs blur from the motion-vector buffer already produced for temporal AA, tile-classifying max velocity and gathering along it.
+- [ ] Add a color-grading pipeline that loads real 3D LUT assets into the color-grade slot and applies user grade strength, replacing the neutral-only LUT currently bound.
+- [ ] Add lens post effects — chromatic aberration, vignette, and film grain — as a single parameterized fullscreen pass so final-image lens character is authorable.
+- [ ] Implement physically based bloom with a progressive dual-filter mip pyramid replacing the single-radius blur, giving wide energy-conserving glare.
+- [ ] Implement a physically based lens-flare and glare pass that thresholds bright HDR pixels and convolves them with a starburst and ghost kernel.
+
+## Volumetrics, Atmosphere & Decals
+
+- [ ] Implement volumetric fog as a froxel-grid compute pipeline that injects per-light scattering, ray-marches in-scattering with shadow sampling, and composites the result into the scene, activating light shafts that are currently flags-only.
+- [ ] Implement a physically based sky-atmosphere model with transmittance and multiscatter lookup tables and aerial perspective, rendered before opaque and sampled by fog and IBL, giving time-of-day skies with no assets.
+- [ ] Implement deferred decals that project material properties onto the GBuffer within decal box volumes during a dedicated pass between GBuffer and lighting, so surface detail can be layered without geometry.
+- [ ] Implement height and exponential distance fog with a dedicated fullscreen pass that reconstructs world position from depth and blends a fog color, giving cheap atmospheric depth independent of the volumetric path.
+
+## Frame Graph & Memory
+
+- [ ] Implement physical transient-resource aliasing that allocates a single backing memory pool and binds aliased textures according to the compiler's existing aliasing plan, so the computed savings are realized instead of only estimated.
+- [ ] Make the render pass set data-driven by allowing passes to be registered and inserted at runtime rather than a fixed enum, so decals, SSR, and volumetrics can add passes without editing the core enum.
+- [ ] Emit explicit GPU barriers and transitions from the compiler's barrier list into the submission layer, so resource state transitions are graph-driven and validated rather than implicit in submit order.
+- [ ] Add async-compute scheduling in the graph so independent compute passes (cull, Hi-Z, ambient occlusion, histogram) can run on a separate queue overlapping graphics work, reporting overlap in the pass profiles.
+
+## HDR Output & Color Management
+
+- [ ] Implement HDR display output that detects display HDR capability, requests a 10-bit or half-float backbuffer instead of the current LDR one, and applies the appropriate encode so tone mapping targets the display's real nit range.
+- [ ] Implement a configurable display-referred tone-mapping curve with paper-white nits, peak nits, and hue-preserving desaturation in the output transform so HDR and SDR outputs share one grading pipeline with correct paper-white anchoring.
+
+## Hardware Ray Tracing
+
+- [ ] Add a ray-tracing acceleration-structure manager that builds and refits a per-mesh bottom-level structure and a per-frame scene top-level structure from the render proxies, exposed as a graph resource, gated on capability detection.
+- [ ] Implement ray-traced shadows that trace visibility rays from GBuffer positions toward each shadowing light and denoise the result temporally, as an alternative to shadow maps where hardware supports it.
+- [ ] Implement ray-traced reflections that trace from the GBuffer where screen-space reflections fail off-screen, shade hits with the deferred BRDF, and denoise, giving accurate off-screen reflections.
+- [ ] Implement ray-traced ambient occlusion tracing short cosine-hemisphere rays against the acceleration structure as a higher-quality alternative to the screen-space pass.
+
+## CPU Culling & Scene Systems
+
+- [ ] Implement a two-level bounding-volume hierarchy or portal/occluder system on the CPU side of the scene extractor to reject whole sub-trees before per-instance GPU culling, reducing the instance count fed into the cull shader for large worlds.
+- [ ] Add GPU-driven per-cluster small-triangle and back-face cone culling in the meshlet path so sub-pixel and back-facing meshlets are discarded before rasterization, cutting overdraw on dense meshes.
+- [ ] Implement streaming virtual texturing that pages high-resolution material textures on demand based on GPU feedback of visible texel density, so large texture sets fit a fixed budget.
+
+## Render Instrumentation
+
+- [ ] Add a GPU-driven visibility and overdraw debug visualization that shades pixels by triangle or meshlet id or by overdraw count sourced from the GPU cull results, so culling correctness is inspectable.
+- [ ] Implement a per-frame render-graph capture that serializes the compiled passes, barriers, aliases, and measured GPU timings to a file for offline inspection, making the graph's behavior verifiable in tests.
+
+# 40 · Engine Core — Detailed Engineering Tasks
+
+## Memory & Custom Allocators
+
+- [ ] Implement a linear/bump arena allocator that carves aligned sub-allocations from a single reserved block, supports rewind-to-marker and reset, never frees individual allocations, and is covered by tests asserting pointer monotonicity and correct alignment for over-aligned requests.
+- [ ] Implement a double-buffered per-frame allocator that hands out transient memory during a frame and is fully reset in constant time at the frame boundary by flipping buffers, with a test proving frame-N allocations are invalidated and reused in frame N+2.
+- [ ] Implement a fixed-block pool allocator backed by a free-list of recycled slots that returns constant-time allocate and free, grows by chunk when exhausted, and is validated by a random allocate/free stress test without corruption.
+- [ ] Implement a scoped stack allocator with RAII markers that asserts LIFO discipline in debug builds and releases everything above the marker on scope exit.
+- [ ] Implement an engine memory tracker that records live bytes and allocation counts per string or enum tag, enforces per-tag budgets by failing or asserting when a tag exceeds its budget, and exposes a snapshot report queryable per tag.
+- [ ] Provide standard polymorphic-memory-resource adapters for the arena, pool, and frame allocators so existing container usage in hot paths can be redirected to engine allocators without changing container types.
+- [ ] Implement an aligned system-allocation wrapper that guarantees 64-byte alignment for SIMD and cache-line data on all compilers and backs the archetype chunk pool's raw pages.
+- [ ] Back the archetype chunk pool with a virtual-address reserve/commit allocator that reserves a large contiguous region up front and commits pages on demand, exposing committed-versus-reserved bytes and reducing per-chunk system allocation count to near zero under steady state.
+
+## Threading, Jobs & Lock-Free Primitives
+
+- [ ] Extract the worker pool and job graph into a subsystem-agnostic jobs module out of the ECS namespace so renderer, asset streaming, and scene systems can submit work to one shared scheduler, with a test submitting non-ECS jobs.
+- [ ] Add a typed task/future primitive with continuation chaining that schedules the continuation on the worker pool when the antecedent completes, without blocking a worker thread, validated by a chained-computation test.
+- [ ] Add job priority levels to the worker pool queues so latency-critical jobs preempt background work at steal time, with a test asserting a high-priority job scheduled after a low-priority backlog starts first.
+- [ ] Rewrite the job-graph runtime state to use atomic per-node dependency counters and a lock-free ready queue so completion callbacks perform no heap allocation and can be called concurrently from multiple workers, verified by a multi-threaded stress test.
+- [ ] Implement a bounded lock-free multi-producer multi-consumer queue using a sequence-numbered ring buffer, and use it as the worker pool's global submission queue, covered by a stress test checking no lost or duplicated items.
+- [ ] Implement a wait-free single-producer single-consumer ring buffer for one-to-one handoff such as render-command streaming, with a throughput test across two pinned threads.
+- [ ] Implement a guided parallel-for on the shared job system that splits a range into work-stealing sub-ranges sized from remaining iterations so uneven per-item cost self-balances, verified against static striping on a skewed workload.
+- [ ] Add epoch-based reclamation or hazard pointers so lock-free structures can free retired nodes safely, with a test that reclaims memory only after all readers have advanced their epoch.
+
+## SIMD & Math
+
+- [ ] Replace the scalar loops in the kernel float lanes with real intrinsic specializations for SSE2, AVX2, AVX-512, and NEON covering load, store, arithmetic, min, max, compare, and select, gated by the existing backend tags, with a test asserting bit-identical results against the scalar fallback.
+- [ ] Add a hardware fused-multiply-add path that emits the intrinsic when available and documents the precision difference from the separate multiply-add fallback, selectable via a determinism flag.
+- [ ] Implement a SIMD batch transform routine that multiplies an array of matrices against an array of positions using the intrinsic lanes, exposed as a kernel and benchmarked to beat the scalar path on large arrays.
+- [ ] Add cache-line-aligned SIMD value types to the math library with load and store helpers so structure-of-arrays math buffers can be consumed directly by intrinsic kernels.
+- [ ] Add matrix inverse, transpose, and translation-rotation-scale decompose functions to the math library so transform back-solves do not depend on the renderer's third-party math.
+- [ ] Add perspective, orthographic, and look-at matrix builders to the math library under the documented handedness convention, with tests round-tripping a projected point.
+- [ ] Add frustum construction from a view-projection matrix plus box and sphere intersection tests so scene culling has a native, testable primitive independent of the renderer.
+- [ ] Add a fixed-point deterministic math option for lockstep-simulation cases where floating-point rounding differences across machines are unacceptable, with a cross-configuration bit-equality test.
+
+## ECS Storage, Archetypes & Command Buffer
+
+- [ ] Add an archetype transition-edge cache that memoizes the destination archetype for each source-archetype and add/remove-component pair so repeated structural changes skip archetype re-resolution, verified by a test asserting the second identical add is constant time.
+- [ ] Extend the command buffer to support non-trivially-copyable components by recording per-type move-construct and destroy function pointers alongside the byte payload, so components holding handles or strings can be deferred, verified by round-tripping a move-only component.
+- [ ] Add a bulk move-entities-between-worlds operation that transfers whole chunks by pointer swap when component layouts match instead of per-entity copy, validated by a test asserting zero per-entity component copies.
+- [ ] Add a defragment maintenance pass that compacts partially-filled chunks of the same archetype into fewer full chunks during a sync point, reported via maintenance stats, with a test asserting reduced chunk count and preserved data.
+- [ ] Add an order-preserving stable-removal option to entity destruction for archetypes flagged order-sensitive, with a test proving remaining entities keep their relative row order.
+
+## ECS Queries & Scheduler
+
+- [ ] Add a persistent cached query object that stores its matched-archetype set and invalidates incrementally on structural version bump, so repeated per-frame iteration skips archetype matching when no archetype was created or destroyed.
+- [ ] Add query result change-filtering that iterates only chunks whose component version exceeds a caller-held baseline using the existing dirty ranges, with a test asserting untouched chunks are skipped.
+- [ ] Add automatic per-system entity command buffers that the scheduler allocates, passes to each parallel worker, and plays back deterministically at the stage's sync point, so systems can request structural changes during parallel iteration without manual buffer wiring.
+- [ ] Add work-stealing at query-chunk granularity within a single system so one wide system's chunks are distributed across all idle workers, verified by telemetry showing more than one worker active for a single system.
+
+## World Resources, Relations & Lifecycle
+
+- [ ] Add world-resource singleton components stored once per world outside archetype storage so global state such as time, input, and config is accessible to systems without a carrier entity, with get, set, has, and remove tests.
+- [ ] Add relation cleanup policies that run when a relation target entity is destroyed so dangling relation pairs cannot survive, verified by destroying a target and asserting the chosen policy outcome.
+- [ ] Add wildcard relation queries that enumerate all targets an entity relates to under a given relation, with a test listing multiple targets.
+- [ ] Add exclusive-relation enforcement so a relation flagged exclusive replaces any existing target rather than adding a second pair, with a test asserting only the latest target remains.
+- [ ] Add a deferred-destruction queue so entity destruction requested mid-iteration is recorded and applied at the next sync point, with a test proving iteration over an entity being destroyed remains valid until the sync point.
+
+## Reflection & Type System
+
+- [ ] Extend component reflection to describe nested struct fields recursively so an inspector or serializer can walk composite components, with a test reflecting a struct of structs.
+- [ ] Add fixed-array and dynamic-container field descriptors to reflection with element type and count or stride so array members are enumerable, with a round-trip serialization test.
+- [ ] Add string-field reflection with an offset and length/accessor strategy so text component fields can be inspected and serialized, with a read/write-by-reflection test.
+- [ ] Add enum reflection that maps enum field values to enumerator names and back so inspectors show names and serializers store stable identifiers, with a name/value round-trip test.
+- [ ] Add a general runtime type registry that reflects arbitrary non-component types such as assets and save structs using the same field-descriptor model, verified by reflecting a non-component struct.
+- [ ] Add per-field attribute metadata such as min, max, step, tooltip, and hidden to reflection descriptors and expose it through the registry so editor tooling drives validation from a single source.
+
+## Serialization, Snapshots & Save
+
+- [ ] Make the chunked snapshot binary codec endian-portable by writing all multi-byte integers in a fixed little-endian layout and byte-swapping on big-endian hosts, verified by decoding an opposite-endian fixture.
+- [ ] Add a component-schema version and field-layout table to the snapshot and component binary format plus a migration step that reorders, adds, or drops component fields when the stored layout differs from the runtime layout, verified by loading a fixture whose component gained and lost a field.
+- [ ] Add optional block compression to the chunked snapshot codec with a header flag so large snapshots shrink on disk, verified by a compress/decompress round-trip and a size-reduction assertion.
+- [ ] Add a whole-file checksum to the snapshot and save-game formats that is written on encode and validated on decode so corrupted files are rejected, with a bit-flip detection test.
+- [ ] Extend save-game migrations with a value-transform migration kind that applies a caller-supplied function to convert a value's type or units between versions, with a transform-applied test.
+- [ ] Add a component serialize/deserialize hook interface for components whose in-memory form differs from their persisted form, invoked by the snapshot restorer instead of a raw byte copy, verified by round-tripping a component holding an asset handle.
+
+## Asset Management
+
+- [ ] Add an asset dependency graph that records which assets reference which and propagates hot-reload to dependents when a base asset changes, verified by reloading a material and asserting a dependent mesh instance observes the update.
+- [ ] Add an asynchronous streaming loader that enqueues load requests with priorities onto the shared job system and resolves handles on completion, so callers request-then-poll without blocking, with a priority-ordering test.
+- [ ] Add a budget-driven cache eviction policy that unloads least-recently-used unreferenced assets when a configured memory budget is exceeded, integrated with the memory tracker tags, verified by loading past budget and asserting the coldest asset is evicted.
+- [ ] Add content-hash-addressable asset identity that deduplicates identical imported payloads to one cache entry keyed by content hash so two references to identical content share one resident copy, with a dedup-count test.
+- [ ] Add a generational-index runtime handle alongside the shared-pointer handle so systems can store a trivially-copyable, revocable reference that reports staleness after reload or unload, with a stale-detection test.
+
+## Coroutines, Async & Script Host
+
+- [ ] Add a coroutine task type whose awaiter suspends onto the shared job system and resumes on a worker when the awaited job completes, giving native systems await-style async without blocking threads.
+- [ ] Add a frame-yielding coroutine primitive for wait-next-frame and wait-seconds driven by the scene task loop so gameplay logic can span frames without hand-rolled poll state machines, with a multi-frame resume test.
+- [ ] Add real Lua coroutine suspension by routing behaviour calls through new-thread and resume so a script yield suspends and resumes across frames instead of running to completion, verified by a script that yields with preserved locals.
+- [ ] Add a persisted execution-position field and a wait node kind to the visual-graph runtime so a graph can suspend at a node and resume there next invocation, verified by a graph that pauses and continues from the same node.
+- [ ] Add a structured cancellation token threaded through the async task and streaming-load APIs so an in-flight coroutine or load can be cancelled at its next suspension point and releases its resources, with a cancel-mid-flight test.
+
+# 41 · Scripting, Audio & Input — Detailed Engineering Tasks
+
+## Scripting
+
+- [ ] Implement an engine-integrated coroutine scheduler exposed to all script backends as wait-seconds, wait-frames, and wait-until-condition primitives that suspend a behaviour function mid-body (via yield on Lua and a resumable state machine on native and visual-graph) and resume it on the correct tick group, so sequential logic needs no manual state machines.
+- [ ] Implement a script-facing Task.Start that accepts a script-authored coroutine body and drives it through the scene task system, completing the deferred half of the Task API so scripts, not only native code, can spawn, await, and cancel long-running asynchronous work.
+- [ ] Add a per-behaviour instruction budget by installing a Lua count hook that aborts a script with a diagnostic once it exceeds a configurable opcode count per lifecycle invocation, so a runaway loop in one behaviour cannot hang the frame.
+- [ ] Add a per-state or per-behaviour memory ceiling via a custom Lua allocator that fails allocation past a configurable byte cap and surfaces it as a script diagnostic, so a script cannot exhaust process memory.
+- [ ] Implement hot-reload state preservation for Lua behaviours that serializes the previous environment's live exposed and script-declared persistent variables before the environment swap and re-injects matching values afterward, so editing a script mid-play does not reset gameplay state.
+- [ ] Implement per-instance exposed-variable override application for the visual-graph backend so editor-authored overrides seed graph default-value pins before the created lifecycle, achieving parity with the Lua backend instead of the current no-op.
+- [ ] Implement per-instance exposed-variable storage and override application for the native backend so compiled behaviours declare exposed fields addressable per entity, removing the native-backend no-op.
+- [ ] Build a debug-adapter-protocol server that bridges the existing Lua debug hook's pause, step, breakpoint, and call-stack machinery to a socket endpoint so an external editor can attach, set breakpoints, step, and inspect frames over a standard protocol.
+- [ ] Extend breakpoints with a condition expression and a hit-count field, evaluating the condition in the paused frame's environment inside the hook so a breakpoint only stops when its predicate is true or its Nth hit is reached.
+- [ ] Add a watch and evaluate facility that compiles and runs an arbitrary expression string against a paused frame's locals and upvalues and returns a typed variable snapshot, so a debugger can evaluate expressions and inspect nested tables on demand.
+- [ ] Add a set-variable capability that writes a new value into a named local or upvalue of a paused frame so a debugger can mutate state at a breakpoint.
+- [ ] Introduce a managed C#/.NET script backend implementing the backend interface that loads a compiled assembly, maps lifecycle and event callbacks and the existing function-registry surface into managed method calls, and marshals script values across the boundary, adding a fourth first-class scripting language.
+- [ ] Extend the script value type with array and string-keyed-map variants plus marshalling on every backend boundary, so structured data such as lists and records can cross the script boundary without being flattened into separate scalar pins.
+- [ ] Add first-class vector, quaternion, and color value types to the script value system and function-registry pins so transform, physics, and renderer APIs pass composite math types as single arguments instead of three float pins.
+- [ ] Add a per-behaviour and per-registered-function CPU-time profiler that samples execution duration during lifecycle, event, and call dispatch and exposes an aggregated per-frame report, so designers can find which scripts and API calls dominate the budget.
+- [ ] Add a change-notification observer mechanism to the shared script state so a behaviour can subscribe to a key and be invoked when its value changes, replacing per-frame polling for cross-behaviour shared data.
+- [ ] Implement native-plugin hot-reload state preservation that snapshots a native behaviour's exposed and registered instance data before unloading the shared library and restores it after the rebuilt plugin reloads.
+- [ ] Add a sandbox capability policy per behaviour asset that gates which registered API namespaces a given script may call and rejects disallowed calls with a diagnostic, so content-authored scripts run with least privilege.
+- [ ] Add structured error objects carrying source line, chunk, and call stack to script diagnostics emitted from failed safe calls, so runtime script errors surface a navigable location in tooling.
+- [ ] Implement a deterministic script fixed-tick group that runs flagged behaviours on the physics fixed timestep with an accumulator, so gameplay logic requiring stable step size runs independently of render frame rate.
+
+## Audio
+
+- [ ] Build a per-bus DSP insert chain using a node graph so each authored mixer bus can host an ordered list of effect nodes routed between the bus source and its parent, turning buses into real processing chains rather than volume and mute only.
+- [ ] Implement a low-pass filter effect node selectable per bus and per source with authorable cutoff, so environmental muffling and dialogue clarity can be shaped without pre-baked assets.
+- [ ] Implement a reverb effect node with authorable room parameters as a shared aux bus plus per-source send levels, so multiple sources feed one reverb tail through a send-and-return topology.
+- [ ] Implement a parametric equalizer effect node with multiple bands usable on any bus so mixes can be tone-shaped at authoring time.
+- [ ] Implement a dynamics compressor and limiter effect node on the master and arbitrary buses with threshold, ratio, attack, and release parameters, so the mix is protected from clipping and can be glued.
+- [ ] Add sidechain ducking that keys one bus's gain reduction off another bus's signal level so, for example, music is ducked by a dialogue bus each audio tick.
+- [ ] Extend mixer snapshots beyond bus volumes to also carry per-bus mute, pitch, and effect-parameter overrides, and interpolate all of them during snapshot transitions, so a snapshot captures a full mix state.
+- [ ] Add a per-clip streaming policy that selects stream-versus-decode-to-memory and honor it instead of unconditionally streaming, so short one-shot effects play from a decoded in-memory buffer without per-play disk streaming.
+- [ ] Implement an in-memory decoded-PCM cache keyed by clip asset id so repeated one-shots of the same short clip share one decoded buffer instead of re-decoding per voice.
+- [ ] Implement asynchronous clip loading and decoding on a worker so one-shot playback and source creation never block the game thread on first-touch decode, resolving the sound once decoding completes.
+- [ ] Implement sample-accurate scheduled playback that starts a voice at a specified future audio-clock frame, exposed through the play descriptor, so cues fire exactly on the audio clock rather than at frame boundaries.
+- [ ] Add beat and tempo-quantized scheduling built on the sample-accurate start-time mechanism so a cue can be scheduled to the next bar or beat of an authored tempo, enabling rhythmic music layering.
+- [ ] Replace binary occlusion with a filtered occlusion model that additionally drives a per-voice low-pass cutoff proportional to ray-blocked coverage, so occluded sources are muffled and attenuated rather than only attenuated.
+- [ ] Distinguish obstruction from occlusion by sampling the direct path and the reverb-send path separately, applying obstruction to the dry signal while leaving the reverb send audible, so a source behind a thin wall sounds correctly indirect.
+- [ ] Add multi-listener support that drives multiple listeners bound to per-local-user cameras and routes each spatial source to the nearest listener, so split-screen local multiplayer gets correct per-viewport 3D audio.
+- [ ] Add directional source cones with inner and outer angle and outer gain so sources such as speakers and character mouths radiate directionally instead of omnidirectionally.
+- [ ] Implement reverb-zone volumes as scene components that select an environmental reverb preset by listener position and crossfade the master reverb parameters on zone transitions.
+- [ ] Add per-bus and master metering that reports peak and RMS levels each audio tick through a lock-free channel to the game thread so editor meters and audio debugging can display live signal levels.
+- [ ] Add an optional binaural HRTF spatialization path selectable per source so headphone users get true binaural positioning instead of only vector-based panning.
+- [ ] Implement looping-voice virtualization that records stolen looping one-shots and automatically restarts them at their computed current position when pool capacity frees, so an important looping sound resumes instead of being permanently lost to voice stealing.
+- [ ] Add a music crossfade helper that ties two voices to a shared normalized fade parameter and ramps their send volumes inversely over an authorable duration, so track transitions need no manual per-frame volume scripting.
+- [ ] Add distance-based air-absorption filtering that scales a per-voice low-pass cutoff with listener distance so far-away sources lose high frequencies realistically, layered on top of distance attenuation.
+
+## Input
+
+- [ ] Implement a device-to-local-user binding layer that assigns a specific gamepad index and optionally the shared keyboard and mouse to each local user and routes only that device's state into that user's evaluation, so local multiplayer players control separate characters from separate controllers.
+- [ ] Implement a press-any-button-to-join flow that watches all unassigned connected devices for a first actuation and returns the actuating device so it can be bound to a newly created local user, so drop-in local co-op works without pre-assignment.
+- [ ] Emit device hotplug events into the script event bus by diffing gamepad connectivity across frames so gameplay can react to controllers being plugged in or lost instead of polling.
+- [ ] Implement an interactive rebind capture flow that listens for the next actuated key across all devices with cancel and timeout, returns it as a candidate, and feeds it into the rebind path, so a settings screen can offer press-a-key-to-bind.
+- [ ] Extend rebinding to address an individual composite slot via a binding-id and slot-index pair, closing the gap where a composite's slots cannot be independently rebound.
+- [ ] Implement last-used-device tracking that records whether the most recent actuation came from keyboard and mouse or a specific gamepad and exposes it per local user so UI can switch button-prompt glyphs to match the active device.
+- [ ] Implement the reserved field-of-view-scaling modifier by giving the input subsystem access to the active camera's field of view and scaling the value accordingly, converting the reserved enum slot into a working sensitivity-versus-zoom modifier.
+- [ ] Add an input-buffering trigger option that remembers an actuation for a configurable window so a slightly-early press still satisfies the action when its gate opens later that window, enabling forgiving action-game timing.
+- [ ] Implement a directional-sequence combo trigger that fires when a configured ordered sequence of actions or directions completes within a time budget, extending the trigger set beyond the single-action gate.
+- [ ] Add an action-level toggle modifier that converts a momentary press into a latched on/off state resolved in the mapping evaluator, so accessibility and preference toggles need no per-behaviour scripting.
+- [ ] Introduce named haptic effect assets describing a magnitude-over-time curve and dual-motor mix and a player that drives the vibration backend each frame from the curve, so designers author rumble patterns instead of only setting constant motor magnitudes.
+- [ ] Implement per-local-user haptics routing that maps a local user to its bound device index so setting vibration addresses a specific player's controller rather than a raw device index.
+- [ ] Add virtual on-screen touch control regions that map touch contacts to actions so mobile builds get button and stick input through the same action system, going beyond a single binary touch key.
+- [ ] Add a mouse-delta relative-motion evaluation path distinct from absolute pointer position so first-person look uses frame-to-frame delta unaffected by cursor clamping or absolute resets.
+- [ ] Implement per-device sensitivity and dead-zone calibration profiles that scale and curve a device's analog inputs before modifier evaluation and persist alongside the rebind profile so players can tune stick response per controller.
+- [ ] Add a rebind-UI query API that enumerates every rebindable binding in the active contexts with its current key, display name, and conflict status so a settings screen can render the full remap table without walking asset internals.
+- [ ] Implement an input-consumption report that records which higher-priority mapping context consumed a key this frame and exposes it so gameplay can detect when UI or console captured input rather than silently receiving nothing.
+- [ ] Add a snapshot-diff comparison utility over input recordings that reports the first frame two recordings diverge in resolved action state, turning deterministic replay into a regression-testable golden-file mechanism for input logic.
+
+# 42 · Editor Tooling — Detailed Engineering Tasks
+
+## Transform Gizmos, Snapping & Viewport Manipulation
+
+- [ ] Implement a gizmo coordinate-space toggle that switches axis orientation between world-aligned and the selected entity's local rotation, persisted per-viewport and bound to a hotkey, so translating along local axes follows the object's frame.
+- [ ] Implement scale-value snapping in the gizmo drag path that rounds each axis' scale delta to a configurable increment, exposed as a scale-snap toolbar dropdown and verified by a self-test that a dragged scale lands exactly on the increment.
+- [ ] Implement vertex and surface snapping that, while a modifier key is held during a translate drag, raycasts the mouse against other meshes' triangles and vertices and snaps the dragged object's pivot to the nearest hit, so parts assemble precisely without manual coordinate entry.
+- [ ] Implement a pivot-mode switch between bounding-box center, object origin, and median of multi-selection that changes where the gizmo renders and about which point rotate and scale operate.
+- [ ] Implement a numeric transform-entry overlay that lets the user type an exact delta mid-drag to move, rotate, or scale by that amount along the active gizmo axis, committing as a single undo step.
+- [ ] Implement a viewport statistics HUD that overlays live frame time, FPS, draw-call count, triangle count, and visible-entity count sourced from the submission builder, toggled from the viewport toolbar.
+- [ ] Implement camera bookmarks that store named yaw, pitch, pivot, and distance poses to the workspace file and restore them with an animated transition through the existing focus path.
+- [ ] Implement a selection-isolation solo mode that temporarily hides all non-selected entities in the viewport render pass and restores full visibility on exit, driven from the hierarchy and reversible without mutating the scene document.
+- [ ] Implement viewport-to-file capture that renders the current viewport at a chosen resolution and writes an image to disk, wired to a toolbar button and usable headlessly for regression screenshots.
+
+## Command System & Undo/Redo
+
+- [ ] Implement drag-coalescing in the command stack so consecutive same-target transform commands issued within one gizmo gesture merge into a single reversible entry, verified by a test asserting a multi-frame drag collapses to one undo.
+- [ ] Implement an undo-history panel that lists every entry in the active partition with its label and a marker at the current position and lets the user click any entry to undo or redo to that exact point deterministically.
+- [ ] Implement a can-merge-with protocol on editor commands plus a time-window threshold so rapid inspector field edits coalesce while distinct edits remain separate undo steps.
+- [ ] Implement a transaction and scope API on the command stack that groups an arbitrary set of sub-commands into one atomic compound command whose undo reverses all children in reverse order.
+- [ ] Implement a per-scene dirty-since-last-save indicator derived from comparing the command-stack position against the position recorded at save time, so the title bar and close prompt reflect true modification state across undo and redo.
+
+## Asset Database & Content Browser
+
+- [ ] Implement a persistent asset database that assigns a stable identifier to every project asset, stores a serialized index of path, type, hash, and dependencies on disk, and incrementally updates it on file change, replacing the current directory-scan index.
+- [ ] Implement a cross-type reference and dependency inspector that, for any selected asset, queries the database to list all assets that reference it and all assets it depends on, generalizing the material-only reference finder.
+- [ ] Implement safe asset rename and move that rewrites all incoming references by identifier across scenes, materials, and prefabs in one transaction so relocating an asset never produces dangling links.
+- [ ] Implement a broken-reference scanner that walks the asset database, reports every asset with a missing dependency, and surfaces results in a dockable list with click-to-select.
+- [ ] Implement a content-browser search-and-filter bar that queries the asset database by name substring and asset-type facet and repopulates the tile and list view live, independent of the current folder.
+- [ ] Implement an import-preset system that stores per-extension import settings as project files and applies them automatically during import so re-imports are deterministic.
+- [ ] Implement a background thumbnail-generation queue that renders mesh, material, and texture thumbnails off the UI thread and streams them into the disk cache as they complete so browsing a large folder never blocks paint.
+- [ ] Implement drag-and-drop of a mesh into the viewport that spawns the entity at the surface point under the cursor via raycast rather than the origin, as a single undoable command.
+
+## Prefabs & Scene Authoring
+
+- [ ] Implement a prefab override system that records per-instance property deltas against the source prefab, displays overridden fields with a distinct marker in the inspector, and supports per-property revert-to-prefab and apply-to-prefab.
+- [ ] Implement nested-prefab editing so a prefab instance can be opened in an isolated edit context, changes written back to the prefab asset, and all other instances updated on reload.
+- [ ] Implement a prefab and scene diff view that compares two files or an instance against its source and lists added, removed, and changed entities and components in a reviewable tree.
+- [ ] Implement prefab variants that inherit from a base prefab and store only their overrides so a family of related objects can share edits pushed from the base.
+- [ ] Implement multi-entity copy, paste, and duplicate-with-hierarchy that serializes the selected subtree and reinstantiates it as one undoable command, including paste-into-parent.
+
+## Console & Diagnostics
+
+- [ ] Implement a console command-input line with a parser and a registry of named editor commands plus command-history recall, turning the read-only log into an interactive command surface.
+- [ ] Implement a console text-search filter that highlights and narrows entries matching a query string, combined with the existing level filters.
+- [ ] Implement click-to-navigate on console entries so a log line carrying a source location opens the script editor at that line or selects that entity.
+- [ ] Implement per-category console filtering built from the distinct category values already stored on each entry so noisy subsystems can be muted.
+
+## Profiling, Capture & Debugging
+
+- [ ] Implement a CPU frame-profiler panel that samples named scopes per frame from the message loop and rendering submission and renders a per-frame timeline breakdown with min, average, and max timings.
+- [ ] Implement a memory-profiler panel that tracks editor and scene allocations by category and displays live totals plus a high-water mark, sourced from an instrumented allocator hook.
+- [ ] Implement a GPU frame-capture debugger that snapshots one frame's draw calls with their render state, textures, and view targets and presents an inspectable per-draw-call list for diagnosing rendering issues.
+- [ ] Implement a render-pass visualization selector in the viewport that overrides output to show albedo, normals, depth, overdraw, or wireframe through the existing submission path.
+- [ ] Implement an asset-load telemetry log that records every asset load and cook duration and cache hit or miss and exposes it in a sortable diagnostics list.
+
+## Live-Coding & Hot-Reload
+
+- [ ] Implement a Lua script hot-reload watcher that detects changes to script assets on disk and reloads them into the running scene session without restarting play mode, preserving entity state where possible.
+- [ ] Implement native behaviour and plugin hot-reload that unloads and reloads the compiled gameplay module and re-binds live component instances so native behaviour changes take effect without relaunching the editor.
+- [ ] Implement a live reimport-on-change pipeline that watches source files and re-cooks and reapplies them to open scenes automatically, extending the material-graph cook-reload behavior to all asset types.
+- [ ] Implement play-mode frame stepping with single-step and step-N added alongside pause, advancing the simulation exactly one fixed tick per press for debugging gameplay frame-by-frame.
+
+## Automation & Functional Test Harness
+
+- [ ] Implement an input-driven automation harness that feeds synthetic pointer and keyboard event sequences into the live window message pipeline and asserts resulting editor state, enabling GUI-level regression tests beyond the object-level self-test.
+- [ ] Implement an interaction record-and-playback system that captures a session's input events to a file and deterministically replays them against the editor so reported bugs can be reproduced in continuous integration.
+- [ ] Implement a scriptable automation command layer that lets an external driver invoke editor operations over a local channel and read back results, enabling agent-driven end-to-end tests.
+- [ ] Implement golden-image viewport comparison in the self-test harness that renders known scenes headlessly and diffs against stored reference images with a tolerance, failing on visual regressions.
+
+## Persistence, Recovery & Version Control
+
+- [ ] Implement periodic scene autosave that writes a timestamped recovery copy at a configurable interval and on focus loss and an on-launch recovery prompt that restores the latest copy after a crash.
+- [ ] Implement version-control status integration that queries the working copy for each asset's state and overlays a status badge on content-browser tiles and hierarchy rows.
+- [ ] Implement version-control actions to stage, revert, diff, and view history invocable from the asset context menu, operating through a pluggable backend interface so the concrete system is swappable.
+- [ ] Implement a text-serialization canonicalization pass for scene and prefab files that produces stable, line-diffable output with sorted keys and deterministic ordering so merges and code review of scene changes are tractable.
+
+## Workflow & Discoverability
+
+- [ ] Implement a command palette invoked by a global shortcut that fuzzy-searches all named editor actions and assets and executes or opens the chosen result, providing keyboard-first navigation of the whole toolset.
+- [ ] Implement a user-editable keymap that loads and saves keyboard bindings for every editor command to a config file and resolves conflicts, replacing the hard-coded shortcut policy.
+- [ ] Implement a transient toast notification service that surfaces non-blocking success, warning, and error messages with auto-dismiss so feedback no longer relies solely on the console log.
+- [ ] Implement entity tags and layers with a management panel, storing them on the scene document and enabling hierarchy filtering, bulk selection, and per-layer viewport visibility toggling.
