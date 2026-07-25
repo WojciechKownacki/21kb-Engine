@@ -531,6 +531,7 @@ void WriteInstructionOperation(
     case VisualGraphIrOpcode::SetProperty:
     case VisualGraphIrOpcode::Branch:
     case VisualGraphIrOpcode::Sequence:
+    case VisualGraphIrOpcode::Wait:
         stream << "    context.Trace(" << CppStringLiteral(ToString(instruction.opcode)) << ", " << symbol << ");\n";
         break;
     }
@@ -608,6 +609,16 @@ void WriteExecuteBody(
         return;
     }
 
+    if (instruction.opcode == VisualGraphIrOpcode::Wait) {
+        stream << "        context.MarkNodeEvaluated(" << instruction.sourceNodeId << "U);\n";
+        stream << "    }\n";
+        if (instruction.nextNodeId != 0U) {
+            stream << "    context.Suspend(" << function.eventNodeId << "U, " << instruction.nextNodeId << "U);\n";
+        }
+        stream << "}\n\n";
+        return;
+    }
+
     WriteInstructionOperation(stream, instruction, bindings, requireNativeBindings, errors, diagnostics);
     stream << "        context.MarkNodeEvaluated(" << instruction.sourceNodeId << "U);\n";
     stream << "    }\n";
@@ -622,7 +633,16 @@ void WriteFunctionBody(std::ostringstream& stream, std::string_view className, c
     if (function.entryNodeId == 0U || FindInstruction(function, function.entryNodeId) == nullptr) {
         stream << "    static_cast<void>(context);\n";
     } else {
+        stream << "    switch (context.TakeContinuation(" << function.eventNodeId << "U)) {\n";
+        for (const VisualGraphIrInstruction& instruction : function.instructions) {
+            stream << "    case " << instruction.sourceNodeId << "U:\n";
+            WriteExecuteCall(stream, className, NodeFunctionName("Execute", function, instruction.sourceNodeId));
+            stream << "        return;\n";
+        }
+        stream << "    default:\n";
         WriteExecuteCall(stream, className, NodeFunctionName("Execute", function, function.entryNodeId));
+        stream << "        return;\n";
+        stream << "    }\n";
     }
     stream << "}\n\n";
 }
@@ -694,6 +714,8 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    void EmitEventTo(std::uint64_t targetEntity, std::string_view name, std::span<const VisualGraphNativeEventArgument> arguments);\n";
     header << "    void RequireComponent(std::string_view name);\n";
     header << "    void Trace(std::string_view opcode, std::string_view symbol);\n";
+    header << "    void Suspend(std::uint32_t eventNodeId, std::uint32_t nextNodeId);\n";
+    header << "    std::uint32_t TakeContinuation(std::uint32_t eventNodeId);\n";
     header << "    bool ReadBool(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
     header << "    int ReadInt(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
     header << "    float ReadFloat(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";

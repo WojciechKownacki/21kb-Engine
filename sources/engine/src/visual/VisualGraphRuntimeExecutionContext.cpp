@@ -97,6 +97,26 @@ const std::vector<std::string>& VisualGraphRuntimeExecutionContext::RuntimeError
     return runtimeErrors_;
 }
 
+void VisualGraphRuntimeExecutionContext::Suspend(std::uint32_t eventNodeId, std::uint32_t nextNodeId) {
+    if (eventNodeId != 0U && nextNodeId != 0U) {
+        continuations_[eventNodeId] = nextNodeId;
+    }
+}
+
+std::uint32_t VisualGraphRuntimeExecutionContext::TakeContinuation(std::uint32_t eventNodeId) {
+    const auto iter = continuations_.find(eventNodeId);
+    if (iter == continuations_.end()) {
+        return 0U;
+    }
+    const std::uint32_t nodeId = iter->second;
+    continuations_.erase(iter);
+    return nodeId;
+}
+
+void VisualGraphRuntimeExecutionContext::ClearContinuation(std::uint32_t eventNodeId) noexcept {
+    continuations_.erase(eventNodeId);
+}
+
 void VisualGraphRuntimeExecutionContext::BeginExecutionPass() {
     writesInCurrentExecution_.clear();
     emittedEvents_.clear();
@@ -112,6 +132,7 @@ void VisualGraphRuntimeExecutionContext::ClearFrameState() {
     emittedEventRecords_.clear();
     traces_.clear();
     runtimeErrors_.clear();
+    continuations_.clear();
 }
 
 std::string VisualGraphRuntimeExecutionContext::Key(std::uint32_t nodeId, std::string_view pin) {

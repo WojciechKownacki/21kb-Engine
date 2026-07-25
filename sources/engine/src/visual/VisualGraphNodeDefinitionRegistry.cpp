@@ -86,6 +86,12 @@ VisualGraphNodeDefinitionRegistry VisualGraphNodeDefinitionRegistry::CreateDefau
         .pins = {Input("exec"), Output("then")},
     }));
     static_cast<void>(registry.Register(VisualGraphNodeDefinition{
+        .kind = VisualGraphNodeKind::Wait,
+        .displayName = "Wait",
+        .requiresSymbol = false,
+        .pins = {Input("exec"), Output("then")},
+    }));
+    static_cast<void>(registry.Register(VisualGraphNodeDefinition{
         .kind = VisualGraphNodeKind::Comment,
         .displayName = "Comment",
         .requiresSymbol = false,

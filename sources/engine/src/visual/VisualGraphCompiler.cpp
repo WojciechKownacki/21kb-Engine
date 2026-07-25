@@ -30,6 +30,8 @@ void AddCompileError(VisualGraphCompileResult& result, std::uint32_t nodeId, std
         return VisualGraphIrOpcode::CallNative;
     case VisualGraphNodeKind::EmitEvent:
         return VisualGraphIrOpcode::EmitEvent;
+    case VisualGraphNodeKind::Wait:
+        return VisualGraphIrOpcode::Wait;
     case VisualGraphNodeKind::Event:
     case VisualGraphNodeKind::CustomEvent:
     case VisualGraphNodeKind::Comment:

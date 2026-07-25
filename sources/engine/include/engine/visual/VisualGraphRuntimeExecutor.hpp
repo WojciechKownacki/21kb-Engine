@@ -17,6 +17,7 @@ using VisualGraphCustomEventArgument = VisualGraphEventArgument;
 
 struct VisualGraphRuntimeExecutionResult {
     bool executed = false;
+    bool suspended = false;
     std::vector<std::string> errors;
     std::vector<VisualGraphDiagnostic> diagnostics;
 
@@ -66,6 +67,7 @@ private:
         NodeSet& evaluatedNodes,
         bool followExecution,
         std::size_t& stepBudget,
+        std::uint32_t continuationEventNodeId,
         // LIB-101: C++ recursion depth of the DATA-INPUT resolution chain
         // (incremented only on the input-dependency recursion, NOT on the
         // iterative forward-flow walk). Bounds a pathologically deep data DAG

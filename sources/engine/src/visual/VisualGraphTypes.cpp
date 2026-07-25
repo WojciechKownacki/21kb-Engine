@@ -113,6 +113,8 @@ const char* ToString(VisualGraphNodeKind kind) noexcept {
         return "CallNative";
     case VisualGraphNodeKind::EmitEvent:
         return "EmitEvent";
+    case VisualGraphNodeKind::Wait:
+        return "Wait";
     case VisualGraphNodeKind::Comment:
         return "Comment";
     }
@@ -185,6 +187,7 @@ bool TryParseVisualGraphNodeKind(std::string_view text, VisualGraphNodeKind& out
         std::pair<std::string_view, VisualGraphNodeKind>{"SetProperty", VisualGraphNodeKind::SetProperty},
         std::pair<std::string_view, VisualGraphNodeKind>{"CallNative", VisualGraphNodeKind::CallNative},
         std::pair<std::string_view, VisualGraphNodeKind>{"EmitEvent", VisualGraphNodeKind::EmitEvent},
+        std::pair<std::string_view, VisualGraphNodeKind>{"Wait", VisualGraphNodeKind::Wait},
         std::pair<std::string_view, VisualGraphNodeKind>{"Comment", VisualGraphNodeKind::Comment},
     };
     return ParseNamedValue(text, values, output);
