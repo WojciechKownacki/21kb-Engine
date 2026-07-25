@@ -1,4 +1,5 @@
 #include "runtime/RuntimeTextureResourceEnsurer.hpp"
+#include "runtime/RuntimeTextureMipChain.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -114,8 +115,24 @@ void RuntimeTextureResourceEnsurer::Ensure(
             return;
         }
 
-        const bgfx::Memory* memory = bgfx::copy(asset->rgba8.data(), static_cast<std::uint32_t>(asset->rgba8.size()));
-        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture(asset->MakeDesc(memory, colorSpace));
+        const std::vector<std::uint8_t>* uploadBytes = &asset->rgba8;
+        std::optional<RuntimeTextureMipChain> generatedMipChain;
+        if (asset->dimension == RenderTextureDimension::Texture2D && asset->mipCount == 1U) {
+            generatedMipChain = BuildRuntimeTexture2DMipChain(asset->rgba8, asset->width, asset->height, colorSpace);
+            if (!generatedMipChain.has_value() ||
+                generatedMipChain->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+                context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
+                return;
+            }
+            uploadBytes = &generatedMipChain->rgba8;
+        }
+
+        const bgfx::Memory* memory = bgfx::copy(uploadBytes->data(), static_cast<std::uint32_t>(uploadBytes->size()));
+        RenderTextureDesc textureDesc = asset->MakeDesc(memory, colorSpace);
+        if (generatedMipChain.has_value()) {
+            textureDesc.mipCount = generatedMipChain->mipCount;
+        }
+        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture(textureDesc);
         if (!handle.IsValid()) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             static_cast<void>(manager.Unload(assetId));

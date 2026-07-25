@@ -3081,8 +3081,9 @@ void RunRendererPreservesGraphTextureDimensionsThroughProductionPipelineTest() {
         "Production resource pipeline did not create a 3D texture resource");
     Require(arrayResource != nullptr && arrayResource->dimension == RenderTextureDimension::Texture2DArray && arrayResource->layers == 3U,
         "Production resource pipeline did not create a 2D array texture resource");
-    Require(flatResource != nullptr && flatResource->dimension == RenderTextureDimension::Texture2D,
-        "Production resource pipeline changed the legacy 2D texture dimension");
+    Require(flatResource != nullptr && flatResource->dimension == RenderTextureDimension::Texture2D &&
+            flatResource->mipCount == 2U,
+        "Production resource pipeline did not create a complete mip chain for the 2D texture");
 
     Require(renderer.LastSceneSubmitStats().textureDimensionMismatchCount == 1U,
         "Production submit must count exactly the authored 2D-to-Cube mismatch");

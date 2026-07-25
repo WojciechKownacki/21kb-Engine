@@ -17,6 +17,7 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
+#include "runtime/RuntimeTextureMipChain.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -61,6 +62,39 @@ void RunRenderTextureColorSpaceDescTest() {
     Require((linear.flags & BGFX_TEXTURE_SRGB) == 0U, "Linear texture desc should not request bgfx sRGB sampling");
     Require(srgb.colorSpace == RenderTextureColorSpace::Srgb, "sRGB texture desc did not preserve color-space metadata");
     Require((srgb.flags & BGFX_TEXTURE_SRGB) != 0U, "Base Color sRGB texture desc should request bgfx sRGB sampling");
+}
+
+void RunRuntimeTextureMipChainGenerationTest() {
+    constexpr std::array<std::uint8_t, 32U> checkerboard{
+        0U, 0U, 0U, 255U, 255U, 255U, 255U, 255U, 0U, 0U, 0U, 255U, 255U, 255U, 255U, 255U,
+        255U, 255U, 255U, 255U, 0U, 0U, 0U, 255U, 255U, 255U, 255U, 255U, 0U, 0U, 0U, 255U,
+    };
+    const std::optional<RuntimeTextureMipChain> linear =
+        BuildRuntimeTexture2DMipChain(checkerboard, 4U, 2U, RenderTextureColorSpace::Linear);
+    const std::optional<RuntimeTextureMipChain> srgb =
+        BuildRuntimeTexture2DMipChain(checkerboard, 4U, 2U, RenderTextureColorSpace::Srgb);
+
+    Require(linear.has_value() && srgb.has_value(), "Runtime texture mip-chain generation rejected valid RGBA8 data");
+    Require(linear->mipCount == 3U && linear->rgba8.size() == 44U,
+        "Runtime texture mip-chain generation did not produce the complete 4x2, 2x1, 1x1 chain");
+    Require(linear->rgba8[32U] == 128U && linear->rgba8[40U] == 128U,
+        "Linear texture mip levels were not box-filtered in linear space");
+    Require(srgb->rgba8[32U] == 188U && srgb->rgba8[40U] == 188U,
+        "sRGB texture mip levels were not box-filtered in linear-light space");
+
+    constexpr std::array<std::uint8_t, 12U> oddStrip{
+        10U, 20U, 30U, 255U,
+        40U, 50U, 60U, 255U,
+        70U, 80U, 90U, 255U,
+    };
+    const std::optional<RuntimeTextureMipChain> strip =
+        BuildRuntimeTexture2DMipChain(oddStrip, 1U, 3U, RenderTextureColorSpace::Linear);
+    Require(strip.has_value() && strip->mipCount == 2U && strip->rgba8.size() == 16U,
+        "Runtime texture mip-chain generation did not support an odd one-dimensional texture");
+    Require(strip->rgba8[12U] == 40U && strip->rgba8[13U] == 50U && strip->rgba8[14U] == 60U,
+        "Odd texture downsampling dropped source texels instead of covering the full level");
+    Require(!BuildRuntimeTexture2DMipChain(std::span<const std::uint8_t>{ oddStrip }.first(8U), 1U, 3U, RenderTextureColorSpace::Linear).has_value(),
+        "Runtime texture mip-chain generation accepted a truncated base level");
 }
 
 void RunRenderTextureTextAssetPreservesDimensionTest() {
@@ -2869,6 +2903,7 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureColorSpaceDescTest();
+    RunRuntimeTextureMipChainGenerationTest();
     RunRenderTextureTextAssetPreservesDimensionTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest();
