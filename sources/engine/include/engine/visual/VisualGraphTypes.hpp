@@ -50,6 +50,7 @@ enum class VisualGraphNodeKind : std::uint8_t {
     SetProperty,
     CallNative,
     EmitEvent,
+    Wait,
     Comment,
 };
 

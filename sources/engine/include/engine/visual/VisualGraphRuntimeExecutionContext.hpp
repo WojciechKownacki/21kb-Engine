@@ -50,6 +50,9 @@ public:
     [[nodiscard]] const std::vector<VisualGraphEmittedEvent>& EmittedEventRecords() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Traces() const noexcept;
     [[nodiscard]] const std::vector<std::string>& RuntimeErrors() const noexcept;
+    void Suspend(std::uint32_t eventNodeId, std::uint32_t nextNodeId);
+    [[nodiscard]] std::uint32_t TakeContinuation(std::uint32_t eventNodeId);
+    void ClearContinuation(std::uint32_t eventNodeId) noexcept;
     void BeginExecutionPass();
     void ClearFrameState();
 
@@ -62,6 +65,7 @@ private:
     std::vector<VisualGraphEmittedEvent> emittedEventRecords_;
     std::vector<std::string> traces_;
     std::vector<std::string> runtimeErrors_;
+    std::unordered_map<std::uint32_t, std::uint32_t> continuations_;
 };
 
 } // namespace kb::visual

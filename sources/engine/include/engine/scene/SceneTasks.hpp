@@ -33,41 +33,21 @@ struct TaskCompletionRecord {
     bool succeeded = false;
 };
 
-// LIB-097: Task/Coroutine model decision — this engine has THREE script
-// backends (Native, Lua, Visual Graph), and a real "suspend an in-flight
-// script call and resume it later" Coroutine needs backend-specific
-// suspension machinery that does not exist anywhere yet on ANY of the three
-// fronts (confirmed by research before implementing):
-//   - Lua: every script call in this engine (ExecuteFunction,
-//     PucLuaScriptRuntime.cpp) runs through lua_pcall, which runs a
-//     function to completion and returns — real coroutine.yield support
-//     that suspends a BEHAVIOUR'S OWN Tick call would require rebuilding
-//     that call path on lua_newthread/lua_resume, a rewrite of the
-//     engine's Lua calling convention itself, not an additive API.
-//   - Visual Graph: VisualGraphRuntimeExecutor::ExecuteFunction always
-//     walks the whole graph from entryNodeId to completion every
-//     invocation — there is no persisted "which node was current" concept
-//     anywhere, so a state-machine-graph Coroutine needs a new Wait node
-//     kind AND a new per-instance persisted execution-position field,
-//     neither of which exist.
-//   - C++: this codebase has never used <coroutine>/std::coroutine_handle
-//     anywhere (confirmed by a full-repo grep) — introducing real C++20
-//     coroutines now would be a first-ever, unproven platform/toolchain
-//     decision, not required to deliver a working Task primitive.
-// Decision: SceneTasks/SceneTaskService below IS the C++ task adapter
-// model, delivered now — a plain, hand-rolled poll object (no
-// std::coroutine_handle, no suspension), mirroring SceneTimerService's
-// exact per-frame-drive shape (LIB-095). The Lua generator model and the
-// Visual Graph state-machine model are DELIBERATELY NOT implemented here —
-// documented as the chosen future models, not fabricated — because a
-// script cannot author the body of a Task/Coroutine without real
-// suspension. Until then, only NATIVE C++ code can create a task (Start/
-// StartFixedStep below have no script-facing equivalent); scripts can only
-// observe/control an already-running task through Task.IsRunning/
-// Task.Cancel and the TaskCompleted/TaskFailed events it dispatches — a
-// real, non-fabricated capability (e.g. a native plugin starts a
-// background operation and hands script the resulting handle to poll or
-// cancel).
+// LIB-097: Task/Coroutine model decision. The three supported execution
+// models deliberately match each backend instead of imposing one unsafe
+// abstraction on all of them:
+//   - Lua lifecycle and event entries run as Lua generator threads. A
+//     coroutine.yield() suspends the entry and the next call of that same
+//     entry resumes it (PucLuaScriptRuntime::ExecuteFunction).
+//   - Visual Graph has the Wait node. It persists the next node per event
+//     in VisualGraphRuntimeExecutionContext and resumes that node on the
+//     next invocation of the same lifecycle/custom-event function.
+//   - Native C++ uses SceneTasks/SceneTaskService: a hand-rolled poll
+//     adapter, not std::coroutine_handle, with the same per-frame drive
+//     shape as SceneTimerService (LIB-095).
+// A SceneTasks body is intentionally native-only: Start/StartFixedStep have
+// no script-facing equivalent. Scripts can observe or cancel a native task
+// through Task.IsRunning/Task.Cancel and receive TaskCompleted/TaskFailed.
 //
 // LIB-098 ("yield na sekundy, fixed steps, event, asset load, scene load")
 // scope decision, researched against this same model — of the five named

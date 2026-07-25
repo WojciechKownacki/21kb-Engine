@@ -18,6 +18,8 @@ namespace {
         return VisualGraphNodeKind::CallNative;
     case VisualGraphIrOpcode::EmitEvent:
         return VisualGraphNodeKind::EmitEvent;
+    case VisualGraphIrOpcode::Wait:
+        return VisualGraphNodeKind::Wait;
     case VisualGraphIrOpcode::Branch:
         return VisualGraphNodeKind::Branch;
     case VisualGraphIrOpcode::Sequence:
