@@ -232,6 +232,8 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeRenderResourceLifecycle.hpp
     src/runtime/RuntimeRenderResourcePruner.cpp
     src/runtime/RuntimeRenderResourcePruner.hpp
+    src/runtime/RuntimeTextureMipChain.cpp
+    src/runtime/RuntimeTextureMipChain.hpp
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp

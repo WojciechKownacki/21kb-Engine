@@ -7945,46 +7945,47 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position) {
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryPosition(position);
-    if (result.changed) {
-        MarkSceneEntitiesRenderDirty(result.touched);
-    }
-    return result.changed;
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation) {
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryRotation(rotation);
-    if (result.changed) {
-        MarkSceneEntitiesRenderDirty(result.touched);
-    }
-    return result.changed;
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditRotationDelta(kb::scene::Quat delta) {
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyRotationDelta(delta);
-    if (result.changed) {
-        MarkSceneEntitiesRenderDirty(result.touched);
-    }
-    return result.changed;
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryScale(kb::scene::Vec3 scale) {
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryScale(scale);
-    if (result.changed) {
-        MarkSceneEntitiesRenderDirty(result.touched);
-    }
-    return result.changed;
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditProperty(InspectorPropertyId property, float value) {
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyProperty(property, value);
-    if (result.changed) {
-        MarkSceneEntitiesRenderDirty(result.touched);
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
+}
+
+bool EditorSceneContext::FinalizeActiveTransformEditApply(
+    bool changed,
+    std::span<const kb::scene::SceneEntity> touched) {
+    if (!changed) {
+        return false;
     }
-    return result.changed;
+
+    MarkSceneEntitiesRenderDirty(touched);
+    // Component overlays consume the canonical world transform cache directly.
+    // Keep it current during an interactive edit instead of waiting for commit,
+    // so colliders, joints, character controllers, lights, and descendants follow
+    // the object on every drag update.
+    scene_->Runtime().SynchronizeTransforms();
+    return true;
 }
 
 float EditorSceneContext::ActiveTransformEditPropertyStart(InspectorPropertyId property) const noexcept {
