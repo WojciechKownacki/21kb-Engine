@@ -183,11 +183,18 @@ private:
         }
     };
 
+    void ClearCoroutines(const InstanceKey& instanceKey) noexcept;
+    void ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept;
+
     lua_State* state_ = nullptr;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;
     std::unordered_map<std::uint64_t, std::vector<ExposedVariableRecord>> exposedVariables_;
     std::unordered_map<InstanceKey, std::vector<PucLuaExposedVariableInstance>, InstanceKeyHasher> instanceVariables_;
+    // LIB-097: registry references own Lua generator threads. Each thread is
+    // scoped to one behaviour instance and entry function, so yielding Tick
+    // never suspends another entity or lifecycle callback.
+    std::unordered_map<InstanceKey, std::unordered_map<std::string, int>, InstanceKeyHasher> coroutineRefs_;
     PucLuaDebugSettings debugSettings_;
     PucLuaDebugPauseSnapshot lastDebugPause_;
     DebugStepMode debugStepMode_ = DebugStepMode::Run;

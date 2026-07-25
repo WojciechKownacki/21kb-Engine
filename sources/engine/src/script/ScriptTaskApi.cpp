@@ -37,9 +37,9 @@ ScriptFunctionCallResult NoScene() {
     return Error("task api requires an active scene");
 }
 
-// LIB-097: no Task.Start exists here on purpose — a script cannot author
-// the body of a task (that requires the yield mechanism LIB-098 will add);
-// today only native C++ can call kb::scene::SceneTasks::Start directly.
+// LIB-097: no Task.Start exists here on purpose. Lua and Visual Graph own
+// their respective coroutine state, while a SceneTasks body is a native C++
+// poll callback; only native C++ can call kb::scene::SceneTasks::Start.
 // IsRunning/Cancel are the real, non-fabricated surface a script CAN use:
 // observing/controlling a task a native plugin already started and handed
 // the id of (e.g. via a TaskCompleted/TaskFailed event argument, or a

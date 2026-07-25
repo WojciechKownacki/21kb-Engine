@@ -85,6 +85,7 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     const int environmentRef = luaL_ref(state_, LUA_REGISTRYINDEX);
     const auto old = scripts_.find(assetId.value);
     if (old != scripts_.end()) {
+        ClearCoroutinesForAsset(assetId);
         luaL_unref(state_, LUA_REGISTRYINDEX, old->second.environmentRef);
     }
     scripts_[assetId.value] = ScriptRecord{
@@ -105,6 +106,7 @@ void PucLuaScriptRuntime::UnloadScript(kb::assets::AssetId assetId) noexcept {
         return;
     }
     luaL_unref(state_, LUA_REGISTRYINDEX, iter->second.environmentRef);
+    ClearCoroutinesForAsset(assetId);
     scripts_.erase(iter);
     exposedVariables_.erase(assetId.value);
     std::erase_if(instanceVariables_, [assetId](const auto& entry) {
@@ -124,11 +126,19 @@ void PucLuaScriptRuntime::Clear() noexcept {
                 luaL_unref(state_, LUA_REGISTRYINDEX, record.valueRef);
             }
         }
+        for (const auto& [instance, functions] : coroutineRefs_) {
+            static_cast<void>(instance);
+            for (const auto& [name, reference] : functions) {
+                static_cast<void>(name);
+                luaL_unref(state_, LUA_REGISTRYINDEX, reference);
+            }
+        }
     }
     scripts_.clear();
     modules_.clear();
     exposedVariables_.clear();
     instanceVariables_.clear();
+    coroutineRefs_.clear();
     lastDebugPause_ = {};
     debugStepMode_ = DebugStepMode::Run;
 }
@@ -422,6 +432,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     const auto eraseDestroyedInstanceState = [&]() {
         if (context.Lifecycle() == ScriptLifecycleEvent::Destroyed) {
             instanceVariables_.erase(instanceKey);
+            ClearCoroutines(instanceKey);
         }
     };
     const int environmentRef = FindScriptEnvironment(assetId);
@@ -485,45 +496,93 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     lua_rawgeti(state_, LUA_REGISTRYINDEX, environmentRef);
     const int environmentIndex = lua_gettop(state_);
     PucLuaRuntimeApi::AttachExecutionApi(state_, environmentIndex, context, *this);
-    lua_getfield(state_, environmentIndex, std::string{ functionName }.c_str());
-    if (lua_isnil(state_, -1) != 0) {
-        eraseDestroyedInstanceState();
-        return result;
-    }
-    if (lua_isfunction(state_, -1) == 0) {
-        result.diagnostics.push_back(ScriptDiagnostic{
-            .entity = context.Self(),
-            .assetId = assetId,
-            .backend = behaviour.backend,
-            .message = "lua script entry is not a function",
-        });
-        eraseDestroyedInstanceState();
-        return result;
+
+    // LIB-097: every Lua lifecycle/event entry is a generator. A yielded
+    // thread is resumed on the next invocation of that same entry; a normal
+    // function still runs exactly once and then releases its thread.
+    lua_State* coroutine = nullptr;
+    int coroutineRef = kNoReference;
+    bool resuming = false;
+    if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
+        if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
+            coroutineRef = suspended->second;
+            lua_rawgeti(state_, LUA_REGISTRYINDEX, coroutineRef);
+            coroutine = lua_tothread(state_, -1);
+            lua_pop(state_, 1);
+            resuming = coroutine != nullptr;
+        }
     }
 
-    lua_pushcfunction(state_, &PucLuaErrorReporter::Traceback);
-    const int errorHandlerIndex = lua_gettop(state_) - 1;
-    lua_insert(state_, errorHandlerIndex);
+    int argumentCount = 0;
+    if (coroutine == nullptr) {
+        lua_getfield(state_, environmentIndex, std::string{ functionName }.c_str());
+        if (lua_isnil(state_, -1) != 0) {
+            eraseDestroyedInstanceState();
+            return result;
+        }
+        if (lua_isfunction(state_, -1) == 0) {
+            result.diagnostics.push_back(ScriptDiagnostic{
+                .entity = context.Self(),
+                .assetId = assetId,
+                .backend = behaviour.backend,
+                .message = "lua script entry is not a function",
+            });
+            eraseDestroyedInstanceState();
+            return result;
+        }
+        coroutine = lua_newthread(state_);
+        *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(coroutine)) = this;
+        lua_pushvalue(state_, -1);
+        coroutineRef = luaL_ref(state_, LUA_REGISTRYINDEX);
+        lua_pop(state_, 1);
+        // Stack now holds environment and the entry function. Move the
+        // function to the owned generator thread before its first resume.
+        lua_xmove(state_, coroutine, 1);
+    } else if (resuming) {
+        lua_settop(coroutine, 0);
+    }
 
     PucLuaRuntimeApi::PushSelf(state_, context);
-    int argCount = 1;
+    ++argumentCount;
     if (event == nullptr) {
         lua_pushnumber(state_, static_cast<lua_Number>(context.DeltaSeconds()));
-        ++argCount;
     } else {
         PucLuaRuntimeApi::PushEvent(state_, *event);
-        ++argCount;
+    }
+    ++argumentCount;
+    lua_xmove(state_, coroutine, argumentCount);
+
+    int resultCount = 0;
+    PucLuaDebugHook::Install(coroutine, *this);
+    const int status = lua_resume(coroutine, state_, argumentCount, &resultCount);
+    PucLuaDebugHook::Clear(coroutine);
+    if (status == LUA_YIELD) {
+        coroutineRefs_[instanceKey][std::string{functionName}] = coroutineRef;
+        result.executed = true;
+        return result;
     }
 
-    PucLuaDebugHook::Install(state_, *this);
-    const int status = lua_pcall(state_, argCount, 0, errorHandlerIndex);
-    PucLuaDebugHook::Clear(state_);
+    const std::string coroutineError = status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorFromTop(coroutine);
+
+    if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
+        if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
+            luaL_unref(state_, LUA_REGISTRYINDEX, suspended->second);
+            instance->second.erase(suspended);
+            if (instance->second.empty()) {
+                coroutineRefs_.erase(instance);
+            }
+        } else if (coroutineRef != kNoReference) {
+            luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
+        }
+    } else if (coroutineRef != kNoReference) {
+        luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
+    }
     if (status != LUA_OK) {
         result.diagnostics.push_back(ScriptDiagnostic{
             .entity = context.Self(),
             .assetId = assetId,
             .backend = behaviour.backend,
-            .message = PucLuaErrorReporter::ErrorFromTop(state_),
+            .message = coroutineError,
         });
         eraseDestroyedInstanceState();
         return result;
@@ -537,6 +596,33 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
 int PucLuaScriptRuntime::FindScriptEnvironment(kb::assets::AssetId assetId) const noexcept {
     const auto iter = scripts_.find(assetId.value);
     return iter == scripts_.end() ? kNoReference : iter->second.environmentRef;
+}
+
+void PucLuaScriptRuntime::ClearCoroutines(const InstanceKey& instanceKey) noexcept {
+    const auto iter = coroutineRefs_.find(instanceKey);
+    if (iter == coroutineRefs_.end()) {
+        return;
+    }
+    if (state_ != nullptr) {
+        for (const auto& [functionName, reference] : iter->second) {
+            static_cast<void>(functionName);
+            luaL_unref(state_, LUA_REGISTRYINDEX, reference);
+        }
+    }
+    coroutineRefs_.erase(iter);
+}
+
+void PucLuaScriptRuntime::ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept {
+    std::vector<InstanceKey> keys;
+    for (const auto& [key, functions] : coroutineRefs_) {
+        static_cast<void>(functions);
+        if (key.assetId == assetId.value) {
+            keys.push_back(key);
+        }
+    }
+    for (const InstanceKey& key : keys) {
+        ClearCoroutines(key);
+    }
 }
 
 } // namespace kb::script

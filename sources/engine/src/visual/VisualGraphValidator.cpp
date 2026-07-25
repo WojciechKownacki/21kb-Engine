@@ -56,7 +56,7 @@ void ValidateNodes(const VisualGraphAsset& graph, VisualGraphValidationResult& r
             } else if (!customEvents.insert(node.symbol).second) {
                 AddValidationError(result, node.id, "duplicate custom event node " + node.symbol);
             }
-        } else if (node.kind != VisualGraphNodeKind::Sequence && node.kind != VisualGraphNodeKind::Branch && node.kind != VisualGraphNodeKind::Comment &&
+        } else if (node.kind != VisualGraphNodeKind::Sequence && node.kind != VisualGraphNodeKind::Branch && node.kind != VisualGraphNodeKind::Wait && node.kind != VisualGraphNodeKind::Comment &&
                    node.symbol.empty()) {
             AddValidationError(result, node.id, "node " + std::to_string(node.id) + " requires a symbol");
         }
