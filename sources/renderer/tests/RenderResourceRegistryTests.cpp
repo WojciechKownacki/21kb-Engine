@@ -22,8 +22,10 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +33,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace kb::render::tests {
@@ -1998,6 +2001,22 @@ void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
     const ResolvedRuntimeMaterialAsset inlineTextureResolved = RuntimeMaterialResolver{}.ResolveAsset(manager, inlineTextureMetadata->id);
     Require(inlineTextureResolved.resolved && inlineTextureResolved.material.desc.albedoTextureAssetId == graphMaskId.value,
         "KBMAT-GRAPH-0406: Runtime resolver should map Material Output BaseColor links to PBR albedo texture for previews");
+
+    // [PERF] Time the synchronous runtime resolve of this graph-backed material with a texture sample - the same
+    // work the editor does as "preview resolve after edit" when a node is added. Cold = first resolve (disk read
+    // + parse + shader-source codegen + program binding); warm = second resolve (codegen served from the process
+    // memo). If neither is ~1-2s, the reported "adding a node lags" is NOT the resolve.
+    {
+        RuntimeMaterialResolver perfResolver;
+        const auto coldStart = std::chrono::steady_clock::now();
+        const ResolvedRuntimeMaterialAsset coldResolve = perfResolver.ResolveAsset(manager, inlineTextureMetadata->id);
+        const double coldMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - coldStart).count();
+        const auto warmStart = std::chrono::steady_clock::now();
+        const ResolvedRuntimeMaterialAsset warmResolve = perfResolver.ResolveAsset(manager, inlineTextureMetadata->id);
+        const double warmMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmStart).count();
+        std::fprintf(stderr, "[PERF-RESOLVE] graph material (texture sample) resolve: cold=%.3f ms  warm=%.3f ms\n", coldMs, warmMs);
+        Require(coldResolve.resolved && warmResolve.resolved, "[PERF-RESOLVE] graph material resolves both times");
+    }
     Require(NearlyEqual(inlineTextureResolved.material.desc.baseColor[0], 1.0F) &&
             NearlyEqual(inlineTextureResolved.material.desc.baseColor[1], 1.0F) &&
             NearlyEqual(inlineTextureResolved.material.desc.baseColor[2], 1.0F) &&
@@ -2695,6 +2714,81 @@ void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
         "Render texture DDS fixture was not found");
 }
 
+// The decoded-texture cache: a file must be decoded to RGBA8 at most once while unchanged on disk, so the many
+// scenes that reference the same texture (main scene + material preview + thumbnails) stop each paying the full
+// bimg decode - the multi-second stall on opening a Material Editor. Proven via the decode counter, with a
+// changed-file negative control that must re-decode (hot reload stays correct).
+void RunRenderTextureAssetLoaderDecodeCacheTest() {
+    const std::filesystem::path pngFixture = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/images/SplashScreen.png");
+    const std::filesystem::path ddsFixture = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/textures/fieldstone-rgba.dds");
+    Require(!pngFixture.empty() && !ddsFixture.empty(), "Decode cache test fixtures (png/dds) were not found");
+
+    std::error_code error;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_texture_decode_cache";
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Decode cache test could not create temp root");
+    // Staged copy so the file can be mutated without touching the shared fixture. bimg sniffs format from the
+    // bytes, so the .png name is irrelevant once we overwrite it with DDS content below.
+    const std::filesystem::path texturePath = root / "cached.png";
+    std::filesystem::copy_file(pngFixture, texturePath, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "Decode cache test could not stage the png fixture");
+
+    const std::uint64_t before = RenderTextureAssetLoader::DebugDecodeCount();
+    const std::optional<RenderTextureAssetData> first = RenderTextureAssetLoader::LoadTexture(texturePath);
+    Require(first.has_value() && !first->rgba8.empty(), "Decode cache: first load decoded the texture");
+    const std::uint64_t afterFirst = RenderTextureAssetLoader::DebugDecodeCount();
+    Require(afterFirst == before + 1U, "Decode cache: a first, never-seen file performs exactly one real decode");
+
+    const std::optional<RenderTextureAssetData> second = RenderTextureAssetLoader::LoadTexture(texturePath);
+    Require(second.has_value(), "Decode cache: second load returned data");
+    Require(RenderTextureAssetLoader::DebugDecodeCount() == afterFirst,
+        "Decode cache: a repeated load of an unchanged file must be served from cache, not re-decoded");
+    Require(second->width == first->width && second->height == first->height && second->rgba8 == first->rgba8,
+        "Decode cache: the cached texture bytes are identical to the freshly decoded ones");
+
+    // Negative control: overwrite with a different image (different byte size => different freshness key). The
+    // entry must be invalidated and the new content decoded, proving the cache is not a permanent freeze.
+    std::filesystem::copy_file(ddsFixture, texturePath, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "Decode cache: could not overwrite the staged texture with a different image");
+    const std::uint64_t beforeReload = RenderTextureAssetLoader::DebugDecodeCount();
+    const std::optional<RenderTextureAssetData> reloaded = RenderTextureAssetLoader::LoadTexture(texturePath);
+    Require(reloaded.has_value() && !reloaded->rgba8.empty(), "Decode cache: reloaded the changed file");
+    Require(RenderTextureAssetLoader::DebugDecodeCount() == beforeReload + 1U,
+        "Decode cache negative control: a changed file is re-decoded, never served stale");
+
+    std::filesystem::remove_all(root, error);
+}
+
+// Texture streaming: the render thread must never block on a first-time decode. TryAcquireDecodedTexture
+// returns null immediately for an unseen texture (no synchronous decode = no 1-2s freeze on texture pick), and
+// a background worker streams it into the cache so a later frame binds it.
+void RunRenderTextureAsyncDecodeStreamsInTest() {
+    const std::filesystem::path pngFixture = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/images/SplashScreen.png");
+    Require(!pngFixture.empty(), "Async decode test fixture (png) was not found");
+    std::error_code error;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_async_decode";
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    const std::filesystem::path texturePath = root / "async_stream.png";
+    std::filesystem::copy_file(pngFixture, texturePath, std::filesystem::copy_options::overwrite_existing, error);
+    Require(!error, "Async decode test could not stage the fixture");
+
+    Require(RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath) == nullptr,
+        "Async decode: an unseen texture is NOT available synchronously (the render thread does not block-decode it)");
+    RenderTextureAssetLoader::RequestAsyncTextureDecode(texturePath);
+    std::shared_ptr<const RenderTextureAssetData> streamed;
+    for (int attempt = 0; attempt < 500 && streamed == nullptr; ++attempt) {
+        streamed = RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath);
+        if (streamed == nullptr) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    Require(streamed != nullptr && streamed->width > 0U && !streamed->rgba8.empty(),
+        "Async decode: the background worker streams the texture into the cache so a later frame can bind it");
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest() {
     const std::filesystem::path cubePath = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/textures/uffizi.ktx");
     Require(!cubePath.empty(), "Render texture cube KTX fixture was not found");
@@ -2779,6 +2873,8 @@ void RunRenderResourceRegistryTests() {
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
+    RunRenderTextureAssetLoaderDecodeCacheTest();
+    RunRenderTextureAsyncDecodeStreamsInTest();
     RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();

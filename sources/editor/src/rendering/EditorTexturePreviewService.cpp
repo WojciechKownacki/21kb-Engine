@@ -218,16 +218,24 @@ private:
 
     EditorTexturePreviewImage image{ .width = static_cast<int>(bitmap->GetWidth()), .height = static_cast<int>(bitmap->GetHeight()) };
     image.bgra.resize(static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height));
-    for (int y = 0; y < image.height; ++y) {
-        for (int x = 0; x < image.width; ++x) {
-            Gdiplus::Color pixel;
-            if (bitmap->GetPixel(x, y, &pixel) != Gdiplus::Ok) {
-                return std::nullopt;
-            }
-            image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) + static_cast<std::size_t>(x)] =
-                static_cast<std::uint32_t>(pixel.GetBlue()) | (static_cast<std::uint32_t>(pixel.GetGreen()) << 8U) | (static_cast<std::uint32_t>(pixel.GetRed()) << 16U) | (static_cast<std::uint32_t>(pixel.GetAlpha()) << 24U);
-        }
+
+    // GDI+ PixelFormat32bppARGB stores pixels as B,G,R,A bytes in little-endian memory — i.e. the exact
+    // 0xAARRGGBB uint32 layout EditorTexturePreviewImage::bgra expects — so a single LockBits + per-row
+    // memcpy replaces the previous per-pixel GetPixel() loop. GetPixel() is a bounds-checked, format-
+    // converting COM-style call costing ~300ns each; on a 2048x2048 texture that is 4.2M calls (~1.3s) and
+    // it ran synchronously on the GDI paint thread, which is exactly the "wmpaint 1.3s" stall we measured.
+    const Gdiplus::Rect lockRect(0, 0, image.width, image.height);
+    Gdiplus::BitmapData locked{};
+    if (bitmap->LockBits(&lockRect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &locked) != Gdiplus::Ok) {
+        return std::nullopt;
     }
+    const auto* sourceRow = static_cast<const std::uint8_t*>(locked.Scan0);
+    const std::size_t rowBytes = static_cast<std::size_t>(image.width) * sizeof(std::uint32_t);
+    for (int y = 0; y < image.height; ++y) {
+        std::memcpy(image.bgra.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width), sourceRow, rowBytes);
+        sourceRow += locked.Stride;
+    }
+    bitmap->UnlockBits(&locked);
     return image;
 }
 

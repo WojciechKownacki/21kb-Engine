@@ -15,6 +15,8 @@
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
+#include <cstdio>
+
 #if defined(_WIN32)
 #if !defined(WIN32_LEAN_AND_MEAN)
 #define WIN32_LEAN_AND_MEAN
@@ -390,6 +392,38 @@ void RunMaterialVersioningContractsTest() {
             "KBMAT-GRAPH-0004: Future Material Type asset version should report unsupported document version");
         Require(RenderMaterialTypeDocumentDiagnosticCodeName(result.diagnostics[0].code) == std::string_view{ "unsupported_document_version" },
             "KBMAT-GRAPH-0004: Material Type document diagnostics should expose stable code names");
+    }
+}
+
+void RunMaterialGraphLayerStackIndexBoundTest() {
+    // A layer-stack index comes straight from the file and used to drive an unbounded resize(): a single
+    // crafted line allocated tens of GB and crashed the whole project on load. A hostile index must now fail
+    // the line, fail-closed, without allocating - not OOM.
+    const auto header =
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "materialTypeVersion 1\n"
+        "baseColor 1 1 1 1\n"
+        "graphNode 1 MaterialOutput 640 240\n"
+        "graphNode 2 LayerStack 0 0\n";
+    {
+        std::istringstream input{ std::string{ header } + "graphLayerStackEntry 2 4000000000 0 0 true _ _ _\n" };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "AUDIT-1: an out-of-range layer-stack entry index must fail the material, not OOM");
+        Require(std::ranges::any_of(result.diagnostics, [](const RenderMaterialAssetParseDiagnostic& diagnostic) {
+            return diagnostic.code == RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode;
+        }), "AUDIT-1: the out-of-range layer-stack entry index reports an InvalidGraphNode diagnostic");
+    }
+    {
+        std::istringstream input{ std::string{ header } + "graphLayerStackParameter 2 4000000000 layer p Float4 _\n" };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "AUDIT-1: an out-of-range layer-stack parameter index must fail the material, not OOM");
+    }
+    {
+        // Positive control: a small, sane index still loads, so the bound did not break real layer stacks.
+        std::istringstream input{ std::string{ header } + "graphLayerStackEntry 2 3 0 0 true _ _ _\n" };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(result.asset.has_value(), "AUDIT-1: a small in-range layer-stack index still loads");
     }
 }
 
@@ -3523,6 +3557,106 @@ void RunMaterialGraphFunctionInliningTest() {
         "KBMAT-MAT42: Recursive function calls must report MaterialFunctionCycle");
 }
 
+// Adding a node re-resolves the whole material up to 3x on the main thread, each running the string-heavy
+// shader-source codegen - the dominant Debug-build cost of "adding a node lags 1-2s". The runtime resolver now
+// funnels its compile through a process-wide artifact-cache memo (CompileRenderMaterialGraphMemoized), so those
+// duplicate resolves share one codegen. This test measures a single codegen's real cost and proves the memo
+// avoids the repeat codegen via the global invocation counter.
+void RunMaterialGraphCompileMemoCostTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    const RenderMaterialGraphNode output = graph.nodes.front();
+    const RenderMaterialGraphNode color{
+        .id = 4310U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -220,
+        .positionY = 0,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.8 0.2 0.2 1" },
+    };
+    graph.nodes.push_back(color);
+    graph.links.push_back(MakeGraphLink(color, "rgba", output, "baseColor"));
+    const RenderMaterialGraphBuildContext context{ .assetId = 0x43420001U };
+
+    // Single codegen cost (informational, and confirms exactly one invocation for one compile).
+    const std::uint64_t microsBefore = RenderMaterialGraphCompileTotalMicroseconds();
+    const std::uint64_t countBefore = RenderMaterialGraphCompileInvocationCount();
+    const RenderMaterialGraphCompileResult first = CompileRenderMaterialGraphToShaderSource(graph, context);
+    Require(first.Succeeded(), "KBMAT-PERF: representative material graph compiles");
+    Require(RenderMaterialGraphCompileInvocationCount() == countBefore + 1U, "KBMAT-PERF: one compile = one invocation");
+    const double oneCompileMs = static_cast<double>(RenderMaterialGraphCompileTotalMicroseconds() - microsBefore) / 1000.0;
+    std::fprintf(stderr, "[KBMAT-PERF] single shader-source codegen: %.3f ms (Debug, %zu-node graph)\n",
+        oneCompileMs, graph.nodes.size());
+
+    // Memo: resolving the SAME graph again through the artifact cache must NOT run a second codegen. This is the
+    // mechanism the resolver uses, so 3 identical resolves collapse to 1 codegen instead of 3.
+    RenderMaterialGraphCompileArtifactCache cache;
+    static_cast<void>(CompileRenderMaterialGraphWithArtifactCache(cache, graph, context)); // populates (1 codegen)
+    const std::uint64_t countAfterPopulate = RenderMaterialGraphCompileInvocationCount();
+    const RenderMaterialGraphCompileArtifactCacheResult repeat = CompileRenderMaterialGraphWithArtifactCache(cache, graph, context);
+    Require(repeat.compile.Succeeded() && repeat.cacheHit,
+        "KBMAT-PERF: repeat resolve of the same graph hits the compile memo");
+    Require(RenderMaterialGraphCompileInvocationCount() == countAfterPopulate,
+        "KBMAT-PERF: the memo hit performed NO additional codegen (the 2nd/3rd resolve per edit is now free)");
+    // Negative control: a genuinely different graph (an extra node feeding emissive) must still codegen - the
+    // memo keys on the emitted source, so a structural edit is not suppressed.
+    RenderMaterialGraphDocument changedGraph = graph;
+    const RenderMaterialGraphNode emissiveColor{
+        .id = 4311U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -220,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.1 0.9 0.3 1" },
+    };
+    changedGraph.nodes.push_back(emissiveColor);
+    changedGraph.links.push_back(MakeGraphLink(emissiveColor, "rgba", output, "emissive"));
+    const RenderMaterialGraphCompileArtifactCacheResult changed = CompileRenderMaterialGraphWithArtifactCache(cache, changedGraph, context);
+    Require(changed.compile.Succeeded() && RenderMaterialGraphCompileInvocationCount() > countAfterPopulate,
+        "KBMAT-PERF negative control: a structurally changed graph misses the memo and recompiles");
+}
+
+// A parameter value left over from a node that is currently DISCONNECTED from Material Output (or was removed)
+// has no matching slot in the reachable-node parameter schema. That is harmless - shader generation walks the
+// graph, not the value list - so it must be a non-blocking "unused" WARNING, not a shader_generation_failed
+// ERROR that makes a work-in-progress graph read as broken. It is reconciled away on save.
+void RunOrphanedGraphParameterValueIsWarningTest() {
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    const RenderMaterialGraphNode output = material.graph.nodes.front();
+    const RenderMaterialGraphNode textureSample{
+        .id = 6120U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = -220,
+        .positionY = 0,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "declaredBaseColor",
+            .displayName = "Declared Base Color",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    };
+    material.graph.nodes.push_back(textureSample);
+    material.graph.links.push_back(MakeGraphLink(textureSample, "color", output, "baseColor"));
+    // A value the reachable slot could use, plus one left over from a disconnected/removed node.
+    material.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "declaredBaseColor", .type = RenderMaterialParameterType::Texture, .assetId = 0x6001U });
+    material.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "orphanFromDisconnectedNode", .type = RenderMaterialParameterType::Texture, .assetId = 0x6002U });
+
+    const std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialAssetGraphDiagnostics(material);
+    const bool hasError = std::any_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    Require(!hasError,
+        "KBMAT-PARAM: a leftover value from a disconnected node must NOT be a blocking shader-generation error");
+    const bool hasUnusedWarning = std::any_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.kind == RenderMaterialGraphDiagnosticKind::UnusedParameterValue &&
+            diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Warning &&
+            diagnostic.message.find("orphanFromDisconnectedNode") != std::string::npos;
+    });
+    Require(hasUnusedWarning,
+        "KBMAT-PARAM: the leftover value is reported as a non-blocking 'unused' warning (cleaned up on save)");
+}
+
 void RunMaterialGraphLayerStackInliningTest() {
     constexpr std::uint64_t kRedLayerId = 0x43000001ULL;
     constexpr std::uint64_t kBlueLayerId = 0x43000002ULL;
@@ -6443,6 +6577,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunBuiltInPbrMaterialTypeSchemaExistsTest();
     RunBuiltInPbrMaterialTypeDocumentExistsTest();
     RunMaterialVersioningContractsTest();
+    RunMaterialGraphLayerStackIndexBoundTest();
     RunMaterialTypeDocumentRoundTripTest();
     RunBuiltInPbrSchemaCoversAllMaterialFieldsTest();
     RunBuiltInPbrSchemaHasCorrectRangesTest();
@@ -6492,6 +6627,8 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialGraphShaderSourceCompilerMvpTest();
     RunMaterialGraphOrganizationNodeCodegenTest();
     RunMaterialGraphFunctionInliningTest();
+    RunMaterialGraphCompileMemoCostTest();
+    RunOrphanedGraphParameterValueIsWarningTest();
     RunMaterialGraphLayerStackInliningTest();
     RunMaterialGraphMaterialTypeDocumentGenerationTest();
     RunMaterialGraphCompileArtifactCacheTest();

@@ -13,6 +13,7 @@
 #include <bgfx/bgfx.h>
 
 #include <limits>
+#include <memory>
 #include <sstream>
 
 namespace kb::render {
@@ -90,10 +91,24 @@ void RuntimeTextureResourceEnsurer::Ensure(
         }
 
         const std::filesystem::path texturePath = ResolveAssetPhysicalPath(manager, *metadata);
-        const std::optional<RenderTextureAssetData> asset = texturePath.empty()
-            ? std::nullopt
-            : RenderTextureAssetLoader::LoadTexture(texturePath);
-        if (!asset.has_value() || asset->rgba8.empty() ||
+        // When streaming is enabled (editor app), bind the texture only once it is decoded: on the first
+        // reference the decode is queued on a background worker and the slot is left unbound for now, so picking
+        // a texture / opening a material no longer freezes the render thread ~1s on a large image - the texture
+        // streams in a frame or two later. When disabled (tests, headless captures) decode synchronously so a
+        // texture is deterministically bound in the same submit.
+        std::shared_ptr<const RenderTextureAssetData> asset;
+        if (!texturePath.empty()) {
+            if (RenderTextureAssetLoader::IsAsyncTextureDecodeEnabled()) {
+                asset = RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath);
+                if (asset == nullptr) {
+                    RenderTextureAssetLoader::RequestAsyncTextureDecode(texturePath);
+                }
+            } else if (std::optional<RenderTextureAssetData> decoded = RenderTextureAssetLoader::LoadTexture(texturePath);
+                       decoded.has_value()) {
+                asset = std::make_shared<const RenderTextureAssetData>(std::move(*decoded));
+            }
+        }
+        if (asset == nullptr || asset->rgba8.empty() ||
             asset->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
