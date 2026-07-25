@@ -744,6 +744,9 @@ public:
 
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
+    [[nodiscard]] bool FinalizeActiveTransformEditApply(
+        bool changed,
+        std::span<const kb::scene::SceneEntity> touched);
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
     [[nodiscard]] bool ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit);
     [[nodiscard]] bool RecordMaterialGraphWorkingCopyEdit(

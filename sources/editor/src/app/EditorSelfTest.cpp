@@ -38,6 +38,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -615,6 +616,7 @@ void RunSelectionTransformSuite(Report& report) {
 
     const std::array<kb::scene::SceneEntity, 2> selected{ first, second };
     context.SelectHierarchyEntities(selected);
+    context.Scene().Components().Colliders().Set(first, kb::scene::ColliderComponent{});
 
     const InspectorPanelRenderer::Hit pivotXHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 216);
     report.Check(
@@ -626,6 +628,23 @@ void RunSelectionTransformSuite(Report& report) {
     report.Check(context.BeginSelectedTransformEdit("Edit Transform"), "Begin multi-selection transform edit");
     report.Check(std::abs(context.ActiveTransformEditPropertyStart(InspectorPropertyId::PositionX) - 4.0F) < 0.001F, "Multi-selection position edit starts from pivot X");
     report.Check(context.ApplyActiveTransformEditProperty(InspectorPropertyId::PositionX, 10.0F), "Apply multi-selection pivot X edit");
+
+    const kb::scene::TransformComponent liveMovedFirst = context.Scene().Transforms().Get(first);
+    const kb::scene::TransformComponent liveMovedSecond = context.Scene().Transforms().Get(second);
+    report.Check(!liveMovedFirst.worldDirty && std::abs(liveMovedFirst.worldPosition.x - 8.0F) < 0.001F,
+        "Interactive transform edit synchronizes the first entity world transform before commit");
+    report.Check(!liveMovedSecond.worldDirty && std::abs(liveMovedSecond.worldPosition.x - 12.0F) < 0.001F,
+        "Interactive transform edit synchronizes the second entity world transform before commit");
+
+    bool colliderFollowedLiveEdit = false;
+    for (const kb::scene::PhysicsDebugLineDesc& line : kb::scene::PhysicsDebugDraw::CollectLines(context.Scene())) {
+        for (const kb::scene::Vec3& point : {line.from, line.to}) {
+            if (std::abs(point.x - 8.5F) < 0.001F) {
+                colliderFollowedLiveEdit = true;
+            }
+        }
+    }
+    report.Check(colliderFollowedLiveEdit, "Collider wireframe follows an interactive transform edit before commit");
     report.Check(context.CommitActiveTransformEdit(), "Commit multi-selection transform edit");
 
     kb::scene::TransformComponent movedFirst = context.Scene().Transforms().Get(first);
