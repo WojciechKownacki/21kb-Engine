@@ -197,6 +197,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
     for (const ScriptFunctionDesc& function : functions) {
         catalog.functions.push_back(ScriptApiCatalogFunction{
             .name = function.signature.name,
+            .description = function.signature.description,
             .inputs = ToApiPins(function.signature.inputs),
             .outputs = ToApiPins(function.signature.outputs),
         });

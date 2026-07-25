@@ -188,9 +188,15 @@ void AppendStubFunction(
         ? binding.luaName
         : binding.tableName + "." + binding.luaName;
 
-    out += "---Forwards to the engine function `";
-    out += binding.functionName;
-    out += "`.\n";
+    if (function != nullptr && !function->description.empty()) {
+        out += "---";
+        out += function->description;
+        out += '\n';
+    } else {
+        out += "---Forwards to the engine function `";
+        out += binding.functionName;
+        out += "`.\n";
+    }
     if (binding.returnKind == ScriptApiCatalogLuaReturnKind::GuardedTable) {
         out += "---Returns nil when the engine reports `";
         out += binding.returnPin;
@@ -336,11 +342,13 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
     for (const auto& [group, functions] : groups) {
         out += "### ";
         out += group;
-        out += "\n\n| Function | Inputs | Outputs |\n|---|---|---|\n";
+        out += "\n\n| Function | Description | Inputs | Outputs |\n|---|---|---|---|\n";
         for (const ScriptApiCatalogFunction* function : functions) {
             out += "| `";
             out += function->name;
             out += "` | ";
+            out += function->description;
+            out += " | ";
             out += PinList(function->inputs);
             out += " | ";
             out += PinList(function->outputs);
@@ -543,6 +551,8 @@ std::string ScriptApiExport::ToJson(const ScriptApiCatalog& catalog) {
         }
         out += "{\"name\":";
         AppendJsonString(out, function.name);
+        out += ",\"description\":";
+        AppendJsonString(out, function.description);
         out += ",\"inputs\":";
         AppendJsonPins(out, function.inputs);
         out += ",\"outputs\":";

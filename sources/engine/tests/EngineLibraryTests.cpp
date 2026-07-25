@@ -3361,13 +3361,12 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
     }
 }
 
-// LIB-029: every function the catalog reports must have a real binding in
-// every supported frontend. Native + generic Lua CallFunction reachability
-// are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
-// the single registration path (LIB-002) — this test covers the one step
-// that registers separately and could independently regress: the Visual
-// Graph CallNative binding ScriptFunctionVisualGraphBindings attaches to
-// every RegisterFunction call.
+// LIB-029: every function the catalog reports must have a canonical
+// description and a real binding in every supported frontend. Native +
+// generic Lua CallFunction reachability are structurally guaranteed by
+// ScriptRuntimeHost::RegisterFunction being the single registration path
+// (LIB-002); the Visual Graph CallNative binding is the independently
+// registered surface that this test verifies for every function too.
 void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
@@ -3376,6 +3375,8 @@ void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
     kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
 
     for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string missingDescriptionMessage = "Engine21kbLibrary function '" + function.name + "' is missing its canonical description";
+        kb::tests::Require(!function.description.empty(), missingDescriptionMessage.c_str());
         const std::string bindingKey = "Function." + function.name;
         const std::string missingNativeBindingMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Visual Graph native binding";
         kb::tests::Require(
@@ -3390,6 +3391,17 @@ void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
             host.Functions().FindSignature(function.name) != nullptr,
             missingRegistryEntryMessage.c_str());
     }
+
+    const kb::script::ScriptApiCatalogFunction* worldExists = catalog.FindFunction("World.Exists");
+    kb::tests::Require(worldExists != nullptr, "Engine21kbLibrary catalog description fixture World.Exists is missing");
+    const std::string markdown = kb::script::ScriptApiExport::ToMarkdown(catalog);
+    kb::tests::Require(
+        markdown.find(worldExists->description) != std::string::npos,
+        "Engine21kbLibrary generated Markdown reference must publish a function's canonical description");
+    const std::string json = kb::script::ScriptApiExport::ToJson(catalog);
+    kb::tests::Require(
+        json.find("\"description\":\"Calls the `World` engine API operation `Exists`.\"") != std::string::npos,
+        "Engine21kbLibrary generated JSON catalog must publish a function's canonical description");
 }
 
 // LIB-031: every kb::library handle type must classify to exactly the

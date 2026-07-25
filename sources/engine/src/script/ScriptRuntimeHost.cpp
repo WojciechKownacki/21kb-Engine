@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -32,6 +33,16 @@ namespace {
         });
     }
     return apiPins;
+}
+
+[[nodiscard]] std::string DefaultFunctionDescription(std::string_view name) {
+    const std::size_t separator = name.find('.');
+    if (separator == std::string_view::npos || separator + 1U == name.size()) {
+        return "Calls the engine function `" + std::string{ name } + "`.";
+    }
+
+    return "Calls the `" + std::string{ name.substr(0U, separator) }
+        + "` engine API operation `" + std::string{ name.substr(separator + 1U) } + "`.";
 }
 
 class ScriptRuntimeHostSceneSystem final : public kb::scene::SceneSystem {
@@ -237,6 +248,9 @@ bool ScriptRuntimeHost::RegisterFunction(ScriptFunctionDesc function) {
         state_->visualGraphRuntimeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr ||
         state_->visualGraphNativeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr) {
         return false;
+    }
+    if (function.signature.description.empty()) {
+        function.signature.description = DefaultFunctionDescription(functionName);
     }
     const std::vector<ScriptApiPin> inputs = ToApiPins(function.signature.inputs);
     const std::vector<ScriptApiPin> outputs = ToApiPins(function.signature.outputs);

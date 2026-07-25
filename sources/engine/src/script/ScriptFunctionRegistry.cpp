@@ -64,7 +64,7 @@ std::optional<ScriptValue> ScriptFunctionCallResult::Output(std::string_view nam
 }
 
 bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
-    if (locked_ || function.signature.name.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
+    if (locked_ || function.signature.name.empty() || function.signature.description.empty() || function.callback == nullptr || FindSignature(function.signature.name) != nullptr) {
         return false;
     }
     if (!HasValidPins(function.signature.inputs) || !HasValidPins(function.signature.outputs)) {

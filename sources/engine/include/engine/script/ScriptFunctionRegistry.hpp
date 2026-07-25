@@ -30,6 +30,12 @@ struct ScriptFunctionArgument {
 
 struct ScriptFunctionSignature {
     std::string name;
+    // Canonical, human-readable summary for the callable API surface. The
+    // ScriptRuntimeHost supplies a contract-derived summary when an adapter
+    // does not author one, so every function that reaches Native, Lua, and
+    // Visual Graph has documentation in the same registration record that
+    // defines its name and pins.
+    std::string description;
     std::vector<ScriptFunctionPin> inputs;
     std::vector<ScriptFunctionPin> outputs;
     // LIB-025: empty when the function is not deprecated. Set via
