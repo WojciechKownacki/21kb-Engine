@@ -1549,6 +1549,41 @@ void RunBehaviourComponentSceneApiTest() {
     kb::tests::Require(!scene.Components().Behaviours().Has(object.Entity()), "Behaviour component was not removed");
 }
 
+void RunVisualGraphWaitContinuationTest() {
+    kb::visual::VisualGraphRuntimeArtifact artifact{};
+    artifact.module.functions.push_back(kb::visual::VisualGraphIrFunction{
+        .event = kb::visual::VisualGraphLifecycleEvent::Tick,
+        .eventNodeId = 1U,
+        .entryNodeId = 2U,
+        .instructions = {
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::Wait,
+                .sourceNodeId = 2U,
+                .nextNodeId = 3U,
+            },
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::EmitEvent,
+                .sourceNodeId = 3U,
+                .symbol = "Resumed",
+            },
+        },
+    });
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphRuntimeExecutor executor{bindings};
+    kb::visual::VisualGraphRuntimeExecutionContext context;
+
+    const kb::visual::VisualGraphRuntimeExecutionResult suspended = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+    kb::tests::Require(suspended.Succeeded() && suspended.executed && suspended.suspended,
+        "Visual graph Wait node did not suspend the active lifecycle state machine");
+    kb::tests::Require(context.EmittedEvents().empty(), "Visual graph Wait node ran nodes after its continuation in the same frame");
+
+    const kb::visual::VisualGraphRuntimeExecutionResult resumed = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+    kb::tests::Require(resumed.Succeeded() && resumed.executed && !resumed.suspended,
+        "Visual graph Wait continuation did not resume on the next lifecycle invocation");
+    kb::tests::Require(context.EmittedEvents().size() == 1U && context.EmittedEvents().front() == "Resumed",
+        "Visual graph Wait continuation did not execute its persisted next node");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1572,6 +1607,7 @@ void RunVisualGraphTests() {
     RunVisualGraphNodeDefinitionRegistryTest();
     RunVisualGraphNodeCatalogTest();
     RunVisualGraphDocumentEditingTest();
+    RunVisualGraphWaitContinuationTest();
     RunBehaviourComponentSceneApiTest();
 }
 

@@ -807,6 +807,35 @@ end
     kb::tests::Require(sandboxLeak.Succeeded() && sandboxLeak.emittedEvents.empty(), "PUC Lua sandbox leaked library table mutations across script environments");
 }
 
+void RunPucLuaCoroutineGeneratorTest() {
+    constexpr kb::assets::AssetId kLuaAsset{ 3199U };
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(luaRuntime.LoadScript(kLuaAsset, R"(
+function Tick(self, dt)
+    SetShared("lua.coroutine.before", (GetShared("lua.coroutine.before") or 0) + 1)
+    coroutine.yield()
+    SetShared("lua.coroutine.after", (GetShared("lua.coroutine.after") or 0) + 1)
+end
+)", "Coroutine.lua").succeeded, "Lua coroutine generator test script did not load");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Coroutine" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua coroutine backend registration failed");
+
+    kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F).Succeeded(), "Lua coroutine first Tick failed");
+    kb::tests::Require(runtime.SharedState().Get("lua.coroutine.before")->AsInt() == 1 && !runtime.SharedState().Get("lua.coroutine.after").has_value(),
+        "Lua coroutine did not suspend at coroutine.yield");
+    kb::tests::Require(runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F).Succeeded(), "Lua coroutine resume Tick failed");
+    kb::tests::Require(runtime.SharedState().Get("lua.coroutine.before")->AsInt() == 1 && runtime.SharedState().Get("lua.coroutine.after")->AsInt() == 1,
+        "Lua coroutine did not resume the suspended generator instead of restarting Tick");
+}
+
 void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Runtime Advanced" });
@@ -13457,6 +13486,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();
+    RunPucLuaCoroutineGeneratorTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();

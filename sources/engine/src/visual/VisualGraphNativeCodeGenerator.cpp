@@ -531,6 +531,7 @@ void WriteInstructionOperation(
     case VisualGraphIrOpcode::SetProperty:
     case VisualGraphIrOpcode::Branch:
     case VisualGraphIrOpcode::Sequence:
+    case VisualGraphIrOpcode::Wait:
         stream << "    context.Trace(" << CppStringLiteral(ToString(instruction.opcode)) << ", " << symbol << ");\n";
         break;
     }

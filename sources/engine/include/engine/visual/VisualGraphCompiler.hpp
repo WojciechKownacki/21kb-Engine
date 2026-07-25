@@ -16,6 +16,7 @@ enum class VisualGraphIrOpcode : std::uint8_t {
     SetProperty,
     CallNative,
     EmitEvent,
+    Wait,
 };
 
 struct VisualGraphIrInput {

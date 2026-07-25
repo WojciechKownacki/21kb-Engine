@@ -106,7 +106,9 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(co
     NodeSet executing;
     NodeSet evaluatedNodes;
     std::size_t stepBudget = kMaxVisualGraphExecutionSteps;
-    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, function->entryNodeId, context, executing, evaluatedNodes, true, stepBudget, 0U);
+    const std::uint32_t continuation = context.TakeContinuation(function->eventNodeId);
+    const std::uint32_t startNodeId = continuation != 0U ? continuation : function->entryNodeId;
+    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, startNodeId, context, executing, evaluatedNodes, true, stepBudget, function->eventNodeId, 0U);
     executed.executed = true;
     return executed;
 }
@@ -119,6 +121,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
     NodeSet& evaluatedNodes,
     bool followExecution,
     std::size_t& stepBudget,
+    std::uint32_t continuationEventNodeId,
     std::size_t depth) const {
     VisualGraphRuntimeExecutionResult result{};
 
@@ -199,7 +202,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                         continue;
                     }
                 }
-                AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, depth + 1U));
+                AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, continuationEventNodeId, depth + 1U));
                 if (!nodeResult.Succeeded()) {
                     executing.erase(nodeId);
                     AppendErrors(result, std::move(nodeResult));
@@ -254,7 +257,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                         }
                     }
                 }
-            } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence) {
+            } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence && instruction->opcode != VisualGraphIrOpcode::Wait) {
                 const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
                 if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
                 } else if (binding == nullptr) {
@@ -317,6 +320,13 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
             executing.erase(nodeId);
             nodeId = callFailed ? instruction->falseNodeId : instruction->trueNodeId;
             continue;
+        }
+
+        if (instruction->opcode == VisualGraphIrOpcode::Wait && followExecution) {
+            context.Suspend(continuationEventNodeId, instruction->nextNodeId);
+            executing.erase(nodeId);
+            result.suspended = true;
+            return result;
         }
 
         const std::uint32_t nextNodeId = instruction->nextNodeId;
