@@ -6,8 +6,11 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 
 #include <array>
 #include <cstdint>
@@ -85,6 +88,15 @@ void WriteProjectDescriptor(
 
 [[nodiscard]] bool Contains(const std::string& text, std::string_view needle) {
     return text.find(needle) != std::string::npos;
+}
+
+[[nodiscard]] std::string LineContaining(const std::string& text, std::string_view needle) {
+    const std::size_t match = text.find(needle);
+    if (match == std::string::npos) {
+        return {};
+    }
+    const std::size_t lineEnd = text.find('\n', match);
+    return text.substr(match, lineEnd == std::string::npos ? std::string::npos : lineEnd - match);
 }
 
 constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
@@ -406,8 +418,52 @@ local characterJumpRequested = false
 local characterJumpObserved = false
 local platformTargetX = 320.0
 local lib131Completed = false
+local fastMoverReported = false
+local parentedBodyReported = false
+local dynamicParentedBodyReported = false
+local parentedSampleSeconds = 0.0
+local parentedSampleReported = false
+local colliderLifecyclePhase = 0
+local colliderLifecycleEntity = 0
+local colliderLifecycleReported = false
+local unloadSceneId = 0
+local unloadAnchor = 0
+local unloadJointed = 0
+local unloadCharacter = 0
+local unloadPhase = 0
+local sceneUnloadReported = false
+local lib133Completed = false
+local determinismFixedTickCount = 0
+local determinismTickCount = 0
+local determinismMutationReported = false
+local determinismPhaseProbeMutationApplied = false
+local determinismSameStepReported = false
+local lib134Completed = false
+
+)" R"(
+function FixedTick(self, dt)
+    determinismFixedTickCount = determinismFixedTickCount + 1
+    if determinismFixedTickCount == 30 then
+        local body1 = World.FindByName("DeterminismRuntimeBody1")
+        local body2 = World.FindByName("DeterminismRuntimeBody2")
+        local body3 = World.FindByName("DeterminismRuntimeBody3")
+        local body4 = World.FindByName("DeterminismRuntimeBody4")
+        local phaseProbe = World.FindByName("DeterminismPhaseProbeRuntime")
+        local applied1 = Physics.AddImpulse(body1, 0.75, 0.20, -0.10)
+        local applied2 = Physics.AddImpulse(body2, -0.35, 0.10, 0.25)
+        local applied3 = Physics.AddImpulse(body3, 0.20, 0.30, 0.15)
+        local applied4 = Physics.AddImpulse(body4, -0.15, 0.25, -0.20)
+        determinismPhaseProbeMutationApplied = Physics.SetVelocity(phaseProbe, 12.0, 0.0, 0.0)
+        if applied1 and applied2 and applied3 and applied4
+            and determinismPhaseProbeMutationApplied then
+            determinismMutationReported = true
+            Log("physics runtime determinism fixed mutation applied")
+        end
+    end
+end
 
 function Tick(self, dt)
+    determinismTickCount = determinismTickCount + 1
     local projectile = World.FindByName("Projectile")
     local forceBody = World.FindByName("ForceBody")
     local impulseBody = World.FindByName("ImpulseBody")
@@ -429,6 +485,22 @@ function Tick(self, dt)
     local groundingCharacter = World.FindByName("GroundingCharacterRuntime")
     local movingPlatform = World.FindByName("MovingPlatformRuntime")
     local platformCharacter = World.FindByName("PlatformRidingCharacterRuntime")
+    local tunnelingSphere = World.FindByName("TunnelingSphereRuntime")
+    local arrestedSphere = World.FindByName("ArrestedSphereRuntime")
+    local parentedBody = World.FindByName("ParentedRigidbodyChildRuntime")
+    local dynamicParentedParent = World.FindByName("DynamicRigidbodyParentRuntime")
+    local dynamicParentedChild = World.FindByName("DynamicRigidbodyChildRuntime")
+    local unloadSurvivor = World.FindByName("SceneUnloadSurvivorRuntime")
+
+    if determinismFixedTickCount == 30 and determinismPhaseProbeMutationApplied
+        and not determinismSameStepReported then
+        local phaseProbePosition = Transform.GetPosition(
+            World.FindByName("DeterminismPhaseProbeRuntime"))
+        if phaseProbePosition ~= nil and phaseProbePosition.x > 1450.1 then
+            determinismSameStepReported = true
+            Log("physics runtime determinism fixed mutation simulated same step")
+        end
+    end
 
     if not controlsApplied then
         local forceApplied = Physics.AddForce(forceBody, 60.0, 0.0, 0.0)
@@ -760,6 +832,154 @@ function Tick(self, dt)
             and platformGroundVelocity.found and platformGroundVelocity.x > 0.5 then
             lib131Completed = true
             Log("physics runtime LIB-131 complete")
+        end
+    end
+
+)" R"(
+    local tunnelingPosition = Transform.GetPosition(tunnelingSphere)
+    local arrestedPosition = Transform.GetPosition(arrestedSphere)
+    if not fastMoverReported and tunnelingPosition ~= nil and arrestedPosition ~= nil
+        and tunnelingPosition.x > 1001.0 and arrestedPosition.x < 1000.0 then
+        fastMoverReported = true
+        Log("physics runtime fast mover CCD verified")
+    end
+
+    local parentedPosition = Transform.GetPosition(parentedBody)
+    parentedSampleSeconds = parentedSampleSeconds + dt
+    if not parentedSampleReported and parentedSampleSeconds > 4.0 and parentedPosition ~= nil then
+        parentedSampleReported = true
+        Log("physics runtime parented sample x=" .. parentedPosition.x .. " y=" .. parentedPosition.y)
+    end
+    if not parentedBodyReported and parentedPosition ~= nil
+        and parentedPosition.x > 1.0 and parentedPosition.x < 3.0
+        and parentedPosition.y > 0.0 and parentedPosition.y < 1.0 then
+        parentedBodyReported = true
+        Log("physics runtime parented rigidbody verified")
+    end
+
+    local dynamicParentPosition = Transform.GetPosition(dynamicParentedParent)
+    local dynamicChildPosition = Transform.GetPosition(dynamicParentedChild)
+    local dynamicParentVelocity = Physics.GetVelocity(dynamicParentedParent)
+    local dynamicChildVelocity = Physics.GetVelocity(dynamicParentedChild)
+    if not dynamicParentedBodyReported and parentedSampleSeconds > 4.0
+        and dynamicParentPosition ~= nil and dynamicParentPosition.x > 824.0
+        and dynamicChildPosition ~= nil
+        and dynamicChildPosition.x > 2.99 and dynamicChildPosition.x < 3.01
+        and dynamicParentVelocity.found and dynamicParentVelocity.x > 1.0
+        and dynamicChildVelocity.found and dynamicChildVelocity.x > 1.0 then
+        dynamicParentedBodyReported = true
+        Log("physics runtime dynamic parented rigidbody verified")
+    end
+
+    if colliderLifecyclePhase == 0 then
+        colliderLifecycleEntity = World.InstantiatePrefab({
+            prefab = "/Game/Prefabs/LifecycleCollider.kbprefab",
+            x = 1050.0,
+            y = 20.0,
+            z = 0.0
+        })
+        if colliderLifecycleEntity ~= nil and colliderLifecycleEntity ~= 0 then
+            colliderLifecyclePhase = 1
+        end
+    elseif colliderLifecyclePhase == 1 then
+        local position = Transform.GetPosition(colliderLifecycleEntity)
+        local velocity = Physics.GetVelocity(colliderLifecycleEntity)
+        if position ~= nil and position.y < 19.5 and velocity.found
+            and World.Destroy(colliderLifecycleEntity) then
+            colliderLifecyclePhase = 2
+        end
+    elseif colliderLifecyclePhase == 2 then
+        local velocity = Physics.GetVelocity(colliderLifecycleEntity)
+        if not World.Exists(colliderLifecycleEntity) and not velocity.found then
+            colliderLifecycleEntity = World.InstantiatePrefab({
+                prefab = "/Game/Prefabs/LifecycleCollider.kbprefab",
+                x = 1050.0,
+                y = 20.0,
+                z = 0.0
+            })
+            if colliderLifecycleEntity ~= nil and colliderLifecycleEntity ~= 0 then
+                colliderLifecyclePhase = 3
+            end
+        end
+    elseif colliderLifecyclePhase == 3 and not colliderLifecycleReported then
+        local position = Transform.GetPosition(colliderLifecycleEntity)
+        local velocity = Physics.GetVelocity(colliderLifecycleEntity)
+        if position ~= nil and position.y < 19.5 and velocity.found then
+            colliderLifecycleReported = true
+            Log("physics runtime collider spawn despawn respawn verified")
+        end
+    end
+
+    if unloadPhase == 0 then
+        unloadSceneId = Scene.Load("/Game/Scenes/UnloadPhysics.21kbscene", true)
+        if unloadSceneId ~= nil and unloadSceneId ~= 0
+            and Scene.LoadProgress(unloadSceneId) == 1.0
+            and Scene.Find("UnloadPhysics") == unloadSceneId then
+            unloadPhase = 1
+            Log("physics runtime additive physics scene loaded")
+        end
+    elseif unloadPhase == 1 then
+        unloadAnchor = World.FindByName("UnloadAnchorRuntime")
+        unloadJointed = World.FindByName("UnloadJointedRuntime")
+        unloadCharacter = World.FindByName("UnloadCharacterRuntime")
+        local anchorVelocity = Physics.GetVelocity(unloadAnchor)
+        local jointedVelocity = Physics.GetVelocity(unloadJointed)
+        local characterVelocity = Physics.CharacterVelocity(unloadCharacter)
+        if anchorVelocity.found and jointedVelocity.found and characterVelocity.found
+            and Scene.Unload(unloadSceneId) then
+            unloadPhase = 2
+            Log("physics runtime physics scene unload requested")
+        end
+    elseif unloadPhase == 2 and not sceneUnloadReported then
+        local staleAnchorVelocity = Physics.GetVelocity(unloadAnchor)
+        local staleJointedVelocity = Physics.GetVelocity(unloadJointed)
+        local staleCharacterVelocity = Physics.CharacterVelocity(unloadCharacter)
+        if Scene.LoadProgress(unloadSceneId) == 0.0
+            and Scene.Find("UnloadPhysics") == 0
+            and not World.Exists(unloadAnchor) and not World.Exists(unloadJointed)
+            and not World.Exists(unloadCharacter)
+            and not staleAnchorVelocity.found and not staleJointedVelocity.found
+            and not staleCharacterVelocity.found then
+            sceneUnloadReported = true
+            Log("physics runtime physics scene unloaded")
+        end
+    end
+
+    if not lib133Completed and fastMoverReported and parentedBodyReported
+        and dynamicParentedBodyReported
+        and colliderLifecycleReported and sceneUnloadReported then
+        local survivorPosition = Transform.GetPosition(unloadSurvivor)
+        local survivorVelocity = Physics.GetVelocity(unloadSurvivor)
+        if survivorPosition ~= nil and survivorPosition.x > 1101.0
+            and survivorVelocity.found and survivorVelocity.x > 1.5 then
+            lib133Completed = true
+            Log("physics runtime LIB-133 complete")
+        end
+    end
+
+    if not lib134Completed and determinismTickCount >= 90
+        and determinismMutationReported and determinismSameStepReported then
+        local signature = ""
+        local signatureValid = true
+        for index = 1, 4 do
+            local entity = World.FindByName("DeterminismRuntimeBody" .. index)
+            local position = Transform.GetPosition(entity)
+            local velocity = Physics.GetVelocity(entity)
+            local angularVelocity = Physics.GetAngularVelocity(entity)
+            if position == nil or not velocity.found or not angularVelocity.found then
+                signatureValid = false
+            else
+                signature = signature .. string.format(
+                    "|%a,%a,%a,%a,%a,%a,%a,%a,%a",
+                    position.x, position.y, position.z,
+                    velocity.x, velocity.y, velocity.z,
+                    angularVelocity.x, angularVelocity.y, angularVelocity.z)
+            end
+        end
+        if signatureValid then
+            lib134Completed = true
+            Log("physics runtime determinism signature " .. signature)
+            Log("physics runtime LIB-134 complete")
         end
     end
 
@@ -1294,6 +1514,307 @@ end
         kb::scene::Vec3{ 320.0F, characterHalfHeight, 0.0F },
         defaultCharacter);
 
+    constexpr float fastMoverWallX = 1000.0F;
+    createCharacterRigBody(
+        "FastMoverWallRuntime",
+        kb::scene::Vec3{ fastMoverWallX, 0.0F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 0.1F, 10.0F, 10.0F });
+    const auto createFastMover = [&scene](const char* name, float z, bool continuous) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ fastMoverWallX - 5.0F, 0.0F, z },
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+                .linearVelocity = kb::scene::Vec3{ 200.0F, 0.0F, 0.0F },
+                .useGravity = false,
+                .useContinuousCollision = continuous,
+            });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.2F,
+            });
+    };
+    createFastMover("TunnelingSphereRuntime", -3.0F, false);
+    createFastMover("ArrestedSphereRuntime", 3.0F, true);
+
+    const kb::scene::SceneObject parentedRigParent = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "ParentedRigidbodyParentRuntime",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 700.0F, 0.0F, 0.0F },
+                .localRotation = kb::scene::Quat{ 0.0F, 1.0F, 0.0F, 0.0F },
+            },
+        });
+    createCharacterRigBody(
+        "ParentedRigidbodyFloorRuntime",
+        kb::scene::Vec3{ 700.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 20.0F, 1.0F, 20.0F });
+    const kb::scene::SceneObject parentedRigChild = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "ParentedRigidbodyChildRuntime",
+            .parent = parentedRigParent,
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 2.0F, 5.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        parentedRigChild.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+        });
+    scene.Components().Colliders().Set(
+        parentedRigChild.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.3F,
+        });
+
+    const kb::scene::SceneObject dynamicRigChild = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "DynamicRigidbodyChildRuntime",
+        });
+    const kb::scene::SceneObject dynamicRigParent = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "DynamicRigidbodyParentRuntime",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 800.0F, 100.0F, 0.0F },
+            },
+        });
+    Require(
+        scene.Hierarchy().SetParent(dynamicRigChild.Entity(), dynamicRigParent.Entity()),
+        "LIB-133 runtime dynamic rigidbody hierarchy could not be created");
+    kb::scene::TransformComponent dynamicRigChildTransform = scene.Transforms().Get(dynamicRigChild);
+    dynamicRigChildTransform.localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(dynamicRigChild.Entity(), dynamicRigChildTransform);
+    scene.Components().Rigidbodies().Set(
+        dynamicRigChild.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+            .linearVelocity = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        dynamicRigChild.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.25F,
+        });
+    scene.Components().Rigidbodies().Set(
+        dynamicRigParent.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+            .linearVelocity = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        dynamicRigParent.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.25F,
+        });
+
+    // LIB-134 production determinism rig. It is serialized into the same project scene as
+    // the rest of the player probe, then mutated from Lua FixedTick in a fixed entity/call
+    // order. The exact-state signature is compared only between replays of this same binary
+    // and configuration; CROSS_PLATFORM_DETERMINISTIC is intentionally not claimed.
+    createCharacterRigBody(
+        "DeterminismRuntimeFloor",
+        kb::scene::Vec3{ 1400.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 10.0F, 1.0F, 10.0F });
+    constexpr std::array<kb::scene::Vec3, 4> determinismPositions{ {
+        { 1400.0F, 1.0F, 0.0F },
+        { 1400.2F, 2.2F, 0.1F },
+        { 1399.8F, 3.4F, -0.1F },
+        { 1400.1F, 4.6F, 0.2F },
+    } };
+    for (std::size_t index = 0; index < determinismPositions.size(); ++index) {
+        const kb::scene::SceneObject body = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = "DeterminismRuntimeBody" + std::to_string(index + 1U),
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = determinismPositions[index],
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            body.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+                .linearVelocity = kb::scene::Vec3{
+                    0.1F * static_cast<float>(index + 1U),
+                    0.0F,
+                    -0.05F * static_cast<float>(index),
+                },
+                .angularVelocity = kb::scene::Vec3{
+                    0.3F + 0.1F * static_cast<float>(index),
+                    -0.2F + 0.05F * static_cast<float>(index),
+                    0.15F * static_cast<float>(index + 1U),
+                },
+            });
+        scene.Components().Colliders().Set(
+            body.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box,
+                .boxSize = kb::scene::Vec3{ 0.8F, 0.8F, 0.8F },
+                .friction = 0.6F,
+                .restitution = 0.15F,
+            });
+    }
+    const kb::scene::SceneObject determinismPhaseProbe = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "DeterminismPhaseProbeRuntime",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 1450.0F, 20.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        determinismPhaseProbe.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        determinismPhaseProbe.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.25F,
+        });
+
+    const kb::scene::SceneObject unloadSurvivor = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "SceneUnloadSurvivorRuntime",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 1100.0F, 40.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        unloadSurvivor.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+            .linearVelocity = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F },
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        unloadSurvivor.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.3F,
+        });
+
+    std::error_code lifecycleDirectoryError;
+    std::filesystem::create_directories(root / "Assets" / "Prefabs", lifecycleDirectoryError);
+    std::filesystem::create_directories(root / "Assets" / "Scenes", lifecycleDirectoryError);
+    Require(!lifecycleDirectoryError, "LIB-133 runtime lifecycle asset directories could not be created");
+
+    kb::scene::ScenePrefab lifecyclePrefab;
+    static_cast<void>(lifecyclePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "LifecycleColliderRuntime",
+        .transform = kb::scene::TransformComponent{},
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .rigidbody = kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+            },
+            .collider = kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.3F,
+            },
+        },
+    }));
+    const kb::scene::ScenePrefabHandle lifecyclePrefabHandle =
+        scene.Prefabs().Register("LifecycleCollider", std::move(lifecyclePrefab));
+    Require(
+        lifecyclePrefabHandle.IsValid() &&
+            scene.Prefabs().Save(lifecyclePrefabHandle, root / "Assets" / "Prefabs" / "LifecycleCollider.kbprefab"),
+        "LIB-133 runtime collider lifecycle prefab could not be saved");
+
+    {
+        kb::scene::Scene unloadScene;
+        const kb::scene::SceneObject unloadRoot = unloadScene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = "UnloadPhysicsRootRuntime",
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ 1150.0F, 0.0F, 0.0F },
+                },
+            });
+        const auto createUnloadBody = [&unloadScene, unloadRoot](
+                                          const char* name,
+                                          float localX) {
+            const kb::scene::SceneObject object = unloadScene.Entities().CreateObject(
+                kb::scene::SceneObjectDesc{
+                    .name = name,
+                    .parent = unloadRoot,
+                    .transform = kb::scene::TransformComponent{
+                        .localPosition = kb::scene::Vec3{ localX, 20.0F, 0.0F },
+                    },
+                });
+            unloadScene.Components().Rigidbodies().Set(
+                object.Entity(),
+                kb::scene::RigidbodyComponent{
+                    .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                    .mass = 1.0F,
+                    .useGravity = false,
+                });
+            unloadScene.Components().Colliders().Set(
+                object.Entity(),
+                kb::scene::ColliderComponent{
+                    .shape = kb::scene::ColliderShape::Sphere,
+                    .radius = 0.3F,
+                });
+            return object;
+        };
+        const kb::scene::SceneObject unloadAnchor =
+            createUnloadBody("UnloadAnchorRuntime", 0.0F);
+        const kb::scene::SceneObject unloadJointed =
+            createUnloadBody("UnloadJointedRuntime", 1.0F);
+        unloadScene.Components().Joints().Set(
+            unloadJointed.Entity(),
+            kb::scene::JointComponent{
+                .type = kb::scene::JointType::Fixed,
+                .connectedEntity = unloadAnchor.Entity(),
+                .anchor = {},
+                .connectedAnchor = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+            });
+        const kb::scene::SceneObject unloadCharacter = unloadScene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = "UnloadCharacterRuntime",
+                .parent = unloadRoot,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ 2.0F, 20.0F, 0.0F },
+                },
+            });
+        unloadScene.Components().CharacterControllers().Set(
+            unloadCharacter.Entity(),
+            kb::scene::CharacterControllerComponent{
+                .radius = 0.4F,
+                .height = 1.8F,
+                .useGravity = false,
+            });
+        Require(
+            kb::scene::SceneDocumentService::Save(
+                unloadScene,
+                root / "Assets" / "Scenes" / "UnloadPhysics.21kbscene",
+                "UnloadPhysics"),
+            "LIB-133 additive physics unload scene could not be saved");
+    }
+
     static_cast<void>(scene.Entities().CreateObject(
         kb::scene::SceneObjectDesc{ .name = "PhysicsObserver" }));
     std::error_code error;
@@ -1388,6 +1909,10 @@ void RunProjectileTemplateTests() {
         "LIB-130 all advertised JointTypes did not complete through the production runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-131 complete"),
         "LIB-131 character slope, step, grounding, platform motion, gravity, and jump did not complete through the production runtime");
+    Require(Contains(run.output, "[log] physics runtime LIB-133 complete"),
+        "LIB-133 fast mover, collider lifecycle, parented rigidbody, and scene unload did not complete through the production runtime");
+    Require(Contains(run.output, "[log] physics runtime dynamic parented rigidbody verified"),
+        "LIB-133 dynamic rigidbody parent+child did not preserve a same-step parent-relative local pose in production runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-129 complete"),
         "LIB-129 project asset did not configure named query layers and the live Jolt collision matrix in kb_cli runtime");
     for (const char* eventName : { "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit" }) {
@@ -1397,7 +1922,42 @@ void RunProjectileTemplateTests() {
     }
     Require(Contains(run.output, "[log] physics runtime LIB-127 complete"),
         "LIB-127 full trigger/collision lifecycle did not complete in the serialized kb_cli Jolt runtime");
+    Require(Contains(run.output, "[log] physics runtime determinism fixed mutation applied"),
+        "LIB-134 production runtime did not apply the ordered FixedTick mutation through live Jolt");
+    Require(Contains(run.output, "[log] physics runtime determinism fixed mutation simulated same step"),
+        "LIB-134 kb_cli did not run FixedTick in the authoritative pre-simulation phase before the same Jolt step");
+    Require(Contains(run.output, "[log] physics runtime LIB-134 complete"),
+        "LIB-134 production runtime did not publish a final deterministic physics signature");
+    const std::string determinismSignature =
+        LineContaining(run.output, "physics runtime determinism signature ");
+    Require(!determinismSignature.empty(),
+        "LIB-134 first production runtime did not expose its deterministic physics signature");
     Require(Contains(run.output, "0 diagnostics"), "projectile physics runtime was not clean");
+
+    // A second complete player lifetime in the same process must reuse the
+    // process-persistent Physics.Jolt library instead of mapping a second
+    // shadow copy with a disconnected set of Jolt static globals.
+    const CommandRun secondRun = Run(&kb::cli::RunRunCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--frames", "300",
+    });
+    Require(secondRun.exitCode == 0, "second sequential kb_cli runtime reported diagnostics");
+    Require(Contains(secondRun.output, "[module] active Physics.Jolt"),
+        "second sequential kb_cli runtime did not reactivate the project Physics.Jolt module");
+    Require(Contains(secondRun.output, "[log] physics runtime LIB-131 complete"),
+        "second sequential kb_cli runtime did not execute live Jolt simulation");
+    Require(Contains(secondRun.output, "[log] physics runtime LIB-133 complete"),
+        "second sequential kb_cli runtime did not repeat the full LIB-133 physics lifecycle");
+    Require(Contains(secondRun.output, "[log] physics runtime LIB-134 complete"),
+        "second sequential kb_cli runtime did not repeat the production determinism scenario");
+    // Jolt guarantees determinism for the same binary when simulation-mutating calls occur in
+    // the same order. This second complete player lifetime is that production replay: project
+    // asset load, scheduler-owned FixedTick, dynamic Jolt module, simulation, and write-back.
+    const std::string secondDeterminismSignature =
+        LineContaining(secondRun.output, "physics runtime determinism signature ");
+    Require(!secondDeterminismSignature.empty() && secondDeterminismSignature == determinismSignature,
+        "LIB-134 same-binary/same-platform production replays diverged despite identical serialized state and ordered FixedTick mutations");
 
     kb::project::ProjectDescriptorReadResult descriptor =
         kb::project::ProjectManager::LoadProject(TestRoot() / "Project.21kbproject");

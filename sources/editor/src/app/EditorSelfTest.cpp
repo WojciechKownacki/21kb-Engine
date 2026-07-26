@@ -36,6 +36,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -719,6 +720,183 @@ void RunPhysicsComponentCatalogSuite(Report& report) {
     report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::CharacterController), "Character Controller '×' removes the component");
     report.Check(context.RemovePhysicsComponent(actor, kb::editor::PhysicsComponentKind::Joint), "Joint '×' removes the component");
     report.Check(!context.Scene().Components().Joints().Has(actor), "Joint gone after remove");
+}
+
+void RunCameraInspectorSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::scene::SceneEntity fallback = context.CreateHierarchyObject();
+    report.Check(
+        context.AddComponentToEntity(fallback, "Camera"),
+        "LIB-135 add fallback Camera used to detect hierarchy selection jumps");
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    context.SelectEntity(actor);
+    report.Check(
+        context.AddComponentToEntity(actor, "Camera"),
+        "LIB-135 add Camera through the editor component catalog");
+    report.Check(
+        context.Scene().Components().Cameras().Has(actor),
+        "LIB-135 Camera component is present after editor add");
+    const std::vector<EditorHierarchyRow> cameraRows = context.HierarchyRows();
+    const auto actorRow = std::ranges::find(
+        cameraRows, actor, &EditorHierarchyRow::entity);
+    report.Check(
+        actorRow != cameraRows.end() && actorRow->hasCamera,
+        "LIB-135 Camera entity exposes the camera icon in Hierarchy");
+
+    const std::array<InspectorPropertyId, 8> properties{
+        InspectorPropertyId::CameraProjection,
+        InspectorPropertyId::CameraVerticalFov,
+        InspectorPropertyId::CameraOrthographicHeight,
+        InspectorPropertyId::CameraNearClip,
+        InspectorPropertyId::CameraFarClip,
+        InspectorPropertyId::CameraPrimary,
+        InspectorPropertyId::CameraViewportId,
+        InspectorPropertyId::CameraPriority,
+    };
+    std::array<InspectorPanelRenderer::Hit, properties.size()> hits{};
+    const auto expectedKind = [](InspectorPropertyId property) {
+        switch (property) {
+        case InspectorPropertyId::CameraVerticalFov:
+        case InspectorPropertyId::CameraOrthographicHeight:
+        case InspectorPropertyId::CameraNearClip:
+        case InspectorPropertyId::CameraFarClip:
+            return InspectorHitKind::FloatField;
+        case InspectorPropertyId::CameraPrimary:
+            return InspectorHitKind::BoolField;
+        default:
+            return InspectorHitKind::TextField;
+        }
+    };
+    const int maxScroll =
+        InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+    const int scrollStep =
+        std::max(1, static_cast<int>(kContent.bottom - kContent.top) - 80);
+    for (int scroll = 0; scroll <= maxScroll; scroll += scrollStep) {
+        static_cast<void>(
+            context.Inspector().SetScrollOffset(scroll, maxScroll));
+        for (int y = kContent.top; y < kContent.bottom; ++y) {
+            for (int x = kContent.left; x < kContent.right; ++x) {
+                const InspectorPanelRenderer::Hit hit =
+                    InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                if (hit.section != InspectorSectionId::Camera) {
+                    continue;
+                }
+                for (std::size_t index = 0U; index < properties.size(); ++index) {
+                    if (hits[index].kind == InspectorHitKind::None &&
+                        hit.property == properties[index] &&
+                        hit.kind == expectedKind(properties[index])) {
+                        hits[index] = hit;
+                    }
+                }
+            }
+        }
+    }
+    static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
+    for (const InspectorPanelRenderer::Hit& hit : hits) {
+        report.Check(
+            hit.kind != InspectorHitKind::None,
+            "LIB-135 Camera field is visible and hit-testable in the production Inspector");
+    }
+
+    const auto hitFor = [&properties, &hits](InspectorPropertyId property) {
+        for (std::size_t index = 0U; index < properties.size(); ++index) {
+            if (properties[index] == property) {
+                return hits[index];
+            }
+        }
+        return InspectorPanelRenderer::Hit{};
+    };
+    const auto click = [&context](const InspectorPanelRenderer::Hit& hit) {
+        const POINT point = Center(hit.rect);
+        return InspectorPanelInteraction::HandlePointerDown(
+            context, hit, point.x, point.y);
+    };
+    const auto editText = [&context, &click](
+                              const InspectorPanelRenderer::Hit& hit,
+                              std::string_view value,
+                              bool releasePointer) {
+        if (!click(hit)) {
+            return false;
+        }
+        if (releasePointer) {
+            static_cast<void>(
+                InspectorPanelInteraction::HandlePointerUp(context));
+        }
+        context.Inspector().ClearText();
+        context.Inspector().InsertText(value);
+        return InspectorPanelInteraction::HandleKeyDown(
+            nullptr, context, static_cast<WPARAM>(VK_RETURN));
+    };
+    const auto camera = [&context]() {
+        return context.Scene().Components().Cameras().TryGet(
+            context.SelectedEntity());
+    };
+    const auto selectionStayedOnActor = [&context, actor]() {
+        return context.SelectedEntity() == actor;
+    };
+
+    report.Check(
+        click(hitFor(InspectorPropertyId::CameraProjection)),
+        "LIB-135 Camera projection click is handled");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-135 Camera projection edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr &&
+            camera()->projection ==
+            kb::scene::CameraProjection::Orthographic,
+        "LIB-135 Camera projection edit reaches the live component");
+    report.Check(
+        click(hitFor(InspectorPropertyId::CameraPrimary)),
+        "LIB-135 Camera primary click is handled");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-135 Camera primary edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr && camera()->primary,
+        "LIB-135 Camera primary edit reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraViewportId), "7", false),
+        "LIB-135 Camera viewport edit is committed");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-135 Camera viewport edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr && camera()->viewportId == 7U,
+        "LIB-135 Camera viewport reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraPriority), "42", false),
+        "LIB-135 Camera priority edit is committed");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-135 Camera priority edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr && camera()->priority == 42,
+        "LIB-135 Camera priority reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraVerticalFov), "47.5", true),
+        "LIB-135 Camera FOV edit is committed");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-135 Camera FOV edit preserves hierarchy selection");
+    const bool fovChanged =
+        camera() != nullptr &&
+        std::abs(camera()->verticalFovDegrees - 47.5F) < 0.001F;
+    report.Check(
+        fovChanged,
+        "LIB-135 Camera FOV reaches the live component");
+    if (fovChanged) {
+        report.Check(
+            context.UndoSceneCommand(),
+            "LIB-135 Camera inspector edit participates in scene undo");
+        report.Check(
+            camera() != nullptr &&
+                std::abs(camera()->verticalFovDegrees - 60.0F) < 0.001F,
+            "LIB-135 Camera undo restores the previous runtime value");
+    }
 }
 
 void RunSelectionTransformSuite(Report& report) {
@@ -5139,6 +5317,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "script_inspector_schema_refresh", &RunScriptInspectorSchemaRefreshSuite);
     RunSuiteInScratch(report, "inspector_component_affordances", &RunInspectorComponentAffordancesSuite);
     RunSuiteInScratch(report, "physics_component_catalog", &RunPhysicsComponentCatalogSuite);
+    RunSuiteInScratch(report, "camera_inspector", &RunCameraInspectorSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);

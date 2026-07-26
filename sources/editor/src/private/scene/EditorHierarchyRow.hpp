@@ -17,6 +17,7 @@ struct EditorHierarchyRow {
     bool expanded = false;
     bool visible = true;
     bool prefabRoot = false;
+    bool hasCamera = false;
 };
 
 } // namespace kb::editor

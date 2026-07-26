@@ -15,6 +15,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
@@ -295,12 +296,54 @@ struct LightWireframeBasis {
     return {value.x, value.y, value.z};
 }
 
-[[nodiscard]] kb::scene::Vec3 ResolveLightWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
+[[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
     return transform.worldDirty ? transform.localPosition : transform.worldPosition;
 }
 
-[[nodiscard]] kb::scene::Quat ResolveLightWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
+[[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
     return transform.worldDirty ? transform.localRotation : transform.worldRotation;
+}
+
+[[nodiscard]] std::vector<kb::render::EditorCameraWireframeDesc> BuildCameraWireframes(
+    const EditorSceneContext& sceneContext) {
+    struct Context {
+        const EditorSceneContext* sceneContext = nullptr;
+        std::vector<kb::render::EditorCameraWireframeDesc> wireframes;
+    } context{
+        .sceneContext = &sceneContext,
+    };
+
+    sceneContext.Scene().Components().Visitors().ForEachCamera(
+        [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* opaque) {
+            auto& context = *static_cast<Context*>(opaque);
+            if (!IsSelectedEntity(*context.sceneContext, entity) ||
+                !context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
+                return;
+            }
+
+            const LightWireframeBasis basis = BasisFromQuat(ResolveWorldRotation(transform));
+            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+            context.wireframes.push_back(kb::render::EditorCameraWireframeDesc{
+                .projection = camera.projection == kb::scene::CameraProjection::Orthographic
+                    ? kb::render::EditorCameraWireframeProjection::Orthographic
+                    : kb::render::EditorCameraWireframeProjection::Perspective,
+                .position = {position.x, position.y, position.z},
+                .forward = basis.forward,
+                .right = basis.right,
+                .up = basis.up,
+                .verticalFovDegrees = camera.verticalFovDegrees,
+                .orthographicHeight = camera.orthographicHeight,
+                .nearClip = camera.nearClip,
+                .farClip = camera.farClip,
+                // CameraComponent does not own the editor fly-camera viewport.
+                // Keep its authoring wireframe square instead of inheriting the
+                // unrelated Scene View panel aspect ratio.
+                .aspect = 1.0F,
+            });
+        },
+        &context);
+
+    return context.wireframes;
 }
 
 [[nodiscard]] std::vector<kb::render::EditorLightWireframeDesc> BuildLightWireframes(
@@ -328,8 +371,8 @@ struct LightWireframeBasis {
                 return;
             }
 
-            const LightWireframeBasis basis = BasisFromQuat(ResolveLightWorldRotation(transform));
-            const kb::scene::Vec3 position = ResolveLightWorldPosition(transform);
+            const LightWireframeBasis basis = BasisFromQuat(ResolveWorldRotation(transform));
+            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
             context.wireframes.push_back(kb::render::EditorLightWireframeDesc{
                 .kind = ToEditorLightWireframeKind(light.kind),
                 .position = {position.x, position.y, position.z},
@@ -508,6 +551,7 @@ struct LightWireframeBasis {
             .visible = viewportState.GridVisible(),
         },
         .editorGizmo = gizmo,
+        .editorCameraWireframes = BuildCameraWireframes(sceneContext),
         .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
         .physicsDebugLines = BuildPhysicsDebugLines(sceneContext),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),

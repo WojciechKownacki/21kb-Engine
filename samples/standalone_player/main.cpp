@@ -4,13 +4,20 @@
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectManager.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/script/ScriptModule.hpp"
@@ -37,6 +44,7 @@
 #include <Windows.h>
 
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -174,12 +182,15 @@ private:
 struct StandaloneOptions {
     std::filesystem::path graphCacheRoot;
     std::filesystem::path assetRoot;
+    std::filesystem::path projectPath;
     std::string mountName = "Game";
     std::string meshPath = "/Game/triangle.obj";
     std::string materialPath = "/Game/graph.kbmat";
+    std::string scenePath;
     std::optional<std::uint32_t> expectedGraphGpuCount{};
     bgfx::RendererType::Enum rendererType = bgfx::RendererType::Noop;
     bool selfTest = false;
+    bool cameraRuntimeSelfTest = false;
     bool inputRuntimeTest = false;
     std::string focusProbeStopEvent;
     bool help = false;
@@ -236,8 +247,11 @@ void PrintUsage() {
     std::fprintf(stdout,
         "kb_standalone_player options:\n"
         "  --self-test\n"
+        "  --camera-runtime-self-test\n"
         "  --input-runtime-test\n"
         "  --renderer=noop|d3d11\n"
+        "  --project=<project directory or .21kbproject file>\n"
+        "  --scene=<virtual or physical scene path; defaults to project defaultScene>\n"
         "  --graph-cache-root=<path>\n"
         "  --asset-root=<path>\n"
         "  --mount=<name>\n"
@@ -359,6 +373,8 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             options.help = true;
         } else if (argument == "--self-test") {
             options.selfTest = true;
+        } else if (argument == "--camera-runtime-self-test") {
+            options.cameraRuntimeSelfTest = true;
         } else if (argument == "--input-runtime-test") {
             options.inputRuntimeTest = true;
         } else if (HasPrefix(argument, "--focus-probe-stop-event=")) {
@@ -375,6 +391,10 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             options.graphCacheRoot = std::filesystem::path{ std::string{ ValueAfter(argument, "--graph-cache-root=") } };
         } else if (HasPrefix(argument, "--asset-root=")) {
             options.assetRoot = std::filesystem::path{ std::string{ ValueAfter(argument, "--asset-root=") } };
+        } else if (HasPrefix(argument, "--project=")) {
+            options.projectPath = std::filesystem::path{ std::string{ ValueAfter(argument, "--project=") } };
+        } else if (HasPrefix(argument, "--scene=")) {
+            options.scenePath = std::string{ ValueAfter(argument, "--scene=") };
         } else if (HasPrefix(argument, "--mount=")) {
             options.mountName = std::string{ ValueAfter(argument, "--mount=") };
         } else if (HasPrefix(argument, "--mesh=")) {
@@ -395,23 +415,6 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     return true;
 }
 
-[[nodiscard]] kb::render::SceneRenderCamera RuntimeCamera() noexcept {
-    return kb::render::SceneRenderCamera{
-        .view = {
-            1.0F, 0.0F, 0.0F, 0.0F,
-            0.0F, 1.0F, 0.0F, 0.0F,
-            0.0F, 0.0F, 1.0F, 0.0F,
-            0.0F, 0.0F, 0.0F, 1.0F,
-        },
-        .projection = {
-            1.0F, 0.0F, 0.0F, 0.0F,
-            0.0F, 1.0F, 0.0F, 0.0F,
-            0.0F, 0.0F, 1.0F, 0.0F,
-            0.0F, 0.0F, 0.0F, 1.0F,
-        },
-    };
-}
-
 [[nodiscard]] kb::render::RenderSceneSubmitDesc HeadlessSubmitDesc() noexcept {
     return kb::render::RenderSceneSubmitDesc{
         .target = kb::render::RenderSceneTargetBinding{
@@ -424,12 +427,11 @@ void WriteTriangleObj(const std::filesystem::path& path) {
                 .viewportIndex = 0U,
             },
         },
-        .cameraOverride = RuntimeCamera(),
         .clearRgba = 0x101018FFU,
     };
 }
 
-[[nodiscard]] bool BuildSceneFromAssets(const StandaloneOptions& options, kb::scene::Scene& scene) {
+[[nodiscard]] bool RegisterRuntimeAssetLoaders(kb::scene::Scene& scene) {
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     if (!manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>())) {
         std::fprintf(stderr, "kb_standalone_player: mesh loader registration failed\n");
@@ -443,6 +445,14 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         std::fprintf(stderr, "kb_standalone_player: texture loader registration failed\n");
         return false;
     }
+    return true;
+}
+
+[[nodiscard]] bool BuildSceneFromAssets(const StandaloneOptions& options, kb::scene::Scene& scene) {
+    if (!RegisterRuntimeAssetLoaders(scene)) {
+        return false;
+    }
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
     if (!manager.Mounts().Mount(options.mountName, options.assetRoot)) {
         std::fprintf(stderr, "kb_standalone_player: asset mount failed for '%s'\n", options.assetRoot.string().c_str());
         return false;
@@ -497,7 +507,317 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         .meshAssetId = meshMetadata->id.value,
         .materialAssetId = materialMetadata->id.value,
     });
+    const kb::scene::SceneObject camera =
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Standalone Runtime Camera",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, -2.0F },
+            },
+        });
+    scene.Components().Cameras().Set(camera.Entity(), kb::scene::CameraComponent{
+        .primary = true,
+        .viewportId = 1U,
+    });
     return true;
+}
+
+struct StandaloneProjectRuntimeConfig {
+    kb::project::ProjectDescriptor descriptor{};
+    std::filesystem::path projectRoot;
+    std::string sceneReference;
+    std::string physicsLayersAsset;
+    std::string inputMappingContext;
+    bool inputEnabled = true;
+    std::vector<std::string> requiredModules;
+};
+
+[[nodiscard]] bool ReadProjectRuntimeConfig(
+    const StandaloneOptions& options,
+    StandaloneProjectRuntimeConfig& config) {
+    std::error_code pathError;
+    const std::filesystem::path absoluteInput =
+        std::filesystem::absolute(options.projectPath, pathError).lexically_normal();
+    if (pathError) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project path could not be resolved: %s\n",
+            options.projectPath.string().c_str());
+        return false;
+    }
+
+    std::filesystem::path projectFile = absoluteInput;
+    if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
+        projectFile /= "Project.21kbproject";
+    }
+    if (pathError ||
+        !std::filesystem::is_regular_file(projectFile, pathError) ||
+        pathError) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project descriptor was not found: %s\n",
+            projectFile.string().c_str());
+        return false;
+    }
+
+    kb::project::ProjectDescriptorReadResult loaded =
+        kb::project::ProjectManager::LoadProject(projectFile);
+    if (!loaded.succeeded) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project descriptor load failed: %s\n",
+            loaded.error.c_str());
+        return false;
+    }
+
+    config.projectRoot = projectFile.parent_path();
+    for (kb::project::ProjectPluginReference& plugin : loaded.descriptor.plugins) {
+        if (!plugin.enabled) {
+            continue;
+        }
+        if (!plugin.name.empty()) {
+            config.requiredModules.push_back(plugin.name);
+        }
+        const std::filesystem::path configuredPath{ plugin.binaryPath };
+        if (configuredPath.empty() || configuredPath.is_absolute()) {
+            continue;
+        }
+        const std::filesystem::path projectLocalPath =
+            config.projectRoot / configuredPath;
+        std::error_code pluginError;
+        if (std::filesystem::is_regular_file(projectLocalPath, pluginError) &&
+            !pluginError) {
+            plugin.binaryPath = projectLocalPath.string();
+        }
+    }
+
+    config.sceneReference =
+        options.scenePath.empty() ? loaded.descriptor.defaultScene : options.scenePath;
+    config.physicsLayersAsset = loaded.descriptor.physicsLayersAsset;
+    config.inputMappingContext = loaded.descriptor.inputMappingContext;
+    config.inputEnabled = loaded.descriptor.inputEnabled;
+    config.descriptor = std::move(loaded.descriptor);
+    return true;
+}
+
+[[nodiscard]] bool LoadProjectScene(
+    const StandaloneProjectRuntimeConfig& config,
+    kb::scene::Scene& scene) {
+    if (!scene.ModuleDiagnostics().empty()) {
+        for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
+            std::fprintf(stderr,
+                "kb_standalone_player: module diagnostic: %s\n",
+                diagnostic.c_str());
+        }
+        return false;
+    }
+    for (const std::string& module : config.requiredModules) {
+        if (!scene.IsModuleActive(module)) {
+            std::fprintf(stderr,
+                "kb_standalone_player: configured module is not active: %s\n",
+                module.c_str());
+            return false;
+        }
+    }
+    if (!RegisterRuntimeAssetLoaders(scene)) {
+        return false;
+    }
+    if (!scene.Assets().MountProject(config.projectRoot)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project assets could not be mounted: %s\n",
+            config.projectRoot.string().c_str());
+        return false;
+    }
+    const std::size_t discovered = scene.Assets().Discover();
+    if (!config.physicsLayersAsset.empty() &&
+        !kb::scene::PhysicsBackend::LoadAndConfigureLayers(
+            scene, config.physicsLayersAsset)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project physics layers could not be applied: %s\n",
+            config.physicsLayersAsset.c_str());
+        return false;
+    }
+
+    std::filesystem::path scenePath;
+    if (!config.sceneReference.empty() && config.sceneReference.front() == '/') {
+        const kb::assets::AssetMetadata* metadata =
+            scene.Assets().Manager().Registry().FindByPath(config.sceneReference);
+        if (metadata == nullptr) {
+            std::fprintf(stderr,
+                "kb_standalone_player: project scene asset was not found: %s\n",
+                config.sceneReference.c_str());
+            return false;
+        }
+        scenePath = metadata->physicalPath;
+    } else {
+        scenePath = std::filesystem::path{ config.sceneReference };
+        if (scenePath.is_relative()) {
+            scenePath = config.projectRoot / scenePath;
+        }
+    }
+    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: project scene could not be loaded: %s\n",
+            scenePath.string().c_str());
+        return false;
+    }
+
+    kb::scene::SceneInputActivation::Apply(scene);
+    if (config.inputEnabled && !config.inputMappingContext.empty()) {
+        const kb::assets::AssetMetadata* input =
+            scene.Assets().Manager().Registry().FindByPath(config.inputMappingContext);
+        if (input == nullptr ||
+            input->type != "InputMappingContext" ||
+            !scene.Input().AddMappingContext(input->id.value, 0)) {
+            std::fprintf(stderr,
+                "kb_standalone_player: project input mapping could not be activated: %s\n",
+                config.inputMappingContext.c_str());
+            return false;
+        }
+    }
+
+    std::fprintf(stdout,
+        "kb_standalone_player: project=%s scene=%s assets=%zu modules=%zu\n",
+        config.projectRoot.string().c_str(),
+        scenePath.string().c_str(),
+        discovered,
+        scene.ActiveModuleCount());
+    std::fflush(stdout);
+    return true;
+}
+
+[[nodiscard]] bool PrepareCameraRuntimeSelfTestProject(
+    StandaloneOptions& options,
+    std::filesystem::path& packageRoot) {
+    packageRoot = std::filesystem::temp_directory_path() /
+        ("21kb_camera_runtime_self_test_" +
+            std::to_string(static_cast<unsigned long long>(GetCurrentProcessId())));
+    std::error_code filesystemError;
+    std::filesystem::remove_all(packageRoot, filesystemError);
+    filesystemError.clear();
+    std::filesystem::create_directories(
+        packageRoot / "Assets" / "Scenes", filesystemError);
+    if (filesystemError) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime package directory failed\n");
+        return false;
+    }
+
+    kb::project::ProjectDescriptor descriptor{};
+    descriptor.name = "CameraRuntimeSelfTest";
+    descriptor.defaultScene = "/Game/Scenes/CameraRuntime.21kbscene";
+    if (!kb::project::ProjectManager::SaveProject(
+            packageRoot / "Project.21kbproject", descriptor)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime project descriptor write failed\n");
+        return false;
+    }
+
+    kb::scene::Scene authoringScene;
+    const kb::scene::SceneObject fallbackCamera =
+        authoringScene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Fallback Camera",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ -6.0F, 0.0F, -4.0F },
+            },
+        });
+    authoringScene.Components().Cameras().Set(
+        fallbackCamera.Entity(),
+        kb::scene::CameraComponent{
+            .projection = kb::scene::CameraProjection::Perspective,
+            .verticalFovDegrees = 73.0F,
+            .nearClip = 0.1F,
+            .farClip = 500.0F,
+            .primary = true,
+            .viewportId = 0U,
+            .priority = 10,
+        });
+
+    const kb::scene::SceneObject selectedCamera =
+        authoringScene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Selected Camera",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 6.0F, 2.0F, -4.0F },
+            },
+        });
+    authoringScene.Components().Cameras().Set(
+        selectedCamera.Entity(),
+        kb::scene::CameraComponent{
+            .projection = kb::scene::CameraProjection::Perspective,
+            .verticalFovDegrees = 37.0F,
+            .orthographicHeight = 14.0F,
+            .nearClip = 0.25F,
+            .farClip = 321.0F,
+            .primary = true,
+            .viewportId = 1U,
+            .priority = 100,
+        });
+    if (!kb::scene::SceneDocumentService::Save(
+            authoringScene,
+            packageRoot / "Assets" / "Scenes" / "CameraRuntime.21kbscene",
+            "CameraRuntime")) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime scene write failed\n");
+        return false;
+    }
+
+    options.projectPath = packageRoot;
+    options.rendererType = bgfx::RendererType::Noop;
+    std::fprintf(stdout,
+        "kb_standalone_player: camera_runtime_package=%s\n",
+        packageRoot.string().c_str());
+    std::fflush(stdout);
+    return true;
+}
+
+[[nodiscard]] bool ValidateProjectCameraRuntime(
+    const kb::scene::Scene& scene,
+    const kb::render::Renderer& renderer) {
+    const kb::scene::SceneRenderCameraRay ray =
+        kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 32.0F, 32.0F);
+    const bool selectedPoseReachedRenderer =
+        ray.valid &&
+        std::fabs(ray.ray.origin.x - 6.0F) < 0.01F &&
+        std::fabs(ray.ray.origin.y - 2.0F) < 0.01F &&
+        std::fabs(ray.ray.origin.z + 4.0F) < 0.01F;
+
+    bool serializedFieldsLoaded = false;
+    for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+        if (scene.Entities().Name(root) != "Selected Camera") {
+            continue;
+        }
+        const kb::scene::CameraComponent* camera =
+            scene.Components().Cameras().TryGet(root);
+        serializedFieldsLoaded =
+            camera != nullptr &&
+            camera->projection == kb::scene::CameraProjection::Perspective &&
+            std::fabs(camera->verticalFovDegrees - 37.0F) < 0.001F &&
+            std::fabs(camera->orthographicHeight - 14.0F) < 0.001F &&
+            std::fabs(camera->nearClip - 0.25F) < 0.001F &&
+            std::fabs(camera->farClip - 321.0F) < 0.001F &&
+            camera->primary &&
+            camera->viewportId == 1U &&
+            camera->priority == 100;
+        break;
+    }
+
+    const bool succeeded =
+        kb::scene::SceneRenderFeedback::HasFrame(scene) &&
+        serializedFieldsLoaded &&
+        selectedPoseReachedRenderer;
+    const kb::render::Renderer::RuntimeSceneResourceStats stats =
+        renderer.RuntimeResourceStats();
+    std::fprintf(succeeded ? stdout : stderr,
+        "kb_standalone_player: camera_runtime result=%s source=project_scene "
+        "camera_component=loaded viewport=1 priority=100 renderer_feedback=%s "
+        "pose=(%.2f,%.2f,%.2f) ray_valid=%u frame=%u sync_cameras=%u proxies=%u\n",
+        succeeded ? "pass" : "fail",
+        selectedPoseReachedRenderer ? "selected_camera" : "missing_or_wrong_camera",
+        static_cast<double>(ray.ray.origin.x),
+        static_cast<double>(ray.ray.origin.y),
+        static_cast<double>(ray.ray.origin.z),
+        ray.valid ? 1U : 0U,
+        kb::scene::SceneRenderFeedback::HasFrame(scene) ? 1U : 0U,
+        stats.syncCameraSeenCount,
+        stats.renderSceneCameraProxyCount);
+    std::fflush(succeeded ? stdout : stderr);
+    return succeeded;
 }
 
 [[nodiscard]] bool SubmitRuntimeFrame(kb::render::Renderer& renderer, const kb::scene::Scene& scene) {
@@ -587,8 +907,31 @@ int main(int argc, char** argv) {
         CloseHandle(stopEvent);
         return EXIT_SUCCESS;
     }
-    if (options.assetRoot.empty() && !options.selfTest && !options.inputRuntimeTest) {
-        std::fprintf(stderr, "kb_standalone_player: provide --asset-root, --self-test, or --input-runtime-test\n");
+    if (options.cameraRuntimeSelfTest &&
+        (!options.projectPath.empty() ||
+            !options.assetRoot.empty() ||
+            options.selfTest ||
+            options.inputRuntimeTest)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: --camera-runtime-self-test cannot be combined with another runtime source\n");
+        return EXIT_FAILURE;
+    }
+    if (!options.projectPath.empty() &&
+        (!options.assetRoot.empty() ||
+            options.selfTest ||
+            options.inputRuntimeTest)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: --project cannot be combined with asset or self-test runtime sources\n");
+        return EXIT_FAILURE;
+    }
+    if (options.assetRoot.empty() &&
+        options.projectPath.empty() &&
+        !options.selfTest &&
+        !options.cameraRuntimeSelfTest &&
+        !options.inputRuntimeTest) {
+        std::fprintf(stderr,
+            "kb_standalone_player: provide --project, --asset-root, --self-test, "
+            "--camera-runtime-self-test, or --input-runtime-test\n");
         PrintUsage();
         return EXIT_FAILURE;
     }
@@ -597,12 +940,27 @@ int main(int argc, char** argv) {
     if (options.selfTest && options.assetRoot.empty() && !PrepareGraphSelfTestPackage(options, selfTestPackageRoot)) {
         return EXIT_FAILURE;
     }
+    std::filesystem::path cameraRuntimePackageRoot;
+    if (options.cameraRuntimeSelfTest &&
+        !PrepareCameraRuntimeSelfTestProject(options, cameraRuntimePackageRoot)) {
+        return EXIT_FAILURE;
+    }
+
+    std::optional<StandaloneProjectRuntimeConfig> projectRuntime;
+    if (!options.projectPath.empty()) {
+        projectRuntime.emplace();
+        if (!ReadProjectRuntimeConfig(options, *projectRuntime)) {
+            return EXIT_FAILURE;
+        }
+    }
 
     kb::input::Win32InputCollector inputCollector;
     StandaloneSurface surface;
     // Keep the automated graph cook/load check unobtrusive; normal player runs
     // and the input verification own a visible, focusable production window.
-    if (!surface.Initialize(!options.selfTest, inputCollector)) {
+    if (!surface.Initialize(
+            !options.selfTest && !options.cameraRuntimeSelfTest,
+            inputCollector)) {
         std::fprintf(stderr, "kb_standalone_player: runtime window creation failed\n");
         return EXIT_FAILURE;
     }
@@ -611,12 +969,23 @@ int main(int argc, char** argv) {
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
     staticModules.push_back(std::move(scriptModuleOwner));
-    kb::scene::Scene scene{kb::project::ProjectDescriptor{}, std::move(staticModules)};
-    if (!scriptModule->Succeeded() || scriptModule->Host() == nullptr) {
+    kb::project::ProjectDescriptor sceneDescriptor =
+        projectRuntime.has_value()
+        ? std::move(projectRuntime->descriptor)
+        : kb::project::ProjectDescriptor{};
+    kb::scene::Scene scene{ std::move(sceneDescriptor), std::move(staticModules) };
+    const bool scriptActive = scene.IsModuleActive("Script");
+    if (scriptActive &&
+        (!scriptModule->Succeeded() || scriptModule->Host() == nullptr)) {
         std::fprintf(stderr, "kb_standalone_player: script module initialization failed\n");
         for (const std::string& diagnostic : scriptModule->Diagnostics()) {
             std::fprintf(stderr, "kb_standalone_player: script module diagnostic: %s\n", diagnostic.c_str());
         }
+        return EXIT_FAILURE;
+    }
+    if (options.inputRuntimeTest && !scriptActive) {
+        std::fprintf(stderr,
+            "kb_standalone_player: input runtime verification requires the Script module\n");
         return EXIT_FAILURE;
     }
     if (options.inputRuntimeTest) {
@@ -628,6 +997,10 @@ int main(int argc, char** argv) {
             .primary = true,
             .viewportId = 1U,
         });
+    } else if (projectRuntime.has_value()) {
+        if (!LoadProjectScene(*projectRuntime, scene)) {
+            return EXIT_FAILURE;
+        }
     } else if (!options.assetRoot.empty() && !BuildSceneFromAssets(options, scene)) {
         return EXIT_FAILURE;
     }
@@ -657,11 +1030,19 @@ int main(int argc, char** argv) {
     inputCollector.Collect(scene.Input().MutableDeviceState(), surface.Window());
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     const bool submitted = SubmitRuntimeFrame(renderer, scene);
-    const bool statsValid = submitted && ValidateStats(options, renderer);
+    const bool cameraRuntimeValid =
+        !options.cameraRuntimeSelfTest ||
+        (submitted && ValidateProjectCameraRuntime(scene, renderer));
+    const bool statsValid =
+        submitted && cameraRuntimeValid && ValidateStats(options, renderer);
     renderer.Shutdown();
     if (statsValid && !selfTestPackageRoot.empty()) {
         std::error_code cleanupError;
         std::filesystem::remove_all(selfTestPackageRoot, cleanupError);
+    }
+    if (statsValid && !cameraRuntimePackageRoot.empty()) {
+        std::error_code cleanupError;
+        std::filesystem::remove_all(cameraRuntimePackageRoot, cleanupError);
     }
     return statsValid ? EXIT_SUCCESS : EXIT_FAILURE;
 }

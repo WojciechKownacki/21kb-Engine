@@ -183,6 +183,14 @@ std::vector<std::string> ScriptRuntimeHost::DrainSceneSystemDiagnostics() {
     return drained;
 }
 
+const ScriptRuntimeExecutionResult* ScriptRuntimeHost::InstalledSceneSystemLastResult() const noexcept {
+    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->LastResult();
+}
+
+const ScriptRuntimeAssetPrepareResult* ScriptRuntimeHost::InstalledSceneSystemLastPrepareResult() const noexcept {
+    return state_->installedSceneSystem == nullptr ? nullptr : &state_->installedSceneSystem->LastPrepareResult();
+}
+
 const std::vector<kb::library::EngineLibraryModuleReportEntry>& ScriptRuntimeHost::LibraryStartupReport() const noexcept {
     return libraryStartupReport_;
 }
