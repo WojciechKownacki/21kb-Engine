@@ -4,7 +4,7 @@
 
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
-#include "platform/win32/Win32InputKeyMap.hpp"
+#include "engine/platform/win32/Win32InputKeyMap.hpp"
 
 #include <array>
 #include <cstdio>
@@ -44,10 +44,10 @@ void Win32InputDebugLogger::LogPresses(const kb::input::InputDeviceState& state,
         was = down;
     };
 
-    for (const Win32KeyBinding& binding : Win32InputKeyMap::KeyboardAndMouse()) {
+    for (const kb::input::Win32KeyBinding& binding : kb::input::Win32InputKeyMap::KeyboardAndMouse()) {
         check(binding.key);
     }
-    for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
+    for (const kb::input::Win32GamepadButtonBinding& binding : kb::input::Win32InputKeyMap::GamepadButtons()) {
         check(binding.key);
     }
 }
