@@ -20,6 +20,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -4564,6 +4565,61 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
     renderer.Shutdown();
 }
 
+void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType =
+        static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(
+        renderer.Initialize(surface, &config),
+        "Camera wireframe renderer did not initialize in headless Noop mode");
+    Require(
+        renderer.BeginFrame(),
+        "Camera wireframe renderer did not begin a frame");
+
+    SceneGizmoPass gizmoPass;
+    Require(
+        gizmoPass.Initialize(),
+        "Camera wireframe gizmo pass did not initialize");
+    const SceneRenderCamera camera = IdentityCamera();
+    const std::array<EditorCameraWireframeDesc, 2U> wireframes{{
+        EditorCameraWireframeDesc{
+            .projection =
+                EditorCameraWireframeProjection::Perspective,
+            .position = {0.0F, 0.0F, 0.0F},
+            .verticalFovDegrees = 60.0F,
+            .nearClip = 0.1F,
+            .farClip = 100.0F,
+            .aspect = 16.0F / 9.0F,
+        },
+        EditorCameraWireframeDesc{
+            .projection =
+                EditorCameraWireframeProjection::Orthographic,
+            .position = {2.0F, 0.0F, 0.0F},
+            .orthographicHeight = 12.0F,
+            .nearClip = 0.25F,
+            .farClip = 250.0F,
+            .aspect = 4.0F / 3.0F,
+        },
+    }};
+    Require(
+        gizmoPass.Submit(SceneGizmoPassDesc{
+            .viewId = 0U,
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .extent = RenderExtent{64U, 64U},
+            .camera = &camera,
+            .cameraWireframes = wireframes,
+        }),
+        "Perspective and orthographic camera wireframes did not reach the real gizmo pass");
+
+    gizmoPass.Shutdown();
+    renderer.EndFrame();
+    renderer.Shutdown();
+}
+
 } // namespace
 
 // MAT-72: material frame time accumulates and is exposed as the u_time vec4 (time, delta, frameIndex).
@@ -4626,6 +4682,7 @@ void RunRendererRuntimeSubmitTests() {
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
+    RunEditorCameraWireframesSubmitInHeadlessNoopTest();
 }
 
 } // namespace kb::render::tests

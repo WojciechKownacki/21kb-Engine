@@ -87,7 +87,12 @@ void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&
 
     const COLORREF rowInk = row.visible ? (selected ? HierarchyPanelStyle::RowTextSelected() : HierarchyPanelStyle::RowText()) : HierarchyPanelStyle::RowTextHidden();
     const COLORREF entityIcon = row.prefabRoot ? HierarchyPanelStyle::PrefabCubeStroke() : HierarchyPanelStyle::CubeStroke();
-    HeroIconPainter::Draw(dc, layout.entityIcon, HeroIconKind::Cube, row.visible ? entityIcon : HierarchyPanelStyle::RowTextHidden(), 2);
+    HeroIconPainter::Draw(
+        dc,
+        layout.entityIcon,
+        row.hasCamera ? HeroIconKind::Camera : HeroIconKind::Cube,
+        row.visible ? entityIcon : HierarchyPanelStyle::RowTextHidden(),
+        2);
     if (sceneContext.IsHierarchyRenaming(row.entity)) {
         DrawRenameField(dc, layout.label, sceneContext.HierarchyRenameBuffer(), sceneContext.IsHierarchyRenameSelectingAll());
     } else {

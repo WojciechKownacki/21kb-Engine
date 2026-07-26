@@ -50,6 +50,7 @@ public:
         bool editorSceneOverlaysEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
+        std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};

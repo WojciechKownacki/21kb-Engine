@@ -1,6 +1,9 @@
 #include "engine/script/ScriptSceneApi.hpp"
 
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -68,15 +71,24 @@ ScriptFunctionCallResult Load(const ScriptFunctionCallContext& context, std::spa
     if (context.scene == nullptr) {
         return NoScene();
     }
-    const std::string path = StringArg(arguments, "path");
-    if (path.empty()) {
+    const std::string pathText = StringArg(arguments, "path");
+    if (pathText.empty()) {
         return Error("scene path is empty");
+    }
+    std::filesystem::path path{ pathText };
+    if (pathText.front() == '/') {
+        const kb::assets::AssetMetadata* metadata =
+            context.scene->Assets().Manager().Registry().FindByPath(path);
+        if (metadata == nullptr || metadata->physicalPath.empty()) {
+            return Error("scene asset could not be resolved: " + pathText);
+        }
+        path = metadata->physicalPath;
     }
     const ScriptValue* additiveValue = FindArg(arguments, "additive");
     const bool additive = additiveValue != nullptr && additiveValue->AsBool(false);
-    const std::uint64_t id = context.scene->LoadedContent().Load(std::filesystem::path{ path }, additive);
+    const std::uint64_t id = context.scene->LoadedContent().Load(path, additive);
     if (id == 0U) {
-        return Error("scene could not be loaded: " + path);
+        return Error("scene could not be loaded: " + pathText);
     }
     return HashResult("id", id);
 }

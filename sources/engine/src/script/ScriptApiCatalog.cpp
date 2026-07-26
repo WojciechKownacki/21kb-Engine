@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 137> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 143> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -105,6 +105,12 @@ constexpr std::array<LuaBindingSpec, 137> kLuaBindings{ {
     { "World", "HasTag", "World.HasTag", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "SetParent", "World.SetParent", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "InstantiatePrefab", "World.InstantiatePrefab", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
+    { "Scene", "Load", "Scene.Load", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
+    { "Scene", "Unload", "Scene.Unload", ScriptApiCatalogLuaReturnKind::SingleOutput, "unloaded" },
+    { "Scene", "SetActive", "Scene.SetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
+    { "Scene", "GetActive", "Scene.GetActive", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
+    { "Scene", "Find", "Scene.Find", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },
+    { "Scene", "LoadProgress", "Scene.LoadProgress", ScriptApiCatalogLuaReturnKind::SingleOutput, "progress" },
     { "Time", "delta", "Time.Delta", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Transform", "GetPosition", "Transform.GetPosition", ScriptApiCatalogLuaReturnKind::GuardedTable, "found" },
     { "Transform", "SetPosition", "Transform.SetPosition", ScriptApiCatalogLuaReturnKind::Default, "" },

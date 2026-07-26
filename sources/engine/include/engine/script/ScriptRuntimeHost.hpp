@@ -47,6 +47,11 @@ public:
     // Per-frame script diagnostics (compile/behaviour errors) captured while the
     // installed scene system ran, drained (and cleared) for the host to surface.
     [[nodiscard]] std::vector<std::string> DrainSceneSystemDiagnostics();
+    // Read-only frame telemetry from the scheduler-owned scene system. The
+    // pointers remain valid until the next scene-system phase runs or the
+    // scene system is destroyed.
+    [[nodiscard]] const ScriptRuntimeExecutionResult* InstalledSceneSystemLastResult() const noexcept;
+    [[nodiscard]] const ScriptRuntimeAssetPrepareResult* InstalledSceneSystemLastPrepareResult() const noexcept;
     // LIB-028: the kb::library startup report (one entry per catalog
     // module: installed/disabled, version, reason) produced by the real
     // EngineLibraryModule::Install() call this host made while

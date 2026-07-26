@@ -98,7 +98,6 @@ bool EditorSceneCommandController::CommitTransaction() {
 
     commandStack_.PushExecuted(EditorSceneHistoryCommand::CreateRecorded(scene_, *pendingTransactionLabel_));
     pendingTransactionLabel_.reset();
-    NormalizeHierarchySelectionAfterSceneRestore();
     NotifySceneChanged(true);
     return true;
 }

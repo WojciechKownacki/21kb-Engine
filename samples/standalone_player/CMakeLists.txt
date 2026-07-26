@@ -23,6 +23,17 @@ kb_apply_quality_gates(kb_standalone_player)
 kb_target_copy_bgfx_runtime_shaders(kb_standalone_player)
 kb_target_stage_material_graph_shader_cache(kb_standalone_player)
 
+if(BUILD_TESTING)
+    add_test(
+        NAME kb_standalone_player_camera_runtime
+        COMMAND $<TARGET_FILE:kb_standalone_player> --camera-runtime-self-test --renderer=noop
+    )
+    set_tests_properties(
+        kb_standalone_player_camera_runtime
+        PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+endif()
+
 set(_kb_standalone_graph_shaderc_tool "")
 if(TARGET bgfx::shaderc)
     set(_kb_standalone_graph_shaderc_tool "$<PATH:CMAKE_PATH,$<TARGET_FILE:bgfx::shaderc>>")
