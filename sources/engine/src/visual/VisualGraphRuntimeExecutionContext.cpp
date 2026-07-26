@@ -117,6 +117,34 @@ void VisualGraphRuntimeExecutionContext::ClearContinuation(std::uint32_t eventNo
     continuations_.erase(eventNodeId);
 }
 
+void VisualGraphRuntimeExecutionContext::SetTaskIsRunningQuery(const void* userData, TaskIsRunningQuery query) noexcept {
+    taskQueryUserData_ = userData;
+    taskIsRunningQuery_ = query;
+}
+
+bool VisualGraphRuntimeExecutionContext::HasTaskIsRunningQuery() const noexcept {
+    return taskIsRunningQuery_ != nullptr;
+}
+
+bool VisualGraphRuntimeExecutionContext::IsTaskRunning(std::uint64_t taskId) const noexcept {
+    return taskIsRunningQuery_ != nullptr && taskId != 0U && taskIsRunningQuery_(taskQueryUserData_, taskId);
+}
+
+void VisualGraphRuntimeExecutionContext::SetWaitTask(std::uint32_t nodeId, std::uint64_t taskId) {
+    if (nodeId != 0U && taskId != 0U) {
+        waitTasks_[nodeId] = taskId;
+    }
+}
+
+std::uint64_t VisualGraphRuntimeExecutionContext::WaitTask(std::uint32_t nodeId) const noexcept {
+    const auto iterator = waitTasks_.find(nodeId);
+    return iterator == waitTasks_.end() ? 0U : iterator->second;
+}
+
+void VisualGraphRuntimeExecutionContext::ClearWaitTask(std::uint32_t nodeId) noexcept {
+    waitTasks_.erase(nodeId);
+}
+
 void VisualGraphRuntimeExecutionContext::BeginExecutionPass() {
     writesInCurrentExecution_.clear();
     emittedEvents_.clear();
@@ -133,6 +161,9 @@ void VisualGraphRuntimeExecutionContext::ClearFrameState() {
     traces_.clear();
     runtimeErrors_.clear();
     continuations_.clear();
+    waitTasks_.clear();
+    taskQueryUserData_ = nullptr;
+    taskIsRunningQuery_ = nullptr;
 }
 
 std::string VisualGraphRuntimeExecutionContext::Key(std::uint32_t nodeId, std::string_view pin) {

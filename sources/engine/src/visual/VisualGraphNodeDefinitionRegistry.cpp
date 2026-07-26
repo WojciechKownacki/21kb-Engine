@@ -89,7 +89,10 @@ VisualGraphNodeDefinitionRegistry VisualGraphNodeDefinitionRegistry::CreateDefau
         .kind = VisualGraphNodeKind::Wait,
         .displayName = "Wait",
         .requiresSymbol = false,
-        .pins = {Input("exec"), Output("then")},
+        // Optional task input keeps legacy one-invocation Wait assets valid.
+        // When connected, the continuation resumes only after the production
+        // SceneTasks handle reaches a terminal state.
+        .pins = {Input("exec"), Input("task", VisualGraphValueType::Hash), Output("then")},
     }));
     static_cast<void>(registry.Register(VisualGraphNodeDefinition{
         .kind = VisualGraphNodeKind::Comment,

@@ -26,6 +26,8 @@ struct VisualGraphEmittedEvent {
 
 class VisualGraphRuntimeExecutionContext final {
 public:
+    using TaskIsRunningQuery = bool (*)(const void* userData, std::uint64_t taskId) noexcept;
+
     void Store(std::uint32_t nodeId, std::string_view pin, VisualGraphRuntimeValue value);
     [[nodiscard]] const VisualGraphRuntimeValue* TryRead(std::uint32_t nodeId, std::string_view pin) const;
     [[nodiscard]] bool WasStoredInCurrentExecution(std::uint32_t nodeId, std::string_view pin) const;
@@ -53,6 +55,12 @@ public:
     void Suspend(std::uint32_t eventNodeId, std::uint32_t nextNodeId);
     [[nodiscard]] std::uint32_t TakeContinuation(std::uint32_t eventNodeId);
     void ClearContinuation(std::uint32_t eventNodeId) noexcept;
+    void SetTaskIsRunningQuery(const void* userData, TaskIsRunningQuery query) noexcept;
+    [[nodiscard]] bool HasTaskIsRunningQuery() const noexcept;
+    [[nodiscard]] bool IsTaskRunning(std::uint64_t taskId) const noexcept;
+    void SetWaitTask(std::uint32_t nodeId, std::uint64_t taskId);
+    [[nodiscard]] std::uint64_t WaitTask(std::uint32_t nodeId) const noexcept;
+    void ClearWaitTask(std::uint32_t nodeId) noexcept;
     void BeginExecutionPass();
     void ClearFrameState();
 
@@ -66,6 +74,9 @@ private:
     std::vector<std::string> traces_;
     std::vector<std::string> runtimeErrors_;
     std::unordered_map<std::uint32_t, std::uint32_t> continuations_;
+    std::unordered_map<std::uint32_t, std::uint64_t> waitTasks_;
+    const void* taskQueryUserData_ = nullptr;
+    TaskIsRunningQuery taskIsRunningQuery_ = nullptr;
 };
 
 } // namespace kb::visual

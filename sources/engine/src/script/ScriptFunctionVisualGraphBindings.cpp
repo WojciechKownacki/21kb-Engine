@@ -116,6 +116,7 @@ void StoreOutputs(
             const ScriptFunctionCallResult result = functions.Call(signature.name, arguments, ScriptFunctionCallContext{
                                                                                                       .scene = &scene,
                                                                                                       .caller = kb::scene::SceneEntity{ context.ReadUInt64(0U, "self") },
+                                                                                                      .callerAsset = kb::assets::AssetId{ context.ReadUInt64(0U, "asset") },
                                                                                                       .callerBackend = kb::scene::BehaviourBackend::VisualGraph,
                                                                                                       .deltaSeconds = context.ReadFloat(0U, "deltaSeconds"),
                                                                                                   });

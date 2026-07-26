@@ -24,6 +24,10 @@ private:
 class PucLuaErrorReporter final {
 public:
     [[nodiscard]] static std::string ErrorFromTop(lua_State* state);
+    // lua_resume does not accept an error-handler function like lua_pcall.
+    // Build the traceback directly from the suspended coroutine while its
+    // failing call frames are still available.
+    [[nodiscard]] static std::string ErrorWithTracebackFromTop(lua_State* state);
     [[nodiscard]] static std::string ChunkFromDebug(lua_Debug& debug);
     static int Traceback(lua_State* state);
 };

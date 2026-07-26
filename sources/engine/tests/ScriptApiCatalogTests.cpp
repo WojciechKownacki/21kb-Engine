@@ -9,6 +9,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <filesystem>
+#include <span>
 #include <string>
 #include <system_error>
 
@@ -43,7 +44,13 @@ void RunCatalogBuildTest() {
 
     const kb::script::ScriptApiCatalogFunction* vector2 = catalog.FindFunction("Input.Vector2");
     kb::tests::Require(vector2 != nullptr, "Script API catalog is missing Input.Vector2");
+    kb::tests::Require(
+        vector2->description == "Reads the current two-dimensional value of the named input action.",
+        "Script API catalog did not preserve the authored Input.Vector2 description");
     kb::tests::Require(vector2->outputs.size() == 2U, "Script API catalog Input.Vector2 output contract is wrong");
+    for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+        kb::tests::Require(!function.description.empty(), "Script API catalog exposed a function without documentation");
+    }
 
     bool foundTransform = false;
     for (const kb::script::ScriptApiCatalogComponent& component : catalog.components) {
@@ -87,16 +94,27 @@ void RunCatalogExportTest() {
 
     const std::string markdown = kb::script::ScriptApiExport::ToMarkdown(catalog);
     kb::tests::Require(Contains(markdown, "### Input"), "Script API markdown is missing the Input group");
+    kb::tests::Require(
+        Contains(markdown, "Reads the current two-dimensional value of the named input action."),
+        "Script API markdown is missing authored function descriptions");
     kb::tests::Require(Contains(markdown, "`localPosition.x`"), "Script API markdown is missing Transform properties");
     kb::tests::Require(Contains(markdown, "function Tick(self, dt)"), "Script API markdown is missing lifecycle signatures");
 
     const std::string json = kb::script::ScriptApiExport::ToJson(catalog);
     kb::tests::Require(Contains(json, "\"Input.Vector2\""), "Script API JSON is missing functions");
+    kb::tests::Require(
+        Contains(json, "\"description\":\"Reads the current two-dimensional value of the named input action.\""),
+        "Script API JSON is missing authored function descriptions");
     kb::tests::Require(Contains(json, "\"lifecycleEvents\""), "Script API JSON is missing lifecycle events");
 
     const std::string stubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
     kb::tests::Require(Contains(stubs, "---@meta"), "Script API stubs are missing the meta marker");
     kb::tests::Require(Contains(stubs, "function Input.Vector2(action, player) end"), "Script API stubs are missing Input.Vector2");
+    kb::tests::Require(Contains(stubs, "function Task.WaitSeconds(seconds, owner) end"), "Script API stubs are missing the direct Lua Task.WaitSeconds await surface");
+    kb::tests::Require(Contains(stubs, "function Task.WaitEvent(event, owner) end"), "Script API stubs are missing the direct Lua Task.WaitEvent await surface");
+    kb::tests::Require(
+        Contains(stubs, "---Reads the current two-dimensional value of the named input action."),
+        "Script API stubs are missing authored function descriptions");
     kb::tests::Require(Contains(stubs, "---@return KbInputVector2Result"), "Script API stubs are missing multi-output result classes");
     kb::tests::Require(Contains(stubs, "function KbSelf:SetProperty(component, property, value) end"), "Script API stubs are missing self methods");
     // The Lua wrappers do not all mirror CallFunction: GetPosition strips its
@@ -111,6 +129,36 @@ void RunCatalogExportTest() {
     kb::script::PucLuaScriptRuntime luaRuntime;
     const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kb::assets::AssetId{ 9001U }, stubs, "kb.lua");
     kb::tests::Require(loaded.succeeded, "Script API stubs are not valid Lua");
+}
+
+void RunFunctionDescriptionIsRequiredAtRegistrationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    const auto callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+        return kb::script::ScriptFunctionCallResult{ .executed = true };
+    };
+
+    kb::tests::Require(
+        !host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Plugin.Undocumented" },
+            .callback = callback,
+        }),
+        "ScriptRuntimeHost accepted a plugin function without an authored description");
+    kb::tests::Require(
+        host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = kb::script::ScriptFunctionSignature{
+                .name = "Plugin.Documented",
+                .description = "Performs the documented plugin operation.",
+            },
+            .callback = callback,
+        }),
+        "ScriptRuntimeHost rejected a plugin function with an authored description");
+
+    const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+    const kb::script::ScriptApiCatalogFunction* documented = catalog.FindFunction("Plugin.Documented");
+    kb::tests::Require(
+        documented != nullptr && documented->description == "Performs the documented plugin operation.",
+        "Script API catalog did not preserve a plugin-authored function description");
 }
 
 void RunAgentProjectFilesTest() {
@@ -146,6 +194,7 @@ namespace kb::tests {
 void RunScriptApiCatalogTests() {
     RunCatalogBuildTest();
     RunCatalogExportTest();
+    RunFunctionDescriptionIsRequiredAtRegistrationTest();
     RunAgentProjectFilesTest();
 }
 

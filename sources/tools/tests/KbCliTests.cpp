@@ -457,10 +457,11 @@ void RunApiCheckCommandTests() {
     // retyped Bool -> Int.
     {
         std::string pinChange = baselineText;
-        const std::string needle = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool")";
-        const std::size_t pos = pinChange.find(needle);
+        const std::size_t functionPos = pinChange.find(R"("name":"World.Exists")");
+        const std::string needle = R"("name":"exists","type":"Bool")";
+        const std::size_t pos = pinChange.find(needle, functionPos);
         Require(pos != std::string::npos, "api-check baseline World.Exists shape changed unexpectedly");
-        const std::string replacement = R"("name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Int")";
+        const std::string replacement = R"("name":"exists","type":"Int")";
         pinChange.replace(pos, needle.size(), replacement);
         const std::string pinChangePath = (TestRoot() / "pinchange.json").string();
         WriteTextFile(pinChangePath, pinChange);
@@ -476,14 +477,16 @@ void RunApiCheckCommandTests() {
     // bracket-matching unsafe) is the minimal, robust way to construct this.
     {
         std::string additive = baselineText;
-        const std::string worldExists = R"({"name":"World.Exists","inputs":[{"name":"entity","type":"Entity","required":true}],"outputs":[{"name":"exists","type":"Bool","required":true}]})";
-        const std::size_t pos = additive.find(worldExists);
+        const std::size_t pos = additive.find(R"({"name":"World.Exists")");
         Require(pos != std::string::npos, "api-check baseline World.Exists object shape changed unexpectedly");
+        const std::size_t objectEnd = additive.find("}]}", pos);
+        Require(objectEnd != std::string::npos, "api-check baseline World.Exists object has no output boundary");
+        const std::size_t worldExistsSize = objectEnd + 3U - pos;
         // Remove the object plus one adjacent comma so the array stays valid
         // JSON whether World.Exists was first, middle, or last.
         std::size_t removeStart = pos;
-        std::size_t removeLength = worldExists.size();
-        if (pos + worldExists.size() < additive.size() && additive[pos + worldExists.size()] == ',') {
+        std::size_t removeLength = worldExistsSize;
+        if (pos + worldExistsSize < additive.size() && additive[pos + worldExistsSize] == ',') {
             removeLength += 1; // trailing comma
         } else if (pos > 0 && additive[pos - 1] == ',') {
             removeStart -= 1; // leading comma (World.Exists was the last entry)

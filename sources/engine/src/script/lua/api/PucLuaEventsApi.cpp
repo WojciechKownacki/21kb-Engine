@@ -14,7 +14,9 @@ extern "C" {
 }
 
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -27,14 +29,16 @@ namespace {
 // NativeEventSubscriptionCallback closure ScriptEventBus stores — when
 // Unsubscribe (or the whole bus/subscription vector) destroys that
 // std::function, this drops to zero refs and ~SubscriberInvocation runs,
-// releasing the registry slot. Safe only as long as `state` outlives the
-// last subscription: kb::script::ScriptRuntimeHostState (ScriptRuntimeHost.
-// cpp) declares `luaRuntime` (owns the lua_State) BEFORE `runtime` (owns
-// the ScriptEventBus holding these subscriptions), so members are torn down
-// in the required order (runtime/subscriptions first, lua_State after) —
-// verified by reading that struct before writing this. Test code
-// constructing both directly must declare PucLuaScriptRuntime before
-// ScriptRuntime for the same reason (the existing test suite already does).
+// releasing the registry slot. `state` is always the owning main Lua state,
+// never a short-lived generator thread, so a completed lifecycle coroutine
+// can be collected while the subscription stays valid. Safe only as long as
+// that main state outlives the last subscription:
+// kb::script::ScriptRuntimeHostState (ScriptRuntimeHost.cpp) declares
+// `luaRuntime` (owns the lua_State) BEFORE `runtime` (owns the ScriptEventBus
+// holding these subscriptions), so members are torn down in the required
+// order (runtime/subscriptions first, lua_State after). Test code constructing
+// both directly must declare PucLuaScriptRuntime before ScriptRuntime for the
+// same reason (the existing test suite already does).
 struct SubscriberInvocation {
     lua_State* state = nullptr;
     const PucLuaScriptRuntime* runtime = nullptr;
@@ -129,7 +133,8 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
 }
 
 // LIB-106: reads an optional trailing recipient-filter table —
-// { tag = "...", component = "...", scene = <id>, channel = "..." } — every
+// { tag = "...", component = "...", scene = <id>, player = <id>,
+// channel = "..." } — every
 // field optional, an absent/non-table argument yields an all-default filter
 // (identical delivery to before this parameter existed).
 [[nodiscard]] EventRecipientFilter OptionalFilterArg(lua_State* state, int index) {
@@ -141,13 +146,24 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     filter.component = OptionalFilterTableStringField(state, index, "component");
     filter.channel = OptionalFilterTableStringField(state, index, "channel");
     filter.sceneId = OptionalFilterTableIntegerField(state, index, "scene");
+    lua_getfield(state, index, "player");
+    if (lua_isnoneornil(state, -1) == 0) {
+        const lua_Integer player = luaL_checkinteger(state, -1);
+        if (player < 0 || static_cast<lua_Unsigned>(player) > std::numeric_limits<std::uint32_t>::max()) {
+            static_cast<void>(luaL_error(state, "event recipient filter player must be a non-negative 32-bit integer"));
+            return {};
+        }
+        filter.playerId = static_cast<std::uint32_t>(player);
+    }
+    lua_pop(state, 1);
     return filter;
 }
 
 int LuaEventsSubscribe(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     const auto* runtime = static_cast<const PucLuaScriptRuntime*>(lua_touserdata(state, lua_upvalueindex(2)));
-    if (context == nullptr || context->Events() == nullptr || runtime == nullptr) {
+    auto* registryState = static_cast<lua_State*>(lua_touserdata(state, lua_upvalueindex(3)));
+    if (context == nullptr || context->Events() == nullptr || runtime == nullptr || registryState == nullptr) {
         lua_pushinteger(state, static_cast<lua_Integer>(kInvalidEventSubscriptionHandle));
         return 1;
     }
@@ -157,16 +173,22 @@ int LuaEventsSubscribe(lua_State* state) {
     const std::string channel = OptionalStringArg(state, 4);
 
     lua_pushvalue(state, 2);
-    const int ref = luaL_ref(state, LUA_REGISTRYINDEX);
-    auto invocation = std::make_shared<SubscriberInvocation>(state, runtime, ref);
+    if (state != registryState) {
+        // Lifecycle/event functions run on short-lived generator threads
+        // (LIB-097). Move the copied callback to the owning main state
+        // before retaining it: storing the coroutine's raw lua_State*
+        // becomes a use-after-free once Lua collects the completed thread.
+        lua_xmove(state, registryState, 1);
+    }
+    const int ref = luaL_ref(registryState, LUA_REGISTRYINDEX);
+    auto invocation = std::make_shared<SubscriberInvocation>(registryState, runtime, ref);
     const EventSubscriptionHandle handle = context->Events()->Subscribe(
         eventName,
         [invocation](const ScriptEvent& event) { InvokeSubscriber(invocation, event); },
         owner,
         channel);
-    if (handle == kInvalidEventSubscriptionHandle) {
-        luaL_unref(state, LUA_REGISTRYINDEX, ref);
-    }
+    // On failure `invocation` falls out of scope here and releases the ref
+    // exactly once. Do not unref manually as well.
     lua_pushinteger(state, static_cast<lua_Integer>(handle));
     return 1;
 }
@@ -247,7 +269,8 @@ void PucLuaEventsApi::Attach(lua_State* state, int environmentIndex, ScriptExecu
 
     lua_pushlightuserdata(state, &context);
     lua_pushlightuserdata(state, const_cast<void*>(static_cast<const void*>(&runtime)));
-    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsSubscribe>, 2);
+    lua_pushlightuserdata(state, runtime.state_);
+    lua_pushcclosure(state, &PucLuaSafeCall<&LuaEventsSubscribe>, 3);
     lua_setfield(state, tableIndex, "Subscribe");
 
     lua_pushlightuserdata(state, &context);

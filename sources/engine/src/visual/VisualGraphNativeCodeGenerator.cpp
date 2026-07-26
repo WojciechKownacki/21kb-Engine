@@ -588,6 +588,30 @@ void WriteExecuteBody(
     std::vector<std::string>& errors,
     std::vector<VisualGraphDiagnostic>& diagnostics) {
     stream << "void " << className << "::" << NodeFunctionName("Execute", function, instruction.sourceNodeId) << "(VisualGraphNativeExecutionContext& context) {\n";
+    const VisualGraphIrInput* waitTask =
+        instruction.opcode == VisualGraphIrOpcode::Wait ? FindInput(instruction, "task") : nullptr;
+    if (waitTask != nullptr) {
+        stream << "    std::uint64_t task = context.WaitTask(" << instruction.sourceNodeId << "U);\n";
+        stream << "    if (task == 0U) {\n";
+        WriteEvaluateDependencies(stream, className, function, instruction);
+        stream << "        task = " << ReadInputExpression(*waitTask) << ";\n";
+        stream << "        if (task == 0U) {\n";
+        stream << "            context.ReportError(\"visual graph Wait requires a valid task handle\");\n";
+        stream << "            return;\n";
+        stream << "        }\n";
+        stream << "        context.SetWaitTask(" << instruction.sourceNodeId << "U, task);\n";
+        stream << "    }\n";
+        stream << "    if (context.IsTaskRunning(task)) {\n";
+        stream << "        context.Suspend(" << function.eventNodeId << "U, " << instruction.sourceNodeId << "U);\n";
+        stream << "        return;\n";
+        stream << "    }\n";
+        stream << "    context.ClearWaitTask(" << instruction.sourceNodeId << "U);\n";
+        if (instruction.nextNodeId != 0U && FindInstruction(function, instruction.nextNodeId) != nullptr) {
+            WriteExecuteCall(stream, className, NodeFunctionName("Execute", function, instruction.nextNodeId));
+        }
+        stream << "}\n\n";
+        return;
+    }
     stream << "    if (!context.IsNodeEvaluated(" << instruction.sourceNodeId << "U)) {\n";
     WriteEvaluateDependencies(stream, className, function, instruction);
 
@@ -714,8 +738,13 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    void EmitEventTo(std::uint64_t targetEntity, std::string_view name, std::span<const VisualGraphNativeEventArgument> arguments);\n";
     header << "    void RequireComponent(std::string_view name);\n";
     header << "    void Trace(std::string_view opcode, std::string_view symbol);\n";
+    header << "    void ReportError(std::string_view message);\n";
     header << "    void Suspend(std::uint32_t eventNodeId, std::uint32_t nextNodeId);\n";
     header << "    std::uint32_t TakeContinuation(std::uint32_t eventNodeId);\n";
+    header << "    bool IsTaskRunning(std::uint64_t taskId);\n";
+    header << "    void SetWaitTask(std::uint32_t nodeId, std::uint64_t taskId);\n";
+    header << "    std::uint64_t WaitTask(std::uint32_t nodeId);\n";
+    header << "    void ClearWaitTask(std::uint32_t nodeId);\n";
     header << "    bool ReadBool(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
     header << "    int ReadInt(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
     header << "    float ReadFloat(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";

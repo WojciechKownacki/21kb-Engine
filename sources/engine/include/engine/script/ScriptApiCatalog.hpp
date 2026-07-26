@@ -18,6 +18,7 @@ class ScriptRuntimeHost;
 
 struct ScriptApiCatalogFunction {
     std::string name;
+    std::string description;
     std::vector<ScriptApiPin> inputs;
     std::vector<ScriptApiPin> outputs;
 };
