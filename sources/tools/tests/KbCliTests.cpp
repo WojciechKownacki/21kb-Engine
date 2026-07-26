@@ -635,6 +635,93 @@ function Tick(self, dt)
     end
 end
 )");
+    WriteTextFile(root / "Assets" / "Logic" / "PhysicsContactProbe.lua", R"(
+local triggerEnter = false
+local triggerStay = false
+local triggerExit = false
+local collisionEnter = false
+local collisionStay = false
+local collisionExit = false
+local launched = false
+local completed = false
+
+local function validPayload(event)
+    if event == nil or event.args == nil or event.args.other == nil or event.args.other == 0 then
+        return false
+    end
+    local nx = event.args.normalX
+    local ny = event.args.normalY
+    local nz = event.args.normalZ
+    local px = event.args.pointX
+    local py = event.args.pointY
+    local pz = event.args.pointZ
+    if nx == nil or ny == nil or nz == nil or px == nil or py == nil or pz == nil then
+        return false
+    end
+    return (nx * nx + ny * ny + nz * nz) > 0.25
+end
+
+local function reportComplete()
+    if not completed and triggerEnter and triggerStay and triggerExit
+        and collisionEnter and collisionStay and collisionExit then
+        completed = true
+        Log("physics runtime LIB-127 complete")
+    end
+end
+
+function OnTriggerEnter(self, event)
+    if validPayload(event) then
+        triggerEnter = true
+        Log("physics runtime OnTriggerEnter")
+    end
+    reportComplete()
+end
+
+function OnTriggerStay(self, event)
+    if validPayload(event) then
+        triggerStay = true
+        Log("physics runtime OnTriggerStay")
+    end
+    reportComplete()
+end
+
+function OnTriggerExit(self, event)
+    if validPayload(event) then
+        triggerExit = true
+        Log("physics runtime OnTriggerExit")
+    end
+    reportComplete()
+end
+
+function OnCollisionEnter(self, event)
+    if validPayload(event) then
+        collisionEnter = true
+        Log("physics runtime OnCollisionEnter")
+    end
+    reportComplete()
+end
+
+function OnCollisionStay(self, event)
+    if validPayload(event) then
+        collisionStay = true
+        Log("physics runtime OnCollisionStay")
+        if not launched and Physics.AddImpulse(self.entity, 0.0, 8.0, 0.0) then
+            launched = true
+        end
+    end
+    reportComplete()
+end
+
+function OnCollisionExit(self, event)
+    -- This explicitly validates the retained final manifold payload:
+    -- Jolt's removal callback itself has no point/normal.
+    if validPayload(event) then
+        collisionExit = true
+        Log("physics runtime OnCollisionExit")
+    end
+    reportComplete()
+end
+)");
 
     kb::scene::Scene scene;
     const kb::scene::SceneObject projectile =
@@ -704,6 +791,61 @@ end
             .shape = kb::scene::ColliderShape::Box,
             .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
             .layer = 8U,
+        });
+
+    const kb::scene::SceneObject contactFloor = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "ContactFloor",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 60.0F, -0.5F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        contactFloor.Entity(),
+        kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(
+        contactFloor.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = kb::scene::Vec3{ 6.0F, 1.0F, 6.0F },
+        });
+
+    const kb::scene::SceneObject contactTrigger = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "ContactTrigger",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 60.0F, 3.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        contactTrigger.Entity(),
+        kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Static });
+    scene.Components().Colliders().Set(
+        contactTrigger.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F },
+            .trigger = true,
+        });
+
+    const kb::scene::SceneObject contactFaller = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "ContactFaller",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 60.0F, 8.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        contactFaller.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+        });
+    scene.Components().Colliders().Set(
+        contactFaller.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.5F,
         });
 
     const kb::scene::SceneObject character = scene.Entities().CreateObject(
@@ -793,11 +935,18 @@ void RunProjectileTemplateTests() {
         "--script", "/Game/Logic/PhysicsRuntimeProbe.lua",
     });
     Require(attachProbe.exitCode == 0, "physics runtime observer could not attach to the scene");
+    const CommandRun attachContactProbe = Run(&kb::cli::RunSceneAttachCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "ContactFaller",
+        "--script", "/Game/Logic/PhysicsContactProbe.lua",
+    });
+    Require(attachContactProbe.exitCode == 0, "LIB-127 physics contact runtime probe could not attach to the scene");
 
     const CommandRun run = Run(&kb::cli::RunRunCommand, {
         "--project", root,
         "--scene", "Assets/Scenes/Main.21kbscene",
-        "--frames", "40",
+        "--frames", "300",
     });
     Require(run.exitCode == 0, "projectile template run reported diagnostics");
     Require(Contains(run.output, "[module] active Physics.Jolt"),
@@ -837,6 +986,13 @@ void RunProjectileTemplateTests() {
         "serialized JointComponent did not constrain live Jolt bodies in kb_cli runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-123 complete"),
         "LIB-123 character/joint production runtime probe did not complete");
+    for (const char* eventName : { "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit" }) {
+        Require(
+            Contains(run.output, std::string{ "[log] physics runtime " } + eventName),
+            (std::string{ "LIB-127 production runtime did not dispatch " } + eventName + " with a valid payload").c_str());
+    }
+    Require(Contains(run.output, "[log] physics runtime LIB-127 complete"),
+        "LIB-127 full trigger/collision lifecycle did not complete in the serialized kb_cli Jolt runtime");
     Require(Contains(run.output, "0 diagnostics"), "projectile physics runtime was not clean");
 }
 
