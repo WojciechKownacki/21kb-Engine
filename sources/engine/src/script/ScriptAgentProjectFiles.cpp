@@ -110,8 +110,10 @@ function Tick(self, dt)
     local move = Input.Vector2("Move")
     local dx = (move.x or 0.0) * speed * dt
     local dy = (move.y or 0.0) * speed * dt
+    if dx == 0.0 and dy == 0.0 then
+        return
+    end
     Transform.Translate(self.entity, dx, dy, 0.0)
-    Log("player tick")
     Emit("PlayerMoved", {})
 end
 )lua";

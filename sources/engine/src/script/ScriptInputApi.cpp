@@ -1,5 +1,8 @@
 #include "engine/script/ScriptInputApi.hpp"
 
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/input/InputContextPriority.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
@@ -8,6 +11,7 @@
 #include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -176,12 +180,6 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
     return host.RegisterFunction(std::move(desc));
 }
 
-[[nodiscard]] std::uint64_t ParseAssetId(std::string_view text) {
-    std::uint64_t id = 0U;
-    std::from_chars(text.data(), text.data() + text.size(), id);
-    return id;
-}
-
 [[nodiscard]] bool ParseUnsignedId(
     std::string_view text, std::uint64_t& id) noexcept {
     id = 0U;
@@ -189,6 +187,44 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
         std::from_chars(text.data(), text.data() + text.size(), id);
     return parsed.ec == std::errc{} &&
         parsed.ptr == text.data() + text.size();
+}
+
+[[nodiscard]] std::uint64_t ResolveMappingContextId(
+    kb::scene::Scene& scene, std::string_view reference) {
+    const auto isMappingContext = [](const kb::assets::AssetMetadata* metadata) {
+        return metadata != nullptr && metadata->type == "InputMappingContext";
+    };
+
+    // Preserve the legacy decimal-id form used by the direct Lua wrapper.
+    // AssetRef strings use hexadecimal ids, while normal authoring uses a
+    // virtual /Game path; all three forms must resolve to the same asset.
+    std::uint64_t decimalId = 0U;
+    if (ParseUnsignedId(reference, decimalId) && decimalId != 0U) {
+        const kb::assets::AssetMetadata* metadata =
+            scene.Assets().Manager().Registry().Find(kb::assets::AssetId{decimalId});
+        if (isMappingContext(metadata)) {
+            return decimalId;
+        }
+        // Resolver-only scenes predate the asset registry integration and
+        // legitimately expose mapping contexts by numeric id alone.
+        if (scene.Assets().Manager().Registry().Count() == 0U) {
+            return decimalId;
+        }
+    }
+
+    kb::assets::AssetId assetId{};
+    if (kb::assets::TryParseAssetId(reference, assetId) && assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata =
+            scene.Assets().Manager().Registry().Find(assetId);
+        if (isMappingContext(metadata)) {
+            return assetId.value;
+        }
+    }
+
+    const kb::assets::AssetMetadata* metadata =
+        scene.Assets().Manager().Registry().FindByPath(
+            std::filesystem::path{reference});
+    return isMappingContext(metadata) ? metadata->id.value : 0U;
 }
 
 bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
@@ -204,7 +240,9 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
         }
         const ScriptValue* contextArg = FindArg(arguments, "context");
         const ScriptValue* priorityArg = FindArg(arguments, "priority");
-        const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
+        const std::uint64_t id = contextArg != nullptr
+            ? ResolveMappingContextId(*context.scene, contextArg->AsString())
+            : 0U;
         const auto priority = static_cast<std::int32_t>(priorityArg != nullptr ? priorityArg->AsInt() : 0);
         const bool added = context.scene->Input(PlayerFromArgs(arguments)).AddMappingContext(id, priority);
         return BoolResult("added", added);
@@ -222,7 +260,9 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
             return NoScene();
         }
         const ScriptValue* contextArg = FindArg(arguments, "context");
-        const std::uint64_t id = contextArg != nullptr ? ParseAssetId(contextArg->AsString()) : 0U;
+        const std::uint64_t id = contextArg != nullptr
+            ? ResolveMappingContextId(*context.scene, contextArg->AsString())
+            : 0U;
         kb::input::InputSubsystem& input = context.scene->Input(PlayerFromArgs(arguments));
         const bool had = input.HasMappingContext(id);
         input.RemoveMappingContext(id);

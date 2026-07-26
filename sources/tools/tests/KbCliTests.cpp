@@ -338,19 +338,8 @@ void RunPlayerControllerTemplateTests() {
     });
     Require(run.exitCode == 0, "player controller template run reported diagnostics");
     Require(Contains(run.output, "[log] player ready"), "player controller template did not run Ready");
-    Require(Contains(run.output, "PlayerMoved"), "player controller template did not emit its movement event");
+    Require(!Contains(run.output, "PlayerMoved"), "player controller template emitted movement without input");
     Require(Contains(run.output, "0 diagnostics"), "player controller template run was not clean");
-
-    std::size_t tickCount = 0;
-    for (std::size_t searchPosition = 0;;) {
-        const std::size_t found = run.output.find("[log] player tick", searchPosition);
-        if (found == std::string::npos) {
-            break;
-        }
-        ++tickCount;
-        searchPosition = found + 1;
-    }
-    Require(tickCount == static_cast<std::size_t>(kFrames), "player controller template did not tick exactly once per simulated frame");
 }
 
 // LIB-014: Projectile.lua (and its Assets/Prefabs/Projectile.kbprefab

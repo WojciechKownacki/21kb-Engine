@@ -27,6 +27,7 @@ add_library(kb_renderer STATIC
     include/kb/render/frame/RenderTargetDesc.hpp
     include/kb/render/frame/RenderViewportDesc.hpp
     include/kb/render/frame/RenderViewportViewIds.hpp
+    include/kb/render/overlay/EditorCameraWireframe.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
     include/kb/render/overlay/EditorLightWireframe.hpp
     include/kb/render/overlay/PhysicsDebugLine.hpp
@@ -136,6 +137,7 @@ add_library(kb_renderer STATIC
     src/frame/RenderPassGraphValidator.cpp
     src/frame/RenderPassGraphValidator.hpp
     src/frame/RenderPassKind.cpp
+    src/overlay/EditorCameraWireframe.cpp
     src/overlay/SceneGizmoPass.cpp
     src/overlay/SceneGridPass.cpp
     src/overlay/SelectionBoxOverlayPass.cpp

@@ -4590,10 +4590,11 @@ void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
             .projection =
                 EditorCameraWireframeProjection::Perspective,
             .position = {0.0F, 0.0F, 0.0F},
-            .verticalFovDegrees = 60.0F,
-            .nearClip = 0.1F,
-            .farClip = 100.0F,
-            .aspect = 16.0F / 9.0F,
+            .verticalFovDegrees = 60.5F,
+            .nearClip = 0.01F,
+            .farClip = 1000.0F,
+            .displayFarClip = 10.0F,
+            .aspect = 1.0F,
         },
         EditorCameraWireframeDesc{
             .projection =
@@ -4602,6 +4603,7 @@ void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
             .orthographicHeight = 12.0F,
             .nearClip = 0.25F,
             .farClip = 250.0F,
+            .displayFarClip = 15.0F,
             .aspect = 4.0F / 3.0F,
         },
     }};
@@ -4617,6 +4619,33 @@ void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
 
     gizmoPass.Shutdown();
     renderer.EndFrame();
+    const auto perspectiveLines =
+        BuildEditorCameraWireframeLines(wireframes[0]);
+    const auto orthographicLines =
+        BuildEditorCameraWireframeLines(wireframes[1]);
+    EditorCameraWireframeDesc fullAuthoredFrustum = wireframes[0];
+    fullAuthoredFrustum.displayFarClip = 0.0F;
+    const auto fullAuthoredLines =
+        BuildEditorCameraWireframeLines(fullAuthoredFrustum);
+    Require(
+        perspectiveLines.size() == 12U &&
+            orthographicLines.size() == 12U,
+        "Camera wireframe geometry must always contain near, far, and connecting edges");
+    Require(
+        NearlyEqual(perspectiveLines[4].from[2], 10.0F) &&
+            NearlyEqual(perspectiveLines[7].to[2], 10.0F) &&
+            NearlyEqual(perspectiveLines[8].to[2], 10.0F),
+        "Perspective camera far-plane edges and connectors did not use the bounded display Far Clip");
+    Require(
+        NearlyEqual(orthographicLines[4].from[2], 15.0F) &&
+            NearlyEqual(orthographicLines[7].to[2], 15.0F) &&
+            NearlyEqual(orthographicLines[8].to[2], 15.0F),
+        "Orthographic camera far-plane edges and connectors did not use the bounded display Far Clip");
+    Require(
+        NearlyEqual(fullAuthoredLines[4].from[2], 1000.0F) &&
+            NearlyEqual(fullAuthoredFrustum.farClip, 1000.0F) &&
+            NearlyEqual(wireframes[0].farClip, 1000.0F),
+        "Editor display depth must not mutate or replace the authored runtime Camera Far Clip");
     renderer.Shutdown();
 }
 
@@ -4645,6 +4674,7 @@ void RunMaterialFrameTimeAdvanceTest() {
 }
 
 void RunRendererRuntimeSubmitTests() {
+    RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
@@ -4682,7 +4712,6 @@ void RunRendererRuntimeSubmitTests() {
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
-    RunEditorCameraWireframesSubmitInHeadlessNoopTest();
 }
 
 } // namespace kb::render::tests
