@@ -326,16 +326,24 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.transformRenderProxyLightIndices.reserve(HierarchyTrackedSlotCount(state));
 
     SynchronizeTransformHierarchy(state);
-    state.sceneSystemScheduler.Update(scene, deltaSeconds);
+    state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds);
+    state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PreFixed);
 
-    if (state.requiresFixedStep && fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
+    if (state.isPlaying && state.requiresFixedStep && fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
         const float clampedDelta = std::clamp(deltaSeconds, 0.0F, std::max(0.0F, fixed.maxFrameDeltaSeconds));
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
             SynchronizeTransformHierarchy(state);
             CaptureFixedStepStart(scene, state);
-            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds);
+            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation);
+            // FixedTick may flush structural/component commands, including
+            // local transform changes. Publish hierarchy-derived world poses
+            // before the physics plugin synchronizes its bodies.
+            SynchronizeTransformHierarchy(state);
+            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::Simulation);
+            SynchronizeTransformHierarchy(state);
+            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PostSimulation);
             SynchronizeTransformHierarchy(state);
             CaptureFixedStepEnd(scene, state);
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
@@ -354,6 +362,10 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedTransformStepStart.clear();
     }
 
+    // Variable consumers (notably script Tick/LateTick) run after the fixed
+    // loop, so they see this Update call's physics write-back. Producers such
+    // as input polling already ran in PreFixed and were visible to FixedTick.
+    state.sceneSystemScheduler.Update(scene, deltaSeconds, SceneUpdatePhase::PostFixed);
     state.systemScheduler.Update(state.world, deltaSeconds);
     const bool progressed = state.world.Progress(deltaSeconds);
     SynchronizeTransformHierarchy(state);

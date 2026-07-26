@@ -69,15 +69,26 @@ ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime, Scrip
     , assetPreparer_(&assetPreparer) {}
 
 void ScriptRuntimeSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
+    attachedScene_ = &context.GetScene();
+    ConfigureSceneFixedStep(*attachedScene_);
     static_cast<void>(ExecuteStartup(context.GetScene(), context.DeltaSeconds()));
 }
 
+void ScriptRuntimeSceneSystem::OnFrameStart(kb::scene::SceneSystemContext& context) {
+    BeginFrame(context.GetScene(), context.DeltaSeconds());
+}
+
 void ScriptRuntimeSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
-    static_cast<void>(ExecuteFrame(context.GetScene(), context.DeltaSeconds()));
+    ExecuteVariableFrame(context.GetScene(), context.DeltaSeconds());
+}
+
+void ScriptRuntimeSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    ExecuteFixedStep(context.GetScene(), context.DeltaSeconds());
 }
 
 void ScriptRuntimeSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     static_cast<void>(ExecuteShutdown(context.GetScene(), context.DeltaSeconds()));
+    attachedScene_ = nullptr;
 }
 
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteStartup(kb::scene::Scene& scene, float deltaSeconds) {
@@ -142,6 +153,41 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     return lastResult_;
 }
 
+void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSeconds) {
+    lastResult_ = {};
+    PrepareScene(scene);
+    const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
+    DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
+    DispatchFiredTimers(scene, clampedDeltaSeconds);
+    DispatchCompletedTasks(scene, clampedDeltaSeconds);
+    AdvanceParticleSystems(scene, clampedDeltaSeconds);
+    DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
+    DispatchDeferredEvents(scene);
+    SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
+}
+
+void ScriptRuntimeSceneSystem::ExecuteFixedStep(kb::scene::Scene& scene, float fixedDeltaSeconds) {
+    if (!scene.Runtime().IsPlaying()) {
+        return;
+    }
+    scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::FixedTick, fixedDeltaSeconds));
+    DispatchCompletedFixedStepTasks(scene, 1U, fixedDeltaSeconds);
+}
+
+void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, float deltaSeconds) {
+    const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
+    // Physics contact events are queued during the Simulation phase. The
+    // post-fixed script update drains them before Tick in the same frame.
+    DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    static_cast<void>(scene.Entities().DrainDeferredDestroys());
+}
+
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteShutdown(kb::scene::Scene& scene, float deltaSeconds) {
     lastResult_ = {};
     ShutdownTrackedBehaviours(scene, deltaSeconds);
@@ -156,6 +202,10 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecutePhase(kb::s
 
 void ScriptRuntimeSceneSystem::SetFrameSettings(ScriptRuntimeFrameSettings settings) noexcept {
     frameSettings_ = settings;
+    fixedAccumulatorSeconds_ = 0.0F;
+    if (attachedScene_ != nullptr) {
+        ConfigureSceneFixedStep(*attachedScene_);
+    }
 }
 
 ScriptRuntimeFrameSettings ScriptRuntimeSceneSystem::FrameSettings() const noexcept {
@@ -179,8 +229,19 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
     // (ExecuteStartup/ExecuteFrame/ExecuteShutdown/ExecutePhase) routes
     // through it, so the stamp is fresh for every phase a script may call
     // Time.FixedDelta from, not only FixedTick.
-    scene.Runtime().SetScriptFixedDeltaSeconds(frameSettings_.fixedDeltaSeconds);
+    const float fixedDeltaSeconds = attachedScene_ == &scene
+        ? scene.Runtime().FixedStepSettings().fixedDeltaSeconds
+        : frameSettings_.fixedDeltaSeconds;
+    scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept {
+    kb::scene::SceneRuntimeFixedStepSettings settings = scene.Runtime().FixedStepSettings();
+    settings.fixedDeltaSeconds = frameSettings_.fixedDeltaSeconds;
+    settings.maxFixedStepsPerFrame = frameSettings_.maxFixedStepsPerFrame;
+    scene.Runtime().SetFixedStepSettings(settings);
+    scene.Runtime().SetScriptFixedDeltaSeconds(settings.fixedDeltaSeconds);
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingSceneLifecycleEvents(kb::scene::Scene& scene, float deltaSeconds) {
