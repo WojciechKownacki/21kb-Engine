@@ -51,6 +51,10 @@ struct PhysicsCastResult {
 struct PhysicsOverlapResult {
     bool overlapping = false;
     SceneEntity entity{};
+    // Positive overlap depth reported by the backend. All-hit overlap
+    // results are ordered deepest-first, then by entity id for deterministic
+    // ties. Zero for an honest miss.
+    float penetrationDepth = 0.0F;
 };
 
 struct PhysicsClosestPointResult {
@@ -131,7 +135,9 @@ public:
     // beyond `results.Capacity()` are silently not written (the exact,
     // long-established NonAlloc contract - see Unity's own RaycastNonAlloc);
     // `results.Full()` after the call is the caller's signal that more may
-    // exist. Results are ordered closest-first.
+    // exist. Cast/raycast results are ordered closest-first. Overlap results
+    // are ordered deepest-first because a stationary overlap has no travel
+    // distance; ties are deterministic by entity id.
     virtual void CastShapeAll(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) const noexcept = 0;
     virtual void OverlapShapeAll(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsOverlapResult>& results) const noexcept = 0;
 
