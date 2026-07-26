@@ -34,9 +34,8 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
     // and Visibility are baked UNCONDITIONALLY per node
     // (ScenePrefabBakedArchetype::transforms/visibility, no mask bit),
     // Camera/MeshRenderer/Light/Behaviour/Rigidbody/Collider/
-    // CharacterController are baked behind ScenePrefabBakedComponentMask
-    // bits. Joint is the one exception (serializable=false, see its entry
-    // below for why). (An earlier version of this catalog wrongly marked
+    // CharacterController/Joint are baked behind ScenePrefabBakedComponentMask
+    // bits. (An earlier version of this catalog wrongly marked
     // Visibility false, reasoning from SceneAssetComponentCodec — a
     // DIFFERENT, unrelated serialization path that does not cover Transform
     // or Visibility either; the round-trip test below caught the mistake.)
@@ -92,19 +91,12 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("CharacterController"),
             .serializable = true,
         },
-        // Joint is deliberately serializable=false: JointComponent::
-        // connectedEntity is a live kb::scene::SceneEntity runtime handle,
-        // and this engine has no stable cross-node entity reference scheme
-        // any component can serialize through yet (ScenePrefabNodeDesc::
-        // parentNode is a prefab-local node INDEX, a hierarchy-specific
-        // mechanism, not a general one) - claiming serializable=true here
-        // would be dishonest until that scheme exists. The component is
-        // fully real and script-addressable (Add/Remove/Get/Set, native +
-        // Lua + VisualGraph) within a live, unsaved scene today.
+        // LIB-123: persistent prefab data stores a stable node id and only
+        // resolves the live SceneEntity after the complete instance exists.
         LibraryComponentDesc{
             .name = "Joint",
             .id = ComputeLibraryComponentId("Joint"),
-            .serializable = false,
+            .serializable = true,
         },
     };
     return kCatalog;

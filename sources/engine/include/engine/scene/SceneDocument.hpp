@@ -8,8 +8,9 @@
 namespace kb::scene {
 
 struct SceneDocument {
+    // v4 (LIB-123): JointComponent is persisted with a stable prefab-node reference.
     // v3 (LIB-147): AudioSourceComponent gained the outputBus mixer-routing token.
-    static constexpr std::uint32_t CurrentFileVersion = 3U;
+    static constexpr std::uint32_t CurrentFileVersion = 4U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

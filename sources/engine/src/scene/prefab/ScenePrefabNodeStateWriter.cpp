@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAudioListenerComponents.hpp"
 #include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneCharacterControllerComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -71,6 +72,12 @@ namespace {
 [[nodiscard]] bool Equals(const ColliderComponent& lhs, const ColliderComponent& rhs) noexcept {
     return lhs.shape == rhs.shape && Equals(lhs.center, rhs.center) && Equals(lhs.boxSize, rhs.boxSize) && lhs.radius == rhs.radius
         && lhs.height == rhs.height && lhs.trigger == rhs.trigger;
+}
+
+[[nodiscard]] bool Equals(const CharacterControllerComponent& lhs, const CharacterControllerComponent& rhs) noexcept {
+    return Equals(lhs.center, rhs.center) && lhs.radius == rhs.radius && lhs.height == rhs.height
+        && lhs.slopeLimitDegrees == rhs.slopeLimitDegrees && lhs.stepOffset == rhs.stepOffset
+        && lhs.gravityScale == rhs.gravityScale && lhs.useGravity == rhs.useGravity;
 }
 
 [[nodiscard]] bool Equals(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {
@@ -148,6 +155,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , inputs(scene.Components().Inputs())
     , rigidbodies(scene.Components().Rigidbodies())
     , colliders(scene.Components().Colliders())
+    , characterControllers(scene.Components().CharacterControllers())
     , tags(scene.Components().Tags())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
@@ -199,6 +207,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.collider.has_value()) {
         WriteOptionalComponent(context.colliders, entity, node.components.collider);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.characterController.has_value()) {
+        WriteOptionalComponent(context.characterControllers, entity, node.components.characterController);
     }
     if (!componentMask.available || !componentMask.matches || node.components.tags.has_value()) {
         WriteOptionalComponent(context.tags, entity, node.components.tags);

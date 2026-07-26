@@ -8,6 +8,7 @@
 #include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "scene/asset/io/SceneAssetMetaWriter.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
+#include "scene/prefab/ScenePrefabValidator.hpp"
 
 #include <algorithm>
 #include <set>
@@ -46,6 +47,7 @@ void WriteNestedOverride(std::vector<std::uint8_t>& output, const ScenePrefabPro
 }
 
 void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& node) {
+    SceneAssetBinaryIO::WriteUInt64(output, node.stableId);
     WriteString(output, node.name);
     WriteString(output, node.nestedPrefabGuid);
     WriteUInt32(output, static_cast<std::uint32_t>(node.nestedPrefabOverrides.size()));
@@ -102,7 +104,8 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
 [[nodiscard]] bool CanWrite(const SceneDocument& scene) {
     return !scene.name.empty() &&
         !scene.guid.empty() &&
-        scene.worldPrefab.NodeCount() <= SceneAssetFormat::MaxNodeCount;
+        scene.worldPrefab.NodeCount() <= SceneAssetFormat::MaxNodeCount &&
+        ScenePrefabValidator::IsValid(scene.worldPrefab);
 }
 
 [[nodiscard]] std::vector<std::uint8_t> Serialize(const SceneDocument& scene) {

@@ -22,11 +22,18 @@ class Win32InputCollector;
 
 } // namespace kb::input
 
+namespace kb::script {
+
+class ScriptRuntimeHost;
+
+} // namespace kb::script
+
 // Runs an OS-level verification against the same collector and Scene runtime
 // update path used by the standalone player's normal frame.
 [[nodiscard]] bool RunStandaloneInputRuntimeVerification(
     kb::scene::Scene& scene,
     kb::input::Win32InputCollector& collector,
+    kb::script::ScriptRuntimeHost& scriptHost,
     HWND window);
 
 #endif

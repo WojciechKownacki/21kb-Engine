@@ -51,11 +51,17 @@ struct ScenePrefabOptionalComponentMaskMatch {
     if (components.audioListener.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AudioListener);
     }
+    if (components.characterController.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::CharacterController);
+    }
+    if (components.joint.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Joint);
+    }
     return mask;
 }
 
-[[nodiscard]] inline std::array<kb::ecs::ComponentId, 10U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
-    return std::array<kb::ecs::ComponentId, 10U>{
+[[nodiscard]] inline std::array<kb::ecs::ComponentId, 12U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
+    return std::array<kb::ecs::ComponentId, 12U>{
         registry.CameraComponentId(),
         registry.MeshRendererComponentId(),
         registry.LightComponentId(),
@@ -66,6 +72,8 @@ struct ScenePrefabOptionalComponentMaskMatch {
         registry.BehaviourComponentId(),
         registry.AudioSourceComponentId(),
         registry.AudioListenerComponentId(),
+        registry.CharacterControllerComponentId(),
+        registry.JointComponentId(),
     };
 }
 
@@ -79,7 +87,7 @@ struct ScenePrefabOptionalComponentMaskMatch {
     }
 
     const std::uint16_t expectedMask = ScenePrefabOptionalComponentMask(expected);
-    const std::array<kb::ecs::ComponentId, 10U> componentIds = ScenePrefabOptionalComponentIds(state.components);
+    const std::array<kb::ecs::ComponentId, 12U> componentIds = ScenePrefabOptionalComponentIds(state.components);
     std::array<kb::ecs::ComponentId, componentIds.size()> required{};
     std::array<kb::ecs::ComponentId, componentIds.size()> excluded{};
     std::size_t requiredCount = 0U;

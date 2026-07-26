@@ -39,6 +39,21 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.characterController = *characterController;
     }
 
+    if (const JointComponent* joint = sceneComponents.Joints().TryGet(entity)) {
+        // CaptureService resolves this transient entity id to a stable prefab-node
+        // id before the prefab can leave capture. It is never serialized.
+        components.joint = ScenePrefabJointComponent{
+            .type = joint->type,
+            .connectedNodeStableId = joint->connectedEntity.Id(),
+            .anchor = joint->anchor,
+            .connectedAnchor = joint->connectedAnchor,
+            .axis = joint->axis,
+            .minLimit = joint->minLimit,
+            .maxLimit = joint->maxLimit,
+            .enableLimit = joint->enableLimit,
+        };
+    }
+
     if (const TagsComponent* tags = sceneComponents.Tags().TryGet(entity)) {
         components.tags = *tags;
     }

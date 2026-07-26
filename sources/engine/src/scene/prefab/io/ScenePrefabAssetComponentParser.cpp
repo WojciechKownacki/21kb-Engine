@@ -96,12 +96,72 @@ template <typename T>
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.boxSize", collider.boxSize)
         || !ParseField(fields, "collider.radius", collider.radius)
         || !ParseField(fields, "collider.height", collider.height)
-        || !ParseOptionalBool(fields, "collider.trigger", collider.trigger)) {
+        || !ParseOptionalBool(fields, "collider.trigger", collider.trigger)
+        // These fields were added after the first textual prefab format.
+        // Missing values intentionally retain ColliderComponent's production
+        // defaults so existing assets remain loadable; newly written assets
+        // always persist them below.
+        || !ParseOptionalField(fields, "collider.friction", collider.friction)
+        || !ParseOptionalField(fields, "collider.restitution", collider.restitution)
+        || !ParseOptionalField(fields, "collider.layer", collider.layer)) {
         return false;
     }
 
     collider.shape = static_cast<ColliderShape>(shape);
     components.collider = collider;
+    return true;
+}
+
+[[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasCharacterController = false;
+    if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
+        return false;
+    }
+    if (!hasCharacterController) {
+        return true;
+    }
+
+    CharacterControllerComponent characterController;
+    if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "characterController.center", characterController.center)
+        || !ParseField(fields, "characterController.radius", characterController.radius)
+        || !ParseField(fields, "characterController.height", characterController.height)
+        || !ParseOptionalField(fields, "characterController.slopeLimitDegrees", characterController.slopeLimitDegrees)
+        || !ParseOptionalField(fields, "characterController.stepOffset", characterController.stepOffset)
+        || !ParseOptionalField(fields, "characterController.gravityScale", characterController.gravityScale)
+        || !ParseOptionalBool(fields, "characterController.useGravity", characterController.useGravity)) {
+        return false;
+    }
+
+    components.characterController = characterController;
+    return true;
+}
+
+[[nodiscard]] bool ParseJoint(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasJoint = false;
+    if (!ParseOptionalComponentFlag(fields, "joint", hasJoint)) {
+        return false;
+    }
+    if (!hasJoint) {
+        return true;
+    }
+
+    int type = 0;
+    ScenePrefabJointComponent joint;
+    if (!ParseField(fields, "joint.type", type)
+        || type < static_cast<int>(JointType::Fixed)
+        || type > static_cast<int>(JointType::Point)
+        || !ParseField(fields, "joint.connectedNodeStableId", joint.connectedNodeStableId)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.anchor", joint.anchor)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.connectedAnchor", joint.connectedAnchor)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "joint.axis", joint.axis)
+        || !ParseField(fields, "joint.minLimit", joint.minLimit)
+        || !ParseField(fields, "joint.maxLimit", joint.maxLimit)
+        || !ParseOptionalBool(fields, "joint.enableLimit", joint.enableLimit)) {
+        return false;
+    }
+
+    joint.type = static_cast<JointType>(type);
+    components.joint = joint;
     return true;
 }
 
@@ -204,6 +264,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ScenePrefabAssetInputParser::Parse(fields, components)
         && ParseRigidbody(fields, components)
         && ParseCollider(fields, components)
+        && ParseCharacterController(fields, components)
+        && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)
         && ParseBehaviour(fields, components)
         && ParseAudioSource(fields, components)

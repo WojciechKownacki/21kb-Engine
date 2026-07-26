@@ -4,6 +4,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputMappingContextStack.hpp"
+#include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputTriggers.hpp"
 #include "engine/input/InputValue.hpp"
 
@@ -68,6 +69,14 @@ public:
     void RemoveMappingContext(std::uint64_t contextId);
     void ClearMappingContexts() noexcept;
     [[nodiscard]] bool HasMappingContext(std::uint64_t contextId) const noexcept;
+
+    [[nodiscard]] InputRuntimeRebindResult Rebind(
+        std::uint64_t contextId, std::uint64_t bindingId, InputKey newKey,
+        std::uint8_t gamepadIndex, bool allowConflict = false);
+    [[nodiscard]] bool SetRebindProfile(
+        std::uint64_t contextId, std::span<const InputRebindOverride> overrides);
+    [[nodiscard]] std::span<const InputRebindOverride> RebindProfile(
+        std::uint64_t contextId) const noexcept;
 
     // Recomputes every action's value and trigger events for this frame, reading
     // this subsystem's own device state.

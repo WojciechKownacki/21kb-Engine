@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <utility>
 
 namespace kb::input {
@@ -12,20 +13,37 @@ void InputMappingContextStack::SetResolvers(ActionResolver actionResolver, Conte
 }
 
 bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priority) {
+    ActiveMappingContext active;
+    if (!BuildActive(contextId, priority, RebindProfile(contextId), active)) {
+        return false;
+    }
+    ReplaceActive(std::move(active));
+    return true;
+}
+
+bool InputMappingContextStack::BuildActive(
+    std::uint64_t contextId, std::int32_t priority,
+    std::span<const InputRebindOverride> overrides,
+    ActiveMappingContext& active) const {
     if (!actionResolver_ || !contextResolver_) {
         return false;
     }
-    const std::shared_ptr<const InputMappingContextAsset> context = contextResolver_(contextId);
-    if (context == nullptr) {
+    const std::shared_ptr<const InputMappingContextAsset> baseContext =
+        contextResolver_(contextId);
+    if (baseContext == nullptr) {
         return false;
     }
 
-    ActiveMappingContext active;
+    InputMappingContextAsset context = *baseContext;
+    ApplyRebindProfile(context, overrides);
+
+    active = ActiveMappingContext{};
     active.contextId = contextId;
     active.priority = priority;
-    active.mappings.reserve(context->mappings.size());
-    for (const InputKeyMapping& mapping : context->mappings) {
+    active.mappings.reserve(context.mappings.size());
+    for (const InputKeyMapping& mapping : context.mappings) {
         ResolvedMapping resolved;
+        resolved.bindingId = mapping.bindingId;
         resolved.key = mapping.key;
         resolved.scale = mapping.scale;
         resolved.gamepadIndex = mapping.gamepadIndex;
@@ -54,9 +72,10 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
         }
     }
 
-    active.composites.reserve(context->composites.size());
-    for (const InputCompositeBinding& composite : context->composites) {
+    active.composites.reserve(context.composites.size());
+    for (const InputCompositeBinding& composite : context.composites) {
         ResolvedComposite resolved;
+        resolved.bindingId = composite.bindingId;
         resolved.slots = composite.slots;
         resolved.modifiers = composite.modifiers;
         resolved.triggers = composite.triggers;
@@ -83,9 +102,6 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
         }
     }
 
-    Remove(contextId);
-    contexts_.push_back(std::move(active));
-    SortByPriority();
     return true;
 }
 
@@ -103,6 +119,133 @@ bool InputMappingContextStack::Has(std::uint64_t contextId) const noexcept {
     return std::ranges::any_of(contexts_, [contextId](const ActiveMappingContext& context) {
         return context.contextId == contextId;
     });
+}
+
+InputRuntimeRebindResult InputMappingContextStack::Rebind(
+    std::uint64_t contextId, std::uint64_t bindingId, InputKey newKey,
+    std::uint8_t gamepadIndex, bool allowConflict) {
+    InputRuntimeRebindResult result;
+    if (!contextResolver_) {
+        return result;
+    }
+    const std::shared_ptr<const InputMappingContextAsset> baseContext =
+        contextResolver_(contextId);
+    if (baseContext == nullptr) {
+        return result;
+    }
+
+    InputMappingContextAsset effective = *baseContext;
+    ApplyRebindProfile(effective, RebindProfile(contextId));
+    result.conflict =
+        FindRebindConflict(effective, bindingId, newKey, gamepadIndex);
+    if (result.conflict.has_value() && !allowConflict) {
+        return result;
+    }
+    if (!ApplyRebind(
+            effective, bindingId, newKey, gamepadIndex,
+            /*allowConflict=*/true)) {
+        result.conflict.reset();
+        return result;
+    }
+
+    std::vector<InputRebindOverride> proposed{
+        RebindProfile(contextId).begin(), RebindProfile(contextId).end()};
+    const auto existing = std::ranges::find_if(
+        proposed, [bindingId](const InputRebindOverride& entry) {
+            return entry.bindingId == bindingId;
+        });
+    const auto baseMapping = std::ranges::find_if(
+        baseContext->mappings, [bindingId](const InputKeyMapping& mapping) {
+            return mapping.bindingId == bindingId;
+        });
+    const bool restoresDefault =
+        baseMapping != baseContext->mappings.end() &&
+        baseMapping->key == newKey &&
+        baseMapping->gamepadIndex == gamepadIndex;
+    if (restoresDefault) {
+        if (existing != proposed.end()) {
+            proposed.erase(existing);
+        }
+    } else if (existing != proposed.end()) {
+        existing->key = newKey;
+        existing->gamepadIndex = gamepadIndex;
+    } else {
+        proposed.push_back(InputRebindOverride{
+            .bindingId = bindingId,
+            .key = newKey,
+            .gamepadIndex = gamepadIndex,
+        });
+    }
+
+    ActiveMappingContext rebuilt;
+    const std::optional<std::int32_t> priority = ActivePriority(contextId);
+    if (priority.has_value() &&
+        !BuildActive(contextId, *priority, proposed, rebuilt)) {
+        result.conflict.reset();
+        return result;
+    }
+
+    if (proposed.empty()) {
+        rebindProfiles_.erase(contextId);
+    } else {
+        rebindProfiles_[contextId] = std::move(proposed);
+    }
+    if (priority.has_value()) {
+        ReplaceActive(std::move(rebuilt));
+    }
+    result.applied = true;
+    return result;
+}
+
+bool InputMappingContextStack::SetRebindProfile(
+    std::uint64_t contextId, std::span<const InputRebindOverride> overrides) {
+    if (!IsValidRebindProfile(overrides) || !contextResolver_ ||
+        contextResolver_(contextId) == nullptr) {
+        return false;
+    }
+
+    ActiveMappingContext rebuilt;
+    const std::optional<std::int32_t> priority = ActivePriority(contextId);
+    if (priority.has_value() &&
+        !BuildActive(contextId, *priority, overrides, rebuilt)) {
+        return false;
+    }
+
+    if (overrides.empty()) {
+        rebindProfiles_.erase(contextId);
+    } else {
+        rebindProfiles_[contextId] =
+            std::vector<InputRebindOverride>{overrides.begin(), overrides.end()};
+    }
+    if (priority.has_value()) {
+        ReplaceActive(std::move(rebuilt));
+    }
+    return true;
+}
+
+std::span<const InputRebindOverride> InputMappingContextStack::RebindProfile(
+    std::uint64_t contextId) const noexcept {
+    const auto found = rebindProfiles_.find(contextId);
+    return found != rebindProfiles_.end()
+        ? std::span<const InputRebindOverride>{found->second}
+        : std::span<const InputRebindOverride>{};
+}
+
+std::optional<std::int32_t> InputMappingContextStack::ActivePriority(
+    std::uint64_t contextId) const noexcept {
+    const auto found = std::ranges::find_if(
+        contexts_, [contextId](const ActiveMappingContext& context) {
+            return context.contextId == contextId;
+        });
+    return found != contexts_.end()
+        ? std::optional<std::int32_t>{found->priority}
+        : std::nullopt;
+}
+
+void InputMappingContextStack::ReplaceActive(ActiveMappingContext active) {
+    Remove(active.contextId);
+    contexts_.push_back(std::move(active));
+    SortByPriority();
 }
 
 void InputMappingContextStack::SortByPriority() {

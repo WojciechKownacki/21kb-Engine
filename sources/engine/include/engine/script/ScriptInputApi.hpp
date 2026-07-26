@@ -23,6 +23,13 @@ class ScriptRuntimeHost;
 //   Input.Vector3(action:String)          -> x:Float, y:Float, z:Float
 //   Input.AddMappingContext(context:String, priority:Int) -> added:Bool
 //   Input.RemoveMappingContext(context:String)            -> removed:Bool
+//   Input.Rebind(context:String, binding:String, key:String,
+//                gamepadIndex:Int, allowConflict:Bool)
+//       -> applied:Bool, conflict:String
+//   Input.SaveRebindProfile(context:String, path:String)
+//       -> saved:Bool, error:String
+//   Input.LoadRebindProfile(context:String, path:String)
+//       -> loaded:Bool, error:String
 //
 // Canonical typed-value + trigger-event names (additive aliases over the above,
 // same underlying InputSubsystem queries - kept as separate registrations rather
@@ -51,27 +58,16 @@ class ScriptRuntimeHost;
 // Pointer (LIB-117) - the mouse is a singular physical device (unlike
 // gamepads), shared by every local user, so these take NO player pin and
 // always read the primary local user's device state:
-//   Pointer.Position()       -> x:Float, y:Float (absolute, host window client pixels)
+//   Pointer.Position()       -> x:Float, y:Float (active render-viewport pixels)
 //   Pointer.Delta()          -> x:Float, y:Float (= Input.Value semantics on MouseX/MouseY)
 //   Pointer.Button(button:Int) -> pressed:Bool   (0=left, 1=right, 2=middle)
-//
-// Pointer.Scroll and Pointer.Ray are deliberately NOT implemented yet:
-//   - Scroll needs real wheel delta, which is message-driven (WM_MOUSEWHEEL),
-//     not pollable like GetAsyncKeyState/GetCursorPos/XInputGetState. Wiring it
-//     requires adding a side effect to the editor's existing, currently
-//     zero-test-coverage EditorMouseWheelRouter (sources/editor/src/app/
-//     EditorMouseWheelRouter.cpp) *and* respecting play-vs-edit-mode routing
-//     (over the scene viewport, wheel already drives edit-camera zoom) -
-//     deferred with the same reasoning as LIB-116's touch WM_TOUCH gap; see
-//     others/_temp.md's POWRÓT list.
-//   - Ray needs a screen-space-to-world unproject through the active camera's
-//     view/projection matrices. Those matrices are assembled today only in
-//     kb::render (RenderSceneCameraBuilder), not at the kb::scene/kb::script
-//     layer this API lives in, and CameraComponent has no viewport/priority
-//     fields yet - both are explicitly LIB-135's and LIB-145's scope
-//     ("Camera z pose/projection/viewport/priority" and "screen/world
-//     conversions, ray z kamery"), so implementing it here would either
-//     duplicate that work or require a new kb::scene -> kb::render dependency.
+//   Pointer.Scroll()         -> delta:Float (normalized wheel detents accumulated this frame)
+//   Pointer.Ray()            -> valid:Bool, originX/Y/Z:Float,
+//                               directionX/Y/Z:Float
+// Ray uses SceneRenderFeedback's last renderer-published active camera and
+// viewport (the single source of truth introduced by LIB-145). It reports
+// valid=false before a camera frame has actually been submitted; there is no
+// guessed camera or matrix fallback.
 //
 // Named context priority bands (LIB-118) - Input.AddMappingContext's priority
 // argument is a plain int with no established convention; these functions let

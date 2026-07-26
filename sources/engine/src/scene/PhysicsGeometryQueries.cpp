@@ -19,6 +19,8 @@ using kb::math::Abs;
 using kb::math::Dot;
 using kb::math::Max;
 using kb::math::Normalize;
+using kb::math::Inverse;
+using kb::math::Rotate;
 
 [[nodiscard]] bool IntersectRaySphere(Vec3 origin, Vec3 direction, float maxDistance, Vec3 center, float radius, float& outDistance, Vec3& outNormal) noexcept {
     const Vec3 oc = origin - center;
@@ -79,6 +81,51 @@ using kb::math::Normalize;
     return outDistance >= 0.0F && outDistance <= maxDistance;
 }
 
+// The capsule's cylindrical middle needs its own intersection: testing only
+// the two cap spheres misses a ray through the middle of any non-degenerate
+// capsule. The ray direction is normalized by the caller, so `t` remains a
+// world-space distance after the rotation into collider-local space.
+[[nodiscard]] bool IntersectRayCapsule(Vec3 origin, Vec3 direction, float maxDistance, float radius, float halfCylinder, float& outDistance, Vec3& outNormal) noexcept {
+    float bestDistance = std::numeric_limits<float>::max();
+    Vec3 bestNormal{};
+    bool hit = false;
+
+    const float radialDirectionSquared = direction.x * direction.x + direction.z * direction.z;
+    if (radialDirectionSquared > 0.000001F) {
+        const float radialOriginDirection = origin.x * direction.x + origin.z * direction.z;
+        const float radialOriginSquared = origin.x * origin.x + origin.z * origin.z;
+        const float discriminant = radialOriginDirection * radialOriginDirection - radialDirectionSquared * (radialOriginSquared - radius * radius);
+        if (discriminant >= 0.0F) {
+            const float root = std::sqrt(discriminant);
+            for (const float candidate : { (-radialOriginDirection - root) / radialDirectionSquared, (-radialOriginDirection + root) / radialDirectionSquared }) {
+                const float y = origin.y + direction.y * candidate;
+                if (candidate >= 0.0F && candidate <= maxDistance && y >= -halfCylinder && y <= halfCylinder && candidate < bestDistance) {
+                    bestDistance = candidate;
+                    bestNormal = Normalize(Vec3{ origin.x + direction.x * candidate, 0.0F, origin.z + direction.z * candidate });
+                    hit = true;
+                }
+            }
+        }
+    }
+
+    for (const Vec3 capCenter : { Vec3{ 0.0F, halfCylinder, 0.0F }, Vec3{ 0.0F, -halfCylinder, 0.0F } }) {
+        float candidateDistance = 0.0F;
+        Vec3 candidateNormal{};
+        if (IntersectRaySphere(origin, direction, maxDistance, capCenter, radius, candidateDistance, candidateNormal) && candidateDistance < bestDistance) {
+            bestDistance = candidateDistance;
+            bestNormal = candidateNormal;
+            hit = true;
+        }
+    }
+
+    if (!hit) {
+        return false;
+    }
+    outDistance = bestDistance;
+    outNormal = bestNormal;
+    return true;
+}
+
 struct RaycastAllVisitorContext {
     Scene* scene = nullptr;
     Vec3 origin{};
@@ -126,46 +173,57 @@ bool IntersectRayCollider(
     float& outDistance,
     Vec3& outNormal) noexcept {
     const Vec3 scale = Max(Abs(transform.worldScale), Vec3{ 0.0001F, 0.0001F, 0.0001F });
-    const Vec3 center = transform.worldPosition + Vec3{ collider.center.x * scale.x, collider.center.y * scale.y, collider.center.z * scale.z };
+    // Center is a local-space position, therefore it follows signed scale
+    // (a mirrored transform mirrors an offset collider); dimensions below
+    // use absolute scale because a shape extent cannot be negative.
+    const Vec3 scaledCenter{
+        collider.center.x * transform.worldScale.x,
+        collider.center.y * transform.worldScale.y,
+        collider.center.z * transform.worldScale.z,
+    };
+    const Vec3 center = transform.worldPosition + Rotate(transform.worldRotation, scaledCenter);
+    const Quat inverseRotation = Inverse(transform.worldRotation);
+    const Vec3 localOrigin = Rotate(inverseRotation, origin - center);
+    const Vec3 localDirection = Rotate(inverseRotation, direction);
     switch (collider.shape) {
     case ColliderShape::Sphere: {
         const float radius = collider.radius * std::max({ scale.x, scale.y, scale.z });
-        return IntersectRaySphere(origin, direction, maxDistance, center, radius, outDistance, outNormal);
+        if (!IntersectRaySphere(localOrigin, localDirection, maxDistance, Vec3{}, radius, outDistance, outNormal)) {
+            return false;
+        }
+        outNormal = Rotate(transform.worldRotation, outNormal);
+        return true;
     }
     case ColliderShape::Capsule: {
         const float radius = collider.radius * std::max(scale.x, scale.z);
-        const float halfHeight = std::max(0.0F, collider.height * scale.y * 0.5F - radius);
-        float bestDistance = std::numeric_limits<float>::max();
-        Vec3 bestNormal{};
-        bool hit = false;
-        for (Vec3 sphereCenter : { center + Vec3{ 0.0F, halfHeight, 0.0F }, center - Vec3{ 0.0F, halfHeight, 0.0F } }) {
-            float candidateDistance = 0.0F;
-            Vec3 candidateNormal{};
-            if (IntersectRaySphere(origin, direction, maxDistance, sphereCenter, radius, candidateDistance, candidateNormal) && candidateDistance < bestDistance) {
-                bestDistance = candidateDistance;
-                bestNormal = candidateNormal;
-                hit = true;
-            }
-        }
-        if (!hit) {
+        const float halfCylinder = std::max(0.0F, collider.height * scale.y * 0.5F - radius);
+        if (!IntersectRayCapsule(localOrigin, localDirection, maxDistance, radius, halfCylinder, outDistance, outNormal)) {
             return false;
         }
-        outDistance = bestDistance;
-        outNormal = bestNormal;
+        outNormal = Rotate(transform.worldRotation, outNormal);
         return true;
     }
     case ColliderShape::Box:
-        return IntersectRayAabb(origin, direction, maxDistance, center, Vec3{
+        if (!IntersectRayAabb(localOrigin, localDirection, maxDistance, Vec3{}, Vec3{
             std::max(0.0001F, collider.boxSize.x * scale.x * 0.5F),
             std::max(0.0001F, collider.boxSize.y * scale.y * 0.5F),
             std::max(0.0001F, collider.boxSize.z * scale.z * 0.5F),
-        }, outDistance, outNormal);
+        }, outDistance, outNormal)) {
+            return false;
+        }
+        outNormal = Rotate(transform.worldRotation, outNormal);
+        return true;
     }
     return false;
 }
 
 void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<PhysicsCastResult>& results) {
     results.Clear();
+    if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
+        !std::isfinite(direction.x) || !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
+        !std::isfinite(maxDistance) || maxDistance <= 0.0F || layerMask == 0U) {
+        return;
+    }
     const Vec3 normalizedDirection = Normalize(direction);
     if (kb::math::Length(normalizedDirection) <= 0.000001F || maxDistance <= 0.0F) {
         return;

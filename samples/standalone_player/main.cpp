@@ -1,7 +1,10 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/modules/IEngineModule.hpp"
 #include "engine/platform/win32/Win32InputCollector.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -10,6 +13,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/script/ScriptModule.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -55,6 +59,7 @@ class StandaloneSurface final : public kb::render::RenderSurface {
 public:
     ~StandaloneSurface() override {
         if (window_ != nullptr) {
+            static_cast<void>(UnregisterTouchWindow(window_));
             DestroyWindow(window_);
         }
         if (windowClass_ != 0U) {
@@ -62,10 +67,12 @@ public:
         }
     }
 
-    [[nodiscard]] bool Initialize(bool visible) noexcept {
+    [[nodiscard]] bool Initialize(
+        bool visible, kb::input::Win32InputCollector& inputCollector) noexcept {
+        inputCollector_ = &inputCollector;
         WNDCLASSEXW windowClass{};
         windowClass.cbSize = sizeof(windowClass);
-        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.lpfnWndProc = &WindowProc;
         windowClass.hInstance = GetModuleHandleW(nullptr);
         windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
         windowClass.lpszClassName = kWindowClassName;
@@ -85,8 +92,11 @@ public:
             nullptr,
             nullptr,
             windowClass.hInstance,
-            nullptr);
+            this);
         if (window_ == nullptr) {
+            return false;
+        }
+        if (RegisterTouchWindow(window_, 0U) == 0) {
             return false;
         }
         if (visible) {
@@ -117,9 +127,48 @@ public:
     }
 
 private:
+    static LRESULT CALLBACK WindowProc(
+        HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+        StandaloneSurface* surface = nullptr;
+        if (message == WM_NCCREATE) {
+            const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+            surface = static_cast<StandaloneSurface*>(create->lpCreateParams);
+            if (surface != nullptr) {
+                SetWindowLongPtrW(
+                    window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(surface));
+            }
+        } else {
+            surface = reinterpret_cast<StandaloneSurface*>(
+                GetWindowLongPtrW(window, GWLP_USERDATA));
+        }
+
+        if (surface != nullptr && surface->inputCollector_ != nullptr) {
+            if (message == WM_SIZE) {
+                const RECT viewport{
+                    .left = 0,
+                    .top = 0,
+                    .right = static_cast<LONG>(LOWORD(lparam)),
+                    .bottom = static_cast<LONG>(HIWORD(lparam)),
+                };
+                surface->inputCollector_->ConfigurePointerViewport(
+                    window, viewport, kHeadlessWidth, kHeadlessHeight);
+            }
+            const bool handled = surface->inputCollector_->HandleWindowMessage(
+                window, message, wparam, lparam);
+            if (handled) {
+                return 0;
+            }
+        }
+        if (message == WM_NCDESTROY) {
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
     static constexpr const wchar_t* kWindowClassName = L"21kbStandaloneRuntimeWindow";
     ATOM windowClass_ = 0U;
     HWND window_ = nullptr;
+    kb::input::Win32InputCollector* inputCollector_ = nullptr;
 };
 
 struct StandaloneOptions {
@@ -132,6 +181,7 @@ struct StandaloneOptions {
     bgfx::RendererType::Enum rendererType = bgfx::RendererType::Noop;
     bool selfTest = false;
     bool inputRuntimeTest = false;
+    std::string focusProbeStopEvent;
     bool help = false;
 };
 
@@ -311,6 +361,10 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             options.selfTest = true;
         } else if (argument == "--input-runtime-test") {
             options.inputRuntimeTest = true;
+        } else if (HasPrefix(argument, "--focus-probe-stop-event=")) {
+            options.focusProbeStopEvent =
+                std::string{ValueAfter(
+                    argument, "--focus-probe-stop-event=")};
         } else if (HasPrefix(argument, "--renderer=")) {
             const std::string_view rendererValue = ValueAfter(argument, "--renderer=");
             if (!ParseRenderer(rendererValue, options.rendererType)) {
@@ -504,6 +558,35 @@ int main(int argc, char** argv) {
         PrintUsage();
         return EXIT_SUCCESS;
     }
+    if (!options.focusProbeStopEvent.empty()) {
+        kb::input::Win32InputCollector focusProbeCollector;
+        StandaloneSurface focusProbeSurface;
+        if (!focusProbeSurface.Initialize(true, focusProbeCollector)) {
+            return EXIT_FAILURE;
+        }
+        static_cast<void>(BringWindowToTop(focusProbeSurface.Window()));
+        static_cast<void>(SetForegroundWindow(focusProbeSurface.Window()));
+        static_cast<void>(SetActiveWindow(focusProbeSurface.Window()));
+        SetFocus(focusProbeSurface.Window());
+        const HANDLE stopEvent = OpenEventA(
+            SYNCHRONIZE, FALSE, options.focusProbeStopEvent.c_str());
+        if (stopEvent == nullptr) {
+            return EXIT_FAILURE;
+        }
+        const ULONGLONG deadline = GetTickCount64() + 10'000U;
+        while (WaitForSingleObject(stopEvent, 0U) != WAIT_OBJECT_0 &&
+               GetTickCount64() < deadline) {
+            MSG message{};
+            while (PeekMessageW(
+                       &message, nullptr, 0U, 0U, PM_REMOVE) != 0) {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            Sleep(4U);
+        }
+        CloseHandle(stopEvent);
+        return EXIT_SUCCESS;
+    }
     if (options.assetRoot.empty() && !options.selfTest && !options.inputRuntimeTest) {
         std::fprintf(stderr, "kb_standalone_player: provide --asset-root, --self-test, or --input-runtime-test\n");
         PrintUsage();
@@ -515,22 +598,37 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    kb::input::Win32InputCollector inputCollector;
     StandaloneSurface surface;
     // Keep the automated graph cook/load check unobtrusive; normal player runs
     // and the input verification own a visible, focusable production window.
-    if (!surface.Initialize(!options.selfTest)) {
+    if (!surface.Initialize(!options.selfTest, inputCollector)) {
         std::fprintf(stderr, "kb_standalone_player: runtime window creation failed\n");
         return EXIT_FAILURE;
     }
 
-    kb::scene::Scene scene;
-    kb::input::Win32InputCollector inputCollector;
-    if (options.inputRuntimeTest) {
-        return RunStandaloneInputRuntimeVerification(scene, inputCollector, surface.Window())
-            ? EXIT_SUCCESS
-            : EXIT_FAILURE;
+    auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>();
+    kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
+    std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
+    staticModules.push_back(std::move(scriptModuleOwner));
+    kb::scene::Scene scene{kb::project::ProjectDescriptor{}, std::move(staticModules)};
+    if (!scriptModule->Succeeded() || scriptModule->Host() == nullptr) {
+        std::fprintf(stderr, "kb_standalone_player: script module initialization failed\n");
+        for (const std::string& diagnostic : scriptModule->Diagnostics()) {
+            std::fprintf(stderr, "kb_standalone_player: script module diagnostic: %s\n", diagnostic.c_str());
+        }
+        return EXIT_FAILURE;
     }
-    if (!options.assetRoot.empty() && !BuildSceneFromAssets(options, scene)) {
+    if (options.inputRuntimeTest) {
+        const kb::scene::SceneObject camera =
+            scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Standalone Input Runtime Camera",
+            });
+        scene.Components().Cameras().Set(camera.Entity(), kb::scene::CameraComponent{
+            .primary = true,
+            .viewportId = 1U,
+        });
+    } else if (!options.assetRoot.empty() && !BuildSceneFromAssets(options, scene)) {
         return EXIT_FAILURE;
     }
 
@@ -544,6 +642,14 @@ int main(int argc, char** argv) {
     if (!renderer.Initialize(surface, &config)) {
         std::fprintf(stderr, "kb_standalone_player: renderer initialization failed\n");
         return EXIT_FAILURE;
+    }
+    if (options.inputRuntimeTest) {
+        const bool cameraPublished = SubmitRuntimeFrame(renderer, scene);
+        const bool verified = cameraPublished &&
+            RunStandaloneInputRuntimeVerification(
+                scene, inputCollector, *scriptModule->Host(), surface.Window());
+        renderer.Shutdown();
+        return verified ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     // Production frame order: the platform host snapshots physical devices

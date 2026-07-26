@@ -12,6 +12,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <filesystem>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -167,6 +168,18 @@ void RunPrefabAssetRoundTripTest() {
                 .radius = 1.25F,
                 .height = 5.0F,
                 .trigger = true,
+                .friction = 0.3F,
+                .restitution = 0.7F,
+                .layer = 8U,
+            },
+            .characterController = kb::scene::CharacterControllerComponent{
+                .center = kb::scene::Vec3{ 0.4F, 0.5F, 0.6F },
+                .radius = 0.35F,
+                .height = 1.75F,
+                .slopeLimitDegrees = 43.0F,
+                .stepOffset = 0.25F,
+                .gravityScale = 1.5F,
+                .useGravity = false,
             },
         },
     });
@@ -226,6 +239,16 @@ void RunPrefabAssetRoundTripTest() {
             },
         },
     });
+    prefab.TryGetMutableNode(rootNode)->components.joint = kb::scene::ScenePrefabJointComponent{
+        .type = kb::scene::JointType::Hinge,
+        .connectedNodeStableId = prefab.Nodes()[childNode].stableId,
+        .anchor = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F },
+        .connectedAnchor = kb::scene::Vec3{ 0.4F, 0.5F, 0.6F },
+        .axis = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+        .minLimit = -20.0F,
+        .maxLimit = 35.0F,
+        .enableLimit = true,
+    };
 
     const kb::scene::ScenePrefabHandle savedHandle = source.Prefabs().Register("RoundTrip\\Prefab", std::move(prefab));
     kb::tests::Require(savedHandle.IsValid(), "Prefab asset round-trip setup failed to register prefab");
@@ -240,6 +263,8 @@ void RunPrefabAssetRoundTripTest() {
     const kb::scene::ScenePrefab loadedPrefab = target.Prefabs().Get(loadedHandle);
     kb::tests::Require(!loadedPrefab.Empty(), "Prefab asset get did not return loaded data");
     kb::tests::Require(loadedPrefab.Nodes()[rootNode].nestedPrefabGuid == "nested-template-guid", "Prefab asset did not preserve nested template guid");
+    const auto& prefabJoint = loadedPrefab.Nodes()[rootNode].components.joint;
+    kb::tests::Require(prefabJoint.has_value() && prefabJoint->type == kb::scene::JointType::Hinge && prefabJoint->connectedNodeStableId == loadedPrefab.Nodes()[childNode].stableId && kb::tests::NearlyEqual(prefabJoint->anchor.y, 0.2F) && kb::tests::NearlyEqual(prefabJoint->connectedAnchor.z, 0.6F) && kb::tests::NearlyEqual(prefabJoint->minLimit, -20.0F) && kb::tests::NearlyEqual(prefabJoint->maxLimit, 35.0F) && prefabJoint->enableLimit, "Loaded prefab joint definition was not preserved");
 
     const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedHandle);
     kb::tests::Require(instance.ObjectCount() == 2, "Loaded prefab did not instantiate all nodes");
@@ -252,6 +277,8 @@ void RunPrefabAssetRoundTripTest() {
     const kb::scene::InputComponent* input = target.Components().Inputs().TryGet(instance.ObjectAt(rootNode).Entity());
     const kb::scene::RigidbodyComponent* rigidbody = target.Components().Rigidbodies().TryGet(instance.ObjectAt(rootNode).Entity());
     const kb::scene::ColliderComponent* collider = target.Components().Colliders().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::CharacterControllerComponent* characterController = target.Components().CharacterControllers().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::JointComponent* joint = target.Components().Joints().TryGet(instance.ObjectAt(rootNode).Entity());
     const kb::scene::TagsComponent* tags = target.Components().Tags().TryGet(instance.ObjectAt(rootNode).Entity());
     const kb::scene::LightComponent* light = target.Components().Lights().TryGet(instance.ObjectAt(childNode).Entity());
     const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(instance.ObjectAt(childNode).Entity());
@@ -260,7 +287,9 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 101 && !meshRenderer->castsShadow, "Loaded prefab mesh renderer was not preserved");
     kb::tests::Require(input != nullptr && input->mappingContextAssetId == 303 && input->priority == -4 && !input->enabled, "Loaded prefab input component was not preserved");
     kb::tests::Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Kinematic && kb::tests::NearlyEqual(rigidbody->mass, 8.0F) && kb::tests::NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && !rigidbody->useGravity && rigidbody->lockRotation, "Loaded prefab rigidbody was not preserved");
-    kb::tests::Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && kb::tests::NearlyEqual(collider->center.y, 0.2F) && kb::tests::NearlyEqual(collider->boxSize.z, 4.0F) && kb::tests::NearlyEqual(collider->radius, 1.25F) && collider->trigger, "Loaded prefab collider was not preserved");
+    kb::tests::Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && kb::tests::NearlyEqual(collider->center.y, 0.2F) && kb::tests::NearlyEqual(collider->boxSize.z, 4.0F) && kb::tests::NearlyEqual(collider->radius, 1.25F) && collider->trigger && kb::tests::NearlyEqual(collider->friction, 0.3F) && kb::tests::NearlyEqual(collider->restitution, 0.7F) && collider->layer == 8U, "Loaded prefab collider material/layer was not preserved");
+    kb::tests::Require(characterController != nullptr && kb::tests::NearlyEqual(characterController->center.z, 0.6F) && kb::tests::NearlyEqual(characterController->radius, 0.35F) && kb::tests::NearlyEqual(characterController->height, 1.75F) && kb::tests::NearlyEqual(characterController->slopeLimitDegrees, 43.0F) && kb::tests::NearlyEqual(characterController->stepOffset, 0.25F) && kb::tests::NearlyEqual(characterController->gravityScale, 1.5F) && !characterController->useGravity, "Loaded prefab CharacterController was not preserved");
+    kb::tests::Require(joint != nullptr && joint->type == kb::scene::JointType::Hinge && joint->connectedEntity == instance.ObjectAt(childNode).Entity() && kb::tests::NearlyEqual(joint->anchor.y, 0.2F) && kb::tests::NearlyEqual(joint->connectedAnchor.z, 0.6F) && kb::tests::NearlyEqual(joint->minLimit, -20.0F) && kb::tests::NearlyEqual(joint->maxLimit, 35.0F) && joint->enableLimit, "Loaded prefab joint did not resolve its connected entity");
     kb::tests::Require(tags != nullptr && kb::scene::TagsText(*tags) == "Player, Runtime", "Loaded prefab tags were not preserved");
     kb::tests::Require(light != nullptr && light->kind == kb::scene::LightKind::Spot && kb::tests::NearlyEqual(light->intensity, 6.0F), "Loaded prefab light was not preserved");
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->areaWidth, 2.0F) && kb::tests::NearlyEqual(light->areaHeight, 0.5F), "Loaded prefab light area size was not preserved");
@@ -531,6 +560,16 @@ void RunNestedPrefabAssetRoundTripTest() {
         .name = "Nested Asset Child",
         .parentNode = innerRoot,
     });
+    kb::scene::ScenePrefabNodeDesc* innerRootNode = innerPrefab.TryGetMutableNode(innerRoot);
+    const kb::scene::ScenePrefabNodeDesc* innerChildNode = innerPrefab.TryGetNode(innerChild);
+    kb::tests::Require(innerRootNode != nullptr && innerChildNode != nullptr, "Nested joint fixture nodes were not created");
+    innerRootNode->components.joint = kb::scene::ScenePrefabJointComponent{
+        .type = kb::scene::JointType::Distance,
+        .connectedNodeStableId = innerChildNode->stableId,
+        .minLimit = 1.0F,
+        .maxLimit = 3.0F,
+        .enableLimit = true,
+    };
     const kb::scene::ScenePrefabHandle innerHandle = source.Prefabs().Register("NestedAssetInner", std::move(innerPrefab));
     kb::tests::Require(source.Prefabs().Save(innerHandle, innerPath), "Nested inner prefab save failed");
 
@@ -550,9 +589,67 @@ void RunNestedPrefabAssetRoundTripTest() {
     const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedOuter);
     kb::tests::Require(instance.ObjectCount() == 3, "Loaded nested outer prefab did not compose inner hierarchy");
     kb::tests::Require(target.Entities().Name(instance.ObjectAt(2)) == "Nested Asset Child Override", "Loaded nested outer prefab did not preserve nested override");
+    const kb::scene::JointComponent* nestedJoint = target.Components().Joints().TryGet(instance.ObjectAt(1).Entity());
+    kb::tests::Require(nestedJoint != nullptr && nestedJoint->type == kb::scene::JointType::Distance &&
+                            nestedJoint->connectedEntity == instance.ObjectAt(2).Entity() &&
+                            kb::tests::NearlyEqual(nestedJoint->minLimit, 1.0F) && kb::tests::NearlyEqual(nestedJoint->maxLimit, 3.0F) && nestedJoint->enableLimit,
+        "Nested prefab joint did not remap its stable target to the composed instance's child entity");
 
     std::filesystem::remove(innerPath, removeError);
     std::filesystem::remove(outerPath, removeError);
+}
+
+void RunPrefabCaptureRejectsExternalJointTargetTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "External Joint Owner" });
+    const kb::scene::SceneObject externalTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "External Joint Target" });
+    scene.Components().Joints().Set(owner.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Fixed,
+        .connectedEntity = externalTarget.Entity(),
+    });
+
+    kb::scene::ScenePrefab captured = scene.Prefabs().Capture(owner);
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("ExternalJointMustNotBecomeWorld", std::move(captured));
+    kb::tests::Require(!handle.IsValid(),
+        "Capturing a prefab joint that points outside its subtree must be rejected, never silently converted into a world joint");
+}
+
+void RunPhysicsComponentPrefabHashCoverageTest() {
+    kb::scene::ScenePrefab baseline;
+    const std::uint32_t nodeIndex = baseline.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Physics Hash Coverage",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .collider = kb::scene::ColliderComponent{},
+            .characterController = kb::scene::CharacterControllerComponent{},
+        },
+    });
+    const auto prefabGuid = [](kb::scene::ScenePrefab prefab) {
+        kb::scene::Scene scene;
+        const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("PhysicsHashCoverage", std::move(prefab));
+        kb::tests::Require(handle.IsValid(), "Physics prefab hash fixture could not be registered");
+        return scene.Prefabs().Guid(handle);
+    };
+    const std::string baselineGuid = prefabGuid(baseline);
+
+    const auto requireHashChange = [&baseline, nodeIndex, &prefabGuid, &baselineGuid](auto mutate, const char* message) {
+        kb::scene::ScenePrefab changed = baseline;
+        kb::scene::ScenePrefabNodeDesc* node = changed.TryGetMutableNode(nodeIndex);
+        kb::tests::Require(node != nullptr, "Physics prefab hash fixture node is missing");
+        mutate(node->components);
+        kb::tests::Require(prefabGuid(std::move(changed)) != baselineGuid, message);
+    };
+
+    requireHashChange([](kb::scene::ScenePrefabNodeComponents& components) { components.collider->friction = 0.2F; },
+        "Prefab hash must change when Collider PhysicsMaterial friction changes");
+    requireHashChange([](kb::scene::ScenePrefabNodeComponents& components) { components.collider->restitution = 0.8F; },
+        "Prefab hash must change when Collider PhysicsMaterial restitution changes");
+    requireHashChange([](kb::scene::ScenePrefabNodeComponents& components) { components.collider->layer = 8U; },
+        "Prefab hash must change when Collider layer changes");
+    requireHashChange([](kb::scene::ScenePrefabNodeComponents& components) { components.characterController->stepOffset = 0.75F; },
+        "Prefab hash must change when CharacterController payload changes");
+    requireHashChange([](kb::scene::ScenePrefabNodeComponents& components) {
+        components.joint = kb::scene::ScenePrefabJointComponent{ .connectedNodeStableId = 0U, .maxLimit = 2.0F };
+    }, "Prefab hash must change when Joint payload is added");
 }
 
 } // namespace
@@ -571,6 +668,8 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabParentOverrideAssetRoundTripTest", RunPrefabParentOverrideAssetRoundTripTest);
     run("RunPrefabVariantAddedChildAssetRoundTripTest", RunPrefabVariantAddedChildAssetRoundTripTest);
     run("RunNestedPrefabAssetRoundTripTest", RunNestedPrefabAssetRoundTripTest);
+    run("RunPrefabCaptureRejectsExternalJointTargetTest", RunPrefabCaptureRejectsExternalJointTargetTest);
+    run("RunPhysicsComponentPrefabHashCoverageTest", RunPhysicsComponentPrefabHashCoverageTest);
 }
 
 } // namespace kb::tests

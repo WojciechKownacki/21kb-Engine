@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
+#include "scene/prefab/ScenePrefabValidator.hpp"
 #include "scene/prefab/io/ScenePrefabAssetReader.hpp"
 #include "scene/prefab/io/ScenePrefabAssetWriter.hpp"
 
@@ -87,6 +88,9 @@ bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const
     if (record == nullptr) {
         return false;
     }
+    if (!ScenePrefabValidator::IsValid(record->prefab)) {
+        return false;
+    }
 
     return ScenePrefabAssetWriter::Write(
         path,
@@ -104,6 +108,9 @@ bool ScenePrefabAssetService::Save(Scene& scene, ScenePrefabHandle handle, const
 ScenePrefabHandle ScenePrefabAssetService::Load(Scene& scene, const std::filesystem::path& path) {
     ScenePrefabAssetReadResult asset;
     if (!ScenePrefabAssetReader::Read(path, asset)) {
+        return {};
+    }
+    if (asset.kind == ScenePrefabAssetKind::Template && !ScenePrefabValidator::IsValid(asset.prefab)) {
         return {};
     }
     SceneState& state = SceneAccess::State(scene);

@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneCharacterControllerComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -42,6 +43,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneInputComponents inputs;
     SceneRigidbodyComponents rigidbodies;
     SceneColliderComponents colliders;
+    SceneCharacterControllerComponents characterControllers;
     SceneTagsComponents tags;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;

@@ -55,6 +55,9 @@ struct InputRebindConflict {
 // profile is assumed to have already passed validation when it was created.
 void ApplyRebindProfile(InputMappingContextAsset& context, std::span<const InputRebindOverride> overrides);
 
+[[nodiscard]] bool IsValidRebindProfile(
+    std::span<const InputRebindOverride> overrides) noexcept;
+
 // Binary round-trip for a rebind profile (LIB-119). Reuses InputAssetIO's
 // magic/version/atomic-write conventions rather than inventing new I/O
 // primitives. This is NOT the general user-settings/SaveGame system
