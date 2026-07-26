@@ -3,6 +3,7 @@
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/ScenePrefabNode.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <cstdint>
@@ -22,6 +23,9 @@ public:
 
     [[nodiscard]] static bool ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output);
     static void WriteCharacterController(std::vector<std::uint8_t>& output, const CharacterControllerComponent& characterController);
+
+    [[nodiscard]] static bool ReadJoint(SceneAssetBinaryIO::ByteReader& input, ScenePrefabJointComponent& output);
+    static void WriteJoint(std::vector<std::uint8_t>& output, const ScenePrefabJointComponent& joint);
 };
 
 } // namespace kb::scene

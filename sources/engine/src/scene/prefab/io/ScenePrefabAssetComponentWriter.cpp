@@ -89,6 +89,32 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "collider.radius=" << components.collider->radius << '\n';
         output << "collider.height=" << components.collider->height << '\n';
         output << "collider.trigger=" << (components.collider->trigger ? 1 : 0) << '\n';
+        output << "collider.friction=" << components.collider->friction << '\n';
+        output << "collider.restitution=" << components.collider->restitution << '\n';
+        output << "collider.layer=" << components.collider->layer << '\n';
+    }
+
+    output << "characterController=" << (components.characterController.has_value() ? 1 : 0) << '\n';
+    if (components.characterController.has_value()) {
+        WriteVec3(output, "characterController.center", components.characterController->center);
+        output << "characterController.radius=" << components.characterController->radius << '\n';
+        output << "characterController.height=" << components.characterController->height << '\n';
+        output << "characterController.slopeLimitDegrees=" << components.characterController->slopeLimitDegrees << '\n';
+        output << "characterController.stepOffset=" << components.characterController->stepOffset << '\n';
+        output << "characterController.gravityScale=" << components.characterController->gravityScale << '\n';
+        output << "characterController.useGravity=" << (components.characterController->useGravity ? 1 : 0) << '\n';
+    }
+
+    output << "joint=" << (components.joint.has_value() ? 1 : 0) << '\n';
+    if (components.joint.has_value()) {
+        output << "joint.type=" << static_cast<int>(components.joint->type) << '\n';
+        output << "joint.connectedNodeStableId=" << components.joint->connectedNodeStableId << '\n';
+        WriteVec3(output, "joint.anchor", components.joint->anchor);
+        WriteVec3(output, "joint.connectedAnchor", components.joint->connectedAnchor);
+        WriteVec3(output, "joint.axis", components.joint->axis);
+        output << "joint.minLimit=" << components.joint->minLimit << '\n';
+        output << "joint.maxLimit=" << components.joint->maxLimit << '\n';
+        output << "joint.enableLimit=" << (components.joint->enableLimit ? 1 : 0) << '\n';
     }
 
     output << "tags=" << (components.tags.has_value() ? 1 : 0) << '\n';

@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 132> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 137> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -144,6 +144,9 @@ constexpr std::array<LuaBindingSpec, 132> kLuaBindings{ {
     { "Input", "Vector3", "Input.Vector3", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Input", "AddMappingContext", "Input.AddMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "RemoveMappingContext", "Input.RemoveMappingContext", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "Rebind", "Input.Rebind", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Input", "SaveRebindProfile", "Input.SaveRebindProfile", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Input", "LoadRebindProfile", "Input.LoadRebindProfile", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Input", "ActionBool", "Input.ActionBool", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "ActionFloat", "Input.ActionFloat", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "Action2D", "Input.Action2D", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
@@ -162,6 +165,8 @@ constexpr std::array<LuaBindingSpec, 132> kLuaBindings{ {
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Pointer", "Scroll", "Pointer.Scroll", ScriptApiCatalogLuaReturnKind::SingleOutput, "delta" },
+    { "Pointer", "Ray", "Pointer.Ray", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Task", "WaitSeconds", "Task.WaitSeconds", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
     { "Task", "WaitFixedSteps", "Task.WaitFixedSteps", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
     { "Task", "WaitEvent", "Task.WaitEvent", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },

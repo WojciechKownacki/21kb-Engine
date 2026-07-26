@@ -204,6 +204,19 @@ if(TARGET kb_engine_tests)
     )
 endif()
 
+if(TARGET kb_cli_tests)
+    add_dependencies(kb_cli_tests kb_physics_jolt_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_PHYSICS_JOLT_CLI_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
+    else()
+        set(KB_PHYSICS_JOLT_CLI_TEST_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_cli_tests
+        PRIVATE
+            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"${KB_PHYSICS_JOLT_CLI_TEST_PLUGIN_PATH}\""
+    )
+endif()
+
 if(KB_BUILD_RENDERER)
     if(NOT WIN32)
         message(FATAL_ERROR "KB_BUILD_RENDERER currently requires the Win32 bgfx surface integration. Configure with -DKB_BUILD_RENDERER=OFF on non-Windows hosts.")

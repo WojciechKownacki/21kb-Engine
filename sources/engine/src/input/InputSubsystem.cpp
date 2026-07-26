@@ -27,6 +27,22 @@ bool InputSubsystem::HasMappingContext(std::uint64_t contextId) const noexcept {
     return stack_.Has(contextId);
 }
 
+InputRuntimeRebindResult InputSubsystem::Rebind(
+    std::uint64_t contextId, std::uint64_t bindingId, InputKey newKey,
+    std::uint8_t gamepadIndex, bool allowConflict) {
+    return stack_.Rebind(contextId, bindingId, newKey, gamepadIndex, allowConflict);
+}
+
+bool InputSubsystem::SetRebindProfile(
+    std::uint64_t contextId, std::span<const InputRebindOverride> overrides) {
+    return stack_.SetRebindProfile(contextId, overrides);
+}
+
+std::span<const InputRebindOverride> InputSubsystem::RebindProfile(
+    std::uint64_t contextId) const noexcept {
+    return stack_.RebindProfile(contextId);
+}
+
 void InputSubsystem::Evaluate(float deltaSeconds) {
     EvaluateWithDeviceState(deviceState_, deltaSeconds);
 }

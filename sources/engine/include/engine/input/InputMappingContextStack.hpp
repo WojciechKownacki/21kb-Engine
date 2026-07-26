@@ -6,14 +6,17 @@
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputModifierDesc.hpp"
 #include "engine/input/InputModifiers.hpp"
+#include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputTriggerDesc.hpp"
 #include "engine/input/InputTriggers.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::input {
@@ -21,6 +24,7 @@ namespace kb::input {
 // A resolved mapping: one key->action binding with its action metadata resolved
 // and per-frame state-machine storage for modifiers and triggers.
 struct ResolvedMapping {
+    std::uint64_t bindingId = 0U;
     std::string actionName;
     InputActionValueType valueType = InputActionValueType::Bool;
     bool consumeInput = true;
@@ -39,6 +43,7 @@ struct ResolvedMapping {
 // modifier/trigger stack. See InputCompositeBinding for why this is not just a
 // set of ResolvedMappings summed independently.
 struct ResolvedComposite {
+    std::uint64_t bindingId = 0U;
     std::string actionName;
     InputActionValueType valueType = InputActionValueType::Bool;
     bool consumeInput = true;
@@ -55,6 +60,11 @@ struct ActiveMappingContext {
     std::int32_t priority = 0;
     std::vector<ResolvedMapping> mappings;
     std::vector<ResolvedComposite> composites;
+};
+
+struct InputRuntimeRebindResult {
+    bool applied = false;
+    std::optional<InputRebindConflict> conflict;
 };
 
 // Owns the prioritized stack of active mapping contexts and turns mapping-context
@@ -77,6 +87,22 @@ public:
     void Clear() noexcept;
     [[nodiscard]] bool Has(std::uint64_t contextId) const noexcept;
 
+    // Stores a user override above the immutable mapping-context asset and
+    // immediately rebuilds the live resolved context without changing its
+    // priority. A rejected conflict leaves both the profile and live mappings
+    // untouched.
+    [[nodiscard]] InputRuntimeRebindResult Rebind(
+        std::uint64_t contextId, std::uint64_t bindingId, InputKey newKey,
+        std::uint8_t gamepadIndex, bool allowConflict = false);
+
+    // Replaces the complete persisted profile for one context. Stale binding
+    // ids are retained in the profile (so a temporarily removed binding can
+    // return in a later content version) and ignored while resolving.
+    [[nodiscard]] bool SetRebindProfile(
+        std::uint64_t contextId, std::span<const InputRebindOverride> overrides);
+    [[nodiscard]] std::span<const InputRebindOverride> RebindProfile(
+        std::uint64_t contextId) const noexcept;
+
     // Active contexts, sorted by priority (descending). Mutable so the evaluator
     // can advance each mapping's per-frame runtime state.
     [[nodiscard]] std::span<ActiveMappingContext> Active() noexcept {
@@ -84,11 +110,19 @@ public:
     }
 
 private:
+    [[nodiscard]] bool BuildActive(
+        std::uint64_t contextId, std::int32_t priority,
+        std::span<const InputRebindOverride> overrides,
+        ActiveMappingContext& active) const;
+    [[nodiscard]] std::optional<std::int32_t> ActivePriority(
+        std::uint64_t contextId) const noexcept;
+    void ReplaceActive(ActiveMappingContext active);
     void SortByPriority();
 
     ActionResolver actionResolver_;
     ContextResolver contextResolver_;
     std::vector<ActiveMappingContext> contexts_; // sorted by priority, descending
+    std::unordered_map<std::uint64_t, std::vector<InputRebindOverride>> rebindProfiles_;
 };
 
 } // namespace kb::input

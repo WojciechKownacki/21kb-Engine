@@ -15,7 +15,8 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
         if (parentNode != ScenePrefabNodeDesc::NoParent && parentNode >= nodeIndex) {
             return false;
         }
-        if (nodes[nodeIndex].stableId == ScenePrefabNodeDesc::InvalidStableId) {
+        if (nodes[nodeIndex].stableId == ScenePrefabNodeDesc::InvalidStableId ||
+            nodes[nodeIndex].stableId == ScenePrefabJointComponent::UnresolvedConnectedNodeStableId) {
             return false;
         }
         stableIds.push_back(nodes[nodeIndex].stableId);
@@ -23,6 +24,18 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
     std::sort(stableIds.begin(), stableIds.end());
     if (std::adjacent_find(stableIds.begin(), stableIds.end()) != stableIds.end()) {
         return false;
+    }
+    for (const ScenePrefabNodeDesc& node : nodes) {
+        if (!node.components.joint.has_value()) {
+            continue;
+        }
+        const std::uint64_t targetStableId = node.components.joint->connectedNodeStableId;
+        if (targetStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+            continue;
+        }
+        if (targetStableId == node.stableId || !std::binary_search(stableIds.begin(), stableIds.end(), targetStableId)) {
+            return false;
+        }
     }
     return true;
 }

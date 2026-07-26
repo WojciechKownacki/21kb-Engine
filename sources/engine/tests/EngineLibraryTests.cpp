@@ -2421,9 +2421,8 @@ void RunEngineLibraryComponentRegistryTest() {
         "Engine21kbLibrary component id must differ for different names");
 
     // Honest serializable check: round-trip a scene containing every
-    // cataloged component, then verify only the ones marked serializable=true
-    // actually survive Save+Load, and the ones marked false (Visibility is
-    // NOT one of them - see below; Joint is) genuinely do not.
+    // cataloged component and verify that every serializable claim survives
+    // Save+Load with its real field values and cross-entity references.
     kb::scene::Scene source;
     const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
     source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .visible = false });
@@ -2434,7 +2433,8 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{ .mass = 12.5F });
     source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
     source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .slopeLimitDegrees = 40.0F, .stepOffset = 0.3F, .gravityScale = 1.5F, .useGravity = false });
-    source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .minLimit = -45.0F });
+    const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
+    source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -2448,8 +2448,18 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::scene::Scene target;
     kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile), "Engine21kbLibrary component registry round-trip scene was not loaded");
     const std::vector<kb::scene::SceneEntity> roots = target.Hierarchy().RootEntities();
-    kb::tests::Require(roots.size() == 1U, "Engine21kbLibrary component registry round-trip scene must restore exactly one root entity");
-    const kb::scene::SceneEntity restored = roots.front();
+    kb::tests::Require(roots.size() == 2U, "Engine21kbLibrary component registry round-trip scene must restore both cross-root joint bodies");
+    kb::scene::SceneEntity restored{};
+    kb::scene::SceneEntity restoredJointTarget{};
+    for (const kb::scene::SceneEntity root : roots) {
+        if (target.Entities().Name(root) == "ComponentRegistrySubject") {
+            restored = root;
+        } else if (target.Entities().Name(root) == "ComponentRegistryJointTarget") {
+            restoredJointTarget = root;
+        }
+    }
+    kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid(),
+        "Engine21kbLibrary component registry round-trip must identify both joint bodies by their persisted names");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -2487,17 +2497,18 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredCharacterController->gravityScale, 1.5F) &&
                             !restoredCharacterController->useGravity,
         "Engine21kbLibrary component registry: CharacterController's slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive a save/load round trip");
-    // Joint is deliberately serializable=false (connectedEntity is a live
-    // runtime handle with no stable cross-node serialization scheme yet) -
-    // this must genuinely NOT survive, the same honesty check Visibility's
-    // comment above already established the precedent for.
-    kb::tests::Require(!target.Components().Joints().Has(restored),
-        "Engine21kbLibrary component registry: Joint is marked serializable=false and must NOT survive a save/load round trip");
+    // Joint stores a prefab-local stable target id and resolves it to this
+    // loaded scene's live entity only after every node has been created.
+    const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
+    kb::tests::Require(restoredJoint != nullptr && restoredJoint->type == kb::scene::JointType::Hinge &&
+                            restoredJoint->connectedEntity == restoredJointTarget &&
+                            kb::tests::NearlyEqual(restoredJoint->minLimit, -45.0F) &&
+                            kb::tests::NearlyEqual(restoredJoint->maxLimit, 45.0F) && restoredJoint->enableLimit,
+        "Engine21kbLibrary component registry: Joint must survive real cross-root save/load with connectedEntity remapped to the loaded target");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
-        const bool expectedSerializable = desc.name != "Joint";
-        kb::tests::Require(desc.serializable == expectedSerializable,
-            "Engine21kbLibrary component registry: every cataloged component is serializable=true except Joint — verified against the real save/load round trip above, not assumed");
+        kb::tests::Require(desc.serializable,
+            "Engine21kbLibrary component registry: every cataloged component is serializable=true after the real save/load round trip above");
     }
 }
 

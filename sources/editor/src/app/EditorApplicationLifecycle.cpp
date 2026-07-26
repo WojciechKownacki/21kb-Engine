@@ -29,6 +29,12 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         state.windowClasses.Unregister();
         return false;
     }
+    if (RegisterTouchWindow(state.window, 0U) == 0) {
+        DestroyWindow(state.window);
+        state.window = nullptr;
+        state.windowClasses.Unregister();
+        return false;
+    }
 
     EditorMainWindow::EnableDarkMode(state.window);
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
@@ -55,6 +61,7 @@ void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Shutdown();
 
     if (state.window != nullptr) {
+        static_cast<void>(UnregisterTouchWindow(state.window));
         DestroyWindow(state.window);
         state.window = nullptr;
     }

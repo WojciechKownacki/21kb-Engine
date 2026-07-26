@@ -86,6 +86,11 @@ class IPhysicsBackend {
 public:
     virtual ~IPhysicsBackend() = default;
 
+    // These Rigidbody controls are defined for a live Dynamic body only.
+    // Kinematic motion has the separate MoveKinematic contract below, while
+    // Static bodies have no simulated velocity or sleep state. Backends must
+    // return false (and getters found=false) instead of reporting a Jolt-like
+    // silent no-op as a successful command for either of those body types.
     virtual bool AddForce(SceneEntity entity, Vec3 force) noexcept = 0;
     virtual bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept = 0;
     virtual bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept = 0;
@@ -94,7 +99,9 @@ public:
     [[nodiscard]] virtual PhysicsVectorResult GetAngularVelocity(SceneEntity entity) const noexcept = 0;
     // Moves a Kinematic body toward a target pose over deltaSeconds (Jolt's
     // BodyInterface::MoveKinematic - velocity-based, not a teleport). No-op
-    // (returns false) for a non-Kinematic body.
+    // (returns false) for a non-Kinematic body or non-finite input. The
+    // target rotation must be finite and normalized; callers must not rely on
+    // a backend to repair malformed pose data before it reaches the SDK.
     virtual bool MoveKinematic(SceneEntity entity, Vec3 targetPosition, Quat targetRotation, float deltaSeconds) noexcept = 0;
     virtual bool Sleep(SceneEntity entity) noexcept = 0;
     virtual bool Wake(SceneEntity entity) noexcept = 0;
@@ -102,7 +109,7 @@ public:
 
     // LIB-125: swept-shape cast (closest hit only, along direction*maxDistance),
     // fixed-position overlap (closest overlapping body), and closest surface
-    // point on a specific entity's collider. Real, physics-engine-backed
+    // point on a specific entity's collider, all filtered by layerMask. Real, physics-engine-backed
     // queries (unlike Physics.Raycast, which stays pure ColliderComponent/
     // TransformComponent geometry - a deliberate, unchanged, zero-regression
     // decision; swept-shape collision detection against arbitrary
@@ -110,7 +117,7 @@ public:
     // engine's real physics backend already solves correctly).
     [[nodiscard]] virtual PhysicsCastResult CastShape(const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept = 0;
     [[nodiscard]] virtual PhysicsOverlapResult OverlapShape(const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept = 0;
-    [[nodiscard]] virtual PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point) const noexcept = 0;
+    [[nodiscard]] virtual PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point, std::uint32_t layerMask) const noexcept = 0;
 
     // LIB-126: "All hits" variants of CastShape/OverlapShape - unlike the
     // closest-hit-only queries above, a call here can genuinely intersect an
@@ -234,7 +241,7 @@ public:
 
     [[nodiscard]] static PhysicsCastResult CastShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
     [[nodiscard]] static PhysicsOverlapResult OverlapShape(Scene& scene, const PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
-    [[nodiscard]] static PhysicsClosestPointResult ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point) noexcept;
+    [[nodiscard]] static PhysicsClosestPointResult ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point, std::uint32_t layerMask = kPhysicsAllLayers) noexcept;
 
     // LIB-126: honest empty (results.Count()==0) when no backend is
     // registered, same convention as every other facade method above.

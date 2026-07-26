@@ -7,6 +7,7 @@
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
+#include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -22,6 +23,26 @@
 
 namespace kb::scene {
 
+// Persistent joint data deliberately stores a prefab-node stable id instead of
+// SceneEntity. SceneEntity is a live ECS handle and is only resolved after an
+// instance has created all of its nodes.
+struct ScenePrefabJointComponent {
+    static constexpr std::uint64_t InvalidConnectedNodeStableId = 0U;
+    // Capture uses this only to make an external live-entity reference
+    // unambiguously invalid. Validator rejects it before a prefab can be
+    // saved or instantiated; it can never degrade into a world joint.
+    static constexpr std::uint64_t UnresolvedConnectedNodeStableId = UINT64_MAX;
+
+    JointType type = JointType::Fixed;
+    std::uint64_t connectedNodeStableId = InvalidConnectedNodeStableId;
+    Vec3 anchor{};
+    Vec3 connectedAnchor{};
+    Vec3 axis{ 0.0F, 1.0F, 0.0F };
+    float minLimit = 0.0F;
+    float maxLimit = 0.0F;
+    bool enableLimit = false;
+};
+
 struct ScenePrefabNodeComponents {
     std::optional<CameraComponent> camera;
     std::optional<MeshRendererComponent> meshRenderer;
@@ -30,6 +51,7 @@ struct ScenePrefabNodeComponents {
     std::optional<RigidbodyComponent> rigidbody;
     std::optional<ColliderComponent> collider;
     std::optional<CharacterControllerComponent> characterController;
+    std::optional<ScenePrefabJointComponent> joint;
     std::optional<TagsComponent> tags;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;

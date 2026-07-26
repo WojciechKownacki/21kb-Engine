@@ -255,10 +255,11 @@ public:
         return kb::scene::PhysicsOverlapResult{ .overlapping = true, .entity = knownEntity };
     }
 
-    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(kb::scene::SceneEntity entity, kb::scene::Vec3 point) const noexcept override {
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(kb::scene::SceneEntity entity, kb::scene::Vec3 point, std::uint32_t layerMask) const noexcept override {
         lastClosestPointEntity = entity;
         lastClosestPointQuery = point;
-        if (entity != knownEntity) {
+        lastClosestPointLayerMask = layerMask;
+        if (entity != knownEntity || (layerMask & closestPointHitMask) == 0U) {
             return {};
         }
         return kb::scene::PhysicsClosestPointResult{ .found = true, .point = kb::scene::Vec3{ point.x, 0.0F, point.z }, .distance = point.y };
@@ -373,6 +374,7 @@ public:
 
     std::uint32_t castHitMask = 0x1U;
     std::uint32_t overlapHitMask = 0x1U;
+    std::uint32_t closestPointHitMask = 0x1U;
     mutable kb::scene::PhysicsShapeDesc lastCastShape{};
     mutable kb::scene::Vec3 lastCastOrigin{};
     mutable kb::scene::Vec3 lastCastDirection{};
@@ -383,6 +385,7 @@ public:
     mutable std::uint32_t lastOverlapLayerMask = 0U;
     mutable kb::scene::SceneEntity lastClosestPointEntity{};
     mutable kb::scene::Vec3 lastClosestPointQuery{};
+    mutable std::uint32_t lastClosestPointLayerMask = 0U;
 
 private:
     kb::scene::Vec3 velocity_{};
@@ -5524,6 +5527,7 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     backend.knownEntity = object.Entity();
     backend.castHitMask = 0x1U;
     backend.overlapHitMask = 0x4U;
+    backend.closestPointHitMask = 0x8U;
     kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
 
     // SphereCast: default layerMask (kPhysicsAllLayers) intersects
@@ -5536,6 +5540,15 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
         "Physics.SphereCast must pass the exact shape radius through to the backend");
     kb::tests::Require(kb::tests::NearlyEqual(backend.lastCastOrigin.y, 5.0F) && kb::tests::NearlyEqual(backend.lastCastMaxDistance, 10.0F),
         "Physics.SphereCast must pass origin and distance through to the backend");
+
+    std::vector<kb::script::ScriptFunctionArgument> nonUnitSphereCastArgs = sphereCastArgs;
+    nonUnitSphereCastArgs[4].value = kb::script::ScriptValue{ -4.0F };
+    kb::tests::Require(host.Functions().Call("Physics.SphereCast", nonUnitSphereCastArgs, context).Succeeded() && kb::tests::NearlyEqual(backend.lastCastDirection.y, -1.0F),
+        "Physics.SphereCast must normalize a finite non-unit direction before backend dispatch");
+    std::vector<kb::script::ScriptFunctionArgument> invalidSphereCastArgs = sphereCastArgs;
+    invalidSphereCastArgs[4].value = kb::script::ScriptValue{ std::numeric_limits<float>::infinity() };
+    kb::tests::Require(!host.Functions().Call("Physics.SphereCast", invalidSphereCastArgs, context).Succeeded(),
+        "Physics.SphereCast must reject a non-finite direction before backend dispatch");
 
     // A layerMask that does not intersect castHitMask (0x1) must miss even
     // though the shape/origin/direction are otherwise identical.
@@ -5561,6 +5574,10 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
             && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.y, 2.0F)
             && kb::tests::NearlyEqual(backend.lastCastShape.boxHalfExtents.z, 3.0F),
         "Physics.BoxCast must pass the exact half-extents through to the backend");
+    std::vector<kb::script::ScriptFunctionArgument> invalidBoxCastArgs = boxCastArgs;
+    invalidBoxCastArgs[6].value = kb::script::ScriptValue{ std::numeric_limits<float>::quiet_NaN() };
+    kb::tests::Require(!host.Functions().Call("Physics.BoxCast", invalidBoxCastArgs, context).Succeeded(),
+        "Physics.BoxCast must reject a non-finite half extent before backend dispatch");
 
     const std::vector<kb::script::ScriptFunctionArgument> capsuleCastArgs{
         kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
@@ -5625,6 +5642,19 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
             && kb::tests::NearlyEqual(closestPoint.Output("z")->AsFloat(), 5.0F)
             && kb::tests::NearlyEqual(closestPoint.Output("distance")->AsFloat(), 4.0F),
         "Physics.ClosestPoint must return the backend's exact point/distance for a known entity");
+    kb::tests::Require(backend.lastClosestPointLayerMask == kb::scene::kPhysicsAllLayers,
+        "Physics.ClosestPoint must supply the default layer mask when it is omitted");
+    std::vector<kb::script::ScriptFunctionArgument> maskedClosestPointArgs = closestPointArgs;
+    maskedClosestPointArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "layerMask", .value = kb::script::ScriptValue{ 0x4 } });
+    kb::tests::Require(!host.Functions().Call("Physics.ClosestPoint", maskedClosestPointArgs, context).Output("found")->AsBool(),
+        "Physics.ClosestPoint with a non-intersecting layerMask must report found=false");
+    maskedClosestPointArgs.back().value = kb::script::ScriptValue{ 0x8 };
+    kb::tests::Require(host.Functions().Call("Physics.ClosestPoint", maskedClosestPointArgs, context).Output("found")->AsBool(),
+        "Physics.ClosestPoint with a matching layerMask must report found=true");
+    std::vector<kb::script::ScriptFunctionArgument> invalidClosestPointArgs = closestPointArgs;
+    invalidClosestPointArgs[1].value = kb::script::ScriptValue{ std::numeric_limits<float>::quiet_NaN() };
+    kb::tests::Require(!host.Functions().Call("Physics.ClosestPoint", invalidClosestPointArgs, context).Succeeded(),
+        "Physics.ClosestPoint must reject a non-finite query point before backend dispatch");
     const std::vector<kb::script::ScriptFunctionArgument> unknownClosestPointArgs{
         kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ unknownObject.Entity().Id(), kb::script::ScriptValueType::Entity } },
         kb::script::ScriptFunctionArgument{ .name = "pointX", .value = kb::script::ScriptValue{ 0.0F } },
@@ -5652,7 +5682,7 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
         std::to_string(object.Entity().Id()) + "\n"
                                                 "    local cast = Physics.SphereCast(0.0, 5.0, 0.0, 0.0, -1.0, 0.0, 10.0, 0.75)\n"
                                                 "    local overlap = Physics.OverlapSphere(1.0, 2.0, 3.0, 1.5, 4)\n"
-                                                "    local closest = Physics.ClosestPoint(entityId, 3.0, 4.0, 5.0)\n"
+                                                "    local closest = Physics.ClosestPoint(entityId, 3.0, 4.0, 5.0, 8)\n"
                                                 "    SetShared(\"luaCastHit\", cast.hit)\n"
                                                 "    SetShared(\"luaCastEntity\", cast.entity)\n"
                                                 "    SetShared(\"luaOverlapEntity\", overlap.entity)\n"
@@ -8719,6 +8749,195 @@ end
         "Lua Input.RemoveMappingContext did not remove the active context");
 }
 
+void RunScriptInputRebindApiTest() {
+    using namespace kb::input;
+
+    auto move = std::make_shared<InputActionAsset>();
+    move->name = "Move";
+    move->valueType = InputActionValueType::Bool;
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+
+    auto mappingContext = std::make_shared<InputMappingContextAsset>();
+    mappingContext->mappings.push_back(InputKeyMapping{
+        .bindingId = 1U,
+        .actionId = 1U,
+        .key = InputKey::W,
+    });
+    mappingContext->mappings.push_back(InputKeyMapping{
+        .bindingId = 2U,
+        .actionId = 2U,
+        .key = InputKey::Space,
+    });
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{
+        {1U, move},
+        {2U, jump},
+    };
+    std::unordered_map<
+        std::uint64_t, std::shared_ptr<InputMappingContextAsset>>
+        contexts{{50U, mappingContext}};
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id)
+            -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id)
+            -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(
+        scene.Input().AddMappingContext(50U, 91),
+        "Script rebind test could not activate its context");
+
+    kb::script::ScriptRuntimeHost host{scene};
+    kb::tests::Require(
+        host.Succeeded(), "Script rebind API host did not initialize");
+    kb::tests::Require(
+        host.Functions().FindSignature("Input.Rebind") != nullptr &&
+            host.Functions().FindSignature("Input.SaveRebindProfile") !=
+                nullptr &&
+            host.Functions().FindSignature("Input.LoadRebindProfile") !=
+                nullptr,
+        "Script rebind API functions were not registered");
+    const kb::script::ScriptFunctionCallContext callContext{
+        .scene = &scene,
+        .deltaSeconds = 0.016F,
+    };
+    const auto rebindArgs = [](std::string key) {
+        return std::vector<kb::script::ScriptFunctionArgument>{
+            {.name = "context",
+             .value = kb::script::ScriptValue{std::string{"50"}}},
+            {.name = "binding",
+             .value = kb::script::ScriptValue{std::string{"1"}}},
+            {.name = "key",
+             .value = kb::script::ScriptValue{std::move(key)}},
+            {.name = "gamepadIndex",
+             .value = kb::script::ScriptValue{0}},
+            {.name = "allowConflict",
+             .value = kb::script::ScriptValue{false}},
+        };
+    };
+
+    const kb::script::ScriptFunctionCallResult conflict =
+        host.Functions().Call(
+            "Input.Rebind", rebindArgs("Space"), callContext);
+    kb::tests::Require(
+        conflict.Succeeded() && !conflict.Output("applied")->AsBool() &&
+            conflict.Output("conflict")->AsString() == "2",
+        "Input.Rebind did not surface the conflicting binding id");
+    const kb::script::ScriptFunctionCallResult applied =
+        host.Functions().Call("Input.Rebind", rebindArgs("S"), callContext);
+    kb::tests::Require(
+        applied.Succeeded() && applied.Output("applied")->AsBool() &&
+            applied.Output("conflict")->AsString().empty(),
+        "Input.Rebind did not apply a valid live override");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::W, true);
+    scene.Input().Evaluate(0.016F);
+    kb::tests::Require(
+        !scene.Input().IsActionPressed("Move"),
+        "Input.Rebind left the old physical key live");
+    scene.Input().MutableDeviceState().Reset();
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::S, true);
+    scene.Input().Evaluate(0.016F);
+    kb::tests::Require(
+        scene.Input().IsActionPressed("Move"),
+        "Input.Rebind did not make the new physical key live");
+
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        "21kb_script_input_rebind_tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    error.clear();
+    std::filesystem::create_directories(root, error);
+    kb::tests::Require(
+        !error, "Script rebind test profile directory could not be created");
+    const std::filesystem::path profilePath =
+        root / "player.21kbrebind";
+    const auto profileArgs =
+        [&profilePath]() {
+            return std::vector<kb::script::ScriptFunctionArgument>{
+                {.name = "context",
+                 .value =
+                     kb::script::ScriptValue{std::string{"50"}}},
+                {.name = "path",
+                 .value = kb::script::ScriptValue{
+                     profilePath.string()}},
+            };
+        };
+    const kb::script::ScriptFunctionCallResult saved =
+        host.Functions().Call(
+            "Input.SaveRebindProfile", profileArgs(), callContext);
+    kb::tests::Require(
+        saved.Succeeded() && saved.Output("saved")->AsBool() &&
+            saved.Output("error")->AsString().empty() &&
+            std::filesystem::is_regular_file(profilePath),
+        "Input.SaveRebindProfile did not atomically persist the live profile");
+
+    kb::tests::Require(
+        scene.Input().SetRebindProfile(50U, {}),
+        "Script rebind test could not clear its live profile");
+    const kb::script::ScriptFunctionCallResult loaded =
+        host.Functions().Call(
+            "Input.LoadRebindProfile", profileArgs(), callContext);
+    kb::tests::Require(
+        loaded.Succeeded() && loaded.Output("loaded")->AsBool() &&
+            loaded.Output("error")->AsString().empty(),
+        "Input.LoadRebindProfile did not reload the persisted profile");
+
+    const kb::assets::AssetId luaAsset{8821U};
+    const kb::scene::SceneObject luaObject =
+        scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = "Lua Input Rebind Caller"});
+    scene.Components().Behaviours().Set(
+        luaObject.Entity(),
+        kb::scene::BehaviourComponent{
+            .behaviourAssetId = luaAsset.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    const std::string luaSource =
+        "function Tick(self, dt)\n"
+        "  local conflict = Input.Rebind(50, 1, \"Space\")\n"
+        "  local applied = Input.Rebind(50, 1, \"S\")\n"
+        "  local saved = Input.SaveRebindProfile(50, [[" +
+        profilePath.generic_string() +
+        "]])\n"
+        "  local loaded = Input.LoadRebindProfile(50, [[" +
+        profilePath.generic_string() +
+        "]])\n"
+        "  SetShared(\"rebind.conflict\", conflict.conflict)\n"
+        "  SetShared(\"rebind.applied\", applied.applied)\n"
+        "  SetShared(\"rebind.saved\", saved.saved)\n"
+        "  SetShared(\"rebind.loaded\", loaded.loaded)\n"
+        "end\n";
+    const kb::script::PucLuaLoadResult loadedLua =
+        host.LuaRuntime().LoadScript(
+            luaAsset, luaSource, "InputRebind.lua");
+    kb::tests::Require(
+        loadedLua.succeeded,
+        "Lua input rebind wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick =
+        host.Runtime().ExecuteLifecycle(
+            scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(
+        tick.Succeeded() &&
+            host.SharedState().Get("rebind.conflict")->AsString() == "2" &&
+            host.SharedState().Get("rebind.applied")->AsBool() &&
+            host.SharedState().Get("rebind.saved")->AsBool() &&
+            host.SharedState().Get("rebind.loaded")->AsBool(),
+        "Lua Input rebind/profile wrappers did not reach the production API");
+
+    std::filesystem::remove_all(root, error);
+}
+
 // LIB-115: the same Input.* names, given an explicit player argument, must query
 // a genuinely independent LocalUser InputSubsystem - both through direct native
 // calls and through the Lua wrapper surface (which threads player as an optional
@@ -8814,7 +9033,7 @@ end
     kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
 }
 
-// LIB-117: Pointer.Position/Delta/Button, both as direct native calls and
+// LIB-117: Pointer.Position/Delta/Button/Scroll/Ray, both as direct native calls and
 // through the Lua wrapper table - proving the engine-side pointer position
 // storage (InputDeviceState::SetPointerPosition, LIB-117) reaches script.
 void RunScriptPointerApiTest() {
@@ -8826,11 +9045,22 @@ void RunScriptPointerApiTest() {
     kb::tests::Require(host.Functions().FindSignature("Pointer.Position") != nullptr, "Pointer.Position was not registered");
     kb::tests::Require(host.Functions().FindSignature("Pointer.Delta") != nullptr, "Pointer.Delta was not registered");
     kb::tests::Require(host.Functions().FindSignature("Pointer.Button") != nullptr, "Pointer.Button was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Scroll") != nullptr, "Pointer.Scroll was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Pointer.Ray") != nullptr, "Pointer.Ray was not registered");
 
     scene.Input().MutableDeviceState().SetPointerPosition(120.0F, 340.0F);
     scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseX, 5.0F);
     scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseY, -2.0F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseWheel, 1.5F);
     scene.Input().MutableDeviceState().SetKeyDown(InputKey::MouseLeft, true);
+    kb::scene::SceneRenderVisibilityFrame cameraFrame;
+    cameraFrame.cameraValid = true;
+    cameraFrame.viewportWidth = 240U;
+    cameraFrame.viewportHeight = 680U;
+    cameraFrame.view[0] = cameraFrame.view[5] = cameraFrame.view[10] = cameraFrame.view[15] = 1.0F;
+    cameraFrame.projection[0] = cameraFrame.projection[5] =
+        cameraFrame.projection[10] = cameraFrame.projection[15] = 1.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, cameraFrame);
 
     const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
     const kb::script::ScriptFunctionCallResult position = host.Functions().Call("Pointer.Position", {}, callContext);
@@ -8853,6 +9083,18 @@ void RunScriptPointerApiTest() {
     const kb::script::ScriptFunctionCallResult rightButton = host.Functions().Call("Pointer.Button", rightButtonArgs, callContext);
     kb::tests::Require(leftButton.Succeeded() && leftButton.Output("pressed")->AsBool(), "Pointer.Button(0) should see the left button held");
     kb::tests::Require(rightButton.Succeeded() && !rightButton.Output("pressed")->AsBool(), "Pointer.Button(1) must not see the right button as held");
+    const kb::script::ScriptFunctionCallResult scroll =
+        host.Functions().Call("Pointer.Scroll", {}, callContext);
+    kb::tests::Require(scroll.Succeeded() &&
+            kb::tests::NearlyEqual(scroll.Output("delta")->AsFloat(), 1.5F),
+        "Pointer.Scroll direct call returned the wrong normalized wheel delta");
+    const kb::script::ScriptFunctionCallResult ray =
+        host.Functions().Call("Pointer.Ray", {}, callContext);
+    kb::tests::Require(ray.Succeeded() && ray.Output("valid")->AsBool() &&
+            kb::tests::NearlyEqual(ray.Output("originX")->AsFloat(), 0.0F) &&
+            kb::tests::NearlyEqual(ray.Output("originY")->AsFloat(), 0.0F) &&
+            kb::tests::NearlyEqual(ray.Output("directionZ")->AsFloat(), 1.0F),
+        "Pointer.Ray direct call did not use Pointer.Position with the published active camera");
 
     const kb::assets::AssetId luaAsset{ 8822U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Pointer Caller" });
@@ -8865,11 +9107,15 @@ void RunScriptPointerApiTest() {
 function Tick(self, dt)
     local pos = Pointer.Position()
     local delta = Pointer.Delta()
+    local ray = Pointer.Ray()
     SetShared("pointer.x", pos.x)
     SetShared("pointer.y", pos.y)
     SetShared("pointer.dx", delta.x)
     SetShared("pointer.left", Pointer.Button(0))
     SetShared("pointer.right", Pointer.Button(1))
+    SetShared("pointer.scroll", Pointer.Scroll())
+    SetShared("pointer.rayValid", ray.valid)
+    SetShared("pointer.rayDirectionZ", ray.directionZ)
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Pointer Lua wrapper script did not load");
@@ -8880,6 +9126,11 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.dx")->AsFloat(), 5.0F), "Lua Pointer.Delta returned wrong x");
     kb::tests::Require(host.SharedState().Get("pointer.left")->AsBool(), "Lua Pointer.Button(0) should see the left button held");
     kb::tests::Require(!host.SharedState().Get("pointer.right")->AsBool(), "Lua Pointer.Button(1) must not see the right button as held");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.scroll")->AsFloat(), 1.5F),
+        "Lua Pointer.Scroll returned the wrong normalized wheel delta");
+    kb::tests::Require(host.SharedState().Get("pointer.rayValid")->AsBool() &&
+            kb::tests::NearlyEqual(host.SharedState().Get("pointer.rayDirectionZ")->AsFloat(), 1.0F),
+        "Lua Pointer.Ray did not use the renderer-published active camera");
 }
 
 // LIB-118: the named priority constants must reach script with the exact
@@ -14203,6 +14454,7 @@ void RunScriptRuntimeTests() {
     RunMathFunctionCrossBackendParityTest();
     RunMathUInt32CrossBackendParityTest();
     RunScriptInputApiTest();
+    RunScriptInputRebindApiTest();
     RunScriptInputApiPerPlayerTest();
     RunScriptPointerApiTest();
     RunScriptInputPriorityConstantsTest();

@@ -445,6 +445,18 @@ void TestTouchPoints() {
             "First touch point should round-trip its id/position");
     Require(device.TouchPoints()[1].phase == InputTouchPhase::Moved, "Second touch point should round-trip its phase");
 
+    const std::array<InputTouchPoint, 1> ended{{
+        InputTouchPoint{.id = 2U, .x = 31.0F, .y = 41.0F, .phase = InputTouchPhase::Ended},
+    }};
+    device.SetTouchPoints(ended);
+    Require(!device.IsKeyDown(InputKey::TouchDown),
+            "TouchDown should be false on the frame containing only ended contacts");
+    Require(NearlyEqual(device.GetValue(InputKey::TouchDown), 0.0F),
+            "TouchDown value should be zero on the ended-contact frame");
+    Require(device.TouchPoints().size() == 1U &&
+            device.TouchPoints()[0].phase == InputTouchPhase::Ended,
+            "The ended contact should remain observable for its release frame");
+
     device.SetTouchPoints({});
     Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should go false once every contact ends");
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
@@ -556,17 +568,27 @@ void TestRebindConflictDetection() {
     Require(!ApplyRebind(context, 999U, InputKey::Enter, 0U), "ApplyRebind must fail for an unknown bindingId");
 }
 
-// LIB-119: a rebind applied through ApplyRebind must actually change which
-// physical key drives the action under a real InputSubsystem - not just
-// mutate the asset in isolation - mirroring LIB-113's
-// TestBindingIdStableAcrossRebind but through the new dedicated API.
+// LIB-119: the production InputSubsystem owns an override above the immutable
+// resolver asset, validates it, and rebuilds an already-active context without
+// requiring its caller to know/re-submit the active priority.
 void TestRebindEndToEnd() {
     auto move = MakeAction("Move", InputActionValueType::Bool, true);
+    auto jump = MakeAction("Jump", InputActionValueType::Bool, true);
+    auto blocked = MakeAction("Blocked", InputActionValueType::Bool, true);
     auto context = std::make_shared<InputMappingContextAsset>();
     context->mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});
+    context->mappings.push_back(InputKeyMapping{.bindingId = 8U, .actionId = 2U, .key = InputKey::Space});
+    auto lowerPriorityContext = std::make_shared<InputMappingContextAsset>();
+    lowerPriorityContext->mappings.push_back(InputKeyMapping{
+        .bindingId = 20U,
+        .actionId = 3U,
+        .key = InputKey::S,
+    });
 
-    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
-    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{
+        {1U, move}, {2U, jump}, {3U, blocked}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{
+        {10U, context}, {20U, lowerPriorityContext}};
 
     InputSubsystem subsystem;
     subsystem.SetResolvers(
@@ -578,14 +600,31 @@ void TestRebindEndToEnd() {
             const auto found = contexts.find(id);
             return found != contexts.end() ? found->second : nullptr;
         });
-    Require(subsystem.AddMappingContext(10U, 0), "Context should resolve before rebind");
+    Require(subsystem.AddMappingContext(10U, 317), "Context should resolve before rebind");
+    Require(subsystem.AddMappingContext(20U, 100),
+            "Lower-priority conflict context should resolve before rebind");
 
     subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
     subsystem.Evaluate(0.016F);
     Require(subsystem.IsActionPressed("Move"), "Move should fire on W before rebinding");
 
-    Require(ApplyRebind(*context, 7U, InputKey::S, 0U), "ApplyRebind should succeed for a known bindingId with no conflict");
-    Require(subsystem.AddMappingContext(10U, 0), "Re-adding the context should re-resolve the rebound mapping");
+    const InputRuntimeRebindResult rejected =
+        subsystem.Rebind(10U, 7U, InputKey::Space, 0U);
+    Require(!rejected.applied && rejected.conflict.has_value() &&
+            rejected.conflict->conflictingBindingId == 8U,
+            "Live rebind should reject and identify a conflicting binding");
+    Require(subsystem.RebindProfile(10U).empty(),
+            "A rejected live rebind must not mutate the user profile");
+
+    const InputRuntimeRebindResult rebound =
+        subsystem.Rebind(10U, 7U, InputKey::S, 0U);
+    Require(rebound.applied && !rebound.conflict.has_value(),
+            "Live rebind should apply a non-conflicting override");
+    Require(context->mappings[0].key == InputKey::W,
+            "Live rebind must not mutate the immutable resolver asset");
+    Require(subsystem.RebindProfile(10U).size() == 1U &&
+            subsystem.RebindProfile(10U).front().key == InputKey::S,
+            "Live rebind should retain the user override for persistence");
 
     subsystem.MutableDeviceState().Reset();
     subsystem.Evaluate(0.016F);
@@ -598,6 +637,22 @@ void TestRebindEndToEnd() {
     subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
     subsystem.Evaluate(0.016F);
     Require(subsystem.IsActionPressed("Move"), "Move must fire on the new key S after rebinding");
+    Require(!subsystem.IsActionPressed("Blocked"),
+            "Live rebind must preserve the active context's priority");
+
+    subsystem.RemoveMappingContext(10U);
+    Require(subsystem.AddMappingContext(10U, 317),
+            "Re-adding a context should resolve with its retained user profile");
+    subsystem.MutableDeviceState().Reset();
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.IsActionPressed("Move"),
+            "The user override must survive context removal and reactivation");
+
+    const InputRuntimeRebindResult restored =
+        subsystem.Rebind(10U, 7U, InputKey::W, 0U);
+    Require(restored.applied && subsystem.RebindProfile(10U).empty(),
+            "Restoring the base key should remove the redundant override");
 }
 
 // LIB-119: a rebind profile (the list of user overrides) must round-trip
@@ -626,6 +681,17 @@ void TestRebindProfileRoundTripAndApply() {
             "Rebind profile entry 0 should round-trip");
     Require(loaded.asset[1].bindingId == 999U && loaded.asset[1].key == InputKey::Enter && loaded.asset[1].gamepadIndex == 2U,
             "Rebind profile entry 1 should round-trip");
+
+    std::vector<std::uint8_t> trailingBytes = EncodeRebindProfile(overrides);
+    trailingBytes.push_back(0xFFU);
+    Require(!DecodeRebindProfile(trailingBytes).succeeded,
+            "Rebind profile decoder must reject trailing bytes");
+    const std::vector<InputRebindOverride> duplicateBindings{
+        overrides.front(),
+        overrides.front(),
+    };
+    Require(!WriteRebindProfile(root / "duplicate.21kbrebind", duplicateBindings),
+            "Rebind profile writer must reject duplicate binding ids");
 
     InputMappingContextAsset context;
     context.mappings.push_back(InputKeyMapping{.bindingId = 7U, .actionId = 1U, .key = InputKey::W});

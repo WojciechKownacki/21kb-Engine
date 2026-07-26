@@ -181,6 +181,20 @@ void Scene::ReloadModules() {
     moduleHost_->Reload(state_->world, attachedScenes);
 }
 
+bool Scene::IsModuleActive(std::string_view name) const noexcept {
+    return moduleHost_ != nullptr && moduleHost_->IsActive(name);
+}
+
+std::size_t Scene::ActiveModuleCount() const noexcept {
+    return moduleHost_ != nullptr ? moduleHost_->ActiveCount() : 0U;
+}
+
+std::span<const std::string> Scene::ModuleDiagnostics() const noexcept {
+    return moduleHost_ != nullptr
+        ? std::span<const std::string>{ moduleHost_->Diagnostics() }
+        : std::span<const std::string>{};
+}
+
 SceneState& SceneAccess::State(Scene& scene) noexcept {
     return *scene.state_;
 }

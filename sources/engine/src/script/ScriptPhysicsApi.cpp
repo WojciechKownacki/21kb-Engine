@@ -76,6 +76,26 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? std::string{} : value->AsString();
 }
 
+[[nodiscard]] bool IsFinite(Vec3 value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] bool IsPositiveFinite(float value) noexcept {
+    return std::isfinite(value) && value >= 0.0001F;
+}
+
+[[nodiscard]] bool IsValidQueryShape(const kb::scene::PhysicsShapeDesc& shape) noexcept {
+    switch (shape.kind) {
+    case kb::scene::PhysicsShapeKind::Sphere:
+        return IsPositiveFinite(shape.radius);
+    case kb::scene::PhysicsShapeKind::Box:
+        return IsPositiveFinite(shape.boxHalfExtents.x) && IsPositiveFinite(shape.boxHalfExtents.y) && IsPositiveFinite(shape.boxHalfExtents.z);
+    case kb::scene::PhysicsShapeKind::Capsule:
+        return IsPositiveFinite(shape.radius) && IsPositiveFinite(shape.height) && shape.height >= shape.radius * 2.0F;
+    }
+    return false;
+}
+
 // LIB-125: shared by Raycast (pure geometry) and the sphere/box/capsule
 // cast/overlap functions below (real-backend-routed) - "z warstwa maski"
 // in the plan's LIB-125 bullet qualifies the whole listed group (Raycast
@@ -151,10 +171,14 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
         return Error("physics api requires an active scene");
     }
     const Vec3 origin = VecArg(arguments, "origin");
-    const Vec3 direction = Normalize(VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F }));
-    const float maxDistance = std::max(0.0F, FloatArg(arguments, "distance", 1000.0F));
-    if (Length(direction) <= 0.000001F || maxDistance <= 0.0F) {
-        return Error("raycast direction or distance is invalid");
+    const Vec3 rawDirection = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
+    const float maxDistance = FloatArg(arguments, "distance", 1000.0F);
+    if (!IsFinite(origin) || !IsFinite(rawDirection) || !IsPositiveFinite(maxDistance)) {
+        return Error("raycast origin, direction, or distance is invalid");
+    }
+    const Vec3 direction = Normalize(rawDirection);
+    if (!IsFinite(direction) || Length(direction) <= 0.000001F) {
+        return Error("raycast direction is invalid");
     }
     RaycastContext raycastContext{
         .scene = context.scene,
@@ -210,8 +234,18 @@ ScriptFunctionCallResult CastShapeResult(const ScriptFunctionCallContext& contex
         return Error("physics api requires an active scene");
     }
     const Vec3 origin = VecArg(arguments, "origin");
-    const Vec3 direction = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
-    const float maxDistance = std::max(0.0F, FloatArg(arguments, "distance", 1000.0F));
+    const Vec3 rawDirection = VecArg(arguments, "direction", Vec3{ 0.0F, -1.0F, 0.0F });
+    const float maxDistance = FloatArg(arguments, "distance", 1000.0F);
+    if (!IsFinite(origin) || !IsFinite(rawDirection) || !IsPositiveFinite(maxDistance)) {
+        return Error("cast origin, direction, or distance is invalid");
+    }
+    const Vec3 direction = Normalize(rawDirection);
+    if (!IsFinite(direction) || Length(direction) <= 0.000001F) {
+        return Error("cast direction is invalid");
+    }
+    if (!IsValidQueryShape(shape)) {
+        return Error("cast shape is invalid");
+    }
     const kb::scene::PhysicsCastResult hit = kb::scene::PhysicsBackend::CastShape(*context.scene, shape, origin, direction, maxDistance, LayerMaskArg(arguments));
 
     kb::scene::PhysicsDebugDraw::RecordQueryTrace(*context.scene, kb::scene::PhysicsDebugQueryTrace{
@@ -244,6 +278,9 @@ ScriptFunctionCallResult OverlapShapeResult(const ScriptFunctionCallContext& con
         return Error("physics api requires an active scene");
     }
     const Vec3 center = VecArg(arguments, "center");
+    if (!IsFinite(center) || !IsValidQueryShape(shape)) {
+        return Error("overlap center or shape is invalid");
+    }
     const kb::scene::PhysicsOverlapResult overlap = kb::scene::PhysicsBackend::OverlapShape(*context.scene, shape, center, LayerMaskArg(arguments));
     return ScriptFunctionCallResult{
         .executed = true,
@@ -256,7 +293,7 @@ ScriptFunctionCallResult OverlapShapeResult(const ScriptFunctionCallContext& con
 }
 
 ScriptFunctionCallResult SphereCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return CastShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)) });
+    return CastShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = FloatArg(arguments, "radius", 0.5F) });
 }
 
 ScriptFunctionCallResult BoxCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -265,11 +302,11 @@ ScriptFunctionCallResult BoxCast(const ScriptFunctionCallContext& context, std::
 
 ScriptFunctionCallResult CapsuleCast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     return CastShapeResult(context, arguments,
-        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)), .height = std::max(0.0001F, FloatArg(arguments, "height", 2.0F)) });
+        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = FloatArg(arguments, "radius", 0.5F), .height = FloatArg(arguments, "height", 2.0F) });
 }
 
 ScriptFunctionCallResult OverlapSphere(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
-    return OverlapShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)) });
+    return OverlapShapeResult(context, arguments, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Sphere, .radius = FloatArg(arguments, "radius", 0.5F) });
 }
 
 ScriptFunctionCallResult OverlapBox(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -278,14 +315,18 @@ ScriptFunctionCallResult OverlapBox(const ScriptFunctionCallContext& context, st
 
 ScriptFunctionCallResult OverlapCapsule(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     return OverlapShapeResult(context, arguments,
-        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = std::max(0.0001F, FloatArg(arguments, "radius", 0.5F)), .height = std::max(0.0001F, FloatArg(arguments, "height", 2.0F)) });
+        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = FloatArg(arguments, "radius", 0.5F), .height = FloatArg(arguments, "height", 2.0F) });
 }
 
 ScriptFunctionCallResult ClosestPoint(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
     }
-    const kb::scene::PhysicsClosestPointResult result = kb::scene::PhysicsBackend::ClosestPoint(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "point"));
+    const Vec3 point = VecArg(arguments, "point");
+    if (!IsFinite(point)) {
+        return Error("closest-point query point is invalid");
+    }
+    const kb::scene::PhysicsClosestPointResult result = kb::scene::PhysicsBackend::ClosestPoint(*context.scene, EntityArg(arguments, "entity"), point, LayerMaskArg(arguments));
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -656,6 +697,7 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "pointX", ScriptValueType::Float, true },
         ScriptFunctionPin{ "pointY", ScriptValueType::Float, true },
         ScriptFunctionPin{ "pointZ", ScriptValueType::Float, true },
+        ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false },
     };
     closestPointDesc.signature.outputs = {
         ScriptFunctionPin{ "found", ScriptValueType::Bool, true },

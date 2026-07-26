@@ -5,6 +5,7 @@
 #include "engine/scene/ScenePrefabNode.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::scene {
 
@@ -13,7 +14,7 @@ class ScenePrefab;
 
 class ScenePrefabCaptureTraversal {
 public:
-    static void Append(Scene& scene, SceneObject object, const ScenePrefabCaptureSettings& settings, ScenePrefab& prefab, std::uint32_t parentNode);
+    static void Append(Scene& scene, SceneObject object, const ScenePrefabCaptureSettings& settings, ScenePrefab& prefab, std::uint32_t parentNode, std::vector<SceneEntity>& capturedEntities);
 };
 
 } // namespace kb::scene

@@ -28,6 +28,9 @@ namespace {
 LRESULT CALLBACK EditorApplicationWindowProc::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     EditorApplicationState* state = ResolveState(window, message, lparam);
     if (state != nullptr) {
+        if (state->inputCollector.HandleWindowMessage(window, message, wparam, lparam)) {
+            return 0;
+        }
         return EditorApplicationMessageDispatcher::Dispatch(*state, window, message, wparam, lparam);
     }
 

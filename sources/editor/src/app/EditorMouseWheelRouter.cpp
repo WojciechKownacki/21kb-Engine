@@ -41,14 +41,16 @@ EditorMouseWheelRouter::EditorMouseWheelRouter(
     const EditorFloatingWindowManager& floatingWindows,
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
-    EditorSceneBgfxViewport& sceneViewport) noexcept
+    EditorSceneBgfxViewport& sceneViewport,
+    bool routeSceneCamera) noexcept
     : messageWindow_(messageWindow)
     , mainWindow_(mainWindow)
     , dockModel_(dockModel)
     , floatingWindows_(floatingWindows)
     , metrics_(metrics)
     , sceneContext_(sceneContext)
-    , sceneViewport_(sceneViewport) {}
+    , sceneViewport_(sceneViewport)
+    , routeSceneCamera_(routeSceneCamera) {}
 
 bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     EditorProjectFilesMouseWheelController projectFilesWheel(sceneContext_);
@@ -162,9 +164,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         }
     }
 
-    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
-    if (sceneCamera.HandleMouseWheel(messageWindow_, x, y, wheelDelta)) {
-        return true;
+    if (routeSceneCamera_) {
+        EditorSceneViewportCameraController sceneCamera(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+        if (sceneCamera.HandleMouseWheel(messageWindow_, x, y, wheelDelta)) {
+            return true;
+        }
     }
 
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
