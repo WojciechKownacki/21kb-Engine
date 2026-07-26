@@ -135,6 +135,41 @@ struct RaycastAllVisitorContext {
     kb::library::ArrayNonAlloc<PhysicsCastResult>* results = nullptr;
 };
 
+[[nodiscard]] bool CastResultLess(const PhysicsCastResult& lhs, const PhysicsCastResult& rhs) noexcept {
+    return lhs.distance < rhs.distance ||
+        (lhs.distance == rhs.distance && lhs.entity.Id() < rhs.entity.Id());
+}
+
+void InsertBoundedCastResult(
+    kb::library::ArrayNonAlloc<PhysicsCastResult>& results,
+    PhysicsCastResult candidate) {
+    const std::size_t count = results.Count();
+    const std::size_t capacity = results.Capacity();
+    if (capacity == 0U) {
+        return;
+    }
+
+    std::size_t insertAt = 0U;
+    while (insertAt < count && !CastResultLess(candidate, *results.GetAt(insertAt))) {
+        ++insertAt;
+    }
+    if (insertAt >= capacity) {
+        return;
+    }
+
+    if (count < capacity) {
+        [[maybe_unused]] const bool appended = results.PushBack(candidate);
+        for (std::size_t index = count; index > insertAt; --index) {
+            [[maybe_unused]] const bool shifted = results.SetAt(index, *results.GetAt(index - 1U));
+        }
+    } else {
+        for (std::size_t index = count - 1U; index > insertAt; --index) {
+            [[maybe_unused]] const bool shifted = results.SetAt(index, *results.GetAt(index - 1U));
+        }
+    }
+    [[maybe_unused]] const bool inserted = results.SetAt(insertAt, candidate);
+}
+
 void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, void* rawContext) {
     auto* context = static_cast<RaycastAllVisitorContext*>(rawContext);
     if (context == nullptr || context->scene == nullptr || context->results == nullptr) {
@@ -149,11 +184,10 @@ void RaycastAllVisitor(SceneEntity entity, const TransformComponent& transform, 
     if (!IntersectRayCollider(context->origin, context->direction, context->maxDistance, *collider, transform, distance, normal)) {
         return;
     }
-    // Buffer-full is not an error (LIB-126's documented NonAlloc contract -
-    // PushBack returning false here just means this hit does not fit;
-    // remaining colliders are still visited so a later, closer one is never
-    // skipped in favor of a farther one already collected before sorting).
-    [[maybe_unused]] const bool pushed = context->results->PushBack(PhysicsCastResult{
+    // Maintain the closest Capacity() hits while visiting. Transform
+    // iteration order is not a distance order, so merely ignoring PushBack
+    // failures would retain whichever bodies happened to be visited first.
+    InsertBoundedCastResult(*context->results, PhysicsCastResult{
         .hit = true,
         .entity = entity,
         .distance = distance,
@@ -238,13 +272,8 @@ void RaycastAllNonAlloc(Scene& scene, Vec3 origin, Vec3 direction, float maxDist
     };
     scene.Runtime().SynchronizeTransforms();
     scene.Transforms().ForEach(&RaycastAllVisitor, &context);
-    // Closest-first, matching the Jolt-backed CastShapeAll/OverlapShapeAll
-    // convention (JPH::AllHitCollisionCollector::Sort()) - results.begin()/
-    // end() are mutable span iterators even though the accessor is `const`
-    // (ArrayNonAlloc wraps a std::span<T>, whose constness never propagates
-    // to its pointees), so std::sort works directly over the caller's
-    // buffer with no extra copy.
-    std::sort(results.begin(), results.end(), [](const PhysicsCastResult& lhs, const PhysicsCastResult& rhs) { return lhs.distance < rhs.distance; });
+    // InsertBoundedCastResult keeps the caller-owned buffer sorted without
+    // temporary storage or a post-query allocation.
 }
 
 } // namespace kb::scene

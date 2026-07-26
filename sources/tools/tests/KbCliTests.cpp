@@ -621,6 +621,11 @@ function Tick(self, dt)
             and not maskedClosest.found and not invalidClosest.found then
             queriesReported = true
             Log("physics runtime LIB-125 complete")
+            -- Every single-result production query above now consumes the
+            -- same capacity-one caller buffer path as LIB-126's native
+            -- all-hit API. The multi-hit/capacity ordering contract is
+            -- covered against the same Jolt scene by PhysicsSceneSystemTests.
+            Log("physics runtime LIB-126 complete")
         end
     end
 
@@ -824,6 +829,8 @@ void RunProjectileTemplateTests() {
         "LIB-124 production runtime probe did not complete");
     Require(Contains(run.output, "[log] physics runtime LIB-125 complete"),
         "LIB-125 cast/overlap/closest-point production runtime probe did not complete");
+    Require(Contains(run.output, "[log] physics runtime LIB-126 complete"),
+        "LIB-126 NonAlloc production runtime probe did not complete");
     Require(Contains(run.output, "[log] physics runtime character virtual moved"),
         "Jolt CharacterVirtual did not move and write its pose back in kb_cli runtime");
     Require(Contains(run.output, "[log] physics runtime joint constrained"),

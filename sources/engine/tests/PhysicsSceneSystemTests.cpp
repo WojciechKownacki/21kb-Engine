@@ -451,6 +451,11 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlapAllBuffer(overlapAllStorage);
     kb::scene::PhysicsBackend::OverlapShapeAll(scene, overlapQueryShape, boxRestingPosition, kBoxAndFloorLayers, overlapAllBuffer);
     kb::tests::Require(overlapAllBuffer.Count() == 2U, "PhysicsBackend::OverlapShapeAll must find both the real box and floor bodies overlapping the query sphere");
+    kb::tests::Require(
+        overlapAllBuffer.GetAt(0) != nullptr && overlapAllBuffer.GetAt(1) != nullptr &&
+            overlapAllBuffer.GetAt(0)->penetrationDepth >= overlapAllBuffer.GetAt(1)->penetrationDepth &&
+            overlapAllBuffer.GetAt(0)->penetrationDepth > 0.0F,
+        "PhysicsBackend::OverlapShapeAll must expose and order real Jolt penetration depths deepest-first");
     bool overlapAllFoundBox = false;
     bool overlapAllFoundFloor = false;
     for (const kb::scene::PhysicsOverlapResult& overlap : overlapAllBuffer) {
@@ -458,6 +463,22 @@ void RunPhysicsSceneSystemFallingBodyTest() {
         overlapAllFoundFloor = overlapAllFoundFloor || overlap.entity == floor.Entity();
     }
     kb::tests::Require(overlapAllFoundBox && overlapAllFoundFloor, "PhysicsBackend::OverlapShapeAll must include both real bodies, regardless of internal order");
+
+    kb::scene::PhysicsBackend::CastShapeAll(
+        scene, sphereQueryShape, kb::scene::Vec3{ nan, 0.0F, 0.0F }, castDown, 10.0F, kBoxAndFloorLayers, castAllBuffer);
+    kb::tests::Require(castAllBuffer.Empty(), "PhysicsBackend::CastShapeAll must clear and reject a non-finite origin before Jolt");
+    kb::scene::PhysicsBackend::OverlapShapeAll(
+        scene,
+        kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Capsule, .radius = 0.5F, .height = 1.0F },
+        boxRestingPosition,
+        kBoxAndFloorLayers,
+        overlapAllBuffer);
+    kb::tests::Require(overlapAllBuffer.Empty(), "PhysicsBackend::OverlapShapeAll must clear and reject a degenerate capsule before Jolt");
+    std::array<kb::scene::PhysicsCastResult, 0U> emptyCastStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> emptyCastBuffer(emptyCastStorage);
+    kb::scene::PhysicsBackend::CastShapeAll(
+        scene, sphereQueryShape, castOrigin, castDown, 10.0F, kBoxAndFloorLayers, emptyCastBuffer);
+    kb::tests::Require(emptyCastBuffer.Empty(), "PhysicsBackend::CastShapeAll must accept a zero-capacity caller buffer without hidden storage");
 
     // LIB-127: OnCollisionEnter/Stay/Exit and OnTriggerEnter/Stay/Exit
     // against the REAL Jolt contact listener - reusing this SAME scene (the
