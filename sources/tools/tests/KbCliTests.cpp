@@ -7,8 +7,10 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/PhysicsLayersAssetIO.hpp"
 
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,6 +19,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
@@ -54,10 +57,14 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     Require(output.good(), "kb_cli test file could not be written");
 }
 
-void WriteProjectDescriptor(const std::filesystem::path& root, bool withPhysics) {
+void WriteProjectDescriptor(
+    const std::filesystem::path& root,
+    bool withPhysics,
+    std::string physicsLayersAsset = {}) {
     kb::project::ProjectDescriptor descriptor;
     descriptor.name = "KbCliRuntimeTest";
     descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
+    descriptor.physicsLayersAsset = std::move(physicsLayersAsset);
     if (withPhysics) {
         Require(
             !std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty(),
@@ -345,7 +352,19 @@ void RunPlayerControllerTemplateTests() {
 void PrepareProjectileTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
-    WriteProjectDescriptor(root, true);
+    constexpr std::string_view kPhysicsLayersVirtualPath = "/Game/Config/Runtime.21kbphysicslayers";
+    kb::scene::PhysicsLayersAsset physicsLayers;
+    physicsLayers.layerNames[1] = "Ghost";
+    physicsLayers.layerNames[2] = "Solid";
+    physicsLayers.layerNames[3] = "Query";
+    physicsLayers.SetLayersInteract(1U, 2U, false);
+    std::error_code physicsLayersDirectoryError;
+    std::filesystem::create_directories(root / "Assets" / "Config", physicsLayersDirectoryError);
+    Require(!physicsLayersDirectoryError, "LIB-129 CLI runtime physics layers directory could not be created");
+    Require(
+        kb::scene::WritePhysicsLayersAsset(root / "Assets" / "Config" / "Runtime.21kbphysicslayers", physicsLayers),
+        "LIB-129 CLI runtime physics layers asset could not be written");
+    WriteProjectDescriptor(root, true, std::string{ kPhysicsLayersVirtualPath });
 
     const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
     Require(initAgent.exitCode == 0, "projectile template project init-agent failed");
@@ -379,6 +398,7 @@ local characterReported = false
 local jointImpulseApplied = false
 local jointReported = false
 local lib123Completed = false
+local lib129Completed = false
 
 function Tick(self, dt)
     local projectile = World.FindByName("Projectile")
@@ -583,26 +603,28 @@ function Tick(self, dt)
     end
 
     if not queriesReported then
-        local ray = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 8)
-        local sphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 8)
-        local box = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, 8)
-        local capsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, 8)
-        local overlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, 8)
-        local overlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, 8)
-        local overlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, 8)
-        local closest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, 8)
+        local queryLayer = Physics.LayerBit("Query")
+        local solidLayer = Physics.LayerBit("Solid")
+        local ray = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, queryLayer)
+        local sphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, queryLayer)
+        local box = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, queryLayer)
+        local capsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, queryLayer)
+        local overlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, queryLayer)
+        local overlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, queryLayer)
+        local overlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, queryLayer)
+        local closest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, queryLayer)
         -- Every query must reject the same real body when its layer is not
         -- selected. This is intentionally not an empty-world test: mask 4
         -- differs from QueryTarget's serialized layer 8 while all geometry
         -- remains identical to the positive calls above.
-        local maskedRay = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 4)
-        local maskedSphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 4)
-        local maskedBox = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, 4)
-        local maskedCapsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, 4)
-        local maskedOverlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, 4)
-        local maskedOverlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, 4)
-        local maskedOverlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, 4)
-        local maskedClosest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, 4)
+        local maskedRay = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, solidLayer)
+        local maskedSphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, solidLayer)
+        local maskedBox = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, solidLayer)
+        local maskedCapsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, solidLayer)
+        local maskedOverlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, solidLayer)
+        local maskedOverlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, solidLayer)
+        local maskedOverlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, solidLayer)
+        local maskedClosest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, solidLayer)
         -- PhysicsObserver is a valid scene entity but intentionally has no
         -- Rigidbody/Collider, so ClosestPoint must return its honest miss
         -- result through the live backend without a script diagnostic.
@@ -632,6 +654,24 @@ function Tick(self, dt)
     if not lib123Completed and characterReported and jointReported then
         lib123Completed = true
         Log("physics runtime LIB-123 complete")
+    end
+
+    if not lib129Completed then
+        local ghostLayer = Physics.LayerBit("Ghost")
+        local solidLayer = Physics.LayerBit("Solid")
+        local queryLayer = Physics.LayerBit("Query")
+        local disabledStatic = Transform.GetPosition(World.FindByName("MatrixDisabledStatic"))
+        local disabledDynamic = Transform.GetPosition(World.FindByName("MatrixDisabledDynamic"))
+        local controlStatic = Transform.GetPosition(World.FindByName("MatrixControlStatic"))
+        local controlDynamic = Transform.GetPosition(World.FindByName("MatrixControlDynamic"))
+        if ghostLayer == 2 and solidLayer == 4 and queryLayer == 8
+            and disabledStatic ~= nil and disabledDynamic ~= nil
+            and controlStatic ~= nil and controlDynamic ~= nil
+            and math.abs(disabledDynamic.x - disabledStatic.x) < 0.3
+            and math.abs(controlDynamic.x - controlStatic.x) > 0.7 then
+            lib129Completed = true
+            Log("physics runtime LIB-129 complete")
+        end
     end
 end
 )");
@@ -792,6 +832,38 @@ end
             .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
             .layer = 8U,
         });
+
+    const auto createMatrixBody = [&scene](
+                                      const char* name,
+                                      kb::scene::RigidbodyBodyType bodyType,
+                                      float x,
+                                      std::uint32_t layer) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ x, 0.0F, 20.0F },
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = bodyType,
+                .mass = 1.0F,
+                .useGravity = false,
+            });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.5F,
+                .layer = layer,
+            });
+    };
+    createMatrixBody("MatrixDisabledStatic", kb::scene::RigidbodyBodyType::Static, 100.0F, 4U);
+    createMatrixBody("MatrixDisabledDynamic", kb::scene::RigidbodyBodyType::Dynamic, 100.2F, 2U);
+    createMatrixBody("MatrixControlStatic", kb::scene::RigidbodyBodyType::Static, 110.0F, 1U);
+    createMatrixBody("MatrixControlDynamic", kb::scene::RigidbodyBodyType::Dynamic, 110.2F, 1U);
 
     const kb::scene::SceneObject contactFloor = scene.Entities().CreateObject(
         kb::scene::SceneObjectDesc{
@@ -986,6 +1058,8 @@ void RunProjectileTemplateTests() {
         "serialized JointComponent did not constrain live Jolt bodies in kb_cli runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-123 complete"),
         "LIB-123 character/joint production runtime probe did not complete");
+    Require(Contains(run.output, "[log] physics runtime LIB-129 complete"),
+        "LIB-129 project asset did not configure named query layers and the live Jolt collision matrix in kb_cli runtime");
     for (const char* eventName : { "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit" }) {
         Require(
             Contains(run.output, std::string{ "[log] physics runtime " } + eventName),
@@ -994,6 +1068,27 @@ void RunProjectileTemplateTests() {
     Require(Contains(run.output, "[log] physics runtime LIB-127 complete"),
         "LIB-127 full trigger/collision lifecycle did not complete in the serialized kb_cli Jolt runtime");
     Require(Contains(run.output, "0 diagnostics"), "projectile physics runtime was not clean");
+
+    kb::project::ProjectDescriptorReadResult descriptor =
+        kb::project::ProjectManager::LoadProject(TestRoot() / "Project.21kbproject");
+    Require(descriptor.succeeded, "LIB-129 CLI failure-path test could not reload the valid project descriptor");
+    const kb::project::ProjectDescriptor validDescriptor = descriptor.descriptor;
+    descriptor.descriptor.physicsLayersAsset = "/Game/Config/Missing.21kbphysicslayers";
+    Require(
+        kb::project::ProjectManager::SaveProject(TestRoot() / "Project.21kbproject", descriptor.descriptor),
+        "LIB-129 CLI failure-path test could not persist a missing configured asset");
+    const CommandRun missingLayers = Run(&kb::cli::RunRunCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--frames", "1",
+    });
+    Require(missingLayers.exitCode == 1,
+        "LIB-129 kb_cli silently continued with the default matrix when the configured physics layers asset was missing");
+    Require(Contains(missingLayers.output, "project physics layers could not be loaded and applied"),
+        "LIB-129 kb_cli did not expose the configured physics layers activation failure");
+    Require(
+        kb::project::ProjectManager::SaveProject(TestRoot() / "Project.21kbproject", validDescriptor),
+        "LIB-129 CLI failure-path test did not restore the valid production fixture descriptor");
 }
 
 void RunApiCommandTests() {
