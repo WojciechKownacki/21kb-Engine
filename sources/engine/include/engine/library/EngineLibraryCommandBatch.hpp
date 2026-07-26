@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace kb::library {
@@ -127,7 +128,7 @@ public:
     template <typename Component>
     void Add(BatchEntity entity, const Component& value) {
         static_cast<void>(sizeof(ScriptComponentAccess<Component>));
-        commandBuffer_.Worker(0).Set<Component>(entity.Raw(), value);
+        commandBuffer_.Worker(0).Set<Component>(entity.Raw(), PrepareComponent(value));
     }
 
     // See the EntityHandle overload of Destroy() for why this returns bool
@@ -138,7 +139,7 @@ public:
         if (!entity.IsAlive(*scene_)) {
             return false;
         }
-        commandBuffer_.Worker(0).Set<Component>(entity.Entity(), value);
+        commandBuffer_.Worker(0).Set<Component>(entity.Entity(), PrepareComponent(value));
         trackedTargets_.push_back(entity);
         return true;
     }
@@ -258,6 +259,19 @@ public:
     }
 
 private:
+    template <typename Component>
+    [[nodiscard]] static Component PrepareComponent(const Component& value) {
+        Component prepared = value;
+        if constexpr (std::is_same_v<Component, kb::scene::TransformComponent>) {
+            // CommandBuffer playback bypasses SceneTransforms::Set, whose
+            // normal facade path marks hierarchy-derived world fields dirty.
+            // Preserve batching while restoring that invariant so the
+            // pre-physics hierarchy synchronization publishes this command.
+            prepared.worldDirty = true;
+        }
+        return prepared;
+    }
+
     // LIB-080: the coalesced pending tag state for one target within this
     // batch. `entity` is the CommandEntity every tag command for this target
     // is queued against at Flush(); `existing` distinguishes an already-live

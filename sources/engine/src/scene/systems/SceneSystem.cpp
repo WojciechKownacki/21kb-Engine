@@ -6,6 +6,10 @@ void SceneSystem::OnCreate(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
+void SceneSystem::OnFrameStart(SceneSystemContext& context) {
+    static_cast<void>(context);
+}
+
 void SceneSystem::OnUpdate(SceneSystemContext& context) {
     static_cast<void>(context);
 }

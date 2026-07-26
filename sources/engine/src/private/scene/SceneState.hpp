@@ -106,13 +106,11 @@ public:
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
     SceneRuntimeFixedStepSettings fixedStepSettings;
-    // LIB-093: the SCRIPT FixedTick step, stamped each frame by
-    // ScriptRuntimeSceneSystem from its own ScriptRuntimeFrameSettings::
-    // fixedDeltaSeconds. Kept SEPARATE from fixedStepSettings (the physics
-    // fixed step) because the two are independently configurable — Time.Fixed
-    // Delta must report the delta a script's FixedTick actually runs at, not
-    // the physics one. Defaults to the same 1/60 the script frame settings do,
-    // so a scene whose script system never ran still reports a sane value.
+    // The delta exposed by Time.FixedDelta. In an installed production
+    // ScriptRuntimeSceneSystem this mirrors fixedStepSettings exactly: script
+    // FixedTick and physics consume one authoritative accumulator. It remains
+    // separate storage only for direct/manual ExecuteFrame callers, which are
+    // outside the scene scheduler.
     float scriptFixedDeltaSeconds = 1.0F / 60.0F;
     SceneTransformPropagationBudget transformPropagationBudget;
     // True once a fixed-step system (e.g. physics) has been added. Scenes without

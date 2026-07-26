@@ -9,6 +9,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -55,6 +57,15 @@
 #endif
 
 namespace {
+
+[[nodiscard]] bool RuntimeTraceEnabled() noexcept {
+#if defined(_WIN32)
+    std::size_t length = 0U;
+    return getenv_s(&length, nullptr, 0U, "KB_TEST_TRACE") == 0 && length > 0U;
+#else
+    return std::getenv("KB_TEST_TRACE") != nullptr;
+#endif
+}
 
 void RunPhysicsSceneSystemFallingBodyTest() {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
@@ -1697,6 +1708,104 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     // against genuine non-determinism, not a loosened pass.
     kb::tests::Require(determinismMaxAbsDifference <= 0.02F,
         "LIB-134 two structurally identical rigid body rigs, built adjacently (no destroy/recreate involved), at a close world-space magnitude, must settle into the same real Jolt physics result after chaotic multi-body collision - the one determinism guarantee this engine actually relies on (same binary/platform, same call order)");
+
+    // LIB-128 full production path: project descriptor -> Jolt plugin ->
+    // installed script scene system -> native FixedTick -> function registry
+    // -> Physics.SetVelocity -> same Jolt step -> Transform write-back.
+    // This runs last because the installed script system owns/drains contact
+    // events; earlier assertions intentionally inspect that raw backend queue.
+    const kb::scene::SceneObject fixedTickProbe = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-128 FixedTick Jolt Probe",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -100.0F, 4.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(fixedTickProbe.Entity(), kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+        .mass = 1.0F,
+    });
+    scene.Components().Colliders().Set(fixedTickProbe.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Sphere,
+        .radius = 0.5F,
+        .layer = 0x2U,
+    });
+
+    constexpr kb::assets::AssetId kFixedTickAsset{ 9702U };
+    scene.Components().Behaviours().Set(fixedTickProbe.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kFixedTickAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntimeHost fixedTickHost{
+        scene,
+        kb::script::ScriptRuntimeHostOptions{
+            .frameSettings = kb::script::ScriptRuntimeFrameSettings{ .fixedDeltaSeconds = 1.0F / 60.0F, .maxFixedStepsPerFrame = 8U },
+        },
+    };
+    kb::tests::Require(fixedTickHost.Succeeded(), "LIB-128 real-Jolt script host initialization failed");
+
+    std::size_t fixedTickCalls = 0U;
+    bool firstStepCommandBatchFlushed = false;
+    bool velocityApplied = false;
+    kb::tests::Require(fixedTickHost.NativeBackend().RegisterLifecycle(
+                           kFixedTickAsset,
+                           kb::script::ScriptLifecycleEvent::FixedTick,
+                           [&](kb::script::ScriptExecutionContext& context) {
+                               ++fixedTickCalls;
+                               if (fixedTickCalls == 1U) {
+                                   // A freshly loaded scene has no live Jolt body yet:
+                                   // FixedTick must be able to publish component state
+                                   // through the command buffer before SynchronizeBodies
+                                   // creates and advances that body in this same step.
+                                   const kb::scene::RigidbodyComponent* existingRigidbody =
+                                       scene.Components().Rigidbodies().TryGet(fixedTickProbe.Entity());
+                                   kb::tests::Require(existingRigidbody != nullptr,
+                                       "LIB-128 real-Jolt first-step probe lost its Rigidbody");
+                                   kb::scene::RigidbodyComponent rigidbody = *existingRigidbody;
+                                   rigidbody.linearVelocity = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F };
+                                   kb::library::CommandBatch batch{ scene };
+                                   const kb::library::EntityHandle handle{ fixedTickProbe.Entity(), scene.Id() };
+                                   kb::tests::Require(batch.Add<kb::scene::RigidbodyComponent>(handle, rigidbody),
+                                       "LIB-128 real-Jolt first-step Rigidbody command failed to record");
+                                   firstStepCommandBatchFlushed = batch.Flush().has_value();
+                                   return;
+                               }
+                               const std::vector<kb::script::ScriptFunctionArgument> arguments{
+                                   kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ fixedTickProbe.Entity().Id(), kb::script::ScriptValueType::Entity } },
+                                   kb::script::ScriptFunctionArgument{ .name = "velocityX", .value = kb::script::ScriptValue{ 6.0F } },
+                                   kb::script::ScriptFunctionArgument{ .name = "velocityY", .value = kb::script::ScriptValue{ 0.0F } },
+                                   kb::script::ScriptFunctionArgument{ .name = "velocityZ", .value = kb::script::ScriptValue{ 0.0F } },
+                               };
+                               const kb::script::ScriptFunctionCallResult result = fixedTickHost.Functions().Call(
+                                   "Physics.SetVelocity",
+                                   arguments,
+                                   kb::script::ScriptFunctionCallContext{ .scene = &scene, .deltaSeconds = context.DeltaSeconds() });
+                               const std::optional<kb::script::ScriptValue> applied = result.Output("applied");
+                               velocityApplied = result.Succeeded() && applied.has_value() && applied->AsBool();
+                           }),
+        "LIB-128 real-Jolt FixedTick registration failed");
+    kb::tests::Require(fixedTickHost.InstallSceneSystem(), "LIB-128 real-Jolt script scene system installation failed");
+
+    const float probeXBeforeFixedStep = scene.Transforms().Get(fixedTickProbe.Entity()).localPosition.x;
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const float probeXAfterFirstFixedStep = scene.Transforms().Get(fixedTickProbe.Entity()).localPosition.x;
+    kb::tests::Require(fixedTickCalls == 1U, "LIB-128 real runtime must dispatch exactly one FixedTick for one authoritative fixed step");
+    kb::tests::Require(firstStepCommandBatchFlushed,
+        "LIB-128 FixedTick command buffer must flush before the first Jolt body synchronization");
+    kb::tests::Require(probeXAfterFirstFixedStep > probeXBeforeFixedStep + 0.01F,
+        "LIB-128 Jolt must create the body from FixedTick command-buffer state, integrate it in the SAME first step, and write it back to Transform");
+
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const float probeXAfterSecondFixedStep = scene.Transforms().Get(fixedTickProbe.Entity()).localPosition.x;
+    kb::tests::Require(fixedTickCalls == 2U, "LIB-128 real runtime must keep FixedTick and Jolt at exactly one call per authoritative step");
+    kb::tests::Require(velocityApplied, "LIB-128 Physics.SetVelocity issued by FixedTick must reach the now-live Jolt backend");
+    kb::tests::Require(probeXAfterSecondFixedStep > probeXAfterFirstFixedStep + 0.01F,
+        "LIB-128 Jolt must integrate the live-backend FixedTick velocity in the same second step and write it back to Transform");
+    if (RuntimeTraceEnabled()) {
+        std::cout << "LIB-128 runtime: fixedTicks=" << fixedTickCalls
+                  << " firstStepCommandBatch=" << firstStepCommandBatchFlushed
+                  << " liveBackendCommand=" << velocityApplied
+                  << " x=" << probeXBeforeFixedStep << " -> " << probeXAfterFirstFixedStep
+                  << " -> " << probeXAfterSecondFixedStep << '\n';
+    }
 }
 
 // LIB-129: pure asset IO/loader coverage - unlike the real-Jolt test above,

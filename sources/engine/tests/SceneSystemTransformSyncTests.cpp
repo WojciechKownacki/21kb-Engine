@@ -3,6 +3,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/library/EngineLibraryCommandBatch.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -357,33 +358,32 @@ void RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest() {
 // other Observe*FixedSceneSystem fakes already do for LIB-089.
 class RecordingFixedPhysicsStandIn final : public kb::scene::SceneSystem {
 public:
+    explicit RecordingFixedPhysicsStandIn(kb::scene::SceneEntity entity = {}) noexcept
+        : entity_(entity) {}
+
     void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
-        static_cast<void>(context);
         ++stepsRun;
         lastWrittenValue = stepsRun;
+        if (entity_.IsValid()) {
+            observedCommandValue = context.Transforms().Get(entity_).worldPosition.x;
+        }
     }
 
     [[nodiscard]] bool RequiresFixedStep() const override { return true; }
 
     int stepsRun = 0;
     int lastWrittenValue = 0;
+    float observedCommandValue = 0.0F;
+
+private:
+    kb::scene::SceneEntity entity_{};
 };
 
-// LIB-128: the OPPOSITE direction from
-// RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest above - a
-// real kb::script::ScriptRuntimeSceneSystem's FixedTick dispatch, within
-// ONE Update() call, does NOT see that SAME call's physics fixed-step
-// result, because SceneRuntimeService::Update (SceneRuntime.cpp) calls
-// sceneSystemScheduler.Update() (where ScriptRuntimeSceneSystem::OnUpdate,
-// including its own internal FixedTick dispatch loop, lives) BEFORE the
-// scene's fixed-step loop (where a RequiresFixedStep()==true system's
-// OnFixedUpdate - JoltPhysicsSceneSystem in a real project - executes).
-// This asymmetry is exactly why LIB-014's Projectile template retries
-// Physics.SetVelocity every Tick instead of calling it once in Ready: a
-// freshly-spawned entity's live Jolt body is not created until its first
-// fixed step, which cannot have run yet by the time the SAME call's
-// Ready/FixedTick/Tick already did.
-void RunFixedTickSeesPreviousFramePhysicsResultTest() {
+// LIB-128: a real installed ScriptRuntimeSceneSystem runs FixedTick in
+// PreSimulation. A CommandBatch flushed there must be applied and its
+// transform hierarchy synchronized before a Simulation-phase system reads
+// it, independent of scene-system registration order.
+void RunFixedTickCommandBufferRunsBeforePhysicsTest() {
     kb::scene::Scene scene;
     scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
         .fixedDeltaSeconds = 0.02F,
@@ -391,7 +391,15 @@ void RunFixedTickSeesPreviousFramePhysicsResultTest() {
         .maxFixedStepsPerFrame = 4U,
     });
 
-    auto physicsStandIn = std::make_unique<RecordingFixedPhysicsStandIn>();
+    constexpr kb::assets::AssetId kAsset{ 9700U };
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FixedTickCommandTarget" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    auto physicsStandIn = std::make_unique<RecordingFixedPhysicsStandIn>(object.Entity());
     RecordingFixedPhysicsStandIn* physicsView = physicsStandIn.get();
     scene.Runtime().AddSceneSystem(std::move(physicsStandIn));
 
@@ -403,17 +411,17 @@ void RunFixedTickSeesPreviousFramePhysicsResultTest() {
     };
     kb::tests::Require(host.Succeeded(), "LIB-128 timing contract test host did not initialize");
 
-    constexpr kb::assets::AssetId kAsset{ 9700U };
-    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FixedTickObserver" });
-    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
-        .behaviourAssetId = kAsset.value,
-        .backend = kb::scene::BehaviourBackend::Native,
-        .enabled = true,
-    });
-
-    std::vector<int> observedDuringFixedTick;
-    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::FixedTick, [&observedDuringFixedTick, physicsView](kb::script::ScriptExecutionContext&) {
-                           observedDuringFixedTick.push_back(physicsView->lastWrittenValue);
+    int fixedTickCount = 0;
+    bool commandBufferFlushed = false;
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::FixedTick, [&scene, object, &fixedTickCount, &commandBufferFlushed](kb::script::ScriptExecutionContext&) {
+                           ++fixedTickCount;
+                           kb::scene::TransformComponent transform = scene.Transforms().Get(object.Entity());
+                           transform.localPosition.x = 42.0F;
+                           kb::library::CommandBatch batch{ scene };
+                           const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+                           kb::tests::Require(batch.Add<kb::scene::TransformComponent>(handle, transform),
+                               "LIB-128 FixedTick command buffer failed to record the transform command");
+                           commandBufferFlushed = batch.Flush().has_value();
                        }),
         "LIB-128 timing contract test FixedTick registration failed");
 
@@ -424,26 +432,17 @@ void RunFixedTickSeesPreviousFramePhysicsResultTest() {
     // carry-over arithmetic to reason about.
     static_cast<void>(scene.Runtime().Update(0.02F));
     kb::tests::Require(physicsView->stepsRun == 1, "LIB-128 timing contract test fixture: physics stand-in must have run exactly once");
-    kb::tests::Require(observedDuringFixedTick.size() == 1U, "LIB-128 timing contract test fixture: FixedTick must have dispatched exactly once");
-    kb::tests::Require(observedDuringFixedTick[0] == 0,
-        "LIB-128 contract: FixedTick dispatched during an Update() call must NOT see that SAME call's own physics fixed-step result - physics has not simulated yet when FixedTick fires");
-
-    static_cast<void>(scene.Runtime().Update(0.02F));
-    kb::tests::Require(observedDuringFixedTick.size() == 2U, "LIB-128 timing contract test fixture: FixedTick must have dispatched twice by now");
-    kb::tests::Require(observedDuringFixedTick[1] == 1,
-        "LIB-128 contract: FixedTick sees the PREVIOUS Update() call's physics result, one call late - never the current call's");
+    kb::tests::Require(fixedTickCount == 1, "LIB-128 timing contract test fixture: FixedTick must have dispatched exactly once");
+    kb::tests::Require(commandBufferFlushed, "LIB-128 command buffer must flush successfully inside FixedTick");
+    kb::tests::Require(kb::tests::NearlyEqual(physicsView->observedCommandValue, 42.0F),
+        "LIB-128 contract: physics must observe a CommandBatch flushed by FixedTick in the SAME fixed step");
 }
 
-// LIB-128: kb::script::ScriptRuntimeFrameSettings::fixedDeltaSeconds
-// (drives ScriptRuntimeSceneSystem's own FixedTick accumulator) and
-// kb::scene::SceneRuntimeFixedStepSettings::fixedDeltaSeconds (drives the
-// scene's own accumulator, which steps a RequiresFixedStep()==true system
-// like the real JoltPhysicsSceneSystem) are two GENUINELY INDEPENDENT
-// accumulators with no code keeping them synchronized - configuring them
-// to different rates here and watching the step counts diverge over
-// several Update() calls proves that fact empirically, rather than just
-// asserting it.
-void RunFixedTickAndPhysicsAccumulatorsAreIndependentTest() {
+// LIB-128: installing ScriptRuntimeSceneSystem promotes its host fixed
+// settings into SceneRuntimeFixedStepSettings. Both FixedTick and every
+// Simulation-phase system consume that one accumulator, including pause and
+// resume without fixed-step debt.
+void RunFixedTickAndPhysicsShareSceneAccumulatorTest() {
     kb::scene::Scene scene;
     scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
         .fixedDeltaSeconds = 0.02F,
@@ -455,16 +454,16 @@ void RunFixedTickAndPhysicsAccumulatorsAreIndependentTest() {
     RecordingFixedPhysicsStandIn* physicsView = physicsStandIn.get();
     scene.Runtime().AddSceneSystem(std::move(physicsStandIn));
 
-    // Script's own FixedTick accumulator runs at HALF physics's rate
-    // (0.01s vs 0.02s) - deliberately different, to make any divergence
-    // impossible to miss.
+    // Installing the script system makes its configured fixed step the
+    // scene's authoritative fixed step. Physics and FixedTick must consume
+    // the same two 0.01s substeps from this 0.02s frame.
     kb::script::ScriptRuntimeHost host{
         scene,
         kb::script::ScriptRuntimeHostOptions{
             .frameSettings = kb::script::ScriptRuntimeFrameSettings{ .fixedDeltaSeconds = 0.01F, .maxFixedStepsPerFrame = 8U },
         },
     };
-    kb::tests::Require(host.Succeeded(), "LIB-128 independence test host did not initialize");
+    kb::tests::Require(host.Succeeded(), "LIB-128 shared-accumulator test host did not initialize");
 
     constexpr kb::assets::AssetId kAsset{ 9701U };
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "FixedTickCounter" });
@@ -478,12 +477,23 @@ void RunFixedTickAndPhysicsAccumulatorsAreIndependentTest() {
     kb::tests::Require(host.NativeBackend().RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::FixedTick, [&fixedTickCount](kb::script::ScriptExecutionContext&) {
                            ++fixedTickCount;
                        }),
-        "LIB-128 independence test FixedTick registration failed");
-    kb::tests::Require(host.InstallSceneSystem(), "LIB-128 independence test scene system install failed");
+        "LIB-128 shared-accumulator test FixedTick registration failed");
+    kb::tests::Require(host.InstallSceneSystem(), "LIB-128 shared-accumulator test scene system install failed");
 
     static_cast<void>(scene.Runtime().Update(0.02F));
-    kb::tests::Require(physicsView->stepsRun == 1, "LIB-128 independence test: physics (0.02s rate) must consume exactly 1 step from a 0.02s update");
-    kb::tests::Require(fixedTickCount == 2, "LIB-128 independence test: script FixedTick (0.01s rate) must consume exactly 2 steps from the SAME 0.02s update - twice physics's count, proving the two accumulators are genuinely independent, not silently unified");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().FixedStepSettings().fixedDeltaSeconds, 0.01F),
+        "LIB-128 must expose one authoritative scene fixed delta after installing the script runtime");
+    kb::tests::Require(physicsView->stepsRun == 2, "LIB-128 physics must consume the same two authoritative scene fixed steps as FixedTick");
+    kb::tests::Require(fixedTickCount == 2, "LIB-128 FixedTick and physics step counts must remain exactly equal");
+
+    scene.Runtime().SetPlaying(false);
+    static_cast<void>(scene.Runtime().Update(0.10F));
+    kb::tests::Require(physicsView->stepsRun == 2 && fixedTickCount == 2 && scene.Runtime().LastFixedStepCount() == 0U,
+        "LIB-128 pausing the scene must freeze both FixedTick and physics at the shared accumulator boundary");
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.01F));
+    kb::tests::Require(physicsView->stepsRun == 3 && fixedTickCount == 3,
+        "LIB-128 resuming must produce one normal shared step without replaying paused time as fixed-step debt");
 }
 
 void RunSceneRuntimeFixedStepTest() {
@@ -1014,8 +1024,8 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
     RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest();
     RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest();
-    RunFixedTickSeesPreviousFramePhysicsResultTest();
-    RunFixedTickAndPhysicsAccumulatorsAreIndependentTest();
+    RunFixedTickCommandBufferRunsBeforePhysicsTest();
+    RunFixedTickAndPhysicsShareSceneAccumulatorTest();
     RunSceneRuntimeFixedStepTest();
     RunSceneRuntimeFrameAndPlayStateTest();
     RunSceneRuntimeFixedInterpolationTest();
