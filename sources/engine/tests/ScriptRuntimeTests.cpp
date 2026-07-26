@@ -5718,11 +5718,14 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
 void RunPhysicsBackendNonAllocQueriesTest() {
     kb::scene::Scene scene;
 
-    const kb::scene::SceneObject nearSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
-        .name = "NearSphere",
-        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 7.0F, 0.0F } },
+    // Create far-to-near deliberately. ECS iteration order is not a query
+    // result ordering contract, so a capacity-one implementation that merely
+    // kept the first visited body would incorrectly retain FarSphere.
+    const kb::scene::SceneObject farSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "FarSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 3.0F, 0.0F } },
     });
-    scene.Components().Colliders().Set(nearSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+    scene.Components().Colliders().Set(farSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
 
     const kb::scene::SceneObject midSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "MidSphere",
@@ -5730,11 +5733,11 @@ void RunPhysicsBackendNonAllocQueriesTest() {
     });
     scene.Components().Colliders().Set(midSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x2U });
 
-    const kb::scene::SceneObject farSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
-        .name = "FarSphere",
-        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 3.0F, 0.0F } },
+    const kb::scene::SceneObject nearSphere = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "NearSphere",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 7.0F, 0.0F } },
     });
-    scene.Components().Colliders().Set(farSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
+    scene.Components().Colliders().Set(nearSphere.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F, .layer = 0x1U });
 
     const kb::scene::Vec3 rayOrigin{ 0.0F, 10.0F, 0.0F };
     const kb::scene::Vec3 rayDown{ 0.0F, -1.0F, 0.0F };

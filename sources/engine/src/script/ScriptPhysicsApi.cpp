@@ -2,22 +2,16 @@
 
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/math/EngineMath.hpp"
-#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/Scene.hpp"
-#include "engine/scene/SceneComponents.hpp"
-#include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneRuntime.hpp"
-#include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
-#include "scene/PhysicsGeometryQueries.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
-#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -130,42 +124,6 @@ ScriptFunctionCallResult VectorResult(bool found, Vec3 value) {
     };
 }
 
-// LIB-126: the ray-vs-collider intersection math itself (IntersectRaySphere/
-// IntersectRayAabb) moved to the shared kb::scene::IntersectRayCollider
-// (PhysicsGeometryQueries.hpp/.cpp) so kb::scene::RaycastAllNonAlloc can
-// reuse it verbatim instead of duplicating it - this file's Raycast() below
-// now calls that shared function too.
-struct RaycastContext {
-    kb::scene::Scene* scene = nullptr;
-    Vec3 origin{};
-    Vec3 direction{};
-    float maxDistance = 0.0F;
-    std::uint32_t layerMask = kb::scene::kPhysicsAllLayers;
-    kb::scene::PhysicsCastResult best{ .distance = std::numeric_limits<float>::max() };
-};
-
-void RaycastVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* rawContext) {
-    auto* context = static_cast<RaycastContext*>(rawContext);
-    if (context == nullptr || context->scene == nullptr) {
-        return;
-    }
-    const kb::scene::ColliderComponent* collider = context->scene->Components().Colliders().TryGet(entity);
-    if (collider == nullptr || (collider->layer & context->layerMask) == 0U) {
-        return;
-    }
-    float distance = 0.0F;
-    Vec3 normal{};
-    if (kb::scene::IntersectRayCollider(context->origin, context->direction, context->maxDistance, *collider, transform, distance, normal) && distance < context->best.distance) {
-        context->best = kb::scene::PhysicsCastResult{
-            .hit = true,
-            .entity = entity,
-            .distance = distance,
-            .point = context->origin + context->direction * distance,
-            .normal = normal,
-        };
-    }
-}
-
 ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
@@ -180,20 +138,12 @@ ScriptFunctionCallResult Raycast(const ScriptFunctionCallContext& context, std::
     if (!IsFinite(direction) || Length(direction) <= 0.000001F) {
         return Error("raycast direction is invalid");
     }
-    RaycastContext raycastContext{
-        .scene = context.scene,
-        .origin = origin,
-        .direction = direction,
-        .maxDistance = maxDistance,
-        .layerMask = LayerMaskArg(arguments),
-        // best.distance stays RaycastContext's own default member
-        // initializer (FLT_MAX) - do NOT override it here with `{}`, which
-        // would re-value-initialize PhysicsCastResult to distance=0.0F and
-        // make every real hit's `distance < best.distance` false.
-    };
-    context.scene->Runtime().SynchronizeTransforms();
-    context.scene->Transforms().ForEach(&RaycastVisitor, &raycastContext);
-    const kb::scene::PhysicsCastResult& hit = raycastContext.best;
+    std::array<kb::scene::PhysicsCastResult, 1U> hitStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits(hitStorage);
+    kb::scene::RaycastAllNonAlloc(
+        *context.scene, origin, direction, maxDistance, LayerMaskArg(arguments), hits);
+    const kb::scene::PhysicsCastResult hit =
+        hits.Empty() ? kb::scene::PhysicsCastResult{} : *hits.GetAt(0U);
 
     // LIB-132: single-query trace - RecordQueryTrace is an honest no-op unless debug draw is
     // enabled on this scene (see PhysicsDebugDraw.hpp), so this costs nothing when disabled.
