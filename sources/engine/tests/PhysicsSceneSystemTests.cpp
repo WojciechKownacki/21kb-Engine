@@ -508,11 +508,21 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     scene.Components().Colliders().Set(faller.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.5F });
 
     constexpr kb::assets::AssetId kFallerAsset{ 9601U };
+    constexpr kb::assets::AssetId kFloorContactAsset{ 9602U };
     scene.Components().Behaviours().Set(faller.Entity(), kb::scene::BehaviourComponent{
         .behaviourAssetId = kFallerAsset.value,
         .backend = kb::scene::BehaviourBackend::Native,
         .enabled = true,
     });
+    scene.Components().Behaviours().Set(floor.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kFloorContactAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    // Earlier LIB-124/125 probes intentionally ran physics before a script
+    // system existed. Their historical contacts are unrelated to this rig.
+    static_cast<void>(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene));
 
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     kb::tests::Require(scriptHost.Succeeded(), "LIB-127 real-Jolt test script host did not initialize");
@@ -547,54 +557,133 @@ void RunPhysicsSceneSystemFallingBodyTest() {
 
     struct FallerEventRecord {
         std::string name;
+        kb::scene::SceneEntity target{};
         kb::scene::SceneEntity other{};
+        kb::scene::Vec3 point{};
+        kb::scene::Vec3 normal{};
     };
     std::vector<FallerEventRecord> fallerEvents;
     const auto recordFallerEvent = [&fallerEvents](kb::script::ScriptExecutionContext& context, const kb::script::ScriptEvent& event) {
-        static_cast<void>(context);
         kb::scene::SceneEntity other{};
+        kb::scene::Vec3 point{};
+        kb::scene::Vec3 normal{};
         for (const kb::script::ScriptEventArgument& argument : event.arguments) {
             if (argument.name == "other") {
                 other = kb::scene::SceneEntity{ argument.value.AsUInt64() };
+            } else if (argument.name == "pointX") {
+                point.x = argument.value.AsFloat();
+            } else if (argument.name == "pointY") {
+                point.y = argument.value.AsFloat();
+            } else if (argument.name == "pointZ") {
+                point.z = argument.value.AsFloat();
+            } else if (argument.name == "normalX") {
+                normal.x = argument.value.AsFloat();
+            } else if (argument.name == "normalY") {
+                normal.y = argument.value.AsFloat();
+            } else if (argument.name == "normalZ") {
+                normal.z = argument.value.AsFloat();
             }
         }
-        fallerEvents.push_back(FallerEventRecord{ .name = event.name, .other = other });
+        fallerEvents.push_back(FallerEventRecord{
+            .name = event.name,
+            .target = context.Self(),
+            .other = other,
+            .point = point,
+            .normal = normal,
+        });
     };
     for (const char* name : { "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit" }) {
         kb::tests::Require(scriptHost.NativeBackend().RegisterEvent(kFallerAsset, name, recordFallerEvent), "LIB-127 real-Jolt test event registration failed");
+        kb::tests::Require(scriptHost.NativeBackend().RegisterEvent(kFloorContactAsset, name, recordFallerEvent), "LIB-127 real-Jolt opposite-recipient event registration failed");
     }
     kb::tests::Require(scriptHost.InstallSceneSystem(), "LIB-127 real-Jolt test scene system install failed");
 
-    for (int i = 0; i < 200; ++i) {
+    bool launchedAfterCollisionStay = false;
+    for (int i = 0; i < 300; ++i) {
         [[maybe_unused]] const bool fallerProgressed = scene.Runtime().Update(1.0F / 60.0F);
+        if (!launchedAfterCollisionStay) {
+            const bool hasCollisionStay = std::any_of(
+                fallerEvents.begin(),
+                fallerEvents.end(),
+                [&faller, &floor](const FallerEventRecord& record) {
+                    return record.name == "OnCollisionStay" && record.target == faller.Entity() && record.other == floor.Entity();
+                });
+            if (hasCollisionStay) {
+                kb::tests::Require(
+                    kb::scene::PhysicsBackend::AddImpulse(scene, faller.Entity(), kb::scene::Vec3{ 0.0F, 8.0F, 0.0F }),
+                    "LIB-127 real-Jolt rig could not launch the resting faller to produce OnCollisionExit");
+                launchedAfterCollisionStay = true;
+            }
+        }
     }
 
     bool sawTriggerEnter = false;
+    bool sawTriggerStay = false;
     bool sawTriggerExit = false;
     bool sawCollisionEnter = false;
     bool sawCollisionStay = false;
+    bool sawCollisionExit = false;
+    std::optional<FallerEventRecord> fallerCollisionEnter;
+    std::optional<FallerEventRecord> floorCollisionEnter;
+    std::optional<FallerEventRecord> fallerCollisionExit;
     for (const FallerEventRecord& record : fallerEvents) {
-        if (record.name == "OnTriggerEnter" && record.other == trigger.Entity()) {
+        if (record.target == faller.Entity() && record.name == "OnTriggerEnter" && record.other == trigger.Entity()) {
             sawTriggerEnter = true;
         }
-        if (record.name == "OnTriggerExit" && record.other == trigger.Entity()) {
+        if (record.target == faller.Entity() && record.name == "OnTriggerStay" && record.other == trigger.Entity()) {
+            sawTriggerStay = true;
+        }
+        if (record.target == faller.Entity() && record.name == "OnTriggerExit" && record.other == trigger.Entity()) {
             sawTriggerExit = true;
         }
-        if (record.name == "OnCollisionEnter" && record.other == floor.Entity()) {
+        if (record.target == faller.Entity() && record.name == "OnCollisionEnter" && record.other == floor.Entity()) {
             sawCollisionEnter = true;
+            if (!fallerCollisionEnter.has_value()) {
+                fallerCollisionEnter = record;
+            }
         }
-        if (record.name == "OnCollisionStay" && record.other == floor.Entity()) {
+        if (record.target == floor.Entity() && record.name == "OnCollisionEnter" && record.other == faller.Entity() && !floorCollisionEnter.has_value()) {
+            floorCollisionEnter = record;
+        }
+        if (record.target == faller.Entity() && record.name == "OnCollisionStay" && record.other == floor.Entity()) {
             sawCollisionStay = true;
+        }
+        if (record.target == faller.Entity() && record.name == "OnCollisionExit" && record.other == floor.Entity()) {
+            sawCollisionExit = true;
+            if (!fallerCollisionExit.has_value()) {
+                fallerCollisionExit = record;
+            }
         }
     }
     kb::tests::Require(sawTriggerEnter, "Faller must receive a real OnTriggerEnter for the trigger volume it fell through");
+    kb::tests::Require(sawTriggerStay, "Faller must receive a real OnTriggerStay while it remains inside the trigger volume");
     kb::tests::Require(sawTriggerExit, "Faller must receive a real OnTriggerExit after falling all the way through the trigger volume");
     kb::tests::Require(sawCollisionEnter, "Faller must receive a real OnCollisionEnter when it lands on the real floor body");
     kb::tests::Require(sawCollisionStay, "Faller must receive a real OnCollisionStay while it continues resting on the real floor body");
+    kb::tests::Require(sawCollisionExit, "Faller must receive a real OnCollisionExit after a real impulse separates it from the floor");
+    kb::tests::Require(fallerCollisionEnter.has_value() && floorCollisionEnter.has_value(),
+        "Both recipients of the same real Jolt contact must receive OnCollisionEnter");
+    kb::tests::Require(
+        kb::tests::NearlyEqual(fallerCollisionEnter->point.x, floorCollisionEnter->point.x)
+            && kb::tests::NearlyEqual(fallerCollisionEnter->point.y, floorCollisionEnter->point.y)
+            && kb::tests::NearlyEqual(fallerCollisionEnter->point.z, floorCollisionEnter->point.z),
+        "Both recipients must receive the same deterministic world-space contact point");
+    kb::tests::Require(
+        kb::tests::NearlyEqual(fallerCollisionEnter->normal.x, -floorCollisionEnter->normal.x)
+            && kb::tests::NearlyEqual(fallerCollisionEnter->normal.y, -floorCollisionEnter->normal.y)
+            && kb::tests::NearlyEqual(fallerCollisionEnter->normal.z, -floorCollisionEnter->normal.z),
+        "The second recipient must receive the exact inverse recipient-local contact normal");
+    kb::tests::Require(
+        fallerCollisionExit.has_value()
+            && std::isfinite(fallerCollisionExit->point.x)
+            && std::isfinite(fallerCollisionExit->point.y)
+            && std::isfinite(fallerCollisionExit->point.z)
+            && kb::math::Length(fallerCollisionExit->normal) > 0.5F,
+        "OnCollisionExit must retain the last real manifold point and unit normal instead of returning an unusable zero payload");
 
-    const auto firstIndexOf = [&fallerEvents](std::string_view name) -> std::size_t {
+    const auto firstIndexOf = [&fallerEvents, &faller](std::string_view name) -> std::size_t {
         for (std::size_t i = 0; i < fallerEvents.size(); ++i) {
-            if (fallerEvents[i].name == name) {
+            if (fallerEvents[i].target == faller.Entity() && fallerEvents[i].name == name) {
                 return i;
             }
         }

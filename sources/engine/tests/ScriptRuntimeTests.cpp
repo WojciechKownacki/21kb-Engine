@@ -5830,6 +5830,7 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
     kb::scene::Scene scene;
 
     constexpr kb::assets::AssetId kNativeAsset{ 8801U };
+    constexpr kb::assets::AssetId kGraphAsset{ 8803U };
     const kb::scene::SceneObject nativeSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Native Collision Subject" });
     scene.Components().Behaviours().Set(nativeSubject.Entity(), kb::scene::BehaviourComponent{
         .behaviourAssetId = kNativeAsset.value,
@@ -5847,9 +5848,68 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
 
     const kb::scene::SceneObject otherEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Collision Other" });
     const kb::scene::SceneObject unrelatedEntity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Unrelated Bystander" });
+    const kb::scene::SceneObject graphSubject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visual Graph Trigger Subject" });
+    scene.Components().Behaviours().Set(graphSubject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kGraphAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
 
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Collision/trigger event dispatch test host did not initialize");
+
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "CollisionTriggerReceiver";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::CustomEvent, .symbol = "OnTriggerExit" },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "RecordCollisionTriggerPayload" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "other", .type = kb::visual::VisualGraphValueType::Entity },
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "pointX", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "normalY", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "other", .type = kb::visual::VisualGraphValueType::Entity },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "pointX", .type = kb::visual::VisualGraphValueType::Float },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "normalY", .type = kb::visual::VisualGraphValueType::Float },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution },
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "other", .toNode = 2U, .toPin = "other", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "pointX", .toNode = 2U, .toPin = "pointX", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "normalY", .toNode = 2U, .toPin = "normalY", .kind = kb::visual::VisualGraphEdgeKind::Data },
+    };
+    const kb::visual::VisualGraphCompileResult compiledGraph = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiledGraph.Succeeded(), "LIB-127 collision/trigger Visual Graph did not compile");
+    host.VisualGraphs().Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kGraphAsset,
+        .graphName = graph.name,
+        .module = compiledGraph.module,
+    });
+    struct GraphPayload {
+        std::uint64_t other = 0U;
+        float pointX = 0.0F;
+        float normalY = 0.0F;
+    };
+    std::vector<GraphPayload> graphReceived;
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                           .symbol = "RecordCollisionTriggerPayload",
+                           .inputs = {
+                               kb::visual::VisualGraphNativePinSignature{ .name = "other", .type = kb::visual::VisualGraphValueType::Entity },
+                               kb::visual::VisualGraphNativePinSignature{ .name = "pointX", .type = kb::visual::VisualGraphValueType::Float },
+                               kb::visual::VisualGraphNativePinSignature{ .name = "normalY", .type = kb::visual::VisualGraphValueType::Float },
+                           },
+                           .callback = [&graphReceived](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               graphReceived.push_back(GraphPayload{
+                                   .other = context.ReadUInt64(instruction.inputs[0].sourceNodeId, instruction.inputs[0].sourcePin),
+                                   .pointX = context.ReadFloat(instruction.inputs[1].sourceNodeId, instruction.inputs[1].sourcePin),
+                                   .normalY = context.ReadFloat(instruction.inputs[2].sourceNodeId, instruction.inputs[2].sourcePin),
+                               });
+                           },
+                       }),
+        "LIB-127 collision/trigger Visual Graph binding did not register");
 
     struct ReceivedEvent {
         std::string name;
@@ -5937,6 +5997,14 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
                                                                .isTrigger = false,
                                                                .phase = kb::scene::PhysicsContactPhase::Enter,
                                                            });
+    kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                               .target = graphSubject.Entity(),
+                                                               .other = otherEntity.Entity(),
+                                                               .point = kb::scene::Vec3{ 7.0F, 8.0F, 9.0F },
+                                                               .normal = kb::scene::Vec3{ 0.0F, -1.0F, 0.0F },
+                                                               .isTrigger = true,
+                                                               .phase = kb::scene::PhysicsContactPhase::Exit,
+                                                           });
 
     static_cast<void>(scene.Runtime().Update(0.016F));
 
@@ -5954,6 +6022,10 @@ void RunScriptPhysicsCollisionTriggerEventDispatchTest() {
         "Lua OnTriggerEnter must receive the exact queued contact point via event.args.pointX");
     kb::tests::Require(host.SharedState().Get("luaCollisionStayFired")->AsBool(),
         "Lua OnCollisionStay must also fire for the same entity, independent of OnTriggerEnter having fired for it too");
+    kb::tests::Require(graphReceived.size() == 1U && graphReceived[0].other == otherEntity.Entity().Id()
+            && kb::tests::NearlyEqual(graphReceived[0].pointX, 7.0F)
+            && kb::tests::NearlyEqual(graphReceived[0].normalY, -1.0F),
+        "Visual Graph OnTriggerExit must receive the typed other/point/normal payload through its CustomEvent pins");
 
     kb::tests::Require(kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene).empty(),
         "ScriptRuntimeSceneSystem must have fully drained the pending collision event queue during Update()");
