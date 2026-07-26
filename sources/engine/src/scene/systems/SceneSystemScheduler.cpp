@@ -39,9 +39,25 @@ void SceneSystemScheduler::Add(std::unique_ptr<SceneSystem> system, Scene& scene
     systems_.push_back(std::move(system));
 }
 
-void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds) {
+void SceneSystemScheduler::BeginFrame(Scene& scene, float deltaSeconds) {
     SceneSystemContext context{ scene, deltaSeconds };
     for (const auto& system : systems_) {
+        try {
+            system->OnFrameStart(context);
+        } catch (const std::exception& error) {
+            RecordSystemError("OnFrameStart", error.what());
+        } catch (...) {
+            RecordSystemError("OnFrameStart", nullptr);
+        }
+    }
+}
+
+void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase) {
+    SceneSystemContext context{ scene, deltaSeconds };
+    for (const auto& system : systems_) {
+        if (system->UpdatePhase() != phase) {
+            continue;
+        }
         try {
             system->OnUpdate(context);
         } catch (const std::exception& error) {
@@ -52,9 +68,12 @@ void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds) {
     }
 }
 
-void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds) {
+void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase) {
     SceneSystemContext context{ scene, fixedDeltaSeconds };
     for (const auto& system : systems_) {
+        if (system->FixedUpdatePhase() != phase) {
+            continue;
+        }
         try {
             system->OnFixedUpdate(context);
         } catch (const std::exception& error) {

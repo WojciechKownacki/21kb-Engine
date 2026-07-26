@@ -20,9 +20,9 @@ constexpr std::size_t kMaxLiveTimers = 4096U;
 
 // LIB-096: bounds how many consecutive intervals a single Timer.Repeat can
 // "catch up" on within ONE Advance() call — mirrors the exact same
-// spiral-of-death guard ScriptRuntimeFrameSettings::maxFixedStepsPerFrame
-// already applies to FixedTick's own accumulator (ScriptRuntimeSceneSystem.
-// cpp). Without a bound, a tiny intervalSeconds under one huge deltaSeconds
+// spiral-of-death guard SceneRuntimeFixedStepSettings::maxFixedStepsPerFrame
+// applies to the authoritative FixedTick/physics accumulator. Without a
+// bound, a tiny intervalSeconds under one huge deltaSeconds
 // (a debugger breakpoint, an asset-load stall) would fire thousands of
 // TimerFired events in a single frame; with no bound at all in the OTHER
 // direction (LIB-095's original flat reset), an overdue repeating timer

@@ -135,25 +135,19 @@ public:
     // recomputed after a local or parent change, and what each consumer can
     // rely on WITHOUT calling this explicitly (confirmed against
     // SceneRuntimeService::Update's actual sync call sites, SceneRuntime.cpp):
-    //  - SCRIPTS (kb::script::ScriptRuntimeSceneSystem, registered via
-    //    AddSceneSystem and run from Update() below): get exactly ONE
-    //    automatic sync per Update() call, BEFORE the scene-system
-    //    scheduler runs. Its FixedTick/Tick/LateTick/BeforeRender/
-    //    AfterRender phases then run back-to-back inside that single
-    //    scheduler pass with NO further automatic sync between them — a
-    //    local/parent change made in one phase is only guaranteed visible
-    //    via world* to a LATER phase in the SAME Update() call after an
-    //    EXPLICIT call to this method. This is the established pattern
-    //    kb::library::Transform.SetWorldPose/SetParent(keepWorld)/LookAt
-    //    already follow when they need a fresh parent (or self) world
-    //    transform.
-    //  - PHYSICS (any SceneSystem whose RequiresFixedStep() is true, e.g.
-    //    JoltPhysicsSceneSystem): Update() calls this BEFORE and AFTER
-    //    EVERY individual fixed step, not just once per Update() call — a
-    //    fixed step's read of world* is always fresh, and any local*/
-    //    world* it writes is fully propagated through the hierarchy before
-    //    the next fixed step (or any later reader) sees it. No manual call
-    //    needed here.
+    //  - SCRIPTS: frame-start lifecycle synchronization runs first. Input
+    //    and other PreFixed systems then update, followed by one FixedTick
+    //    in PreSimulation for every authoritative scene fixed step.
+    //    Hierarchy synchronization runs after FixedTick and before physics,
+    //    so a transform command flushed by FixedTick is visible to the same
+    //    simulation step. Tick/LateTick/BeforeRender/AfterRender run in
+    //    PostFixed after physics write-back. There is no automatic sync
+    //    between those four variable phases; code needing a newly-derived
+    //    world pose inside a later variable phase calls this explicitly.
+    //  - PHYSICS: Update() synchronizes before Simulation, after Simulation,
+    //    and after PostSimulation for every substep. Physics reads fresh
+    //    FixedTick/command-buffer results and publishes write-back before
+    //    Tick or the next substep. No manual call is needed.
     //  - RENDERER (kb::render::EcsRenderSceneSynchronizer and everything
     //    it feeds, e.g. Renderer::SubmitSceneToViewport): does NOT call
     //    this method itself, but it does NOT blindly trust the caller's

@@ -22,8 +22,9 @@ public:
     SceneSystemScheduler& operator=(SceneSystemScheduler&&) noexcept = default;
 
     void Add(std::unique_ptr<SceneSystem> system, Scene& scene);
-    void Update(Scene& scene, float deltaSeconds);
-    void FixedUpdate(Scene& scene, float fixedDeltaSeconds);
+    void BeginFrame(Scene& scene, float deltaSeconds);
+    void Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase);
+    void FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase);
     void Shutdown(Scene& scene) noexcept;
 
     // A throw from one scene system (e.g. a third-party plugin's system) must
