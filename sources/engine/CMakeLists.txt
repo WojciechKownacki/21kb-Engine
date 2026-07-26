@@ -1135,6 +1135,16 @@ add_library(kb_engine STATIC
     src/input/InputPollingSystem.cpp
 )
 
+if(WIN32)
+    target_sources(kb_engine PRIVATE
+        include/engine/platform/win32/Win32InputCollector.hpp
+        include/engine/platform/win32/Win32InputKeyMap.hpp
+        src/platform/win32/Win32InputCollector.cpp
+        src/platform/win32/Win32InputKeyMap.cpp
+    )
+    target_link_libraries(kb_engine PRIVATE user32 xinput)
+endif()
+
 if(NOT WIN32)
     set_target_properties(kb_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()

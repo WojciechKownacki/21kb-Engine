@@ -1,9 +1,13 @@
-#include "platform/win32/Win32InputKeyMap.hpp"
+#include "engine/platform/win32/Win32InputKeyMap.hpp"
 
 #if defined(_WIN32)
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <Windows.h>
 #include <Xinput.h>
 
@@ -11,12 +15,9 @@
 
 #include <array>
 
-namespace kb::editor {
+namespace kb::input {
 namespace {
 
-using kb::input::InputKey;
-
-// Digital key -> Win32 virtual key. Letters/digits use their ASCII codes.
 constexpr std::array<Win32KeyBinding, 70> kKeyboardAndMouse{{
     {InputKey::A, 'A'}, {InputKey::B, 'B'}, {InputKey::C, 'C'}, {InputKey::D, 'D'},
     {InputKey::E, 'E'}, {InputKey::F, 'F'}, {InputKey::G, 'G'}, {InputKey::H, 'H'},
@@ -70,7 +71,7 @@ std::span<const Win32GamepadButtonBinding> Win32InputKeyMap::GamepadButtons() no
     return kGamepadButtons;
 }
 
-kb::input::InputKey Win32InputKeyMap::InputKeyForVirtualKey(int virtualKey) noexcept {
+InputKey Win32InputKeyMap::InputKeyForVirtualKey(int virtualKey) noexcept {
     for (const Win32KeyBinding& binding : kKeyboardAndMouse) {
         if (binding.virtualKey == virtualKey) {
             return binding.key;
@@ -79,6 +80,6 @@ kb::input::InputKey Win32InputKeyMap::InputKeyForVirtualKey(int virtualKey) noex
     return InputKey::None;
 }
 
-} // namespace kb::editor
+} // namespace kb::input
 
 #endif

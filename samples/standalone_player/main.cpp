@@ -1,11 +1,14 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/input/InputSubsystem.hpp"
+#include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
@@ -17,6 +20,7 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "StandaloneInputRuntime.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -47,8 +51,51 @@ namespace {
 constexpr std::uint32_t kHeadlessWidth = 64U;
 constexpr std::uint32_t kHeadlessHeight = 64U;
 
-class HeadlessSurface final : public kb::render::RenderSurface {
+class StandaloneSurface final : public kb::render::RenderSurface {
 public:
+    ~StandaloneSurface() override {
+        if (window_ != nullptr) {
+            DestroyWindow(window_);
+        }
+        if (windowClass_ != 0U) {
+            UnregisterClassW(kWindowClassName, GetModuleHandleW(nullptr));
+        }
+    }
+
+    [[nodiscard]] bool Initialize(bool visible) noexcept {
+        WNDCLASSEXW windowClass{};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+        windowClass.lpszClassName = kWindowClassName;
+        windowClass_ = RegisterClassExW(&windowClass);
+        if (windowClass_ == 0U) {
+            return false;
+        }
+        window_ = CreateWindowExW(
+            0U,
+            kWindowClassName,
+            L"21kb Engine Standalone Runtime",
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            640,
+            360,
+            nullptr,
+            nullptr,
+            windowClass.hInstance,
+            nullptr);
+        if (window_ == nullptr) {
+            return false;
+        }
+        if (visible) {
+            ShowWindow(window_, SW_SHOWNORMAL);
+            UpdateWindow(window_);
+        }
+        return true;
+    }
+
     [[nodiscard]] std::uint32_t Width() const noexcept override {
         return kHeadlessWidth;
     }
@@ -58,12 +105,21 @@ public:
     }
 
     [[nodiscard]] void* NativeWindowHandle() const noexcept override {
-        return nullptr;
+        return window_;
     }
 
     [[nodiscard]] void* NativeDisplayHandle() const noexcept override {
         return nullptr;
     }
+
+    [[nodiscard]] HWND Window() const noexcept {
+        return window_;
+    }
+
+private:
+    static constexpr const wchar_t* kWindowClassName = L"21kbStandaloneRuntimeWindow";
+    ATOM windowClass_ = 0U;
+    HWND window_ = nullptr;
 };
 
 struct StandaloneOptions {
@@ -75,6 +131,7 @@ struct StandaloneOptions {
     std::optional<std::uint32_t> expectedGraphGpuCount{};
     bgfx::RendererType::Enum rendererType = bgfx::RendererType::Noop;
     bool selfTest = false;
+    bool inputRuntimeTest = false;
     bool help = false;
 };
 
@@ -129,6 +186,7 @@ void PrintUsage() {
     std::fprintf(stdout,
         "kb_standalone_player options:\n"
         "  --self-test\n"
+        "  --input-runtime-test\n"
         "  --renderer=noop|d3d11\n"
         "  --graph-cache-root=<path>\n"
         "  --asset-root=<path>\n"
@@ -251,6 +309,8 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             options.help = true;
         } else if (argument == "--self-test") {
             options.selfTest = true;
+        } else if (argument == "--input-runtime-test") {
+            options.inputRuntimeTest = true;
         } else if (HasPrefix(argument, "--renderer=")) {
             const std::string_view rendererValue = ValueAfter(argument, "--renderer=");
             if (!ParseRenderer(rendererValue, options.rendererType)) {
@@ -444,8 +504,8 @@ int main(int argc, char** argv) {
         PrintUsage();
         return EXIT_SUCCESS;
     }
-    if (options.assetRoot.empty() && !options.selfTest) {
-        std::fprintf(stderr, "kb_standalone_player: provide --asset-root or --self-test\n");
+    if (options.assetRoot.empty() && !options.selfTest && !options.inputRuntimeTest) {
+        std::fprintf(stderr, "kb_standalone_player: provide --asset-root, --self-test, or --input-runtime-test\n");
         PrintUsage();
         return EXIT_FAILURE;
     }
@@ -455,12 +515,25 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    StandaloneSurface surface;
+    // Keep the automated graph cook/load check unobtrusive; normal player runs
+    // and the input verification own a visible, focusable production window.
+    if (!surface.Initialize(!options.selfTest)) {
+        std::fprintf(stderr, "kb_standalone_player: runtime window creation failed\n");
+        return EXIT_FAILURE;
+    }
+
     kb::scene::Scene scene;
+    kb::input::Win32InputCollector inputCollector;
+    if (options.inputRuntimeTest) {
+        return RunStandaloneInputRuntimeVerification(scene, inputCollector, surface.Window())
+            ? EXIT_SUCCESS
+            : EXIT_FAILURE;
+    }
     if (!options.assetRoot.empty() && !BuildSceneFromAssets(options, scene)) {
         return EXIT_FAILURE;
     }
 
-    HeadlessSurface surface;
     kb::render::DisplayConfig config{};
     config.allowHeadlessNoop = options.rendererType == bgfx::RendererType::Noop;
     config.preferredBgfxRendererType = static_cast<std::int32_t>(options.rendererType);
@@ -473,6 +546,10 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // Production frame order: the platform host snapshots physical devices
+    // first; InputPollingSystem resolves actions during this same scene update.
+    inputCollector.Collect(scene.Input().MutableDeviceState(), surface.Window());
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     const bool submitted = SubmitRuntimeFrame(renderer, scene);
     const bool statsValid = submitted && ValidateStats(options, renderer);
     renderer.Shutdown();

@@ -397,8 +397,6 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
-    src/private/platform/win32/Win32InputCollector.hpp
-    src/private/platform/win32/Win32InputKeyMap.hpp
     src/private/platform/win32/Win32InputDebugLogger.hpp
     src/private/project/EditorProjectAssetIndex.hpp
     src/private/project/EditorProjectBootstrap.hpp
@@ -598,8 +596,6 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
-    src/platform/win32/Win32InputCollector.cpp
-    src/platform/win32/Win32InputKeyMap.cpp
     src/platform/win32/Win32XInputHapticsBackend.cpp
     src/platform/win32/Win32InputDebugLogger.cpp
     src/rendering/DockDropPreviewRenderer.cpp
