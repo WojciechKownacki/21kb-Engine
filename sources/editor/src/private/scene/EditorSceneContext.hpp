@@ -785,6 +785,7 @@ private:
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
     [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
     void ActivateProjectInput();
+    [[nodiscard]] bool ActivateProjectPhysicsLayers(kb::scene::Scene& scene);
     void EnsureScriptRuntime();
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();

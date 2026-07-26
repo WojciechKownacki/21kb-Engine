@@ -116,6 +116,9 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     // IsScriptCurrent check reloads the new source instead of re-running the
     // stale compiled script.
     static_cast<void>(scene_->Assets().Discover());
+    if (!ActivateProjectPhysicsLayers(*scene_)) {
+        return false;
+    }
 
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
@@ -189,6 +192,9 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     RegisterEditorSceneDocumentAssetLoaders(*nextScene);
     const std::size_t discovered = nextScene->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
+    if (!ActivateProjectPhysicsLayers(*nextScene)) {
+        return false;
+    }
 
     if (!currentScenePath_.empty() && !kb::scene::SceneDocumentService::LoadFileIntoScene(*nextScene, currentScenePath_)) {
         console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());

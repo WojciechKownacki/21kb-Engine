@@ -16,6 +16,7 @@
 #include "windowing/FloatingWindowHitTestResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -38,12 +39,16 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -66,6 +71,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cwchar>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -73,6 +79,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -334,6 +341,121 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.msaa4x.x, click.msaa4x.y, renderBackendSettings), "Clicking MSAA 4x is handled");
     report.Check(renderBackendSettings.MsaaSamples() == 4U, "MSAA setting changed to 4x");
     report.Check(renderBackendSettings.BackendGeneration() == backendGenerationBeforeMsaa + 1U, "MSAA change restarts the backend");
+}
+
+void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
+    const EditorProjectBootstrapResult bootstrap = EditorProjectBootstrap::BootstrapDefaultProject();
+    report.Check(bootstrap.succeeded, "LIB-129 bootstrap editor project for physics layers runtime");
+    if (!bootstrap.succeeded) {
+        return;
+    }
+
+    constexpr std::string_view kLayersVirtualPath = "/Game/Config/EditorRuntime.21kbphysicslayers";
+    const std::filesystem::path layersPath =
+        EditorProjectPaths::AssetsRoot() / "Config" / "EditorRuntime.21kbphysicslayers";
+    std::error_code directoryError;
+    std::filesystem::create_directories(layersPath.parent_path(), directoryError);
+    report.Check(!directoryError, "LIB-129 create editor physics layers asset directory");
+
+    kb::scene::PhysicsLayersAsset layers;
+    layers.layerNames[1] = "EditorGhost";
+    layers.layerNames[2] = "EditorSolid";
+    layers.layerNames[3] = "EditorQuery";
+    layers.SetLayersInteract(1U, 2U, false);
+    report.Check(
+        kb::scene::WritePhysicsLayersAsset(layersPath, layers),
+        "LIB-129 write editor project physics layers asset");
+
+    kb::project::ProjectDescriptor descriptor = bootstrap.descriptor;
+    descriptor.physicsLayersAsset = kLayersVirtualPath;
+    report.Check(
+        kb::project::ProjectManager::SaveProject(bootstrap.projectFile, descriptor),
+        "LIB-129 persist editor project physics layers reference");
+
+    EditorSceneContext context;
+    report.Check(
+        kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorGhost") == 2U &&
+            kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorSolid") == 4U &&
+            kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorQuery") == 8U,
+        "LIB-129 editor startup applies named layers after mount and discovery");
+
+    const auto createMatrixBody = [&context](
+                                      const char* name,
+                                      kb::scene::RigidbodyBodyType bodyType,
+                                      float x,
+                                      std::uint32_t layer) {
+        const kb::scene::SceneObject object = context.Scene().Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ x, 0.0F, 50.0F },
+                },
+            });
+        context.Scene().Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = bodyType,
+                .mass = 1.0F,
+                .useGravity = false,
+            });
+        context.Scene().Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.5F,
+                .layer = layer,
+            });
+        return object;
+    };
+
+    const kb::scene::SceneObject disabledStatic =
+        createMatrixBody("EditorMatrixDisabledStatic", kb::scene::RigidbodyBodyType::Static, 100.0F, 4U);
+    const kb::scene::SceneObject disabledDynamic =
+        createMatrixBody("EditorMatrixDisabledDynamic", kb::scene::RigidbodyBodyType::Dynamic, 100.2F, 2U);
+    const kb::scene::SceneObject controlStatic =
+        createMatrixBody("EditorMatrixControlStatic", kb::scene::RigidbodyBodyType::Static, 110.0F, 1U);
+    const kb::scene::SceneObject controlDynamic =
+        createMatrixBody("EditorMatrixControlDynamic", kb::scene::RigidbodyBodyType::Dynamic, 110.2F, 1U);
+    for (std::size_t step = 0U; step < 30U; ++step) {
+        static_cast<void>(context.Scene().Runtime().Update(1.0F / 60.0F));
+    }
+    const float disabledDistance = std::fabs(
+        context.Scene().Transforms().Get(disabledDynamic).localPosition.x -
+        context.Scene().Transforms().Get(disabledStatic).localPosition.x);
+    const float controlDistance = std::fabs(
+        context.Scene().Transforms().Get(controlDynamic).localPosition.x -
+        context.Scene().Transforms().Get(controlStatic).localPosition.x);
+    report.Check(
+        disabledDistance < 0.3F && controlDistance > 0.7F,
+        "LIB-129 editor runtime applies the project matrix to live Jolt while the control pair collides");
+
+    layers.layerNames[3] = "EditorReloadedQuery";
+    report.Check(
+        kb::scene::WritePhysicsLayersAsset(layersPath, layers),
+        "LIB-129 update physics layers asset before editor scene reload");
+    report.Check(context.ReloadSceneFromProject(), "LIB-129 reload editor scene with updated project layers");
+    report.Check(
+        kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorReloadedQuery") == 8U &&
+            kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorQuery") == 0U,
+        "LIB-129 scene reload reapplies the changed physics layers asset");
+
+    layers.layerNames[3] = "EditorPlayQuery";
+    report.Check(
+        kb::scene::WritePhysicsLayersAsset(layersPath, layers),
+        "LIB-129 update physics layers asset before editor Play");
+    report.Check(context.BeginPlayModeSceneSession(), "LIB-129 enter Play with refreshed physics layers");
+    report.Check(
+        kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorPlayQuery") == 8U &&
+            kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorReloadedQuery") == 0U,
+        "LIB-129 Play entry discovers and reapplies on-disk physics layer changes");
+    report.Check(context.RestorePlayModeSceneSession(), "LIB-129 restore editor scene after physics layers Play verification");
+
+    std::error_code removeError;
+    const bool removed = std::filesystem::remove(layersPath, removeError);
+    report.Check(removed && !removeError, "LIB-129 remove configured asset for editor failure-path verification");
+    report.Check(
+        !context.BeginPlayModeSceneSession(),
+        "LIB-129 editor blocks Play instead of silently using the default matrix when the configured asset is missing");
 }
 
 // Finds the first registered asset matching a predicate, or an invalid id.
@@ -4996,7 +5118,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph panel canvas hit-test + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
+    out << "Suites: Project Settings + Project physics layers runtime + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph panel canvas hit-test + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -5010,6 +5132,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
 int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     Report report;
     RunSuiteInScratch(report, "project_settings", &RunProjectSettingsSuite);
+    RunSuiteInScratch(report, "project_physics_layers_runtime", &RunProjectPhysicsLayersRuntimeSuite);
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
