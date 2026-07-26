@@ -131,7 +131,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     while (frameSettings_.fixedDeltaSeconds > 0.0F && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds && fixedSteps < frameSettings_.maxFixedStepsPerFrame) {
         fixedAccumulatorSeconds_ -= frameSettings_.fixedDeltaSeconds;
         ++fixedSteps;
-        MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::FixedTick, frameSettings_.fixedDeltaSeconds));
+        ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::FixedTick, frameSettings_.fixedDeltaSeconds);
     }
     if (frameSettings_.fixedDeltaSeconds <= 0.0F || frameSettings_.maxFixedStepsPerFrame == 0U ||
         (fixedSteps == frameSettings_.maxFixedStepsPerFrame && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds)) {
@@ -142,10 +142,10 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     // after the fixed-step loop so a "wait N fixed steps" task's
     // TaskCompleted/TaskFailed lands before the variable Tick phase below.
     DispatchCompletedFixedStepTasks(scene, fixedSteps, clampedDeltaSeconds);
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
     // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
     // queued during this frame's behaviour phases now that all iteration is
     // done, so no behaviour ran against storage a deferred destroy will pull.
@@ -172,7 +172,7 @@ void ScriptRuntimeSceneSystem::ExecuteFixedStep(kb::scene::Scene& scene, float f
         return;
     }
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::FixedTick, fixedDeltaSeconds));
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::FixedTick, fixedDeltaSeconds);
     DispatchCompletedFixedStepTasks(scene, 1U, fixedDeltaSeconds);
 }
 
@@ -181,10 +181,10 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     // Physics contact events are queued during the Simulation phase. The
     // post-fixed script update drains them before Tick in the same frame.
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
+    ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
     static_cast<void>(scene.Entities().DrainDeferredDestroys());
 }
 
@@ -234,6 +234,40 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
         : frameSettings_.fixedDeltaSeconds;
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
+    kb::scene::Scene& scene,
+    ScriptLifecycleEvent event,
+    float deltaSeconds) {
+    // lifecycleRecords_ is the authoritative frame-start set. Structural
+    // changes are immediately visible to World APIs, but a Behaviour created
+    // by one phase must not enter a later phase before the next BeginFrame has
+    // prepared its asset and dispatched Created/Activated/Ready.
+    std::vector<BehaviourLifecycleRecord> records;
+    records.reserve(lifecycleRecords_.size());
+    for (const auto& [key, tracked] : lifecycleRecords_) {
+        (void)key;
+        if (tracked.created && tracked.active) {
+            records.push_back(tracked);
+        }
+    }
+    std::ranges::sort(records, [](const BehaviourLifecycleRecord& lhs, const BehaviourLifecycleRecord& rhs) {
+        return kb::scene::BehaviourExecutionOrderLess(lhs.entity, lhs.behaviour, rhs.entity, rhs.behaviour);
+    });
+
+    for (const BehaviourLifecycleRecord& tracked : records) {
+        if (!scene.Entities().IsAlive(tracked.entity)) {
+            continue;
+        }
+        const kb::scene::BehaviourComponent* live = scene.Components().Behaviours().TryGet(tracked.entity);
+        if (live == nullptr || !live->enabled ||
+            live->behaviourAssetId != tracked.behaviour.behaviourAssetId ||
+            live->backend != tracked.behaviour.backend) {
+            continue;
+        }
+        ExecuteBehaviourPhase(scene, tracked.entity, *live, event, deltaSeconds);
+    }
 }
 
 void ScriptRuntimeSceneSystem::ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept {
