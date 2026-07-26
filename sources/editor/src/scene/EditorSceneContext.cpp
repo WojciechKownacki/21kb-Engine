@@ -20,6 +20,7 @@
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/JointComponent.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/EditorMeshPreviewRasterizer.hpp"
@@ -1134,6 +1135,7 @@ EditorSceneContext::EditorSceneContext()
     RegisterEditorSceneDocumentAssetLoaders(*scene_);
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
+    static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
     if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, currentScenePath_)) {
@@ -7036,6 +7038,22 @@ void EditorSceneContext::ActivateProjectInput() {
     if (metadata != nullptr && metadata->type == "InputMappingContext") {
         static_cast<void>(scene_->Input().AddMappingContext(metadata->id.value, 0));
     }
+}
+
+bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
+    if (project_.physicsLayersAsset.empty()) {
+        return true;
+    }
+    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, project_.physicsLayersAsset)) {
+        return true;
+    }
+    std::string error = "Project physics layers could not be loaded and applied: " + project_.physicsLayersAsset;
+    const std::string assetError = scene.Assets().Manager().LastError();
+    if (!assetError.empty()) {
+        error += " (" + assetError + ")";
+    }
+    console_.Error("Physics", error);
+    return false;
 }
 
 bool EditorSceneContext::SaveProjectDescriptor() {
