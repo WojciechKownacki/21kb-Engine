@@ -98,6 +98,16 @@ struct DiagnosticPrinter {
             }
         }
     }
+
+    void PrintSceneSystems(const std::vector<std::string>& diagnostics, std::size_t frame) {
+        for (const std::string& diagnostic : diagnostics) {
+            ++total;
+            const std::string line = "[scene system error] " + diagnostic;
+            if (printed.insert(line).second) {
+                err << "frame " << frame << ' ' << line << '\n';
+            }
+        }
+    }
 };
 
 } // namespace
@@ -234,7 +244,10 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    kb::script::ScriptRuntimeSceneSystem scriptSystem{ host.Runtime(), host.AssetPreparer() };
+    if (!host.InstallSceneSystem()) {
+        io.err << "error: script scene system could not be installed\n";
+        return 1;
+    }
 
     io.out << "running " << scenePath.filename().generic_string()
            << " for " << frames << " frames (dt " << deltaSeconds << "s, "
@@ -245,30 +258,53 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     std::size_t executedBehaviours = 0U;
     std::size_t emittedEvents = 0U;
 
-    const kb::script::ScriptRuntimeExecutionResult& startup = scriptSystem.ExecuteStartup(scene, 0.0F);
-    executedBehaviours += startup.executedBehaviours;
-    emittedEvents += startup.emittedEvents.size();
-    printer.PrintScript(startup.diagnostics, 0U);
-    printer.PrintPrepare(scriptSystem.LastPrepareResult().diagnostics, 0U);
+    const kb::script::ScriptRuntimeExecutionResult* startup = host.InstalledSceneSystemLastResult();
+    const kb::script::ScriptRuntimeAssetPrepareResult* startupPrepare = host.InstalledSceneSystemLastPrepareResult();
+    if (startup == nullptr || startupPrepare == nullptr) {
+        io.err << "error: installed script scene system did not expose startup state\n";
+        return 1;
+    }
+    executedBehaviours += startup->executedBehaviours;
+    emittedEvents += startup->emittedEvents.size();
+    printer.PrintScript(startup->diagnostics, 0U);
+    printer.PrintPrepare(startupPrepare->diagnostics, 0U);
+    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), 0U);
+    static_cast<void>(host.DrainSceneSystemDiagnostics());
 
     for (int frame = 1; frame <= frames; ++frame) {
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-        const kb::script::ScriptRuntimeExecutionResult& result = scriptSystem.ExecuteFrame(scene, deltaSeconds);
-        executedBehaviours += result.executedBehaviours;
-        emittedEvents += result.emittedEvents.size();
+        const kb::script::ScriptRuntimeExecutionResult* result = host.InstalledSceneSystemLastResult();
+        const kb::script::ScriptRuntimeAssetPrepareResult* prepare = host.InstalledSceneSystemLastPrepareResult();
+        if (result == nullptr || prepare == nullptr) {
+            io.err << "error: installed script scene system became unavailable\n";
+            return 1;
+        }
+        executedBehaviours += result->executedBehaviours;
+        emittedEvents += result->emittedEvents.size();
         if (!quiet) {
-            for (const kb::script::ScriptEvent& event : result.emittedEvents) {
+            for (const kb::script::ScriptEvent& event : result->emittedEvents) {
                 io.out << "[event] frame " << frame << ' ' << event.name
                        << " (sender " << event.sender.Id() << ")\n";
             }
         }
-        printer.PrintScript(result.diagnostics, static_cast<std::size_t>(frame));
-        printer.PrintPrepare(scriptSystem.LastPrepareResult().diagnostics, static_cast<std::size_t>(frame));
+        printer.PrintScript(result->diagnostics, static_cast<std::size_t>(frame));
+        printer.PrintPrepare(prepare->diagnostics, static_cast<std::size_t>(frame));
+        printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frame));
+        static_cast<void>(host.DrainSceneSystemDiagnostics());
     }
 
-    const kb::script::ScriptRuntimeExecutionResult& shutdown = scriptSystem.ExecuteShutdown(scene, 0.0F);
-    executedBehaviours += shutdown.executedBehaviours;
-    printer.PrintScript(shutdown.diagnostics, static_cast<std::size_t>(frames) + 1U);
+    if (!host.DispatchShutdownLifecycle(0.0F)) {
+        io.err << "error: installed script scene system could not dispatch shutdown\n";
+        return 1;
+    }
+    const kb::script::ScriptRuntimeExecutionResult* shutdown = host.InstalledSceneSystemLastResult();
+    if (shutdown == nullptr) {
+        io.err << "error: installed script scene system did not expose shutdown state\n";
+        return 1;
+    }
+    executedBehaviours += shutdown->executedBehaviours;
+    printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(frames) + 1U);
+    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frames) + 1U);
 
     io.out << "done: " << frames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";

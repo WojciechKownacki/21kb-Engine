@@ -120,6 +120,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .meshPassMode = present.settings.meshPassMode,
         .selectedEntityIds = SelectedEntitySpan(session),
         .dirtySceneEntityIds = dirtySceneEntityIds,
+        .editorCameraWireframes = std::span<const render::EditorCameraWireframeDesc>{present.settings.editorCameraWireframes.data(), present.settings.editorCameraWireframes.size()},
         .editorLightWireframes = std::span<const render::EditorLightWireframeDesc>{present.settings.editorLightWireframes.data(), present.settings.editorLightWireframes.size()},
         .physicsDebugLines = std::span<const render::PhysicsDebugLine>{present.settings.physicsDebugLines.data(), present.settings.physicsDebugLines.size()},
         .clearRgba = kSceneSubmitClearRgba,

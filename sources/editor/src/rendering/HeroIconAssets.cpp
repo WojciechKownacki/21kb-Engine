@@ -104,6 +104,10 @@ static constexpr std::array<HeroIconPath, 3> kRotationSnap{
     HeroIconPath{ "M7.5 19.5A12 12 0 0 1 19.5 7.5M10.5 19.5A9 9 0 0 1 19.5 10.5", false },
     HeroIconPath{ "M8.25 16.75l1.4-1.4M12.5 14.5v-2M16.25 12.25h-2M18.25 8.5l-1.55 1.55", false },
 };
+// Heroicons outline "video-camera" (MIT).
+static constexpr std::array<HeroIconPath, 1> kCamera{
+    HeroIconPath{ "M15.75 10.5 21 7.5v9l-5.25-3m-12-6.75h9a3 3 0 0 1 3 3v4.5a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-4.5a3 3 0 0 1 3-3Z", false },
+};
 
 } // namespace
 
@@ -205,6 +209,10 @@ HeroIconGlyph HeroIconAssets::Gamepad2() noexcept {
 
 HeroIconGlyph HeroIconAssets::RotationSnap() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRotationSnap }, .strokeWidth = 1.8F };
+}
+
+HeroIconGlyph HeroIconAssets::Camera() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCamera } };
 }
 
 } // namespace kb::editor

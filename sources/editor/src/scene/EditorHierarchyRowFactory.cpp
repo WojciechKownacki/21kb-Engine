@@ -39,6 +39,7 @@ EditorHierarchyRow EditorHierarchyRowFactory::Make(
         .expanded = hasChildren && !IsCollapsed(collapsedEntities, entity),
         .visible = visibility.visible,
         .prefabRoot = prefabRoot,
+        .hasCamera = scene.Components().Cameras().Has(entity),
     };
 }
 

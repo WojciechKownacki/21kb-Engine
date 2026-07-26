@@ -6,6 +6,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -263,6 +264,83 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     default:
         return false;
     }
+}
+
+[[nodiscard]] bool IsCameraFloatProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::CameraVerticalFov:
+    case InspectorPropertyId::CameraOrthographicHeight:
+    case InspectorPropertyId::CameraNearClip:
+    case InspectorPropertyId::CameraFarClip:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool ReadCameraFloat(
+    const kb::scene::CameraComponent& camera,
+    InspectorPropertyId property,
+    float& value) noexcept {
+    switch (property) {
+    case InspectorPropertyId::CameraVerticalFov:
+        value = camera.verticalFovDegrees;
+        return true;
+    case InspectorPropertyId::CameraOrthographicHeight:
+        value = camera.orthographicHeight;
+        return true;
+    case InspectorPropertyId::CameraNearClip:
+        value = camera.nearClip;
+        return true;
+    case InspectorPropertyId::CameraFarClip:
+        value = camera.farClip;
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool WriteCameraFloat(
+    kb::scene::CameraComponent& camera,
+    InspectorPropertyId property,
+    float value) noexcept {
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    float* destination = nullptr;
+    switch (property) {
+    case InspectorPropertyId::CameraVerticalFov:
+        if (value < 1.0F || value > 179.0F) {
+            return false;
+        }
+        destination = &camera.verticalFovDegrees;
+        break;
+    case InspectorPropertyId::CameraOrthographicHeight:
+        if (value <= 0.0F) {
+            return false;
+        }
+        destination = &camera.orthographicHeight;
+        break;
+    case InspectorPropertyId::CameraNearClip:
+        if (value <= 0.0F || value >= camera.farClip) {
+            return false;
+        }
+        destination = &camera.nearClip;
+        break;
+    case InspectorPropertyId::CameraFarClip:
+        if (value <= camera.nearClip) {
+            return false;
+        }
+        destination = &camera.farClip;
+        break;
+    default:
+        return false;
+    }
+    if (*destination == value) {
+        return false;
+    }
+    *destination = value;
+    return true;
 }
 
 [[nodiscard]] bool ReadLightFloat(const kb::scene::LightComponent& light, InspectorPropertyId property, float& value) noexcept {
@@ -695,6 +773,181 @@ template <typename Mutator>
     return true;
 }
 
+template <typename Mutator>
+[[nodiscard]] bool MutateCameraComponent(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    std::string label,
+    Mutator mutator) {
+    const kb::scene::CameraComponent* current =
+        sceneContext.Scene().Components().Cameras().TryGet(entity);
+    if (current == nullptr) {
+        return false;
+    }
+    kb::scene::CameraComponent candidate = *current;
+    if (!mutator(candidate)) {
+        return false;
+    }
+    if (!sceneContext.BeginSceneEditTransaction(label)) {
+        return false;
+    }
+    if (!sceneContext.Scene().Entities().IsAlive(entity) ||
+        !sceneContext.Scene().Components().Cameras().Has(entity)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().Cameras().Set(entity, candidate);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+[[nodiscard]] bool RemoveCameraComponent(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity) {
+    if (!sceneContext.Scene().Components().Cameras().Has(entity) ||
+        !sceneContext.BeginSceneEditTransaction("Remove Camera")) {
+        return false;
+    }
+    sceneContext.Scene().Components().Cameras().Remove(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+[[nodiscard]] bool ApplyCameraFloat(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    InspectorPropertyId property,
+    float value) {
+    return MutateCameraComponent(
+        sceneContext,
+        entity,
+        "Edit Camera",
+        [property, value](kb::scene::CameraComponent& camera) {
+            return WriteCameraFloat(camera, property, value);
+        });
+}
+
+template <typename Integer>
+[[nodiscard]] std::optional<Integer> ParseInteger(std::string_view text) noexcept {
+    text = Trim(text);
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    Integer value{};
+    const std::from_chars_result parsed =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+[[nodiscard]] bool ApplyCameraInteger(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    InspectorPropertyId property,
+    std::string_view text) {
+    if (property == InspectorPropertyId::CameraViewportId) {
+        const std::optional<std::uint32_t> value =
+            ParseInteger<std::uint32_t>(text);
+        return value.has_value() &&
+            MutateCameraComponent(
+                sceneContext,
+                entity,
+                "Edit Camera Viewport",
+                [value](kb::scene::CameraComponent& camera) {
+                    if (camera.viewportId == *value) {
+                        return false;
+                    }
+                    camera.viewportId = *value;
+                    return true;
+                });
+    }
+    if (property == InspectorPropertyId::CameraPriority) {
+        const std::optional<std::int32_t> value =
+            ParseInteger<std::int32_t>(text);
+        return value.has_value() &&
+            MutateCameraComponent(
+                sceneContext,
+                entity,
+                "Edit Camera Priority",
+                [value](kb::scene::CameraComponent& camera) {
+                    if (camera.priority == *value) {
+                        return false;
+                    }
+                    camera.priority = *value;
+                    return true;
+                });
+    }
+    return false;
+}
+
+[[nodiscard]] bool HandleCameraClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::CameraComponent* camera =
+        sceneContext.Scene().Components().Cameras().TryGet(entity);
+    if (camera == nullptr) {
+        sceneContext.Inspector().EndTextEdit();
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField &&
+        hit.property == InspectorPropertyId::CameraProjection) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(MutateCameraComponent(
+            sceneContext,
+            entity,
+            "Edit Camera Projection",
+            [](kb::scene::CameraComponent& mutableCamera) {
+                mutableCamera.projection =
+                    mutableCamera.projection ==
+                        kb::scene::CameraProjection::Perspective
+                    ? kb::scene::CameraProjection::Orthographic
+                    : kb::scene::CameraProjection::Perspective;
+                return true;
+            }));
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::BoolField &&
+        hit.property == InspectorPropertyId::CameraPrimary) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(MutateCameraComponent(
+            sceneContext,
+            entity,
+            "Edit Camera Primary",
+            [](kb::scene::CameraComponent& mutableCamera) {
+                mutableCamera.primary = !mutableCamera.primary;
+                return true;
+            }));
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::FloatField &&
+        IsCameraFloatProperty(hit.property)) {
+        float value = 0.0F;
+        if (ReadCameraFloat(*camera, hit.property, value)) {
+            sceneContext.Inspector().BeginTextEdit(
+                hit.property, FormatCompactFloat(value));
+        }
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField &&
+        hit.property == InspectorPropertyId::CameraViewportId) {
+        sceneContext.Inspector().BeginTextEdit(
+            hit.property, std::to_string(camera->viewportId));
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField &&
+        hit.property == InspectorPropertyId::CameraPriority) {
+        sceneContext.Inspector().BeginTextEdit(
+            hit.property, std::to_string(camera->priority));
+        return true;
+    }
+    sceneContext.Inspector().EndTextEdit();
+    return true;
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -896,7 +1149,9 @@ template <typename Store, typename Op>
 // entity field the same "hold LMB + move left/right" behaviour.
 
 [[nodiscard]] bool IsGenericEntityFloatProperty(InspectorPropertyId property) noexcept {
-    return PhysicsKindForProperty(property).has_value() || IsLightFloatProperty(property);
+    return PhysicsKindForProperty(property).has_value() ||
+        IsLightFloatProperty(property) ||
+        IsCameraFloatProperty(property);
 }
 
 [[nodiscard]] bool ReadEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float& out) {
@@ -906,6 +1161,12 @@ template <typename Store, typename Op>
     if (IsLightFloatProperty(property)) {
         if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity)) {
             return ReadLightFloat(*light, property, out);
+        }
+    }
+    if (IsCameraFloatProperty(property)) {
+        if (const kb::scene::CameraComponent* camera =
+                sceneContext.Scene().Components().Cameras().TryGet(entity)) {
+            return ReadCameraFloat(*camera, property, out);
         }
     }
     return false;
@@ -922,6 +1183,11 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         static_cast<void>(MutateLightComponent(sceneContext, entity, "Edit Light", [property, value](kb::scene::LightComponent& light) {
             static_cast<void>(WriteLightFloat(light, property, value));
         }));
+        return;
+    }
+    if (IsCameraFloatProperty(property)) {
+        static_cast<void>(ApplyCameraFloat(
+            sceneContext, entity, property, value));
     }
 }
 
@@ -931,8 +1197,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
 [[nodiscard]] bool BeginEntityFloatDrag(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit, int x, int y) {
     const std::optional<PhysicsComponentKind> physicsKind = PhysicsKindForProperty(hit.property);
     const bool isPhysicsFloat = physicsKind.has_value() && hit.index >= 0 && InspectorPhysicsModel::KindOf(*physicsKind, hit.index) == PhysicsFieldKind::Float;
-    const bool isLightFloat = IsLightFloatProperty(hit.property);
-    if (!isPhysicsFloat && !isLightFloat) {
+    const bool isComponentFloat =
+        IsLightFloatProperty(hit.property) ||
+        IsCameraFloatProperty(hit.property);
+    if (!isPhysicsFloat && !isComponentFloat) {
         return false;
     }
     float value = 0.0F;
@@ -969,6 +1237,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::Camera) {
+                static_cast<void>(RemoveCameraComponent(sceneContext, entity));
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1021,6 +1291,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::MeshRenderer) {
         return HandleMeshRendererClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Camera) {
+        return HandleCameraClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
@@ -1253,6 +1526,35 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsCameraFloatProperty(inspector.EditedProperty())) {
+            const InspectorPropertyId property = inspector.EditedProperty();
+            const kb::scene::CameraComponent* current =
+                sceneContext.Scene().Components().Cameras().TryGet(entity);
+            float currentValue = 0.0F;
+            float value = 0.0F;
+            if (current != nullptr &&
+                ReadCameraFloat(*current, property, currentValue) &&
+                EvaluateMath(inspector.EditBuffer(), currentValue, value)) {
+                static_cast<void>(ApplyCameraFloat(
+                    sceneContext, entity, property, value));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            (inspector.EditedProperty() ==
+                    InspectorPropertyId::CameraViewportId ||
+                inspector.EditedProperty() ==
+                    InspectorPropertyId::CameraPriority)) {
+            static_cast<void>(ApplyCameraInteger(
+                sceneContext,
+                entity,
+                inspector.EditedProperty(),
+                inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsLightFloatProperty(inspector.EditedProperty())) {
             const InspectorPropertyId property = inspector.EditedProperty();
             const kb::scene::LightComponent* current = sceneContext.Scene().Components().Lights().TryGet(entity);

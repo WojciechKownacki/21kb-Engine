@@ -8,6 +8,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -1407,6 +1408,56 @@ void PaintAudioListenerSection(
     y = section.Bottom() + kSectionGap;
 }
 
+constexpr int kCameraSectionRows = 8;
+
+void PaintCameraSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::CameraComponent& camera) {
+    SectionWriter section(
+        dc,
+        Rect(content.left, y, content.right, content.bottom),
+        theme,
+        inspector,
+        InspectorSectionId::Camera,
+        HeroIconKind::Eye,
+        "Camera",
+        true);
+    section.Field(
+        "Projection",
+        InspectorComponentLabelFormatter::ProjectionName(camera.projection),
+        InspectorPropertyId::CameraProjection);
+    section.Float(
+        "Vertical FOV",
+        FormatFloat(camera.verticalFovDegrees, 2),
+        InspectorPropertyId::CameraVerticalFov);
+    section.Float(
+        "Ortho Height",
+        FormatFloat(camera.orthographicHeight, 2),
+        InspectorPropertyId::CameraOrthographicHeight);
+    section.Float(
+        "Near Clip",
+        FormatFloat(camera.nearClip, 3),
+        InspectorPropertyId::CameraNearClip);
+    section.Float(
+        "Far Clip",
+        FormatFloat(camera.farClip, 2),
+        InspectorPropertyId::CameraFarClip);
+    section.Bool("Primary", camera.primary, InspectorPropertyId::CameraPrimary);
+    section.Field(
+        "Viewport ID",
+        std::to_string(camera.viewportId),
+        InspectorPropertyId::CameraViewportId);
+    section.Field(
+        "Priority",
+        std::to_string(camera.priority),
+        InspectorPropertyId::CameraPriority);
+    y = section.Bottom() + kSectionGap;
+}
+
 [[nodiscard]] bool LightUsesRange(kb::scene::LightKind kind) noexcept {
     return kind != kb::scene::LightKind::Directional;
 }
@@ -1606,7 +1657,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     const std::string title = scene.Entities().Name(selected);
     const std::string subtitle = "Entity " + FormatUInt64(selected.Id());
 
-    DrawHeader(dc, content, theme, HeroIconKind::Cube, title, subtitle);
+    DrawHeader(
+        dc,
+        content,
+        theme,
+        scene.Components().Cameras().Has(selected)
+            ? HeroIconKind::Camera
+            : HeroIconKind::Cube,
+        title,
+        subtitle);
     int y = content.top + kHeaderHeight + kPanelPadTop;
 
     // Virtualization: a section is only painted when its [y, y+height] band
@@ -1663,6 +1722,17 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             }
         }
         y += h + kSectionGap;
+    }
+    if (const kb::scene::CameraComponent* camera =
+            scene.Components().Cameras().TryGet(selected);
+        camera != nullptr) {
+        const int h =
+            SectionHeight(inspector, InspectorSectionId::Camera, kCameraSectionRows);
+        if (sectionVisible(y, h)) {
+            PaintCameraSection(dc, content, y, theme, inspector, *camera);
+        } else {
+            y += h + kSectionGap;
+        }
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light));
@@ -1815,6 +1885,11 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
+    }
+    if (scene.Components().Cameras().Has(selected)) {
+        height +=
+            SectionHeight(inspector, InspectorSectionId::Camera, kCameraSectionRows) +
+            kSectionGap;
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
@@ -2153,6 +2228,87 @@ void AdvanceRow(int& y) noexcept {
         return hit;
     }
     AdvanceRow(y);
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestCameraSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    int x,
+    int yPoint,
+    int& y) noexcept {
+    if (InspectorPanelRenderer::Hit hit =
+            HitSectionHeader(
+                content,
+                y,
+                state,
+                InspectorSectionId::Camera,
+                x,
+                yPoint,
+                true);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::Camera)) {
+        return {};
+    }
+
+    if (InspectorPanelRenderer::Hit hit =
+            HitTextRow(
+                RowRect(content, y),
+                InspectorSectionId::Camera,
+                InspectorPropertyId::CameraProjection,
+                x,
+                yPoint);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    for (const InspectorPropertyId property : {
+             InspectorPropertyId::CameraVerticalFov,
+             InspectorPropertyId::CameraOrthographicHeight,
+             InspectorPropertyId::CameraNearClip,
+             InspectorPropertyId::CameraFarClip,
+         }) {
+        if (InspectorPanelRenderer::Hit hit =
+                HitFloatRow(
+                    RowRect(content, y),
+                    InspectorSectionId::Camera,
+                    property,
+                    x,
+                    yPoint);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    if (InspectorPanelRenderer::Hit hit =
+            HitBool(
+                RowRect(content, y),
+                InspectorSectionId::Camera,
+                InspectorPropertyId::CameraPrimary,
+                x,
+                yPoint);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    for (const InspectorPropertyId property : {
+             InspectorPropertyId::CameraViewportId,
+             InspectorPropertyId::CameraPriority,
+         }) {
+        if (InspectorPanelRenderer::Hit hit =
+                HitTextRow(
+                    RowRect(content, y),
+                    InspectorSectionId::Camera,
+                    property,
+                    x,
+                    yPoint);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
     return {};
 }
 
@@ -2611,6 +2767,15 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 }
                 AdvanceRow(y);
             }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().Cameras().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit =
+                HitTestCameraSection(viewport, state, x, scrolledY, y);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
         }
         y += kSectionGap;
     }
