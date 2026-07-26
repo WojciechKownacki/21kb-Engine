@@ -156,15 +156,19 @@ void ScriptExecutionContext::Emit(std::string eventName) {
     Emit(std::move(eventName), {});
 }
 
-void ScriptExecutionContext::Emit(std::string eventName, std::vector<ScriptEventArgument> arguments) {
-    EmitTo(kb::scene::SceneEntity{}, std::move(eventName), std::move(arguments));
+void ScriptExecutionContext::Emit(std::string eventName, std::vector<ScriptEventArgument> arguments, bool observationAlreadyNotified) {
+    EmitTo(kb::scene::SceneEntity{}, std::move(eventName), std::move(arguments), observationAlreadyNotified);
 }
 
 void ScriptExecutionContext::EmitTo(kb::scene::SceneEntity target, std::string eventName) {
     EmitTo(target, std::move(eventName), {});
 }
 
-void ScriptExecutionContext::EmitTo(kb::scene::SceneEntity target, std::string eventName, std::vector<ScriptEventArgument> arguments) {
+void ScriptExecutionContext::EmitTo(
+    kb::scene::SceneEntity target,
+    std::string eventName,
+    std::vector<ScriptEventArgument> arguments,
+    bool observationAlreadyNotified) {
     if (emittedEvents_ == nullptr || eventName.empty()) {
         return;
     }
@@ -174,6 +178,7 @@ void ScriptExecutionContext::EmitTo(kb::scene::SceneEntity target, std::string e
         .target = target,
         .senderAsset = assetId_,
         .arguments = std::move(arguments),
+        .observationAlreadyNotified = observationAlreadyNotified,
     });
 }
 

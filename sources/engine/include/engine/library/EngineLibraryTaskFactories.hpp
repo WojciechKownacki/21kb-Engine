@@ -1,20 +1,33 @@
 #pragma once
 
+#include "engine/assets/AssetId.hpp"
 #include "engine/library/EngineLibraryAsyncResult.hpp"
 #include "engine/scene/SceneTasks.hpp"
 
 #include <cstddef>
 #include <functional>
+#include <memory>
+#include <string>
 #include <utility>
+
+namespace kb::assets {
+class AssetManager;
+}
+
+namespace kb::scene {
+class Scene;
+}
+
+namespace kb::script {
+class ScriptEventObservation;
+}
 
 namespace kb::library {
 
-// LIB-098: ready-made kb::scene::SceneTasks poll closures for the two
-// "yield reasons" that are genuinely distinct, buildable capabilities
-// today — see kb::scene::SceneTasks' own class doc comment for the full
-// scope decision covering all five originally-named reasons (seconds/
-// fixed-steps/event/asset-load/scene-load) and why event/asset-load/
-// scene-load are NOT given factories here.
+// LIB-098: ready-made, non-blocking kb::scene::SceneTasks poll closures for
+// all five supported wait reasons. None of these closures sleeps, performs
+// I/O, loads content, or dispatches callbacks from its poll. They only
+// inspect state advanced elsewhere by the normal frame/runtime pipeline.
 
 // Pass the result to SceneTasks::Start(...). Completes once `seconds` of
 // Frame-domain (scaled/pause-aware) time has elapsed — a non-positive
@@ -44,6 +57,28 @@ namespace kb::library {
         return remaining == 0U ? kb::scene::TaskPollResult::Completed : kb::scene::TaskPollResult::Running;
     };
 }
+
+// Completes after the observed event stream advances past the sequence
+// captured here. The shared observation is lifetime-safe even if the
+// ScriptEventBus that produced it is destroyed before the task.
+[[nodiscard]] std::function<kb::scene::TaskPollResult(float)> MakeWaitEventTask(
+    std::shared_ptr<const kb::script::ScriptEventObservation> observation);
+
+// Waits for an already-registered asset to enter AssetManager's cache.
+// Deliberately does not call Load/LoadOpaque: initiating I/O in a task poll
+// would block the main-thread frame that advances SceneTasks. A missing or
+// subsequently unregistered asset is a terminal failure, not an infinite
+// silent wait.
+[[nodiscard]] std::function<kb::scene::TaskPollResult(float)> MakeWaitAssetLoadTask(
+    const kb::assets::AssetManager& assets,
+    kb::assets::AssetId assetId);
+
+// Waits until content with `sceneName` has been loaded into `scene` by the
+// scene loading pipeline. It does not invoke Scene.Load itself, so polling
+// is a lookup and never performs document I/O.
+[[nodiscard]] std::function<kb::scene::TaskPollResult(float)> MakeWaitSceneLoadTask(
+    const kb::scene::Scene& scene,
+    std::string sceneName);
 
 // LIB-100: bridges an AsyncResult<T> to SceneTasks' poll-based Task
 // model — pass the returned closure to SceneTasks::Start(...); it reports

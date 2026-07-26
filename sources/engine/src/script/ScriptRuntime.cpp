@@ -246,6 +246,14 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
         });
         return result;
     }
+    // LIB-098: Task.WaitEvent observes both explicit ScriptEventBus emits
+    // and the engine's original behaviour dispatch path (timers, tasks,
+    // collisions, scene lifecycle, and events emitted by behaviours).
+    // Observation is separate from bus subscriptions, so this does not
+    // duplicate callback delivery or change the established dispatch mode.
+    if (!event.observationAlreadyNotified) {
+        events_.NotifyObservations(event.name, event.target);
+    }
     DispatchContext context{
         .scene = &scene,
         .runtime = this,

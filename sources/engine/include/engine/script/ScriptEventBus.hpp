@@ -6,7 +6,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::scene {
@@ -60,9 +64,9 @@ using NativeEventSubscriptionCallback = std::function<void(const ScriptEvent&)>;
 // field left at its default means "no constraint on this axis" — an
 // unfiltered Emit(scene, event, target) call behaves EXACTLY as it did
 // before this task, so no existing caller's delivery set changes. `tag`/
-// `component`/`sceneId` are evaluated against a candidate subscription's
+// `component`/`sceneId`/`playerId` are evaluated against a candidate subscription's
 // OWNER entity at delivery time (a subscription with no owner, or whose
-// owner is currently dead, never matches a non-default tag/component/scene
+// owner is currently dead, never matches a non-default tag/component/scene/player
 // filter — the same "no entity identity to match against" rule Emit's
 // existing entity `target` filter already applies): `tag` via
 // kb::scene::SceneTagsComponents (World.HasTag's own backing store),
@@ -71,26 +75,23 @@ using NativeEventSubscriptionCallback = std::function<void(const ScriptEvent&)>;
 // already use), `sceneId` via kb::scene::SceneLoadedContent::OwningScene
 // (which loaded-scene id, from Scene.Load/LIB-071, the owner's root entity
 // belongs to; 0 means "not part of any explicitly loaded scene record" and
-// can never match a non-zero filter). `channel` is different in kind: it is
+// can never match a non-zero filter). `playerId` is the owner's
+// InputComponent::localUser — the engine's existing local-player identity
+// used by per-player Input. An owner without InputComponent cannot match a
+// player filter. `std::nullopt` means no player constraint, so value 0
+// remains available for the primary local player. Remote/network player
+// identity remains part of LIB-195's future gameplay lifecycle.
+// `channel` is different in kind: it is
 // NOT derived from the owner entity, but compared directly against the
 // channel the SUBSCRIPTION itself declared at Subscribe time (see
 // Subscribe's own `channel` parameter below) — a subscription with no
 // channel ("") is reached only by an Emit call that also leaves `channel`
 // unset, matching this struct's all-default "no constraint" behavior.
-//
-// Deliberately NOT a field here: `player`. No Player/LocalUser/PlayerId
-// concept exists ANYWHERE in this engine today (confirmed by a full-repo
-// grep before implementing) — LIB-195 is the task that will define
-// `Player`/`PlayerController`/`Pawn`/`PlayerState` and join/leave lifecycle;
-// LIB-115 is per-player Input. Adding a `player` filter now would mean
-// inventing that entire concept under this much narrower "event recipient
-// filter" task, the same fabrication this codebase has repeatedly refused
-// to do (LIB-097/098's yield-reason deferrals, LIB-105's Visual Graph
-// deferral to LIB-112). Revisit once LIB-195 exists.
 struct EventRecipientFilter {
     std::string tag;
     std::string component;
     std::uint64_t sceneId = 0U;
+    std::optional<std::uint32_t> playerId;
     std::string channel;
 };
 
@@ -105,6 +106,30 @@ struct EventRecipientFilter {
 struct ScriptEventDeliveryResult {
     std::size_t delivered = 0;
     std::vector<std::string> errors;
+};
+
+// Controls only delivery to engine-owned behaviour bridge subscriptions.
+// Regular native/Lua subscribers are always eligible. A backend that mirrors
+// an event to both the legacy behaviour dispatcher and this bus uses
+// ExcludeBehaviourBridges on the bus copy so behaviours execute exactly once.
+enum class ScriptEventBusAudience : std::uint8_t {
+    AllSubscribers = 0,
+    ExcludeBehaviourBridges,
+};
+
+// A lifetime-safe view of one event stream. The observation remains
+// readable after its ScriptEventBus is destroyed, which lets a SceneTask
+// own it without retaining or dereferencing the runtime host. Sequence()
+// changes once for every valid matching ScriptEventBus Emit or original
+// ScriptRuntime behaviour dispatch, regardless of whether that event
+// currently has ordinary subscribers.
+class ScriptEventObservation final {
+public:
+    [[nodiscard]] std::uint64_t Sequence() const noexcept { return sequence_; }
+
+private:
+    friend class ScriptEventBus;
+    std::uint64_t sequence_ = 0U;
 };
 
 // LIB-110: a point-in-time telemetry snapshot — the honest observability
@@ -219,7 +244,20 @@ public:
     // on ("" is the default channel) — see EventRecipientFilter::channel's
     // own doc comment for the full matching rule against Emit's filter.
     [[nodiscard]] EventSubscriptionHandle Subscribe(std::string eventName, NativeEventSubscriptionCallback callback, kb::scene::SceneEntity owner = {}, std::string channel = {});
+    // Engine integration point for backends whose behaviour event entries
+    // are also reachable through ScriptRuntime's original dispatcher.
+    [[nodiscard]] EventSubscriptionHandle SubscribeBehaviourBridge(std::string eventName, NativeEventSubscriptionCallback callback, kb::scene::SceneEntity owner);
     bool Unsubscribe(EventSubscriptionHandle handle) noexcept;
+
+    // Returns a lifetime-safe sequence observation for `eventName`.
+    // `recipient` invalid observes broadcasts and targeted emits alike;
+    // a valid recipient observes broadcasts plus emits targeted to exactly
+    // that entity. Empty names and capacity exhaustion return nullptr.
+    // This is deliberately not a callback subscription: tasks can be
+    // cancelled or outlive the host without leaving a callback behind.
+    [[nodiscard]] std::shared_ptr<const ScriptEventObservation> Observe(
+        std::string eventName,
+        kb::scene::SceneEntity recipient = {});
 
     // Synchronous: invokes every live subscription matching event.name
     // right now, before returning. `target` invalid (default) reaches every
@@ -231,9 +269,14 @@ public:
     // died or been deactivated since it was registered, same policy as
     // Timer/Task's OwnerGone check (LIB-095/097/099). `filter` (LIB-106)
     // narrows the recipient set further along the tag/component/scene/
-    // channel axes — see EventRecipientFilter's doc comment; left at its
+    // player/channel axes — see EventRecipientFilter's doc comment; left at its
     // default, delivery is identical to before this parameter existed.
-    ScriptEventDeliveryResult Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target = {}, const EventRecipientFilter& filter = {});
+    ScriptEventDeliveryResult Emit(
+        kb::scene::Scene& scene,
+        const ScriptEvent& event,
+        kb::scene::SceneEntity target = {},
+        const EventRecipientFilter& filter = {},
+        ScriptEventBusAudience audience = ScriptEventBusAudience::AllSubscribers);
 
     // Always reaches every live subscription matching event.name,
     // regardless of any owner — the same delivery Emit performs when called
@@ -275,11 +318,24 @@ public:
     [[nodiscard]] ScriptEventBusTelemetrySnapshot Telemetry() const noexcept;
 
 private:
+    friend class ScriptRuntime;
+
+    struct ObservationNameHasher {
+        using is_transparent = void;
+
+        [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
+    using ObservationRecipients = std::unordered_map<std::uint64_t, std::weak_ptr<ScriptEventObservation>>;
+
     struct Subscription {
         EventSubscriptionHandle handle = kInvalidEventSubscriptionHandle;
         std::string eventName;
         kb::scene::SceneEntity owner{};
         std::string channel;
+        bool behaviourBridge = false;
         NativeEventSubscriptionCallback callback;
     };
 
@@ -289,8 +345,17 @@ private:
         EventRecipientFilter filter{};
     };
 
+    void NotifyObservations(std::string_view eventName, kb::scene::SceneEntity target);
+    [[nodiscard]] EventSubscriptionHandle SubscribeInternal(
+        std::string eventName,
+        NativeEventSubscriptionCallback callback,
+        kb::scene::SceneEntity owner,
+        std::string channel,
+        bool behaviourBridge);
+
     std::vector<Subscription> subscriptions_;
     std::vector<DeferredEmit> deferredEmits_;
+    std::unordered_map<std::string, ObservationRecipients, ObservationNameHasher, std::equal_to<>> observations_;
     EventSubscriptionHandle nextHandle_ = 1;
     ScriptEventBusTelemetrySnapshot telemetry_{};
     std::size_t emitDepth_ = 0;

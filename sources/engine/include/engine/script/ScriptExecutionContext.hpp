@@ -68,9 +68,9 @@ public:
     [[nodiscard]] const ScriptEventBus* Events() const noexcept;
 
     void Emit(std::string eventName);
-    void Emit(std::string eventName, std::vector<ScriptEventArgument> arguments);
+    void Emit(std::string eventName, std::vector<ScriptEventArgument> arguments, bool observationAlreadyNotified = false);
     void EmitTo(kb::scene::SceneEntity target, std::string eventName);
-    void EmitTo(kb::scene::SceneEntity target, std::string eventName, std::vector<ScriptEventArgument> arguments);
+    void EmitTo(kb::scene::SceneEntity target, std::string eventName, std::vector<ScriptEventArgument> arguments, bool observationAlreadyNotified = false);
 
 private:
     kb::scene::Scene& scene_;

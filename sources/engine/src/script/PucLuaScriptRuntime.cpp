@@ -61,7 +61,9 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     PucLuaStackGuard stack{ state_ };
     PucLuaSandboxEnvironment::Create(state_);
     const int environmentIndex = lua_gettop(state_);
-    PucLuaRuntimeApi::AttachRuntimeFunctions(state_, environmentIndex, *this);
+    if (std::optional<std::string> error = PucLuaRuntimeApi::AttachRuntimeFunctions(state_, environmentIndex, *this)) {
+        return PucLuaLoadResult{ .error = std::move(*error) };
+    }
 
     const std::string chunk = chunkName.empty() ? std::string{ "lua-script-" } + std::to_string(assetId.value) : std::string{ chunkName };
     if (luaL_loadbufferx(state_, source.data(), source.size(), chunk.c_str(), "t") != LUA_OK) {
@@ -150,6 +152,15 @@ bool PucLuaScriptRuntime::HasScript(kb::assets::AssetId assetId) const noexcept 
 bool PucLuaScriptRuntime::IsScriptCurrent(kb::assets::AssetId assetId, std::uint64_t contentHash) const noexcept {
     const auto iter = scripts_.find(assetId.value);
     return iter != scripts_.end() && (contentHash == 0U || iter->second.contentHash == contentHash);
+}
+
+std::size_t PucLuaScriptRuntime::SuspendedCoroutineCount() const noexcept {
+    std::size_t count = 0U;
+    for (const auto& [instance, functions] : coroutineRefs_) {
+        static_cast<void>(instance);
+        count += functions.size();
+    }
+    return count;
 }
 
 PucLuaLoadResult PucLuaScriptRuntime::RegisterModule(std::string name, std::string source, std::string chunkName) {
@@ -375,7 +386,12 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     module.loading = true;
     PucLuaSandboxEnvironment::Create(state_);
     const int environmentIndex = lua_gettop(state_);
-    PucLuaRuntimeApi::AttachRuntimeFunctions(state_, environmentIndex, *this);
+    if (std::optional<std::string> attachError = PucLuaRuntimeApi::AttachRuntimeFunctions(state_, environmentIndex, *this)) {
+        module.loading = false;
+        error = std::string{ "module runtime API initialization failed: " } + *attachError;
+        lua_settop(state_, originalTop);
+        return false;
+    }
     if (luaL_loadbufferx(state_, module.source.data(), module.source.size(), module.chunkName.c_str(), "t") != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
         module.loading = false;
@@ -495,7 +511,16 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     PucLuaStackGuard stack{ state_ };
     lua_rawgeti(state_, LUA_REGISTRYINDEX, environmentRef);
     const int environmentIndex = lua_gettop(state_);
-    PucLuaRuntimeApi::AttachExecutionApi(state_, environmentIndex, context, *this);
+    if (std::optional<std::string> error = PucLuaRuntimeApi::AttachExecutionApi(state_, environmentIndex, context, *this)) {
+        result.diagnostics.push_back(ScriptDiagnostic{
+            .entity = context.Self(),
+            .assetId = assetId,
+            .backend = behaviour.backend,
+            .message = std::move(*error),
+        });
+        eraseDestroyedInstanceState();
+        return result;
+    }
 
     // LIB-097: every Lua lifecycle/event entry is a generator. A yielded
     // thread is resumed on the next invocation of that same entry; a normal
@@ -559,10 +584,23 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     if (status == LUA_YIELD) {
         coroutineRefs_[instanceKey][std::string{functionName}] = coroutineRef;
         result.executed = true;
+        if (context.Lifecycle() == ScriptLifecycleEvent::Destroyed) {
+            // Destroyed is terminal: there is no future lifecycle invocation
+            // on which this generator could resume. Retaining it would leak
+            // both the Lua thread and per-instance exposed state indefinitely.
+            eraseDestroyedInstanceState();
+            result.diagnostics.push_back(ScriptDiagnostic{
+                .entity = context.Self(),
+                .assetId = assetId,
+                .backend = behaviour.backend,
+                .message = "lua Destroyed lifecycle cannot yield because the behaviour is being permanently released",
+            });
+        }
         return result;
     }
 
-    const std::string coroutineError = status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorFromTop(coroutine);
+    const std::string coroutineError =
+        status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
 
     if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
         if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {

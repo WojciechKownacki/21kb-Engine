@@ -1336,6 +1336,7 @@ void RunScriptFunctionRegistryCrossBackendTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Inventory.AddItem",
+                               .description = "Adds an item in the function-registry integration test.",
                                .inputs = {
                                    kb::script::ScriptFunctionPin{ .name = "itemId", .type = kb::script::ScriptValueType::Int },
                                },
@@ -1366,6 +1367,7 @@ void RunScriptFunctionRegistryCrossBackendTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Entity.Use",
+                               .description = "Uses an entity in the function-registry validation test.",
                                .inputs = {
                                    kb::script::ScriptFunctionPin{ .name = "target", .type = kb::script::ScriptValueType::Entity },
                                },
@@ -1395,6 +1397,7 @@ void RunScriptFunctionRegistryCrossBackendTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Inventory.BadOutput",
+                               .description = "Returns an invalid output for registry validation.",
                                .outputs = {
                                    kb::script::ScriptFunctionPin{ .name = "total", .type = kb::script::ScriptValueType::Int },
                                },
@@ -1537,7 +1540,7 @@ end
     kb::scene::Scene failureScene;
     kb::script::ScriptRuntimeHost failureHost{ failureScene };
     kb::tests::Require(failureHost.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Inventory.FailNoOutput" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Inventory.FailNoOutput", .description = "Fails without outputs for frontend error propagation." },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                return kb::script::ScriptFunctionCallResult{
                                    .errors = { "inventory failure" },
@@ -1596,7 +1599,7 @@ void RunVisualGraphCallNativeFailureBranchTest() {
     kb::tests::Require(host.Succeeded(), "CallNative failure branch host setup failed");
 
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFails" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFails", .description = "Always fails for Visual Graph branch testing." },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                return kb::script::ScriptFunctionCallResult{ .errors = { "deliberate LIB-061 test failure" } };
                            },
@@ -1606,7 +1609,7 @@ void RunVisualGraphCallNativeFailureBranchTest() {
     bool successPathRan = false;
     bool failurePathRan = false;
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkSuccessPath" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkSuccessPath", .description = "Marks the Visual Graph success branch." },
                            .callback = [&successPathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                successPathRan = true;
                                return kb::script::ScriptFunctionCallResult{ .executed = true };
@@ -1614,7 +1617,7 @@ void RunVisualGraphCallNativeFailureBranchTest() {
                        }),
         "CallNative failure branch did not register Tests.MarkSuccessPath");
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkFailurePath" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.MarkFailurePath", .description = "Marks the Visual Graph failure branch." },
                            .callback = [&failurePathRan](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                failurePathRan = true;
                                return kb::script::ScriptFunctionCallResult{ .executed = true };
@@ -1688,7 +1691,7 @@ void RunLuaCallFunctionResultAdapterTest() {
     kb::tests::Require(host.Succeeded(), "Lua Result adapter host setup failed");
 
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFailsForLua" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AlwaysFailsForLua", .description = "Always fails for Lua result-adapter testing." },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                return kb::script::ScriptFunctionCallResult{ .errors = { "lua adapter test failure" } };
                            },
@@ -1697,6 +1700,7 @@ void RunLuaCallFunctionResultAdapterTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Tests.SucceedsForLua",
+                               .description = "Returns a value for Lua result-adapter testing.",
                                .outputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = kb::script::ScriptValueType::Int } },
                            },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
@@ -1758,6 +1762,7 @@ void RunLuaCallExpandedTypeInputsTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Tests.ExpandedTypeInputs",
+                               .description = "Accepts expanded scalar types from Lua.",
                                .inputs = {
                                    kb::script::ScriptFunctionPin{ .name = "u32", .type = kb::script::ScriptValueType::UInt32 },
                                    kb::script::ScriptFunctionPin{ .name = "big", .type = kb::script::ScriptValueType::Int64 },
@@ -1835,7 +1840,7 @@ void RunLuaCallFunctionThrowingCallbackSafetyTest() {
     kb::tests::Require(host.Succeeded(), "Lua throwing-callback safety host setup failed");
 
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.ThrowsForLua" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.ThrowsForLua", .description = "Throws for Lua callback exception-safety testing." },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
                                throw std::runtime_error("lua throwing callback safety boom");
                            },
@@ -1895,7 +1900,7 @@ void RunScriptFunctionRegistryExceptionSafetyTest() {
     kb::tests::Require(host.Succeeded(), "Script function exception safety host setup failed");
 
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Throws" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Throws", .description = "Throws for registry exception-safety testing." },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) -> kb::script::ScriptFunctionCallResult {
                                throw std::runtime_error("boom");
                            },
@@ -1904,7 +1909,7 @@ void RunScriptFunctionRegistryExceptionSafetyTest() {
 
     int survivorCalls = 0;
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
-                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Survivor" },
+                           .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Survivor", .description = "Remains callable after another callback throws." },
                            .callback = [&survivorCalls](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                                ++survivorCalls;
                                return kb::script::ScriptFunctionCallResult{ .executed = true };
@@ -2018,7 +2023,7 @@ void RunScriptFunctionRegistryLocksAfterFirstDispatchTest() {
 
     kb::tests::Require(
         host.RegisterFunction(kb::script::ScriptFunctionDesc{
-            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.BeforeStart" },
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.BeforeStart", .description = "Registers before the runtime starts." },
             .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
                 return kb::script::ScriptFunctionCallResult{ .executed = true };
             },
@@ -2029,7 +2034,7 @@ void RunScriptFunctionRegistryLocksAfterFirstDispatchTest() {
     kb::tests::Require(host.Functions().IsLocked(), "Script function registry must lock after the first lifecycle dispatch");
 
     const bool registeredAfterStart = host.RegisterFunction(kb::script::ScriptFunctionDesc{
-        .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AfterStart" },
+        .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.AfterStart", .description = "Attempts registration after the runtime starts." },
         .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
             return kb::script::ScriptFunctionCallResult{ .executed = true };
         },
@@ -2053,7 +2058,7 @@ void RunScriptFunctionRegistryReentrancyGuardTest() {
 
     kb::tests::Require(
         host.RegisterFunction(kb::script::ScriptFunctionDesc{
-            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Recurse" },
+            .signature = kb::script::ScriptFunctionSignature{ .name = "Tests.Recurse", .description = "Recursively calls itself for reentrancy-guard testing." },
             .callback = [&host](const kb::script::ScriptFunctionCallContext& context, std::span<const kb::script::ScriptFunctionArgument>) {
                 return host.Functions().Call("Tests.Recurse", {}, context);
             },
@@ -9561,6 +9566,82 @@ void RunVisualGraphScriptBackendDispatchTest() {
     kb::tests::Require(consumedDelta == 0.25F, "Visual graph script backend did not receive shared delta seconds");
 }
 
+void RunVisualGraphScriptBackendContinuationLifecycleTest() {
+    kb::visual::VisualGraphAsset graph{};
+    graph.name = "VisualBackendContinuationGraph";
+    graph.nodes = {
+        kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick },
+        kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::Wait },
+        kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "RecordResume" },
+    };
+    graph.pins = {
+        kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void },
+        kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "failed", .type = kb::visual::VisualGraphValueType::Void },
+    };
+    graph.edges = {
+        kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 2U, .toPin = "exec" },
+        kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "then", .toNode = 3U, .toPin = "exec" },
+    };
+
+    const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Visual graph continuation lifecycle graph did not compile");
+
+    constexpr kb::assets::AssetId kVisualAsset{ 2002U };
+    kb::visual::VisualGraphRuntimeRegistry artifacts;
+    artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{
+        .assetId = kVisualAsset,
+        .graphName = graph.name,
+        .module = compiled.module,
+    });
+
+    std::size_t resumedInstances = 0U;
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                           .symbol = "RecordResume",
+                           .callback = [&resumedInstances](kb::visual::VisualGraphRuntimeExecutionContext&, const kb::visual::VisualGraphIrInstruction&) {
+                               ++resumedInstances;
+                           },
+                       }),
+        "Visual graph continuation lifecycle binding registration failed");
+
+    kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(artifacts, bindings, instances)),
+        "Visual graph continuation lifecycle backend registration failed");
+
+    kb::scene::Scene scene;
+    for (const char* name : { "First Visual Coroutine", "Second Visual Coroutine" }) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = name });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = kVisualAsset.value,
+            .backend = kb::scene::BehaviourBackend::VisualGraph,
+            .enabled = true,
+        });
+    }
+
+    const kb::script::ScriptRuntimeExecutionResult suspended =
+        runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(suspended.Succeeded() && suspended.executedBehaviours == 2U && resumedInstances == 0U,
+        "Visual graph backend did not suspend each behaviour instance at Wait");
+    kb::tests::Require(instances.Count() == 2U, "Visual graph backend did not retain one continuation context per behaviour instance");
+
+    const kb::script::ScriptRuntimeExecutionResult resumed =
+        runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(resumed.Succeeded() && resumed.executedBehaviours == 2U && resumedInstances == 2U,
+        "Visual graph backend did not independently resume both persisted continuations");
+
+    const kb::script::ScriptRuntimeExecutionResult destroyed =
+        runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.0F);
+    kb::tests::Require(destroyed.Succeeded() && instances.Count() == 0U,
+        "Visual graph backend retained continuation state after behaviour destruction");
+}
+
 void RunVisualGraphScriptEventPayloadDispatchTest() {
     kb::visual::VisualGraphAsset graph{};
     graph.name = "VisualGraphPayloadEmitter";
@@ -10849,6 +10930,13 @@ void RunScriptTaskApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script task API host did not initialize");
+    for (const char* name : { "Task.WaitSeconds", "Task.WaitFixedSteps", "Task.WaitEvent", "Task.WaitAsset", "Task.WaitScene" }) {
+        const std::string message = std::string{ name } + " was not registered";
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr, message.c_str());
+        const std::string symbol = std::string{ "Function." } + name;
+        kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, symbol) != nullptr,
+            "A Task wait-reason function was not registered for the Visual Graph runtime");
+    }
     kb::tests::Require(host.Functions().FindSignature("Task.IsRunning") != nullptr, "Task.IsRunning was not registered");
     kb::tests::Require(host.Functions().FindSignature("Task.Cancel") != nullptr, "Task.Cancel was not registered");
     kb::tests::Require(host.Functions().FindSignature("Task.Start") == nullptr, "Task.Start must NOT be script-facing (LIB-097's chosen scope — only native C++ can author a task's body)");
@@ -11585,6 +11673,20 @@ void RunEngineLibraryTaskFactoriesTest() {
     std::function<kb::scene::TaskPollResult(float)> waitStepsBurst = kb::library::MakeWaitFixedStepsTask(5U);
     kb::tests::Require(waitStepsBurst(2.0F) == kb::scene::TaskPollResult::Running, "MakeWaitFixedStepsTask must correctly accumulate a multi-step poll (2/5)");
     kb::tests::Require(waitStepsBurst(10.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitFixedStepsTask must complete when a single poll's step count overshoots the remaining total");
+
+    kb::script::ScriptEventBus eventBus;
+    const std::shared_ptr<const kb::script::ScriptEventObservation> observation = eventBus.Observe("FactoryEvent");
+    std::function<kb::scene::TaskPollResult(float)> waitEvent = kb::library::MakeWaitEventTask(observation);
+    kb::tests::Require(waitEvent(0.0F) == kb::scene::TaskPollResult::Running, "MakeWaitEventTask must remain pending before the observed event");
+    kb::scene::Scene scene;
+    static_cast<void>(eventBus.Emit(scene, kb::script::ScriptEvent{ .name = "OtherEvent" }));
+    kb::tests::Require(waitEvent(0.0F) == kb::scene::TaskPollResult::Running, "MakeWaitEventTask must ignore a different event name");
+    static_cast<void>(eventBus.Emit(scene, kb::script::ScriptEvent{ .name = "FactoryEvent" }));
+    kb::tests::Require(waitEvent(0.0F) == kb::scene::TaskPollResult::Completed, "MakeWaitEventTask must complete after the observed event");
+
+    std::function<kb::scene::TaskPollResult(float)> invalidEvent =
+        kb::library::MakeWaitEventTask(std::shared_ptr<const kb::script::ScriptEventObservation>{});
+    kb::tests::Require(invalidEvent(0.0F) == kb::scene::TaskPollResult::Failed, "MakeWaitEventTask must fail honestly without an observation");
 }
 
 // LIB-098: SceneTasks::StartFixedStep/AdvanceFixedSteps end-to-end through
@@ -11661,6 +11763,203 @@ void RunSceneTaskFixedStepDomainTest() {
     scene.Runtime().SetPlaying(true);
     static_cast<void>(system.ExecuteFrame(scene, fixedStep * 1.0F));
     kb::tests::Require(!scene.Tasks().Exists(pausedFixedTaskId), "A fixed-step task must resume completing normally once the scene is unpaused");
+}
+
+void RunTaskWaitReasonsRuntimeIntegrationTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "TaskWaitReasonsProject";
+    WriteTextFile(projectRoot / "Assets" / "Logic" / "WaitAsset.lua", "function Tick(self, dt)\nend\n");
+    const std::filesystem::path sceneFile = projectRoot / "DeferredWaitScene.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "DeferredWaitRoot" }));
+        kb::tests::Require(
+            kb::scene::SceneDocumentService::Save(source, sceneFile, "DeferredWaitScene"),
+            "Task.WaitScene fixture could not be saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Task.WaitAsset project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Task.WaitAsset fixture discovery failed");
+    const kb::assets::AssetMetadata* waitAsset =
+        scene.Assets().Manager().Registry().FindByPath("/Game/Logic/WaitAsset.lua");
+    kb::tests::Require(waitAsset != nullptr, "Task.WaitAsset fixture did not resolve through its virtual path");
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Task wait-reasons runtime host did not initialize");
+
+    constexpr kb::assets::AssetId kOwnerAsset{ 1241U };
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Wait Reasons Owner" });
+    scene.Components().Behaviours().Set(owner.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kOwnerAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    std::vector<std::uint64_t> completedTasks;
+    kb::tests::Require(host.NativeBackend().RegisterEvent(
+                           kOwnerAsset,
+                           "TaskCompleted",
+                           [&completedTasks](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                               if (!event.arguments.empty()) {
+                                   completedTasks.push_back(event.arguments.front().value.AsUInt64());
+                               }
+                           }),
+        "Task wait-reasons completion listener registration failed");
+
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    system.SetFrameSettings(kb::script::ScriptRuntimeFrameSettings{
+        .fixedDeltaSeconds = 0.02F,
+        .maxFixedStepsPerFrame = 8U,
+    });
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .caller = owner.Entity(),
+        .callerAsset = kOwnerAsset,
+        .callerBackend = kb::scene::BehaviourBackend::Native,
+    };
+    const auto ownerArgument = [&]() {
+        return kb::script::ScriptFunctionArgument{
+            .name = "owner",
+            .value = kb::script::ScriptValue{ owner.Entity().Id(), kb::script::ScriptValueType::Entity },
+        };
+    };
+    const auto startWait = [&](const char* functionName, kb::script::ScriptFunctionArgument reason) {
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call(
+            functionName,
+            std::vector<kb::script::ScriptFunctionArgument>{ std::move(reason), ownerArgument() },
+            context);
+        kb::tests::Require(result.Succeeded(), "A Task wait-reason function failed to create its runtime task");
+        return result.Output("task")->AsUInt64();
+    };
+
+    const std::uint64_t secondsTask = startWait(
+        "Task.WaitSeconds",
+        kb::script::ScriptFunctionArgument{ .name = "seconds", .value = kb::script::ScriptValue{ 0.05F } });
+    const std::uint64_t fixedTask = startWait(
+        "Task.WaitFixedSteps",
+        kb::script::ScriptFunctionArgument{ .name = "steps", .value = kb::script::ScriptValue{ 2 } });
+    const std::uint64_t eventTask = startWait(
+        "Task.WaitEvent",
+        kb::script::ScriptFunctionArgument{ .name = "event", .value = kb::script::ScriptValue{ std::string{ "OpenGate" } } });
+    const std::uint64_t runtimeEventTask = startWait(
+        "Task.WaitEvent",
+        kb::script::ScriptFunctionArgument{ .name = "event", .value = kb::script::ScriptValue{ std::string{ "EngineGate" } } });
+    const std::uint64_t assetTask = startWait(
+        "Task.WaitAsset",
+        kb::script::ScriptFunctionArgument{ .name = "reference", .value = kb::script::ScriptValue{ std::string{ "/Game/Logic/WaitAsset.lua" } } });
+    const std::uint64_t sceneTask = startWait(
+        "Task.WaitScene",
+        kb::script::ScriptFunctionArgument{ .name = "scene", .value = kb::script::ScriptValue{ std::string{ "DeferredWaitScene" } } });
+    const std::array taskIds{ secondsTask, fixedTask, eventTask, runtimeEventTask, assetTask, sceneTask };
+    for (const std::uint64_t taskId : taskIds) {
+        kb::tests::Require(taskId != 0U && scene.Tasks().Exists(taskId), "Task wait-reason call did not return a live task");
+    }
+
+    static_cast<void>(system.ExecuteFrame(scene, 0.01F));
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(waitAsset->id),
+        "Task.WaitAsset performed a load from its main-thread poll instead of only observing cache state");
+    kb::tests::Require(scene.LoadedContent().Find("DeferredWaitScene") == 0U,
+        "Task.WaitScene fabricated a load instead of only observing scene state");
+
+    kb::tests::Require(
+        host.Runtime().Events().EmitDeferred(
+            kb::script::ScriptEvent{ .name = "OpenGate", .target = owner.Entity() },
+            owner.Entity()),
+        "Task.WaitEvent fixture could not queue its event");
+    static_cast<void>(system.ExecuteFrame(scene, 0.02F));
+    kb::tests::Require(scene.Tasks().Exists(eventTask),
+        "Task.WaitEvent completed before the frame-boundary deferred event was actually delivered");
+
+    static_cast<void>(host.Runtime().DispatchEventAndDrain(
+        scene,
+        kb::script::ScriptEvent{ .name = "EngineGate", .target = owner.Entity() },
+        0.0F));
+    kb::tests::Require(scene.Assets().Manager().LoadOpaque(waitAsset->id),
+        "Task.WaitAsset fixture's external asset load failed");
+    kb::tests::Require(scene.LoadedContent().Load(sceneFile, true) != 0U,
+        "Task.WaitScene fixture's external scene load failed");
+    static_cast<void>(system.ExecuteFrame(scene, 0.02F));
+
+    for (const std::uint64_t taskId : taskIds) {
+        kb::tests::Require(!scene.Tasks().Exists(taskId), "A satisfied Task wait reason remained live after its runtime advance");
+        kb::tests::Require(std::ranges::find(completedTasks, taskId) != completedTasks.end(),
+            "A satisfied Task wait reason did not dispatch TaskCompleted to its owner");
+    }
+
+    // Real Lua generator path: the generic function bridge starts the same
+    // wait task, coroutine.yield releases the lifecycle entry, and the
+    // following frame resumes it only after SceneTasks completed the wait.
+    constexpr kb::assets::AssetId kLuaWaitAsset{ 1242U };
+    kb::tests::Require(host.LuaRuntime().LoadScript(kLuaWaitAsset, R"(
+local waitTask = nil
+function Tick(self, dt)
+    if waitTask == nil then
+        waitTask = Task.WaitSeconds(0.02, self.entity)
+    end
+    SetShared("lua.wait.seconds.completed", true)
+end
+)",
+                           "TaskWaitSeconds.lua")
+                           .succeeded,
+        "Lua Task.WaitSeconds fixture did not load");
+    const kb::scene::SceneObject luaOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Wait Owner" });
+    scene.Components().Behaviours().Set(luaOwner.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaWaitAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    static_cast<void>(system.ExecuteFrame(scene, 0.01F));
+    kb::tests::Require(!host.SharedState().Get("lua.wait.seconds.completed").has_value(),
+        "Lua Task.WaitSeconds did not suspend its lifecycle generator");
+    static_cast<void>(system.ExecuteFrame(scene, 0.02F));
+    kb::tests::Require(host.SharedState().Get("lua.wait.seconds.completed").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Lua Task.WaitSeconds did not resume through the production SceneTasks/runtime path");
+}
+
+// LIB-097 audit regression: Destroyed is terminal and therefore cannot own
+// a resumable generator. A yield must fail loudly while releasing both the
+// coroutine registry reference and the instance-variable state immediately.
+void RunPucLuaDestroyedYieldCleanupTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Lua Destroyed-yield cleanup host setup failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0xD357U };
+    kb::tests::Require(host.LuaRuntime().LoadScript(kAsset, R"(
+function Destroyed(self, dt)
+    coroutine.yield()
+end
+)",
+                           "DestroyedYield.lua")
+                           .succeeded,
+        "Lua Destroyed-yield cleanup script did not load");
+    const std::vector<kb::script::ScriptApiPin> exposedPins{
+        kb::script::ScriptApiPin{ .name = "alive", .type = kb::script::ScriptValueType::Bool },
+    };
+    const std::vector<kb::script::ScriptValue> exposedDefaults{ kb::script::ScriptValue{ true } };
+    const std::vector<std::uint8_t> hasDefaults{ 1U };
+    host.LuaRuntime().SetScriptExposedVariables(kAsset, exposedPins, exposedDefaults, hasDefaults);
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Destroyed Yield" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    host.LuaRuntime().SetInstanceVariableOverride(object.Entity(), kAsset, "alive", kb::script::ScriptValue{ true });
+    kb::tests::Require(!host.LuaRuntime().InstanceVariables(object.Entity(), kAsset).empty(),
+        "Lua Destroyed-yield cleanup could not seed instance state");
+
+    const kb::script::ScriptRuntimeExecutionResult result =
+        host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Destroyed, 0.0F);
+    kb::tests::Require(!result.Succeeded() && result.diagnostics.size() == 1U &&
+            result.diagnostics.front().message.find("Destroyed lifecycle cannot yield") != std::string::npos,
+        "Lua Destroyed yield must produce an explicit terminal-lifecycle diagnostic");
+    kb::tests::Require(host.LuaRuntime().SuspendedCoroutineCount() == 0U,
+        "Lua Destroyed yield retained an unreachable coroutine registry reference");
+    kb::tests::Require(host.LuaRuntime().InstanceVariables(object.Entity(), kAsset).empty(),
+        "Lua Destroyed yield retained per-instance exposed-variable state");
 }
 
 // LIB-099: cancellation propagation — widens Timer/Task's existing
@@ -12257,6 +12556,17 @@ function Tick(self, dt)
     SetShared("lua.events.lastDoor", lastDoor)
 end
 
+function ForceGeneratorCollection(self, event)
+    -- The subscription was created by Created's generator thread. Allocate
+    -- enough short-lived objects after Created returned to force Lua to
+    -- collect that completed thread before the retained callback is used.
+    -- The callback must therefore live in the owning main-state registry.
+    local value = nil
+    for i = 1, 20000 do
+        value = { index = i, text = "generator-gc-" .. i }
+    end
+end
+
 function EmitPing(self, event)
     Events.Broadcast("Ping", { value = 7 })
 end
@@ -12297,6 +12607,10 @@ end
         }
     });
     kb::tests::Require(nativePingHandle != kb::script::kInvalidEventSubscriptionHandle, "Native Ping subscription must register");
+
+    const kb::script::ScriptRuntimeExecutionResult forcedCollection =
+        runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ForceGeneratorCollection" }, 0.0F);
+    kb::tests::Require(forcedCollection.Succeeded(), "Post-subscribe allocation churn must execute cleanly and collect completed generator threads");
 
     const kb::script::ScriptEvent doorOpened{
         .name = "DoorOpened",
@@ -12641,13 +12955,13 @@ void RunSceneUnloadCancelsTimersTasksAndSubscriptionsTest() {
 }
 
 // LIB-106: proves Emit/Broadcast's new recipient filters (tag/component/
-// scene/channel) genuinely narrow delivery, each axis tested independently
+// scene/player/channel) genuinely narrow delivery, each axis tested independently
 // so a bug in one axis can't hide behind another passing. `entity` (the
 // pre-existing `target` parameter) is not re-tested here —
 // RunScriptEventBusNativeSubscribeEmitTest (LIB-105) already covers it
-// exhaustively. `player` is deliberately absent from EventRecipientFilter
-// entirely (see its own doc comment in ScriptEventBus.hpp) — no Player
-// concept exists anywhere in this engine yet (LIB-195's job).
+// exhaustively. Player filtering uses InputComponent::localUser, the existing
+// local-player identity shared with the per-player Input runtime; LIB-195
+// remains responsible for future remote/network player lifecycle.
 void RunScriptEventBusRecipientFilterTest() {
     kb::scene::Scene scene;
     kb::script::ScriptEventBus bus;
@@ -12747,6 +13061,42 @@ void RunScriptEventBusRecipientFilterTest() {
         kb::tests::Require(result.delivered == 1U && aFired == 1 && bFired == 0, "A scene filter must reach ONLY the subscription whose owner belongs to that loaded scene id");
     }
 
+    // --- player/local user ---
+    {
+        const kb::scene::SceneObject primaryPlayer = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Primary Player" });
+        const kb::scene::SceneObject playerTwo = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Player Two" });
+        const kb::scene::SceneObject noPlayer = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter No Player" });
+        scene.Components().Inputs().Set(primaryPlayer.Entity(), kb::scene::InputComponent{
+            .localUser = kb::input::kPrimaryLocalUser,
+        });
+        scene.Components().Inputs().Set(playerTwo.Entity(), kb::scene::InputComponent{
+            .localUser = kb::input::LocalUserId{ 2U },
+        });
+
+        int primaryFired = 0;
+        int playerTwoFired = 0;
+        int noPlayerFired = 0;
+        static_cast<void>(bus.Subscribe("PlayerEvent", [&primaryFired](const kb::script::ScriptEvent&) { ++primaryFired; }, primaryPlayer.Entity()));
+        static_cast<void>(bus.Subscribe("PlayerEvent", [&playerTwoFired](const kb::script::ScriptEvent&) { ++playerTwoFired; }, playerTwo.Entity()));
+        static_cast<void>(bus.Subscribe("PlayerEvent", [&noPlayerFired](const kb::script::ScriptEvent&) { ++noPlayerFired; }, noPlayer.Entity()));
+
+        kb::script::EventRecipientFilter playerTwoFilter;
+        playerTwoFilter.playerId = 2U;
+        const kb::script::ScriptEventDeliveryResult playerTwoResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "PlayerEvent" }, playerTwoFilter);
+        kb::tests::Require(playerTwoResult.delivered == 1U && primaryFired == 0 && playerTwoFired == 1 && noPlayerFired == 0,
+            "A player filter must reach ONLY the owner whose InputComponent targets that local user");
+
+        kb::script::EventRecipientFilter primaryFilter;
+        primaryFilter.playerId = 0U;
+        const kb::script::ScriptEventDeliveryResult primaryResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "PlayerEvent" }, primaryFilter);
+        kb::tests::Require(primaryResult.delivered == 1U && primaryFired == 1 && playerTwoFired == 1 && noPlayerFired == 0,
+            "Player id zero must explicitly select the primary local user, not mean an absent filter");
+
+        const kb::script::ScriptEventDeliveryResult unfilteredResult = bus.Broadcast(scene, kb::script::ScriptEvent{ .name = "PlayerEvent" });
+        kb::tests::Require(unfilteredResult.delivered == 3U && primaryFired == 2 && playerTwoFired == 2 && noPlayerFired == 1,
+            "An event without a player filter must remain backward-compatible and reach owners without InputComponent too");
+    }
+
     // --- channel ---
     {
         const kb::scene::SceneObject owner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Channel Owner" });
@@ -12798,6 +13148,14 @@ end
 function ShoutDeferredOnCombat(self, event)
     Events.EmitDeferred("Shout", nil, nil, { channel = "combat" })
 end
+
+function ShoutOnPlayerTwo(self, event)
+    Events.Broadcast("PlayerShout", nil, { player = 2 })
+end
+
+function ShoutOnPrimaryPlayer(self, event)
+    Events.Broadcast("PlayerShout", nil, { player = 0 })
+end
 )",
         "EventsFilterSubscriber.lua");
     kb::tests::Require(loaded.succeeded, "Lua Events recipient filter subscriber script must load");
@@ -12838,6 +13196,26 @@ end
     const std::optional<kb::script::ScriptValue> combatCountAfterCombat = runtime.SharedState().Get("lua.filter.combatCount");
     kb::tests::Require(chatCountAfterCombat.has_value() && chatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must NOT have reached the chat-channel subscriber");
     kb::tests::Require(combatCountAfterCombat.has_value() && combatCountAfterCombat->AsInt() == 1, "The deferred combat-channel shout must have reached the combat-channel subscriber exactly once");
+
+    const kb::scene::SceneObject primaryRecipient = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Filter Primary Recipient" });
+    const kb::scene::SceneObject playerTwoRecipient = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Filter Player Two Recipient" });
+    scene.Components().Inputs().Set(primaryRecipient.Entity(), kb::scene::InputComponent{
+        .localUser = kb::input::kPrimaryLocalUser,
+    });
+    scene.Components().Inputs().Set(playerTwoRecipient.Entity(), kb::scene::InputComponent{
+        .localUser = kb::input::LocalUserId{ 2U },
+    });
+    int primaryPlayerDeliveries = 0;
+    int playerTwoDeliveries = 0;
+    static_cast<void>(runtime.Events().Subscribe("PlayerShout", [&primaryPlayerDeliveries](const kb::script::ScriptEvent&) { ++primaryPlayerDeliveries; }, primaryRecipient.Entity()));
+    static_cast<void>(runtime.Events().Subscribe("PlayerShout", [&playerTwoDeliveries](const kb::script::ScriptEvent&) { ++playerTwoDeliveries; }, playerTwoRecipient.Entity()));
+
+    const kb::script::ScriptRuntimeExecutionResult shoutPlayerTwo = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutOnPlayerTwo" }, 0.0F);
+    kb::tests::Require(shoutPlayerTwo.Succeeded() && primaryPlayerDeliveries == 0 && playerTwoDeliveries == 1,
+        "Lua's {player=2} recipient filter must reach only local user 2");
+    const kb::script::ScriptRuntimeExecutionResult shoutPrimaryPlayer = runtime.DispatchEvent(scene, kb::script::ScriptEvent{ .name = "ShoutOnPrimaryPlayer" }, 0.0F);
+    kb::tests::Require(shoutPrimaryPlayer.Succeeded() && primaryPlayerDeliveries == 1 && playerTwoDeliveries == 1,
+        "Lua's explicit {player=0} recipient filter must reach only the primary local user");
 }
 
 // LIB-107: regression-proves the "Dispatch mode contract" doc comment on
@@ -13216,12 +13594,20 @@ void RunVisualGraphEmitEventReachesBusTest() {
     graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick });
     graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "DeltaSeconds" });
     graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 3U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "BridgeEmitted" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 4U, .kind = kb::visual::VisualGraphNodeKind::CustomEvent, .symbol = "BridgeEmitted" });
+    graph.nodes.push_back(kb::visual::VisualGraphNode{ .id = 5U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "RecordBridgeAmount" });
     graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
     graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = kb::visual::VisualGraphValueType::Float });
     graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
     graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 4U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void });
+    graph.pins.push_back(kb::visual::VisualGraphPin{ .nodeId = 5U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float });
     graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 1U, .fromPin = "then", .toNode = 3U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
     graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 2U, .fromPin = "value", .toNode = 3U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "then", .toNode = 5U, .toPin = "exec", .kind = kb::visual::VisualGraphEdgeKind::Execution });
+    graph.edges.push_back(kb::visual::VisualGraphEdge{ .fromNode = 4U, .fromPin = "amount", .toNode = 5U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data });
 
     const kb::visual::VisualGraphCompileResult compiled = kb::visual::VisualGraphCompiler::Compile(graph);
     kb::tests::Require(compiled.Succeeded(), "Emit bridge graph did not compile");
@@ -13230,6 +13616,16 @@ void RunVisualGraphEmitEventReachesBusTest() {
     kb::visual::VisualGraphRuntimeRegistry artifacts;
     artifacts.Store(kb::visual::VisualGraphRuntimeArtifact{ .assetId = kGraphAsset, .graphName = graph.name, .module = compiled.module });
     kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    std::vector<float> graphDeliveries;
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphRuntimeBinding{
+                            .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                            .symbol = "RecordBridgeAmount",
+                            .inputs = { kb::visual::VisualGraphNativePinSignature{ .name = "amount", .type = kb::visual::VisualGraphValueType::Float } },
+                            .callback = [&graphDeliveries](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                                graphDeliveries.push_back(context.ReadFloat(instruction.inputs[0].sourceNodeId, instruction.inputs[0].sourcePin));
+                            },
+                        }),
+        "Emit bridge graph receiver binding registration failed");
     kb::visual::VisualGraphBehaviourInstanceRegistry instances;
 
     kb::script::ScriptRuntime runtime;
@@ -13245,8 +13641,20 @@ void RunVisualGraphEmitEventReachesBusTest() {
 
     int busDeliveries = 0;
     float capturedAmount = -1.0F;
-    static_cast<void>(runtime.Events().Subscribe("BridgeEmitted", [&busDeliveries, &capturedAmount](const kb::script::ScriptEvent& event) {
+    kb::scene::SceneEntity capturedSender{};
+    kb::assets::AssetId capturedSenderAsset{};
+    std::uint64_t waitCreatedInsideMirror = 0U;
+    static_cast<void>(runtime.Events().Subscribe("BridgeEmitted", [&runtime, &scene, object, &busDeliveries, &capturedAmount, &capturedSender, &capturedSenderAsset, &waitCreatedInsideMirror](const kb::script::ScriptEvent& event) {
         ++busDeliveries;
+        capturedSender = event.sender;
+        capturedSenderAsset = event.senderAsset;
+        if (waitCreatedInsideMirror == 0U) {
+            std::shared_ptr<const kb::script::ScriptEventObservation> observation =
+                runtime.Events().Observe("BridgeEmitted", object.Entity());
+            waitCreatedInsideMirror = scene.Tasks().Start(
+                kb::library::MakeWaitEventTask(std::move(observation)),
+                object.Entity());
+        }
         for (const kb::script::ScriptEventArgument& argument : event.arguments) {
             if (argument.name == "amount") {
                 capturedAmount = argument.value.AsFloat();
@@ -13266,6 +13674,20 @@ void RunVisualGraphEmitEventReachesBusTest() {
     }
     kb::tests::Require(foundInOldMechanism, "The old DispatchEvent mechanism must still see the EmitEvent node's output, unchanged by this task");
     kb::tests::Require(busDeliveries == 1 && kb::tests::NearlyEqual(capturedAmount, 0.25F), "The SAME EmitEvent node's output must ALSO reach a native Events.Subscribe listener through the bus, with the correct typed argument value");
+    kb::tests::Require(capturedSender == object.Entity() && capturedSenderAsset == kGraphAsset,
+        "Visual Graph bus emission did not preserve the live sender entity and behaviour asset metadata");
+    kb::tests::Require(waitCreatedInsideMirror != 0U && scene.Tasks().Advance(0.0F).empty() &&
+            scene.Tasks().Exists(waitCreatedInsideMirror),
+        "A Task.WaitEvent created inside the bus mirror was incorrectly satisfied by the same logical event's legacy dispatch");
+    static_cast<void>(runtime.Events().Emit(
+        scene,
+        kb::script::ScriptEvent{ .name = "BridgeEmitted" },
+        object.Entity()));
+    const std::vector<kb::scene::TaskCompletionRecord> waitCompletions = scene.Tasks().Advance(0.0F);
+    kb::tests::Require(waitCompletions.size() == 1U && waitCompletions.front().id == waitCreatedInsideMirror,
+        "Task.WaitEvent did not complete after a genuinely distinct subsequent event");
+    kb::tests::Require(graphDeliveries.size() == 1U && kb::tests::NearlyEqual(graphDeliveries[0], 0.25F),
+        "A Visual Graph event mirrored to both delivery systems must execute a receiving CustomEvent exactly once, never once through the bus bridge and again through DispatchEvent");
 }
 
 // LIB-112: RECEIVE direction of the gameplay event bridge — a native
@@ -13330,6 +13752,24 @@ void RunScriptEventBusReachesVisualGraphCustomEventTest() {
     kb::tests::Require(delivery.delivered == 1U && delivery.errors.empty(), "A native Events.Broadcast must reach the auto-subscribed Visual Graph CustomEvent node");
     kb::tests::Require(recordedAmounts.size() == 1U && kb::tests::NearlyEqual(recordedAmounts[0], 0.75F), "The bus-delivered event's typed argument must reach the graph's CustomEvent output pin and flow through to CallNative, exactly like the old DispatchEvent mechanism already does");
 
+    const kb::script::ScriptEventDeliveryResult invalidPayload =
+        runtime.Events().Broadcast(scene, kb::script::ScriptEvent{ .name = "BridgeReceived" });
+    kb::tests::Require(invalidPayload.delivered == 0U && invalidPayload.errors.size() == 1U &&
+            recordedAmounts.size() == 1U,
+        "A bus-to-graph payload mismatch must surface through ScriptEventDeliveryResult and must not count as delivery");
+
+    kb::scene::BehaviourComponent* liveBehaviour = scene.Components().Behaviours().TryGet(object.Entity());
+    kb::tests::Require(liveBehaviour != nullptr, "Receive bridge live behaviour disappeared before asset-identity audit");
+    liveBehaviour->behaviourAssetId = kGraphAsset.value + 1U;
+    const kb::script::ScriptEventDeliveryResult staleAsset =
+        runtime.Events().Broadcast(scene, kb::script::ScriptEvent{
+            .name = "BridgeReceived",
+            .arguments = { kb::script::ScriptEventArgument{ .name = "amount", .value = kb::script::ScriptValue{ 0.5F } } },
+        });
+    kb::tests::Require(staleAsset.errors.empty() && recordedAmounts.size() == 1U,
+        "A stale graph bridge subscription executed after the live behaviour asset changed");
+    liveBehaviour->behaviourAssetId = kGraphAsset.value;
+
     scene.Components().Behaviours().Remove(object.Entity());
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
     kb::tests::Require(system.LastResult().Succeeded(), "Receive bridge Destroyed dispatch produced diagnostics");
@@ -13337,6 +13777,172 @@ void RunScriptEventBusReachesVisualGraphCustomEventTest() {
 
     const kb::script::ScriptEventDeliveryResult afterDestroy = runtime.Events().Broadcast(scene, kb::script::ScriptEvent{ .name = "BridgeReceived" });
     kb::tests::Require(afterDestroy.delivered == 0U && recordedAmounts.size() == 1U, "A Broadcast after the behaviour was destroyed must not re-invoke the graph — the subscription must genuinely be gone, not just skipped once");
+}
+
+// LIB-098 audit regression: Function.Task.WaitSeconds feeds the task-aware
+// Wait node through the real ScriptRuntimeHost bindings and SceneTasks frame
+// advance. Resuming at Wait must reuse the original handle, not allocate a
+// new task each Tick.
+void RunVisualGraphTaskAwareWaitRuntimeTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Visual Graph task-aware Wait host setup failed");
+
+    int completed = 0;
+    kb::script::ScriptFunctionDesc record;
+    record.signature.name = "Tests.RecordTaskWait";
+    record.signature.description = "Records completion of the task-aware Visual Graph Wait runtime fixture.";
+    record.callback = [&completed](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+        ++completed;
+        return kb::script::ScriptFunctionCallResult{ .executed = true };
+    };
+    kb::tests::Require(host.RegisterFunction(std::move(record)), "Visual Graph task-aware Wait record function registration failed");
+
+    constexpr kb::assets::AssetId kAsset{ 0x7A510U };
+    kb::visual::VisualGraphRuntimeArtifact artifact{
+        .assetId = kAsset,
+        .graphName = "TaskAwareWaitRuntime",
+    };
+    artifact.module.graphName = artifact.graphName;
+    artifact.module.functions.push_back(kb::visual::VisualGraphIrFunction{
+        .event = kb::visual::VisualGraphLifecycleEvent::Tick,
+        .eventNodeId = 1U,
+        .entryNodeId = 2U,
+        .instructions = {
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                .sourceNodeId = 2U,
+                .symbol = "Function.Task.WaitSeconds",
+                .inputs = {
+                    kb::visual::VisualGraphIrInput{ .name = "seconds", .type = kb::visual::VisualGraphValueType::Float, .sourceNodeId = 0U, .sourcePin = "deltaSeconds" },
+                },
+                .outputs = {
+                    kb::visual::VisualGraphIrOutput{ .name = "task", .type = kb::visual::VisualGraphValueType::Hash },
+                },
+                .trueNodeId = 3U,
+            },
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::Wait,
+                .sourceNodeId = 3U,
+                .inputs = {
+                    kb::visual::VisualGraphIrInput{ .name = "task", .type = kb::visual::VisualGraphValueType::Hash, .sourceNodeId = 2U, .sourcePin = "task" },
+                },
+                .nextNodeId = 4U,
+            },
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                .sourceNodeId = 4U,
+                .symbol = "Function.Tests.RecordTaskWait",
+            },
+        },
+    });
+    host.VisualGraphs().Store(std::move(artifact));
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Task-aware Wait Graph" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    static_cast<void>(system.ExecuteFrame(scene, 0.02F));
+    kb::tests::Require(system.LastResult().Succeeded() && completed == 0,
+        "Visual Graph task-aware Wait did not suspend after starting its SceneTask");
+    static_cast<void>(system.ExecuteFrame(scene, 0.01F));
+    kb::tests::Require(system.LastResult().Succeeded() && completed == 0,
+        "Visual Graph task-aware Wait completed before its original SceneTask became terminal");
+    static_cast<void>(system.ExecuteFrame(scene, 0.02F));
+    kb::tests::Require(system.LastResult().Succeeded() && completed == 1,
+        "Visual Graph task-aware Wait did not resume exactly once through the production SceneTasks/runtime path");
+}
+
+// LIB-106 audit regression: the common function registry is the Visual Graph
+// authoring surface for filtered emission. Typed CustomEvent pins feed the
+// same Events.EmitFiltered implementation used by native/Lua callers.
+void RunVisualGraphFilteredEventRuntimeTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Visual Graph filtered event host setup failed");
+    kb::tests::Require(
+        host.CreateVisualGraphNodeCatalog().Find("NativeBinding:CallNative:Function.Events.EmitFiltered") != nullptr,
+        "Visual Graph catalog did not expose Events.EmitFiltered for authoring");
+
+    constexpr kb::assets::AssetId kAsset{ 0xE106U };
+    kb::visual::VisualGraphRuntimeArtifact artifact{
+        .assetId = kAsset,
+        .graphName = "FilteredEventRuntime",
+    };
+    artifact.module.graphName = artifact.graphName;
+    artifact.module.functions.push_back(kb::visual::VisualGraphIrFunction{
+        .customEventName = "DriveFilteredEvent",
+        .eventNodeId = 1U,
+        .eventOutputs = {
+            kb::visual::VisualGraphIrOutput{ .name = "event", .type = kb::visual::VisualGraphValueType::String },
+            kb::visual::VisualGraphIrOutput{ .name = "player", .type = kb::visual::VisualGraphValueType::Int64 },
+        },
+        .entryNodeId = 2U,
+        .instructions = {
+            kb::visual::VisualGraphIrInstruction{
+                .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                .sourceNodeId = 2U,
+                .symbol = "Function.Events.EmitFiltered",
+                .inputs = {
+                    kb::visual::VisualGraphIrInput{ .name = "event", .type = kb::visual::VisualGraphValueType::String, .sourceNodeId = 1U, .sourcePin = "event" },
+                    kb::visual::VisualGraphIrInput{ .name = "player", .type = kb::visual::VisualGraphValueType::Int64, .sourceNodeId = 1U, .sourcePin = "player" },
+                },
+                .outputs = {
+                    kb::visual::VisualGraphIrOutput{ .name = "delivered", .type = kb::visual::VisualGraphValueType::Int },
+                },
+            },
+        },
+    });
+    host.VisualGraphs().Store(std::move(artifact));
+
+    const kb::scene::SceneObject graphOwner = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filtered Event Graph" });
+    scene.Components().Behaviours().Set(graphOwner.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::VisualGraph,
+        .enabled = true,
+    });
+    const kb::scene::SceneObject primary = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filtered Primary" });
+    const kb::scene::SceneObject playerTwo = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filtered Player Two" });
+    scene.Components().Inputs().Set(primary.Entity(), kb::scene::InputComponent{ .localUser = kb::input::kPrimaryLocalUser });
+    scene.Components().Inputs().Set(playerTwo.Entity(), kb::scene::InputComponent{ .localUser = kb::input::LocalUserId{ 2U } });
+    int primaryDeliveries = 0;
+    int playerTwoDeliveries = 0;
+    static_cast<void>(host.Runtime().Events().Subscribe("GraphFiltered", [&primaryDeliveries](const kb::script::ScriptEvent&) { ++primaryDeliveries; }, primary.Entity()));
+    static_cast<void>(host.Runtime().Events().Subscribe("GraphFiltered", [&playerTwoDeliveries](const kb::script::ScriptEvent&) { ++playerTwoDeliveries; }, playerTwo.Entity()));
+
+    kb::script::ScriptRuntimeSceneSystem system{ host.Runtime() };
+    static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
+    kb::tests::Require(system.LastResult().Succeeded(), "Visual Graph filtered event Created frame failed");
+    const kb::script::ScriptRuntimeExecutionResult result = host.Runtime().DispatchEventAndDrain(
+        scene,
+        kb::script::ScriptEvent{
+            .name = "DriveFilteredEvent",
+            .target = graphOwner.Entity(),
+            .arguments = {
+                kb::script::ScriptEventArgument{ .name = "event", .value = kb::script::ScriptValue{ std::string{ "GraphFiltered" } } },
+                kb::script::ScriptEventArgument{ .name = "player", .value = kb::script::ScriptValue{ std::int64_t{ 2 } } },
+            },
+        },
+        0.0F);
+    kb::tests::Require(result.Succeeded() && primaryDeliveries == 0 && playerTwoDeliveries == 1,
+        "Visual Graph Events.EmitFiltered did not route through the production bus using its typed player filter");
+
+    const kb::script::ScriptRuntimeExecutionResult invalidPlayer = host.Runtime().DispatchEventAndDrain(
+        scene,
+        kb::script::ScriptEvent{
+            .name = "DriveFilteredEvent",
+            .target = graphOwner.Entity(),
+            .arguments = {
+                kb::script::ScriptEventArgument{ .name = "event", .value = kb::script::ScriptValue{ std::string{ "GraphFiltered" } } },
+                kb::script::ScriptEventArgument{ .name = "player", .value = kb::script::ScriptValue{ std::int64_t{ -1 } } },
+            },
+        },
+        0.0F);
+    kb::tests::Require(!invalidPlayer.Succeeded() && primaryDeliveries == 0 && playerTwoDeliveries == 1,
+        "Visual Graph Events.EmitFiltered silently accepted an invalid player id or delivered it");
 }
 
 // Regression: stopping play must fire each behaviour's Destroyed hook (the Unity
@@ -13487,6 +14093,7 @@ void RunScriptRuntimeTests() {
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();
     RunPucLuaCoroutineGeneratorTest();
+    RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
     RunCrossBackendEventDispatchTest();
@@ -13546,6 +14153,8 @@ void RunScriptRuntimeTests() {
     RunScriptSaveApiTest();
     RunEngineLibraryTaskFactoriesTest();
     RunSceneTaskFixedStepDomainTest();
+    RunTaskWaitReasonsRuntimeIntegrationTest();
+    RunVisualGraphTaskAwareWaitRuntimeTest();
     RunTimerAndTaskCancellationPropagationTest();
     RunEngineLibraryAsyncResultTest();
     RunEngineLibraryAsyncResultThreadAffinityTest();
@@ -13570,6 +14179,7 @@ void RunScriptRuntimeTests() {
     RunScriptEventBusOrderingUnsubscribeDestroyedOwnerAndRecursiveEmitTest();
     RunVisualGraphEmitEventReachesBusTest();
     RunScriptEventBusReachesVisualGraphCustomEventTest();
+    RunVisualGraphFilteredEventRuntimeTest();
     RunTransformApiLocalAndWorldPoseTest();
     RunTransformApiParentAndHierarchyTest();
     RunTransformApiChildIterationTest();
@@ -13604,6 +14214,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeSceneSystemFixedAccumulatorTest();
     RunScriptRuntimeSceneSystemFixedStepSafetyTest();
     RunVisualGraphScriptBackendDispatchTest();
+    RunVisualGraphScriptBackendContinuationLifecycleTest();
     RunVisualGraphScriptEventPayloadDispatchTest();
     RunScriptRuntimeAssetPreparerEndToEndTest();
     RunScriptRuntimeSceneSystemAssetPreparationTest();

@@ -185,7 +185,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 19U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 20U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -197,8 +197,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer", "Assets", "Save", "Collections", "Text" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly nineteen domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Renderer", "Assets", "Save", "Collections", "Text" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -676,6 +676,7 @@ void RunTypeDescLuaRoundTripTest() {
                 return ScriptFunctionCallResult{ .executed = true, .outputs = { arguments[0] }, .errors = {} };
             };
         }
+        function.signature.description = "Exercises one registered value type through every script frontend.";
         kb::tests::Require(host.RegisterFunction(std::move(function)),
             "Engine21kbLibrary type desc round-trip function registration failed");
     }
@@ -1874,6 +1875,7 @@ void RunUtf8ValidationTest() {
     kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{
                            .signature = kb::script::ScriptFunctionSignature{
                                .name = "Tests.EchoUtf8Text",
+                               .description = "Accepts UTF-8 text for the platform-boundary test.",
                                .inputs = { kb::script::ScriptFunctionPin{ .name = "text", .type = kb::script::ScriptValueType::String } },
                            },
                            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
@@ -2266,6 +2268,7 @@ void RunFunctionDeprecationWiringTest() {
     {
         kb::script::ScriptFunctionDesc logDesc;
         logDesc.signature.name = "Log";
+        logDesc.signature.description = "Records a message for the deprecation wiring test.";
         logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
         logDesc.callback = [&capturedLogs](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
             for (const kb::script::ScriptFunctionArgument& argument : arguments) {
@@ -2282,12 +2285,12 @@ void RunFunctionDeprecationWiringTest() {
     const auto noopCallback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
         return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
     };
-    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.OldFunction" }, .callback = noopCallback }),
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.OldFunction", .description = "Deprecated test function." }, .callback = noopCallback }),
         "Engine21kbLibrary deprecation wiring test function registration failed");
     // Registered up front too (not after the Lua dispatch below), since
     // LIB-021 locks the registry against new Register() calls after the
     // first lifecycle dispatch.
-    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.NewFunction" }, .callback = noopCallback }),
+    kb::tests::Require(host.RegisterFunction(kb::script::ScriptFunctionDesc{ .signature = { .name = "Tests.NewFunction", .description = "Replacement test function." }, .callback = noopCallback }),
         "Engine21kbLibrary deprecation wiring test replacement function registration failed");
 
     const kb::library::LibraryDeprecation deprecation{
@@ -3361,14 +3364,11 @@ void RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest() {
     }
 }
 
-// LIB-029: every function the catalog reports must have a real binding in
-// every supported frontend. Native + generic Lua CallFunction reachability
-// are structurally guaranteed by ScriptRuntimeHost::RegisterFunction being
-// the single registration path (LIB-002) — this test covers the one step
-// that registers separately and could independently regress: the Visual
-// Graph CallNative binding ScriptFunctionVisualGraphBindings attaches to
-// every RegisterFunction call.
-void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
+// LIB-029: every function in the live production catalog carries authored
+// documentation and remains reachable through every supported frontend.
+// Native and Lua CallFunction share ScriptFunctionRegistry; Visual Graph
+// owns two separate binding tables, so all three paths are checked.
+void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary catalog binding test host setup failed");
@@ -3376,6 +3376,9 @@ void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
     kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
 
     for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string missingDescriptionMessage =
+            "Engine21kbLibrary function '" + function.name + "' has no authored description";
+        kb::tests::Require(!function.description.empty(), missingDescriptionMessage.c_str());
         const std::string bindingKey = "Function." + function.name;
         const std::string missingNativeBindingMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Visual Graph native binding";
         kb::tests::Require(
@@ -3386,9 +3389,14 @@ void RunCatalogFunctionsHaveVisualGraphBindingsTest() {
             host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, bindingKey) != nullptr,
             missingRuntimeBindingMessage.c_str());
         const std::string missingRegistryEntryMessage = "Engine21kbLibrary function '" + function.name + "' is missing its Native/Lua CallFunction registry entry";
+        const kb::script::ScriptFunctionSignature* registrySignature =
+            host.Functions().FindSignature(function.name);
+        kb::tests::Require(registrySignature != nullptr, missingRegistryEntryMessage.c_str());
+        const std::string mismatchedDescriptionMessage =
+            "Engine21kbLibrary function '" + function.name + "' description drifted between registry and exported catalog";
         kb::tests::Require(
-            host.Functions().FindSignature(function.name) != nullptr,
-            missingRegistryEntryMessage.c_str());
+            registrySignature->description == function.description,
+            mismatchedDescriptionMessage.c_str());
     }
 }
 
@@ -3536,6 +3544,7 @@ void RunInputLimitsTest() {
         host.RegisterFunction(kb::script::ScriptFunctionDesc{
             .signature = kb::script::ScriptFunctionSignature{
                 .name = "Tests.TakesString",
+                .description = "Accepts text for the input-limit test.",
                 .inputs = { kb::script::ScriptFunctionPin{ .name = "text", .type = kb::script::ScriptValueType::String } },
             },
             .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
@@ -3638,6 +3647,7 @@ void RunExpandedValueTypesTest() {
         host.RegisterFunction(kb::script::ScriptFunctionDesc{
             .signature = kb::script::ScriptFunctionSignature{
                 .name = "Tests.EchoHash",
+                .description = "Echoes a hash for the expanded-value-type test.",
                 .inputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = ScriptValueType::Hash } },
                 .outputs = { kb::script::ScriptFunctionPin{ .name = "value", .type = ScriptValueType::Hash } },
             },
@@ -3792,7 +3802,7 @@ void RunEngineLibraryTests() {
     RunComponentChangeTrackerTest();
     RunTransformChangeTrackerTest();
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
-    RunCatalogFunctionsHaveVisualGraphBindingsTest();
+    RunCatalogFunctionFrontendAndDocumentationComplianceTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
     RunErrorCodeTest();

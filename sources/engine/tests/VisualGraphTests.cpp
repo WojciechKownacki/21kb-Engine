@@ -1376,11 +1376,19 @@ void RunVisualGraphRuntimeDoesNotReevaluateExecutedDataProducerTest() {
 
 void RunVisualGraphNodeDefinitionRegistryTest() {
     const kb::visual::VisualGraphNodeDefinitionRegistry registry = kb::visual::VisualGraphNodeDefinitionRegistry::CreateDefault();
-    kb::tests::Require(registry.Definitions().size() == 10U, "Visual graph default node registry is incomplete");
+    kb::tests::Require(registry.Definitions().size() == 11U, "Visual graph default node registry is incomplete");
 
     const kb::visual::VisualGraphNodeDefinition* branch = registry.Find(kb::visual::VisualGraphNodeKind::Branch);
     kb::tests::Require(branch != nullptr, "Visual graph node registry did not expose Branch");
     kb::tests::Require(branch->pins.size() == 4U, "Visual graph Branch definition did not expose expected pins");
+
+    const kb::visual::VisualGraphNodeDefinition* wait = registry.Find(kb::visual::VisualGraphNodeKind::Wait);
+    kb::tests::Require(wait != nullptr, "Visual graph node registry did not expose Wait");
+    kb::tests::Require(wait->pins.size() == 3U &&
+            wait->pins[0].direction == kb::visual::VisualGraphPinDirection::Input &&
+            wait->pins[1].name == "task" && wait->pins[1].type == kb::visual::VisualGraphValueType::Hash &&
+            wait->pins[2].direction == kb::visual::VisualGraphPinDirection::Output,
+        "Visual graph Wait definition did not expose exec, optional task, and continuation pins");
 
     const std::vector<kb::visual::VisualGraphPin> callPins = registry.CreatePinsForNode(kb::visual::VisualGraphNode{
         .id = 77U,
@@ -1437,7 +1445,8 @@ void RunVisualGraphNodeCatalogTest() {
         "Visual graph node catalog property binding registration failed");
 
     const kb::visual::VisualGraphNodeCatalog catalog = kb::visual::VisualGraphNodeCatalog::FromNativeBindings(nativeBindings);
-    kb::tests::Require(catalog.Entries().size() == 12U, "Visual graph node catalog did not include built-in and native nodes");
+    kb::tests::Require(catalog.Entries().size() == 13U, "Visual graph node catalog did not include built-in and native nodes");
+    kb::tests::Require(catalog.Find("BuiltIn:Wait") != nullptr, "Visual graph node catalog did not expose the Wait state-machine node");
 
     const kb::visual::VisualGraphNodeCatalogEntry* movePlayer = catalog.Find("NativeBinding:CallNative:MovePlayer");
     kb::tests::Require(movePlayer != nullptr, "Visual graph node catalog did not expose the native MovePlayer node");
@@ -1591,6 +1600,21 @@ void RunVisualGraphWaitContinuationTest() {
                            generated.source.find("context.Suspend(1U, 3U)") != std::string::npos &&
                            generated.source.find("context.TakeContinuation(1U)") != std::string::npos,
         "Visual graph Wait native code did not preserve the continuation contract");
+
+    artifact.module.functions.front().instructions.front().inputs.push_back(kb::visual::VisualGraphIrInput{
+        .name = "task",
+        .type = kb::visual::VisualGraphValueType::Hash,
+        .sourceNodeId = 9U,
+        .sourcePin = "task",
+    });
+    const kb::visual::VisualGraphNativeCode generatedTaskWait = kb::visual::VisualGraphNativeCodeGenerator::Generate(
+        artifact.module,
+        kb::visual::VisualGraphNativeCodegenDesc{ .className = "TaskWaitGraph", .namespaceName = "kb::tests" });
+    kb::tests::Require(generatedTaskWait.Succeeded() &&
+            generatedTaskWait.source.find("context.IsTaskRunning(task)") != std::string::npos &&
+            generatedTaskWait.source.find("context.Suspend(1U, 2U)") != std::string::npos &&
+            generatedTaskWait.source.find("context.ClearWaitTask(2U)") != std::string::npos,
+        "Visual graph native code did not preserve task-aware Wait state across resumptions");
 }
 
 } // namespace

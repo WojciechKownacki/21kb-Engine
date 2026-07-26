@@ -4,6 +4,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
+#include "engine/script/ScriptEventsApi.hpp"
 #include "engine/script/ScriptTextApi.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptSaveApi.hpp"
@@ -118,6 +119,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Task",
             .ownerRuntime = "kb::scene::SceneTaskService",
             .Register = &kb::script::ScriptTaskApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Events",
+            .ownerRuntime = "kb::script::ScriptEventBus",
+            .Register = &kb::script::ScriptEventsApi::Register,
         },
         LibraryModuleDesc{
             .name = "Physics",
