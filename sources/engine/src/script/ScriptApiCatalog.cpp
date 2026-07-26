@@ -33,10 +33,11 @@ struct LuaBindingSpec {
 };
 
 // Mirrors the sandbox surface installed by PucLuaFunctionApi::Attach — both
-// the names and each wrapper's return shape. When a table, field, or return
+// PucLuaTaskApi::Attach adds the Task entries below. The names and each
+// wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 125> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 132> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -161,6 +162,13 @@ constexpr std::array<LuaBindingSpec, 125> kLuaBindings{ {
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Task", "WaitSeconds", "Task.WaitSeconds", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
+    { "Task", "WaitFixedSteps", "Task.WaitFixedSteps", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
+    { "Task", "WaitEvent", "Task.WaitEvent", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
+    { "Task", "WaitAsset", "Task.WaitAsset", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
+    { "Task", "WaitScene", "Task.WaitScene", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
+    { "Task", "IsRunning", "Task.IsRunning", ScriptApiCatalogLuaReturnKind::SingleOutput, "running" },
+    { "Task", "Cancel", "Task.Cancel", ScriptApiCatalogLuaReturnKind::SingleOutput, "cancelled" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
 } };
 
@@ -197,6 +205,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
     for (const ScriptFunctionDesc& function : functions) {
         catalog.functions.push_back(ScriptApiCatalogFunction{
             .name = function.signature.name,
+            .description = function.signature.description,
             .inputs = ToApiPins(function.signature.inputs),
             .outputs = ToApiPins(function.signature.outputs),
         });

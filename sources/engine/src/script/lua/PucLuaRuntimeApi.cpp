@@ -7,18 +7,22 @@
 #include "script/lua/api/PucLuaModuleApi.hpp"
 #include "script/lua/api/PucLuaSelfApi.hpp"
 #include "script/lua/api/PucLuaSharedApi.hpp"
+#include "script/lua/api/PucLuaTaskApi.hpp"
 
 namespace kb::script {
 
-void PucLuaRuntimeApi::AttachRuntimeFunctions(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime) {
+std::optional<std::string> PucLuaRuntimeApi::AttachRuntimeFunctions(lua_State* state, int environmentIndex, PucLuaScriptRuntime& runtime) {
     PucLuaModuleApi::AttachImport(state, environmentIndex, runtime);
     // Attach `Inspector` with a null context so top-level `Inspector.x = default`
     // declarations run harmlessly at chunk load (the schema is parsed statically).
     PucLuaSelfApi::AttachInspector(state, environmentIndex, nullptr);
+    return PucLuaTaskApi::Attach(state, environmentIndex);
 }
 
-void PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime) {
-    AttachRuntimeFunctions(state, environmentIndex, runtime);
+std::optional<std::string> PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex, ScriptExecutionContext& context, PucLuaScriptRuntime& runtime) {
+    if (std::optional<std::string> error = AttachRuntimeFunctions(state, environmentIndex, runtime)) {
+        return error;
+    }
     PucLuaEventApi::Attach(state, environmentIndex, context);
     PucLuaEventsApi::Attach(state, environmentIndex, context, runtime);
     PucLuaSharedApi::Attach(state, environmentIndex, context);
@@ -26,6 +30,7 @@ void PucLuaRuntimeApi::AttachExecutionApi(lua_State* state, int environmentIndex
     // Re-attach `Inspector` bound to THIS execution's context so `Inspector.x`
     // read/write routes to the current entity's exposed-variable instance.
     PucLuaSelfApi::AttachInspector(state, environmentIndex, &context);
+    return std::nullopt;
 }
 
 void PucLuaRuntimeApi::PushSelf(lua_State* state, ScriptExecutionContext& context) {

@@ -91,6 +91,11 @@ struct ScriptEvent {
     kb::scene::SceneEntity target{};
     kb::assets::AssetId senderAsset{};
     std::vector<ScriptEventArgument> arguments;
+    // Internal delivery marker used when one logical backend emission is
+    // mirrored to ScriptEventBus and then drained through ScriptRuntime.
+    // The bus advances observations first; the canonical behaviour copy
+    // carries this bit so Task.WaitEvent advances exactly once.
+    bool observationAlreadyNotified = false;
 
     // LIB-104: the typed dispatch key derived from `name` — see
     // ScriptEventId.hpp for why this exists and how it is used on the hot

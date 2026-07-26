@@ -49,38 +49,16 @@ struct TaskCompletionRecord {
 // no script-facing equivalent. Scripts can observe or cancel a native task
 // through Task.IsRunning/Task.Cancel and receive TaskCompleted/TaskFailed.
 //
-// LIB-098 ("yield na sekundy, fixed steps, event, asset load, scene load")
-// scope decision, researched against this same model — of the five named
-// "yield reasons," only TWO are genuinely distinct, buildable capabilities
-// today:
-//   - seconds: kb::library::MakeWaitSecondsTask (EngineLibraryTaskFactories.
-//     hpp) — a Frame-domain poll closure, direct mirror of TimerRecord::
-//     remainingSeconds.
-//   - fixed steps: kb::library::MakeWaitFixedStepsTask, paired with the NEW
-//     StartFixedStep/AdvanceFixedSteps plumbing below — this is the one
-//     piece of real new engine work LIB-098 required (not just a factory
-//     function), because nothing previously surfaced FixedTick's per-frame
-//     step count to anything outside ScriptRuntimeSceneSystem::ExecuteFrame.
-//   - event: DELIBERATELY NOT implemented — event delivery
-//     (NativeScriptBackend::RegisterEvent/DispatchEvent) is push-only,
-//     single-callback-per-(asset,eventName) with last-write-wins semantics;
-//     nothing persists "did event X happen" for a poll to observe, and
-//     building a proper multi-listener registry to support it is closer in
-//     scope to Events.Subscribe (LIB-105) than to this task — documented as
-//     a real, deferred gap, not silently faked with a hack that would break
-//     under >1 concurrent listener.
-//   - asset load / scene load: DELIBERATELY NOT given bespoke factory
-//     helpers — both AssetManager::Load and Scene.Load already run fully
-//     synchronously today (confirmed: SceneLoadedContentQueries::Progress
-//     is a binary 1.0/0.0, never a real multi-frame ramp, per its own
-//     LIB-071 doc comment), so "yielding" for either would degenerate to a
-//     task that completes on its very first poll — indistinguishable from
-//     any other trivial one-poll-and-done task and not worth a named
-//     helper (a plain `[](float){ return TaskPollResult::Completed; }`
-//     closure already covers it). Real multi-frame asset/scene-load
-//     waiting requires an asynchronous AssetManager path that does not
-//     exist anywhere in this engine — a much larger, separately-scoped
-//     future change, not fabricated here.
+// LIB-098 supplies five non-blocking reason adapters in
+// EngineLibraryTaskFactories.hpp: seconds, real FixedTick step count, an
+// observed ScriptEventBus event, an AssetManager cache transition, and a
+// loaded-scene record appearing. Event observations are shared sequence
+// objects rather than retained callbacks, so cancellation and host teardown
+// are lifetime-safe. Asset/scene waits deliberately only OBSERVE state:
+// they never start synchronous Load/LoadOpaque work from a task poll and
+// therefore never hide blocking I/O inside ScriptRuntimeSceneSystem's
+// per-frame Advance. Loading remains the responsibility of the owning
+// subsystem (LIB-155 covers a genuinely asynchronous asset-load initiator).
 class SceneTasks {
 public:
     explicit SceneTasks(Scene& scene) noexcept;

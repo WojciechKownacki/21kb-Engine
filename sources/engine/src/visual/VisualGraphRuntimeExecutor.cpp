@@ -193,20 +193,28 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
             // introduced and caught by the existing RunVisualGraph*
             // CallNativeFailureBranchTest before this comment was written.
             VisualGraphRuntimeExecutionResult nodeResult{};
-            for (const VisualGraphIrInput& input : instruction->inputs) {
-                if (evaluatedNodes.contains(input.sourceNodeId)) {
-                    continue;
-                }
-                if (!instructions.contains(input.sourceNodeId)) {
-                    if (context.TryRead(input.sourceNodeId, input.sourcePin) != nullptr) {
+            // A task-aware Wait resumes at the Wait instruction itself.
+            // Its source Task.Wait* node must not be evaluated again or each
+            // resume would allocate a replacement task and wait forever.
+            const bool resumesTaskWait =
+                instruction->opcode == VisualGraphIrOpcode::Wait &&
+                context.WaitTask(instruction->sourceNodeId) != 0U;
+            if (!resumesTaskWait) {
+                for (const VisualGraphIrInput& input : instruction->inputs) {
+                    if (evaluatedNodes.contains(input.sourceNodeId)) {
                         continue;
                     }
-                }
-                AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, continuationEventNodeId, depth + 1U));
-                if (!nodeResult.Succeeded()) {
-                    executing.erase(nodeId);
-                    AppendErrors(result, std::move(nodeResult));
-                    return result;
+                    if (!instructions.contains(input.sourceNodeId)) {
+                        if (context.TryRead(input.sourceNodeId, input.sourcePin) != nullptr) {
+                            continue;
+                        }
+                    }
+                    AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, continuationEventNodeId, depth + 1U));
+                    if (!nodeResult.Succeeded()) {
+                        executing.erase(nodeId);
+                        AppendErrors(result, std::move(nodeResult));
+                        return result;
+                    }
                 }
             }
 
@@ -323,6 +331,40 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         }
 
         if (instruction->opcode == VisualGraphIrOpcode::Wait && followExecution) {
+            const auto taskInput = std::ranges::find_if(instruction->inputs, [](const VisualGraphIrInput& input) {
+                return input.name == "task";
+            });
+            if (taskInput != instruction->inputs.end()) {
+                std::uint64_t taskId = context.WaitTask(instruction->sourceNodeId);
+                if (taskId == 0U) {
+                    taskId = context.ReadUInt64(taskInput->sourceNodeId, taskInput->sourcePin);
+                    if (taskId == 0U) {
+                        executing.erase(nodeId);
+                        AddRuntimeError(result, instruction->sourceNodeId, "task", "visual graph Wait requires a valid task handle");
+                        return result;
+                    }
+                    if (!context.HasTaskIsRunningQuery()) {
+                        executing.erase(nodeId);
+                        AddRuntimeError(result, instruction->sourceNodeId, "task", "visual graph Wait has no SceneTasks runtime query");
+                        return result;
+                    }
+                    context.SetWaitTask(instruction->sourceNodeId, taskId);
+                }
+                if (context.IsTaskRunning(taskId)) {
+                    context.Suspend(continuationEventNodeId, instruction->sourceNodeId);
+                    executing.erase(nodeId);
+                    result.suspended = true;
+                    return result;
+                }
+                context.ClearWaitTask(instruction->sourceNodeId);
+                const std::uint32_t nextNodeId = instruction->nextNodeId;
+                executing.erase(nodeId);
+                if (nextNodeId == 0U) {
+                    return result;
+                }
+                nodeId = nextNodeId;
+                continue;
+            }
             context.Suspend(continuationEventNodeId, instruction->nextNodeId);
             executing.erase(nodeId);
             result.suspended = true;

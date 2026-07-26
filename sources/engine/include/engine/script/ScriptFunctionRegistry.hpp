@@ -30,6 +30,11 @@ struct ScriptFunctionArgument {
 
 struct ScriptFunctionSignature {
     std::string name;
+    // Required user-facing semantics for the callable. ScriptRuntimeHost
+    // fills this from the built-in documentation catalog for engine-owned
+    // functions; plugins must author it explicitly. It is retained by the
+    // live registry so every frontend/export reads the same description.
+    std::string description;
     std::vector<ScriptFunctionPin> inputs;
     std::vector<ScriptFunctionPin> outputs;
     // LIB-025: empty when the function is not deprecated. Set via

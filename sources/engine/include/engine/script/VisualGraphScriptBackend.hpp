@@ -34,11 +34,17 @@ private:
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity);
 
-    // LIB-112: gameplay event bridge to ScriptEventBus (LIB-105), additive
-    // to the pre-existing old-mechanism CustomEvent/EmitEvent path above
-    // (never replacing it). See VisualGraphScriptBackend.cpp's doc comment
-    // above SubscribeCustomEventsToBus for the full design.
-    void BroadcastEmittedEventsToBus(kb::visual::VisualGraphRuntimeExecutionContext& graphContext, kb::scene::Scene& scene, ScriptEventBus& eventBus) const;
+    // LIB-112: gameplay event bridge to ScriptEventBus (LIB-105). Graph
+    // emissions retain the pre-existing behaviour dispatch and also reach
+    // regular bus consumers; ScriptEventBusAudience prevents the bridge
+    // subscription from consuming that mirrored copy a second time.
+    void BroadcastEmittedEventsToBus(
+        kb::visual::VisualGraphRuntimeExecutionContext& graphContext,
+        kb::scene::Scene& scene,
+        ScriptEventBus& eventBus,
+        kb::scene::SceneEntity sender,
+        kb::assets::AssetId senderAsset,
+        bool mirroredToBehaviourDispatcher) const;
     void SubscribeCustomEventsToBus(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context);
     void UnsubscribeCustomEventsFromBus(kb::assets::AssetId assetId, kb::scene::SceneEntity entity, ScriptEventBus* eventBus);
 

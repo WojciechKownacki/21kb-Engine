@@ -208,6 +208,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptAssetLoader.hpp
     include/engine/script/ScriptAssetsApi.hpp
     include/engine/script/ScriptCollectionsApi.hpp
+    include/engine/script/ScriptEventsApi.hpp
     include/engine/script/ScriptTextApi.hpp
     include/engine/script/ScriptBackend.hpp
     include/engine/script/ScriptBehaviourAsset.hpp
@@ -702,6 +703,7 @@ add_library(kb_engine STATIC
     src/script/lua/api/PucLuaModuleApi.cpp
     src/script/lua/api/PucLuaSelfApi.cpp
     src/script/lua/api/PucLuaSharedApi.cpp
+    src/script/lua/api/PucLuaTaskApi.cpp
     src/script/lua/PucLuaDebugHook.cpp
     src/script/lua/PucLuaRuntimeApi.cpp
     src/script/lua/PucLuaSafeCall.cpp
@@ -719,12 +721,15 @@ add_library(kb_engine STATIC
     src/script/ScriptAssetLoader.cpp
     src/script/ScriptAssetsApi.cpp
     src/script/ScriptCollectionsApi.cpp
+    src/script/ScriptEventsApi.cpp
     src/script/ScriptTextApi.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
     src/script/ScriptEventBus.cpp
     src/script/ScriptExecutionContext.cpp
     src/script/ScriptFunctionRegistry.cpp
+    src/script/ScriptFunctionDocumentation.cpp
+    src/private/script/ScriptFunctionDocumentation.hpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
     src/script/ScriptMaterialInstanceApi.cpp
@@ -769,6 +774,7 @@ add_library(kb_engine STATIC
     src/library/EngineLibraryModuleValidation.cpp
     src/library/EngineLibraryOwnership.cpp
     src/library/EngineLibraryParsing.cpp
+    src/library/EngineLibraryTaskFactories.cpp
     src/library/EngineLibraryTextEncoding.cpp
     src/library/EngineLibraryTypeDesc.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
@@ -777,6 +783,7 @@ add_library(kb_engine STATIC
     src/private/script/lua/api/PucLuaModuleApi.hpp
     src/private/script/lua/api/PucLuaSelfApi.hpp
     src/private/script/lua/api/PucLuaSharedApi.hpp
+    src/private/script/lua/api/PucLuaTaskApi.hpp
     src/private/script/lua/PucLuaDebugHook.hpp
     src/private/script/lua/PucLuaRuntimeApi.hpp
     src/private/script/lua/PucLuaSandboxEnvironment.hpp
