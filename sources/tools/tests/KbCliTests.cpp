@@ -399,6 +399,13 @@ local jointImpulseApplied = false
 local jointReported = false
 local lib123Completed = false
 local lib129Completed = false
+local lib130Completed = false
+local characterGravityObserved = false
+local characterGroundingLanded = false
+local characterJumpRequested = false
+local characterJumpObserved = false
+local platformTargetX = 320.0
+local lib131Completed = false
 
 function Tick(self, dt)
     local projectile = World.FindByName("Projectile")
@@ -411,6 +418,17 @@ function Tick(self, dt)
     local character = World.FindByName("CharacterProbe")
     local jointOwner = World.FindByName("JointOwner")
     local jointConnected = World.FindByName("JointConnected")
+    local pointJointed = World.FindByName("PointJointedRuntime")
+    local distanceJointed = World.FindByName("DistanceJointedRuntime")
+    local hingeLimited = World.FindByName("HingeLimitedRuntime")
+    local hingeFree = World.FindByName("HingeFreeRuntime")
+    local shallowSlopeCharacter = World.FindByName("ShallowSlopeCharacterRuntime")
+    local steepSlopeCharacter = World.FindByName("SteepSlopeCharacterRuntime")
+    local walkableStepCharacter = World.FindByName("WalkableStepCharacterRuntime")
+    local blockedStepCharacter = World.FindByName("BlockedStepCharacterRuntime")
+    local groundingCharacter = World.FindByName("GroundingCharacterRuntime")
+    local movingPlatform = World.FindByName("MovingPlatformRuntime")
+    local platformCharacter = World.FindByName("PlatformRidingCharacterRuntime")
 
     if not controlsApplied then
         local forceApplied = Physics.AddForce(forceBody, 60.0, 0.0, 0.0)
@@ -560,6 +578,7 @@ function Tick(self, dt)
         end
     end
 
+)" R"(
     -- CharacterMove only returns true once the Jolt fixed system has created
     -- its real CharacterVirtual. The later Transform read proves that the
     -- virtual character, not merely its Lua binding, wrote a simulated pose.
@@ -654,6 +673,94 @@ function Tick(self, dt)
     if not lib123Completed and characterReported and jointReported then
         lib123Completed = true
         Log("physics runtime LIB-123 complete")
+    end
+
+    -- Production proof for every advertised JointType. These components
+    -- came from the serialized scene and reached the dynamically loaded
+    -- Jolt plugin through the normal fixed-update path.
+    if not lib130Completed and jointReported then
+        local pointPosition = Transform.GetPosition(pointJointed)
+        local distancePosition = Transform.GetPosition(distanceJointed)
+        local limitedVelocity = Physics.GetAngularVelocity(hingeLimited)
+        local freeVelocity = Physics.GetAngularVelocity(hingeFree)
+        if pointPosition ~= nil and math.abs(pointPosition.y - 10.0) < 0.1
+            and distancePosition ~= nil
+            and (10.0 - distancePosition.y) > 2.5
+            and (10.0 - distancePosition.y) < 3.3
+            and limitedVelocity.found and freeVelocity.found
+            and math.abs(freeVelocity.y) > 5.0
+            and math.abs(limitedVelocity.y) < math.abs(freeVelocity.y) * 0.5 then
+            lib130Completed = true
+            Log("physics runtime LIB-130 complete")
+        end
+    end
+
+)" R"(
+    -- Drive the two step rigs and the kinematic platform through public
+    -- production APIs every frame. Calls made before Jolt creates the live
+    -- objects fail honestly and are retried on the following frame.
+    Physics.CharacterMove(walkableStepCharacter, 2.0, 0.0)
+    Physics.CharacterMove(blockedStepCharacter, 2.0, 0.0)
+    platformTargetX = platformTargetX + dt
+    Physics.MoveKinematic(movingPlatform, platformTargetX, -0.5, 0.0)
+
+    local groundingPosition = Transform.GetPosition(groundingCharacter)
+    local groundingVelocity = Physics.CharacterVelocity(groundingCharacter)
+    if not characterGravityObserved and groundingPosition ~= nil
+        and groundingPosition.y > 1.5
+        and groundingVelocity.found and groundingVelocity.y < -1.0
+        and not Physics.CharacterIsGrounded(groundingCharacter) then
+        characterGravityObserved = true
+        Log("physics runtime character gravity observed")
+    end
+
+    if characterGravityObserved and not characterGroundingLanded
+        and groundingPosition ~= nil
+        and groundingPosition.y > 0.7 and groundingPosition.y < 1.4
+        and Physics.CharacterIsGrounded(groundingCharacter) then
+        characterGroundingLanded = true
+        Log("physics runtime character grounded")
+    end
+
+    if characterGroundingLanded and not characterJumpRequested
+        and Physics.CharacterJump(groundingCharacter, 5.0) then
+        characterJumpRequested = true
+        Log("physics runtime character jump requested")
+    end
+
+    if characterJumpRequested and not characterJumpObserved then
+        local jumpVelocity = Physics.CharacterVelocity(groundingCharacter)
+        if jumpVelocity.found and jumpVelocity.y > 3.0
+            and not Physics.CharacterIsGrounded(groundingCharacter) then
+            characterJumpObserved = true
+            Log("physics runtime character jump observed")
+        end
+    end
+
+    if not lib131Completed and characterGravityObserved and characterGroundingLanded
+        and characterJumpObserved then
+        local shallowPosition = Transform.GetPosition(shallowSlopeCharacter)
+        local steepPosition = Transform.GetPosition(steepSlopeCharacter)
+        local shallowNormal = Physics.CharacterGroundNormal(shallowSlopeCharacter)
+        local walkablePosition = Transform.GetPosition(walkableStepCharacter)
+        local blockedPosition = Transform.GetPosition(blockedStepCharacter)
+        local platformPosition = Transform.GetPosition(movingPlatform)
+        local platformCharacterPosition = Transform.GetPosition(platformCharacter)
+        local platformGroundVelocity = Physics.CharacterGroundVelocity(platformCharacter)
+        if shallowPosition ~= nil and steepPosition ~= nil
+            and Physics.CharacterIsGrounded(shallowSlopeCharacter)
+            and shallowNormal.found and shallowNormal.y > 0.85
+            and steepPosition.y < shallowPosition.y - 5.0
+            and walkablePosition ~= nil and walkablePosition.x > 165.0 and walkablePosition.y > 1.0
+            and blockedPosition ~= nil and blockedPosition.x < 225.0 and blockedPosition.y < 1.0
+            and platformPosition ~= nil and platformCharacterPosition ~= nil
+            and (platformPosition.x - 320.0) > 3.0
+            and math.abs((platformCharacterPosition.x - 320.0) - (platformPosition.x - 320.0)) < 1.0
+            and Physics.CharacterIsGrounded(platformCharacter)
+            and platformGroundVelocity.found and platformGroundVelocity.x > 0.5 then
+            lib131Completed = true
+            Log("physics runtime LIB-131 complete")
+        end
     end
 
     if not lib129Completed then
@@ -968,6 +1075,225 @@ end
             .anchor = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
             .connectedAnchor = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F },
         });
+
+    const auto createWorldJointBody = [&scene](
+                                          const char* name,
+                                          kb::scene::Vec3 position,
+                                          kb::scene::Vec3 angularVelocity,
+                                          bool useGravity) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{ .localPosition = position },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+                .angularVelocity = angularVelocity,
+                .useGravity = useGravity,
+            });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.3F,
+            });
+        return object;
+    };
+
+    const kb::scene::Vec3 pointStart{ 70.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject pointJointed =
+        createWorldJointBody("PointJointedRuntime", pointStart, {}, true);
+    scene.Components().Joints().Set(
+        pointJointed.Entity(),
+        kb::scene::JointComponent{
+            .type = kb::scene::JointType::Point,
+            .connectedEntity = {},
+            .anchor = {},
+            .connectedAnchor = pointStart,
+        });
+
+    const kb::scene::Vec3 distanceStart{ 74.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject distanceJointed =
+        createWorldJointBody("DistanceJointedRuntime", distanceStart, {}, true);
+    scene.Components().Joints().Set(
+        distanceJointed.Entity(),
+        kb::scene::JointComponent{
+            .type = kb::scene::JointType::Distance,
+            .connectedEntity = {},
+            .anchor = {},
+            .connectedAnchor = distanceStart,
+            .minLimit = 0.0F,
+            .maxLimit = 3.0F,
+            .enableLimit = true,
+        });
+
+    constexpr kb::scene::Vec3 hingeAxis{ 0.0F, 1.0F, 0.0F };
+    constexpr kb::scene::Vec3 hingeSpin{ 0.0F, 10.0F, 0.0F };
+    const kb::scene::Vec3 hingeLimitedStart{ 78.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject hingeLimited =
+        createWorldJointBody("HingeLimitedRuntime", hingeLimitedStart, hingeSpin, false);
+    scene.Components().Joints().Set(
+        hingeLimited.Entity(),
+        kb::scene::JointComponent{
+            .type = kb::scene::JointType::Hinge,
+            .connectedEntity = {},
+            .anchor = {},
+            .connectedAnchor = hingeLimitedStart,
+            .axis = hingeAxis,
+            .minLimit = -5.0F,
+            .maxLimit = 5.0F,
+            .enableLimit = true,
+        });
+
+    const kb::scene::Vec3 hingeFreeStart{ 82.0F, 10.0F, 0.0F };
+    const kb::scene::SceneObject hingeFree =
+        createWorldJointBody("HingeFreeRuntime", hingeFreeStart, hingeSpin, false);
+    scene.Components().Joints().Set(
+        hingeFree.Entity(),
+        kb::scene::JointComponent{
+            .type = kb::scene::JointType::Hinge,
+            .connectedEntity = {},
+            .anchor = {},
+            .connectedAnchor = hingeFreeStart,
+            .axis = hingeAxis,
+            .enableLimit = false,
+        });
+
+    const auto createCharacterRigBody = [&scene](
+                                            const char* name,
+                                            kb::scene::Vec3 position,
+                                            kb::scene::RigidbodyBodyType bodyType,
+                                            kb::scene::Vec3 size,
+                                            kb::scene::Quat rotation = {}) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = position,
+                    .localRotation = rotation,
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{ .bodyType = bodyType });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box,
+                .boxSize = size,
+            });
+        return object;
+    };
+    const auto createCharacter = [&scene](
+                                     const char* name,
+                                     kb::scene::Vec3 position,
+                                     kb::scene::CharacterControllerComponent component) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{ .localPosition = position },
+            });
+        scene.Components().CharacterControllers().Set(object.Entity(), component);
+        return object;
+    };
+    const kb::scene::CharacterControllerComponent defaultCharacter{
+        .radius = 0.4F,
+        .height = 1.8F,
+    };
+    constexpr float characterHalfHeight = 0.9F;
+
+    createCharacterRigBody(
+        "SlopeCatchFloorRuntime",
+        kb::scene::Vec3{ 110.0F, -20.0F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 60.0F, 2.0F, 30.0F });
+    createCharacterRigBody(
+        "ShallowRampRuntime",
+        kb::scene::Vec3{ 100.0F, 0.0F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 6.0F, 0.5F, 6.0F },
+        kb::scene::Quat{ 0.0F, 0.0F, 0.173648F, 0.984808F });
+    createCharacterRigBody(
+        "SteepRampRuntime",
+        kb::scene::Vec3{ 120.0F, 0.0F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 6.0F, 0.5F, 6.0F },
+        kb::scene::Quat{ 0.0F, 0.0F, 0.608761F, 0.793353F });
+    createCharacter(
+        "ShallowSlopeCharacterRuntime",
+        kb::scene::Vec3{ 100.0F, 5.0F, 0.0F },
+        defaultCharacter);
+    createCharacter(
+        "SteepSlopeCharacterRuntime",
+        kb::scene::Vec3{ 120.0F, 5.0F, 0.0F },
+        defaultCharacter);
+
+    createCharacterRigBody(
+        "WalkableStepFloorRuntime",
+        kb::scene::Vec3{ 160.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 8.0F, 1.0F, 6.0F });
+    createCharacterRigBody(
+        "WalkableStepRuntime",
+        kb::scene::Vec3{ 183.0F, -4.7F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 40.0F, 10.0F, 6.0F });
+    createCharacter(
+        "WalkableStepCharacterRuntime",
+        kb::scene::Vec3{ 158.0F, characterHalfHeight, 0.0F },
+        kb::scene::CharacterControllerComponent{
+            .radius = 0.4F,
+            .height = 1.8F,
+            .stepOffset = 0.5F,
+        });
+
+    createCharacterRigBody(
+        "BlockedStepFloorRuntime",
+        kb::scene::Vec3{ 220.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 8.0F, 1.0F, 6.0F });
+    createCharacterRigBody(
+        "BlockedStepRuntime",
+        kb::scene::Vec3{ 243.0F, -4.7F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 40.0F, 10.0F, 6.0F });
+    createCharacter(
+        "BlockedStepCharacterRuntime",
+        kb::scene::Vec3{ 218.0F, characterHalfHeight, 0.0F },
+        kb::scene::CharacterControllerComponent{
+            .radius = 0.4F,
+            .height = 1.8F,
+            .stepOffset = 0.1F,
+        });
+
+    createCharacterRigBody(
+        "GroundingFloorRuntime",
+        kb::scene::Vec3{ 290.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 8.0F, 1.0F, 8.0F });
+    createCharacter(
+        "GroundingCharacterRuntime",
+        kb::scene::Vec3{ 290.0F, 5.0F, 0.0F },
+        defaultCharacter);
+
+    createCharacterRigBody(
+        "MovingPlatformRuntime",
+        kb::scene::Vec3{ 320.0F, -0.5F, 0.0F },
+        kb::scene::RigidbodyBodyType::Kinematic,
+        kb::scene::Vec3{ 4.0F, 1.0F, 4.0F });
+    createCharacterRigBody(
+        "PlatformCatchFloorRuntime",
+        kb::scene::Vec3{ 340.0F, -20.0F, 0.0F },
+        kb::scene::RigidbodyBodyType::Static,
+        kb::scene::Vec3{ 80.0F, 2.0F, 20.0F });
+    createCharacter(
+        "PlatformRidingCharacterRuntime",
+        kb::scene::Vec3{ 320.0F, characterHalfHeight, 0.0F },
+        defaultCharacter);
+
     static_cast<void>(scene.Entities().CreateObject(
         kb::scene::SceneObjectDesc{ .name = "PhysicsObserver" }));
     std::error_code error;
@@ -1058,6 +1384,10 @@ void RunProjectileTemplateTests() {
         "serialized JointComponent did not constrain live Jolt bodies in kb_cli runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-123 complete"),
         "LIB-123 character/joint production runtime probe did not complete");
+    Require(Contains(run.output, "[log] physics runtime LIB-130 complete"),
+        "LIB-130 all advertised JointTypes did not complete through the production runtime");
+    Require(Contains(run.output, "[log] physics runtime LIB-131 complete"),
+        "LIB-131 character slope, step, grounding, platform motion, gravity, and jump did not complete through the production runtime");
     Require(Contains(run.output, "[log] physics runtime LIB-129 complete"),
         "LIB-129 project asset did not configure named query layers and the live Jolt collision matrix in kb_cli runtime");
     for (const char* eventName : { "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit" }) {
