@@ -321,22 +321,30 @@ struct BodyRecord {
     return kb::math::Inverse(parentTransform.worldRotation) * worldRotation;
 }
 
-// Shared by WriteBack/WriteBackCharacters below - honest fallback to "local == world" when the
-// entity has no parent OR its parent's TransformComponent cannot be found (matches
-// TransformMath::ComposeRoot's own contract; a vanished parent mid-frame is the same shape of
-// edge case CreateBody/SynchronizeBody already treat as "not simulated this step", not a crash).
-void WriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) {
+// Write-back is deliberately split in two phases. First every simulated body/character publishes
+// its NEW world pose from this same Jolt step. Only then may a child derive its local pose from
+// its parent's world pose. A one-pass unordered_map traversal made dynamic parent+child results
+// depend on which record happened to be visited first.
+void StageWriteBackWorldPose(TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) noexcept {
+    transform.worldPosition = worldPosition;
+    transform.worldRotation = worldRotation;
+    transform.worldDirty = true;
+}
+
+// Honest fallback to "local == world" when the entity has no parent OR its parent's
+// TransformComponent cannot be found (matches TransformMath::ComposeRoot's own contract; a
+// vanished parent mid-frame is the same shape of edge case CreateBody/SynchronizeBody already
+// treats as "not simulated this step", not a crash).
+void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform) {
     const SceneEntity parent = context.GetScene().Hierarchy().Parent(entity);
     const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
     if (parentTransform != nullptr) {
-        transform.localPosition = WorldToLocalPosition(*parentTransform, worldPosition);
-        transform.localRotation = WorldToLocalRotation(*parentTransform, worldRotation);
+        transform.localPosition = WorldToLocalPosition(*parentTransform, transform.worldPosition);
+        transform.localRotation = WorldToLocalRotation(*parentTransform, transform.worldRotation);
     } else {
-        transform.localPosition = worldPosition;
-        transform.localRotation = worldRotation;
+        transform.localPosition = transform.worldPosition;
+        transform.localRotation = transform.worldRotation;
     }
-    transform.worldPosition = worldPosition;
-    transform.worldRotation = worldRotation;
     transform.worldDirty = true;
     context.Transforms().MarkModified(entity);
 }
@@ -992,8 +1000,11 @@ public:
         SynchronizeCharacters(context);
         UpdateCharacters(context);
         Step(context.DeltaSeconds());
+        writeBackEntities_.clear();
+        writeBackEntities_.reserve(bodies_.size() + characters_.size());
         WriteBack(context);
         WriteBackCharacters(context);
+        FinalizeWriteBackLocalPoses(context);
         DispatchContactEvents(context);
     }
 
@@ -1727,7 +1738,8 @@ private:
             }
             const Vec3 position = FromJoltPosition(record.character->GetPosition());
             const Quat rotation = FromJolt(record.character->GetRotation());
-            WriteBackLocalPose(context, entity, *transform, position, rotation);
+            StageWriteBackWorldPose(*transform, position, rotation);
+            writeBackEntities_.push_back(entity);
         }
     }
 
@@ -1801,11 +1813,28 @@ private:
 
             const Quat rotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
             const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), ColliderWorldOffset(body.signature.center, body.signature.scale, rotation));
-            WriteBackLocalPose(context, entity, *transform, position, rotation);
+            StageWriteBackWorldPose(*transform, position, rotation);
+            writeBackEntities_.push_back(entity);
 
             rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
             rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));
             context.GetScene().Components().Rigidbodies().MarkModified(entity);
+        }
+    }
+
+    void FinalizeWriteBackLocalPoses(SceneSystemContext& context) {
+        // All non-static Jolt bodies and CharacterVirtual instances have staged their current
+        // world poses before this compact scratch list is consumed. Local conversion is
+        // therefore independent of bodies_/characters_ hash order, including dynamic
+        // parent+child and mixed rigidbody/character hierarchies.
+        for (const SceneEntity entity : writeBackEntities_) {
+            if (!context.Transforms().IsAlive(entity)) {
+                continue;
+            }
+            TransformComponent* transform = context.Transforms().TryGet(entity);
+            if (transform != nullptr) {
+                FinalizeWriteBackLocalPose(context, entity, *transform);
+            }
         }
     }
 
@@ -2007,6 +2036,7 @@ private:
     std::vector<JointSnapshot> jointScratch_;
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;
     std::vector<CharacterSnapshot> characterScratch_;
+    std::vector<SceneEntity> writeBackEntities_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: authoritative active sub-shape sets, aggregated by body pair.
     // Besides preventing duplicate entity callbacks for compound shapes,

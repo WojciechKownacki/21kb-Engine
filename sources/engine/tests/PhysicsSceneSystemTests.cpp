@@ -1709,6 +1709,48 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(determinismMaxAbsDifference <= 0.02F,
         "LIB-134 two structurally identical rigid body rigs, built adjacently (no destroy/recreate involved), at a close world-space magnitude, must settle into the same real Jolt physics result after chaotic multi-body collision - the one determinism guarantee this engine actually relies on (same binary/platform, same call order)");
 
+    // --- Dynamic parent + dynamic child: both Jolt bodies advance during the same fixed
+    // step. The child's local pose must be derived from the parent's NEW world pose, never
+    // whichever stale pose happens to be visible first while iterating the body map.
+    // Create and componentize the child first on purpose. This forces the regression to cover
+    // the adverse child-before-parent traversal that the old one-pass write-back got wrong.
+    // Kept after LIB-134 so these extra BodyIDs cannot perturb that independent determinism rig.
+    const kb::scene::SceneObject dynamicRigChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "DynamicRigidbodyChild" });
+    const kb::scene::SceneObject dynamicRigParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "DynamicRigidbodyParent",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 760.0F, 100.0F, 0.0F } },
+    });
+    kb::tests::Require(scene.Hierarchy().SetParent(dynamicRigChild.Entity(), dynamicRigParent.Entity()), "LIB-133 dynamic parented rigidbody test setup: SetParent must succeed");
+    kb::scene::TransformComponent dynamicRigChildTransform = scene.Transforms().Get(dynamicRigChild);
+    dynamicRigChildTransform.localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(dynamicRigChild.Entity(), dynamicRigChildTransform);
+    scene.Components().Rigidbodies().Set(dynamicRigChild.Entity(), kb::scene::RigidbodyComponent{
+                                                                     .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                                                                     .mass = 1.0F,
+                                                                     .linearVelocity = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+                                                                     .useGravity = false,
+                                                                 });
+    scene.Components().Colliders().Set(dynamicRigChild.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.25F });
+    scene.Components().Rigidbodies().Set(dynamicRigParent.Entity(), kb::scene::RigidbodyComponent{
+                                                                      .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                                                                      .mass = 1.0F,
+                                                                      .linearVelocity = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+                                                                      .useGravity = false,
+                                                                  });
+    scene.Components().Colliders().Set(dynamicRigParent.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .radius = 0.25F });
+
+    for (int i = 0; i < 30; ++i) {
+        [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
+    }
+    const kb::scene::TransformComponent dynamicRigParentFinal = scene.Transforms().Get(dynamicRigParent);
+    const kb::scene::TransformComponent dynamicRigChildFinal = scene.Transforms().Get(dynamicRigChild);
+    kb::tests::Require(dynamicRigParentFinal.worldPosition.x > 762.5F,
+        "LIB-133 dynamic rigidbody parent test setup: the parent body must move in the real Jolt simulation");
+    kb::tests::Require(std::fabs(dynamicRigChildFinal.worldPosition.x - dynamicRigParentFinal.worldPosition.x - 3.0F) < 0.01F,
+        "LIB-133 a dynamic rigidbody child and its dynamic rigidbody parent must expose their current same-step Jolt world poses");
+    kb::tests::Require(std::fabs(dynamicRigChildFinal.localPosition.x - 3.0F) < 0.01F,
+        "LIB-133 a dynamic rigidbody child's local pose must be derived from the dynamic parent's current same-step world pose, independent of body-map iteration order");
+
     // LIB-128 full production path: project descriptor -> Jolt plugin ->
     // installed script scene system -> native FixedTick -> function registry
     // -> Physics.SetVelocity -> same Jolt step -> Transform write-back.

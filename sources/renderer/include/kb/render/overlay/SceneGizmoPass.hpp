@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
@@ -25,6 +26,7 @@ struct SceneGizmoPassDesc {
     int hoveredAxis = -1;
     int draggedAxis = -1;
     std::uint8_t mode = 0U;
+    std::span<const EditorCameraWireframeDesc> cameraWireframes{};
     std::span<const EditorLightWireframeDesc> lightWireframes{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     bool visible = false;

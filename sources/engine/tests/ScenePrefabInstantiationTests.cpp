@@ -2251,6 +2251,29 @@ void RunPrefabCameraAssetSaveLoadRoundTripTest() {
     kb::tests::Require(kb::tests::NearlyEqual(camera->clearColor.x, 0.4F) && kb::tests::NearlyEqual(camera->clearColor.y, 0.5F) && kb::tests::NearlyEqual(camera->clearColor.z, 0.6F),
         "Camera prefab asset round trip lost clearColor");
 
+    struct CameraVisitorProbe {
+        kb::scene::SceneEntity expectedEntity{};
+        std::size_t count = 0U;
+        bool payloadMatches = false;
+    } probe{
+        .expectedEntity = instance.ObjectAt(cameraNode).Entity(),
+    };
+    loadedScene.Components().Visitors().ForEachCamera(
+        [](kb::scene::SceneEntity entity,
+            const kb::scene::TransformComponent&,
+            const kb::scene::CameraComponent& visitedCamera,
+            void* context) {
+            auto& visitorProbe = *static_cast<CameraVisitorProbe*>(context);
+            ++visitorProbe.count;
+            visitorProbe.payloadMatches =
+                entity == visitorProbe.expectedEntity &&
+                visitedCamera.viewportId == 2U &&
+                visitedCamera.priority == 9;
+        },
+        &probe);
+    kb::tests::Require(probe.count == 1U && probe.payloadMatches,
+        "Camera instantiated through the native prefab path was not visible to the production scene visitor");
+
     std::filesystem::remove(prefabPath, removeError);
 }
 

@@ -2,6 +2,7 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
+#include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
@@ -172,6 +173,7 @@ struct RenderSceneSubmitDesc {
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
+    std::span<const EditorCameraWireframeDesc> editorCameraWireframes{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;

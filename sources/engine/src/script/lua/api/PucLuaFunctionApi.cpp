@@ -1335,6 +1335,98 @@ int LuaWorldInstantiatePrefab(lua_State* state) {
     return 1;
 }
 
+int LuaSceneLoad(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* path = luaL_checkstring(state, 1);
+    const bool additive = lua_gettop(state) >= 2 && lua_toboolean(state, 2) != 0;
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("path", ScriptValue{ std::string{ path != nullptr ? path : "" } }),
+        Arg("additive", ScriptValue{ additive }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.Load", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "scene load failed");
+    }
+    PucLuaValueBridge::Push(state, result.Output("id").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaSceneUnload(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.Unload", arguments);
+    lua_pushboolean(state, result.Output("unloaded").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaSceneSetActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.SetActive", arguments);
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaSceneGetActive(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.GetActive", {});
+    PucLuaValueBridge::Push(state, result.Output("id").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaSceneFind(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const char* name = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("name", ScriptValue{ std::string{ name != nullptr ? name : "" } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.Find", arguments);
+    PucLuaValueBridge::Push(state, result.Output("id").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaSceneLoadProgress(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnumber(state, 0.0);
+        return 1;
+    }
+    const auto id = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("id", ScriptValue{ id, ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Scene.LoadProgress", arguments);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("progress").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    return 1;
+}
+
 int LuaTransformGetPosition(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2553,6 +2645,15 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetParent", &LuaWorldSetParent, context);
     SetClosure(state, "InstantiatePrefab", &LuaWorldInstantiatePrefab, context);
     lua_setfield(state, environmentIndex, "World");
+
+    lua_createtable(state, 0, 6);
+    SetClosure(state, "Load", &LuaSceneLoad, context);
+    SetClosure(state, "Unload", &LuaSceneUnload, context);
+    SetClosure(state, "SetActive", &LuaSceneSetActive, context);
+    SetClosure(state, "GetActive", &LuaSceneGetActive, context);
+    SetClosure(state, "Find", &LuaSceneFind, context);
+    SetClosure(state, "LoadProgress", &LuaSceneLoadProgress, context);
+    lua_setfield(state, environmentIndex, "Scene");
 
     lua_createtable(state, 0, 1);
     SetClosure(state, "delta", &LuaTimeDelta, context);
