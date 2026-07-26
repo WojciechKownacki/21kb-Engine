@@ -72,6 +72,32 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->radius);
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->height);
         ScenePrefabHashBuilder::Mix(hash, components.collider->trigger ? 1U : 0U);
+        ScenePrefabHashBuilder::MixFloat(hash, components.collider->friction);
+        ScenePrefabHashBuilder::MixFloat(hash, components.collider->restitution);
+        ScenePrefabHashBuilder::Mix(hash, components.collider->layer);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.characterController.has_value() ? 1U : 0U);
+    if (components.characterController.has_value()) {
+        ScenePrefabHashBuilder::MixVec3(hash, components.characterController->center);
+        ScenePrefabHashBuilder::MixFloat(hash, components.characterController->radius);
+        ScenePrefabHashBuilder::MixFloat(hash, components.characterController->height);
+        ScenePrefabHashBuilder::MixFloat(hash, components.characterController->slopeLimitDegrees);
+        ScenePrefabHashBuilder::MixFloat(hash, components.characterController->stepOffset);
+        ScenePrefabHashBuilder::MixFloat(hash, components.characterController->gravityScale);
+        ScenePrefabHashBuilder::Mix(hash, components.characterController->useGravity ? 1U : 0U);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.joint.has_value() ? 1U : 0U);
+    if (components.joint.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.joint->type));
+        ScenePrefabHashBuilder::Mix(hash, components.joint->connectedNodeStableId);
+        ScenePrefabHashBuilder::MixVec3(hash, components.joint->anchor);
+        ScenePrefabHashBuilder::MixVec3(hash, components.joint->connectedAnchor);
+        ScenePrefabHashBuilder::MixVec3(hash, components.joint->axis);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->minLimit);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->maxLimit);
+        ScenePrefabHashBuilder::Mix(hash, components.joint->enableLimit ? 1U : 0U);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);

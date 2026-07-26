@@ -50,7 +50,8 @@ using SceneAssetBinaryIO::ReadAllBytes;
 
 [[nodiscard]] bool ReadNode(ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeDesc& output) {
     std::uint32_t nestedOverrideCount = 0;
-    if (!input.ReadString(output.name) ||
+    if ((fileVersion >= 4U && !input.ReadUInt64(output.stableId)) ||
+        !input.ReadString(output.name) ||
         !input.ReadString(output.nestedPrefabGuid) ||
         !input.ReadUInt32(nestedOverrideCount) ||
         nestedOverrideCount > SceneAssetFormat::MaxNestedOverrideCount) {

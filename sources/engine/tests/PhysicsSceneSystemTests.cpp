@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -129,6 +130,20 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     // _temp.md's "Nierozwiazane ryzyko").
     kb::tests::Require(kb::scene::PhysicsBackend::HasBackend(scene), "PhysicsBackend::HasBackend must report true once the real Jolt plugin is loaded and has run at least one fixed step");
 
+    const auto requireNoLiveBodyControls = [&scene](kb::scene::SceneEntity entity, const char* reason) {
+        kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, entity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::AddImpulse(scene, entity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, entity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, entity).found, reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, entity, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::GetAngularVelocity(scene, entity).found, reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::Sleep(scene, entity), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::Wake(scene, entity), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, entity), reason);
+        kb::tests::Require(!kb::scene::PhysicsBackend::MoveKinematic(
+            scene, entity, kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, kb::scene::Quat{}, 1.0F / 60.0F), reason);
+    };
+
     kb::tests::Require(kb::scene::PhysicsBackend::SetVelocity(scene, box.Entity(), kb::scene::Vec3{ 0.0F, 0.0F, 0.0F }),
         "PhysicsBackend::SetVelocity must report true for the real, live dynamic body");
     const kb::scene::PhysicsVectorResult stoppedVelocity = kb::scene::PhysicsBackend::GetVelocity(scene, box.Entity());
@@ -146,6 +161,151 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "PhysicsBackend::IsSleeping must report true immediately after PhysicsBackend::Sleep, through the real Jolt BodyInterface");
     kb::tests::Require(kb::scene::PhysicsBackend::Wake(scene, box.Entity()), "PhysicsBackend::Wake must report true for the real, live dynamic body");
     kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, box.Entity()), "PhysicsBackend::IsSleeping must report false immediately after PhysicsBackend::Wake");
+
+    // Regression: MoveKinematic used to return true and write velocity into
+    // Jolt, but SynchronizeKinematicOrStaticBody replaced its target with the
+    // previous ECS Transform at the beginning of the very next fixed step.
+    // The body therefore never moved in a real runtime despite the successful
+    // API result. A pending live-body move must own exactly the next step,
+    // after which normal Jolt -> Transform write-back resumes.
+    const kb::scene::SceneObject kinematic = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "Kinematic API Probe",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ -10000.0F, 0.0F, 0.0F },
+                .localScale = kb::scene::Vec3{ 2.0F, 1.0F, 1.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        kinematic.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Kinematic,
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        kinematic.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .center = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+            .radius = 0.25F,
+        });
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    // The direct-body controls are Dynamic-only. Jolt itself accepts the
+    // calls for some other motion types but silently ignores force/impulse,
+    // and a kinematic synchronization overwrites directly-set velocity on
+    // the following fixed step. Reporting success for either is an API lie;
+    // only MoveKinematic is meaningful for a Kinematic body.
+    for (const kb::scene::SceneEntity unsupported : { floor.Entity(), kinematic.Entity() }) {
+        kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+            "PhysicsBackend::AddForce must reject live non-Dynamic bodies rather than report Jolt's no-op as applied");
+        kb::tests::Require(!kb::scene::PhysicsBackend::AddImpulse(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+            "PhysicsBackend::AddImpulse must reject live non-Dynamic bodies rather than report Jolt's no-op as applied");
+        kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+            "PhysicsBackend::SetVelocity must reject a body whose velocity is not a Dynamic simulation result");
+        kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, unsupported).found,
+            "PhysicsBackend::GetVelocity must report found=false for a non-Dynamic body");
+        kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, unsupported, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }),
+            "PhysicsBackend::SetAngularVelocity must reject a non-Dynamic body");
+        kb::tests::Require(!kb::scene::PhysicsBackend::GetAngularVelocity(scene, unsupported).found,
+            "PhysicsBackend::GetAngularVelocity must report found=false for a non-Dynamic body");
+        kb::tests::Require(!kb::scene::PhysicsBackend::Sleep(scene, unsupported),
+            "PhysicsBackend::Sleep must reject a non-Dynamic body");
+        kb::tests::Require(!kb::scene::PhysicsBackend::Wake(scene, unsupported),
+            "PhysicsBackend::Wake must reject a non-Dynamic body");
+        kb::tests::Require(!kb::scene::PhysicsBackend::IsSleeping(scene, unsupported),
+            "PhysicsBackend::IsSleeping must be false for a body without Dynamic sleep state");
+    }
+    kb::tests::Require(!kb::scene::PhysicsBackend::MoveKinematic(
+        scene, box.Entity(), kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, kb::scene::Quat{}, 1.0F / 60.0F),
+        "PhysicsBackend::MoveKinematic must reject a real live Dynamic body");
+    const kb::scene::PhysicsVectorResult velocityBeforeInvalidPayload = kb::scene::PhysicsBackend::GetVelocity(scene, box.Entity());
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+    kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, box.Entity(), kb::scene::Vec3{ nan, 0.0F, 0.0F }),
+        "PhysicsBackend::AddForce must reject a non-finite payload before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::AddImpulse(scene, box.Entity(), kb::scene::Vec3{ infinity, 0.0F, 0.0F }),
+        "PhysicsBackend::AddImpulse must reject a non-finite payload before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, box.Entity(), kb::scene::Vec3{ nan, 0.0F, 0.0F }),
+        "PhysicsBackend::SetVelocity must reject a non-finite payload before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, box.Entity(), kb::scene::Vec3{ 0.0F, infinity, 0.0F }),
+        "PhysicsBackend::SetAngularVelocity must reject a non-finite payload before it reaches Jolt");
+    const kb::scene::PhysicsVectorResult velocityAfterInvalidPayload = kb::scene::PhysicsBackend::GetVelocity(scene, box.Entity());
+    kb::tests::Require(velocityBeforeInvalidPayload.found && velocityAfterInvalidPayload.found &&
+            kb::tests::NearlyEqual(velocityBeforeInvalidPayload.value.x, velocityAfterInvalidPayload.value.x) &&
+            kb::tests::NearlyEqual(velocityBeforeInvalidPayload.value.y, velocityAfterInvalidPayload.value.y) &&
+            kb::tests::NearlyEqual(velocityBeforeInvalidPayload.value.z, velocityAfterInvalidPayload.value.z),
+        "Rejected non-finite Rigidbody controls must leave the real Jolt body's velocity untouched");
+    kb::tests::Require(!kb::scene::PhysicsBackend::MoveKinematic(scene, kinematic.Entity(), kb::scene::Vec3{ nan, 0.0F, 0.0F }, kb::scene::Quat{}, 1.0F / 60.0F),
+        "PhysicsBackend::MoveKinematic must reject a non-finite target before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::MoveKinematic(scene, kinematic.Entity(), kb::scene::Vec3{}, kb::scene::Quat{ 0.0F, 0.0F, 0.0F, 0.0F }, 1.0F / 60.0F),
+        "PhysicsBackend::MoveKinematic must reject a non-normalized target rotation before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::MoveKinematic(scene, kinematic.Entity(), kb::scene::Vec3{}, kb::scene::Quat{}, infinity),
+        "PhysicsBackend::MoveKinematic must reject a non-finite deltaSeconds before it reaches Jolt");
+    kb::tests::Require(
+        kb::scene::PhysicsBackend::MoveKinematic(
+            scene,
+            kinematic.Entity(),
+            kb::scene::Vec3{ -9990.0F, 0.0F, 3.0F },
+            kb::scene::Quat{ 0.0F, 0.70710678F, 0.0F, 0.70710678F },
+            1.0F / 60.0F),
+        "PhysicsBackend::MoveKinematic must accept a real live kinematic body");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(
+        kb::tests::NearlyEqual(scene.Transforms().Get(kinematic).localPosition.x, -9990.0F) && kb::tests::NearlyEqual(scene.Transforms().Get(kinematic).localPosition.z, 3.0F),
+        "PhysicsBackend::MoveKinematic must preserve the requested entity pose when its collider has a rotated, scaled center offset");
+    scene.Entities().Destroy(kinematic.Entity());
+
+    // A script can call Physics.* between structural ECS changes and the
+    // next fixed synchronization. The stale Jolt map must never make such
+    // removed/destructed bodies addressable during that interval.
+    const kb::scene::SceneObject beforeFirstSync = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-124 pre-sync",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -10010.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(beforeFirstSync.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(beforeFirstSync.Entity(), kb::scene::ColliderComponent{});
+    requireNoLiveBodyControls(beforeFirstSync.Entity(),
+        "PhysicsBackend controls must reject an authored Dynamic body before its first fixed-step synchronization");
+    scene.Entities().Destroy(beforeFirstSync.Entity());
+
+    const kb::scene::SceneObject removedCollider = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-124 removed collider",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -10020.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(removedCollider.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(removedCollider.Entity(), kb::scene::ColliderComponent{});
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Colliders().Remove(removedCollider.Entity());
+    requireNoLiveBodyControls(removedCollider.Entity(),
+        "PhysicsBackend controls must reject a stale Jolt body immediately after Collider removal");
+    scene.Entities().Destroy(removedCollider.Entity());
+
+    const kb::scene::SceneObject rebuiltBody = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-124 pending rebuild",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -10025.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(rebuiltBody.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(rebuiltBody.Entity(), kb::scene::ColliderComponent{});
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Colliders().Set(rebuiltBody.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F },
+    });
+    requireNoLiveBodyControls(rebuiltBody.Entity(),
+        "PhysicsBackend controls must reject a stale Jolt body immediately after a Collider rebuild request");
+    scene.Entities().Destroy(rebuiltBody.Entity());
+
+    const kb::scene::SceneObject destroyed = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-124 destroyed",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -10030.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Rigidbodies().Set(destroyed.Entity(), kb::scene::RigidbodyComponent{});
+    scene.Components().Colliders().Set(destroyed.Entity(), kb::scene::ColliderComponent{});
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Entities().Destroy(destroyed.Entity());
+    requireNoLiveBodyControls(destroyed.Entity(),
+        "PhysicsBackend controls must reject a destroyed entity before the next fixed synchronization");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
 
     const kb::scene::SceneEntity unknownEntity = scene.Entities().CreateEntity();
     kb::tests::Require(!kb::scene::PhysicsBackend::AddForce(scene, unknownEntity, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
@@ -165,6 +325,10 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     const kb::scene::PhysicsCastResult castHitsBox = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, castOrigin, castDown, 10.0F, 0x2U);
     kb::tests::Require(castHitsBox.hit && castHitsBox.entity == box.Entity(), "PhysicsBackend::CastShape with a mask matching only the box's layer must hit the real box body, not the floor");
     kb::tests::Require(castHitsBox.point.y > boxRestingPosition.y - 0.2F, "PhysicsBackend::CastShape hit point must land on the box's real surface, not fall through to the floor");
+    const kb::scene::PhysicsCastResult castHitsBoxWithNonUnitDirection = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, castOrigin, castDown * 4.0F, 10.0F, 0x2U);
+    kb::tests::Require(castHitsBoxWithNonUnitDirection.hit && castHitsBoxWithNonUnitDirection.entity == box.Entity() &&
+            kb::tests::NearlyEqual(castHitsBoxWithNonUnitDirection.distance, castHitsBox.distance),
+        "PhysicsBackend::CastShape must normalize finite directions so range and hit distance do not depend on input magnitude");
 
     const kb::scene::PhysicsCastResult castHitsFloor = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, castOrigin, castDown, 10.0F, 0x1U);
     kb::tests::Require(castHitsFloor.hit && castHitsFloor.entity == floor.Entity(), "PhysicsBackend::CastShape with a mask matching only the floor's layer must hit the real floor body, skipping the box entirely");
@@ -184,6 +348,82 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(closestOnFloor.found, "PhysicsBackend::ClosestPoint must find the real, live floor body");
     kb::tests::Require(closestOnFloor.point.y > -0.3F && closestOnFloor.point.y < 0.3F, "PhysicsBackend::ClosestPoint must return a point on the floor's real top surface (y approx 0)");
     kb::tests::Require(closestOnFloor.distance > 4.5F && closestOnFloor.distance < 5.5F, "PhysicsBackend::ClosestPoint must return the real distance from the query point to the floor's surface");
+    kb::tests::Require(!kb::scene::PhysicsBackend::ClosestPoint(scene, floor.Entity(), kb::scene::Vec3{ 0.0F, 5.0F, 0.0F }, 0x2U).found,
+        "PhysicsBackend::ClosestPoint must report found=false when its layerMask excludes the target collider");
+    kb::tests::Require(kb::scene::PhysicsBackend::ClosestPoint(scene, floor.Entity(), kb::scene::Vec3{ 0.0F, 5.0F, 0.0F }, 0x1U).found,
+        "PhysicsBackend::ClosestPoint must find the target when its layerMask includes the collider layer");
+
+    kb::tests::Require(!kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, kb::scene::Vec3{ nan, 0.0F, 0.0F }, castDown, 10.0F, 0x2U).hit,
+        "PhysicsBackend::CastShape must reject a non-finite origin before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::OverlapShape(scene, kb::scene::PhysicsShapeDesc{ .kind = kb::scene::PhysicsShapeKind::Box, .boxHalfExtents = kb::scene::Vec3{ nan, 1.0F, 1.0F } }, boxRestingPosition, 0x2U).overlapping,
+        "PhysicsBackend::OverlapShape must reject a non-finite query shape before it reaches Jolt");
+    kb::tests::Require(!kb::scene::PhysicsBackend::ClosestPoint(scene, floor.Entity(), kb::scene::Vec3{ infinity, 0.0F, 0.0F }).found,
+        "PhysicsBackend::ClosestPoint must reject a non-finite query point before it reaches Jolt");
+
+    // Raycast stays intentionally pure ColliderComponent/TransformComponent
+    // geometry, so these regressions exercise the shared Raycast/RaycastAll
+    // solver directly. They prove its geometry agrees with rotated/scaled
+    // collider placement rather than only testing Jolt's narrow phase.
+    const kb::scene::SceneObject rotatedRayBox = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-125 rotated ray box",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ -11000.0F, 0.0F, 0.0F },
+            .localRotation = kb::scene::Quat{ 0.0F, 0.70710678F, 0.0F, 0.70710678F },
+        },
+    });
+    scene.Components().Colliders().Set(rotatedRayBox.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 4.0F, 1.0F, 1.0F }, .layer = 0x20U });
+    const kb::scene::SceneObject capsuleRayTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-125 capsule middle ray target",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -11100.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(capsuleRayTarget.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Capsule, .radius = 0.5F, .height = 4.0F, .layer = 0x40U });
+    const kb::scene::SceneObject mirroredOffsetRayTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-125 mirrored offset ray target",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -11200.0F, 0.0F, 0.0F }, .localScale = kb::scene::Vec3{ -2.0F, 1.0F, 1.0F } },
+    });
+    scene.Components().Colliders().Set(mirroredOffsetRayTarget.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Sphere, .center = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, .radius = 0.5F, .layer = 0x80U });
+    std::array<kb::scene::PhysicsCastResult, 1> pureRayStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> pureRayResults(pureRayStorage);
+    kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ -11000.0F, 0.0F, 3.0F }, kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, 10.0F, 0x20U, pureRayResults);
+    kb::tests::Require(pureRayResults.Count() == 1U && pureRayResults.GetAt(0)->entity == rotatedRayBox.Entity() && pureRayResults.GetAt(0)->distance < 1.2F,
+        "Physics.Raycast geometry must use an oriented box, not its unrotated AABB");
+    kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ -11102.0F, 0.0F, 0.0F }, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, 10.0F, 0x40U, pureRayResults);
+    kb::tests::Require(pureRayResults.Count() == 1U && pureRayResults.GetAt(0)->entity == capsuleRayTarget.Entity(),
+        "Physics.Raycast geometry must hit the cylindrical middle of a capsule, not only its end spheres");
+    kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ -11202.0F, 0.0F, 3.0F }, kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, 10.0F, 0x80U, pureRayResults);
+    kb::tests::Require(pureRayResults.Count() == 1U && pureRayResults.GetAt(0)->entity == mirroredOffsetRayTarget.Entity(),
+        "Physics.Raycast geometry must apply signed scale to Collider.center before rotation");
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const kb::scene::PhysicsCastResult joltMirroredOffsetHit = kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, kb::scene::Vec3{ -11202.0F, 0.0F, 3.0F }, kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, 10.0F, 0x80U);
+    kb::tests::Require(joltMirroredOffsetHit.hit && joltMirroredOffsetHit.entity == mirroredOffsetRayTarget.Entity(),
+        "Jolt CastShape must place a rotated/scaled Collider.center at the same world position as Raycast geometry");
+    const kb::scene::PhysicsClosestPointResult joltMirroredOffsetClosest = kb::scene::PhysicsBackend::ClosestPoint(scene, mirroredOffsetRayTarget.Entity(), kb::scene::Vec3{ -11202.0F, 0.0F, 3.0F }, 0x80U);
+    kb::tests::Require(joltMirroredOffsetClosest.found && joltMirroredOffsetClosest.point.z > 0.8F && joltMirroredOffsetClosest.point.z < 1.2F,
+        "Jolt ClosestPoint must use the same signed-scale Collider.center placement as CastShape");
+    scene.Entities().Destroy(rotatedRayBox.Entity());
+    scene.Entities().Destroy(capsuleRayTarget.Entity());
+    scene.Entities().Destroy(mirroredOffsetRayTarget.Entity());
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+
+    // A body survives physically until the next fixed synchronization, but
+    // queries in the current frame must use current ECS state, not that stale
+    // Jolt snapshot.
+    const kb::scene::SceneObject staleQueryTarget = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "LIB-125 stale query target",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ -11300.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(staleQueryTarget.Entity(), kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F }, .layer = 0x10U });
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    scene.Components().Colliders().Remove(staleQueryTarget.Entity());
+    const kb::scene::Vec3 staleOrigin{ -11300.0F, 5.0F, 0.0F };
+    kb::tests::Require(!kb::scene::PhysicsBackend::CastShape(scene, sphereQueryShape, staleOrigin, castDown, 10.0F, 0x10U).hit,
+        "PhysicsBackend::CastShape must skip a body whose Collider was removed before fixed synchronization");
+    kb::tests::Require(!kb::scene::PhysicsBackend::OverlapShape(scene, overlapQueryShape, kb::scene::Vec3{ -11300.0F, 0.0F, 0.0F }, 0x10U).overlapping,
+        "PhysicsBackend::OverlapShape must skip a stale body before fixed synchronization");
+    kb::tests::Require(!kb::scene::PhysicsBackend::ClosestPoint(scene, staleQueryTarget.Entity(), staleOrigin, 0x10U).found,
+        "PhysicsBackend::ClosestPoint must skip a stale body before fixed synchronization");
+    scene.Entities().Destroy(staleQueryTarget.Entity());
+    static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
 
     const kb::scene::PhysicsClosestPointResult closestOnUnknown = kb::scene::PhysicsBackend::ClosestPoint(scene, unknownEntity, kb::scene::Vec3{ 0.0F, 5.0F, 0.0F });
     kb::tests::Require(!closestOnUnknown.found, "PhysicsBackend::ClosestPoint must report found=false for an entity with no live Jolt body");

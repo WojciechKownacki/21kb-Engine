@@ -1,9 +1,12 @@
 #include "engine/input/InputRebinding.hpp"
 
+#include "engine/input/InputDeviceState.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <unordered_set>
 
 namespace kb::input {
 namespace {
@@ -24,6 +27,10 @@ namespace io = kb::scene::SceneAssetBinaryIO;
 // itself. Shared by FindRebindConflict's two scan loops below.
 [[nodiscard]] bool SameKeySlot(InputKey lhsKey, std::uint8_t lhsGamepad, InputKey rhsKey, std::uint8_t rhsGamepad) noexcept {
     return lhsKey != InputKey::None && lhsKey == rhsKey && lhsGamepad == rhsGamepad;
+}
+
+[[nodiscard]] bool IsValidRebindKey(InputKey key) noexcept {
+    return key == InputKey::None || ParseInputKey(ToString(key)) == key;
 }
 
 } // namespace
@@ -53,6 +60,10 @@ std::optional<InputRebindConflict> FindRebindConflict(
 
 bool ApplyRebind(InputMappingContextAsset& context, std::uint64_t bindingId, InputKey newKey,
                  std::uint8_t gamepadIndex, bool allowConflict) noexcept {
+    if (bindingId == 0U || !IsValidRebindKey(newKey) ||
+        gamepadIndex >= InputDeviceState::kMaxGamepads) {
+        return false;
+    }
     InputKeyMapping* target = nullptr;
     for (InputKeyMapping& mapping : context.mappings) {
         if (mapping.bindingId == bindingId) {
@@ -81,6 +92,24 @@ void ApplyRebindProfile(InputMappingContextAsset& context, std::span<const Input
             }
         }
     }
+}
+
+bool IsValidRebindProfile(
+    std::span<const InputRebindOverride> overrides) noexcept {
+    if (overrides.size() > InputAssetFormat::MaxRebindOverrideCount) {
+        return false;
+    }
+    std::unordered_set<std::uint64_t> bindingIds;
+    bindingIds.reserve(overrides.size());
+    for (const InputRebindOverride& entry : overrides) {
+        if (entry.bindingId == 0U ||
+            !bindingIds.insert(entry.bindingId).second ||
+            !IsValidRebindKey(entry.key) ||
+            entry.gamepadIndex >= InputDeviceState::kMaxGamepads) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::vector<std::uint8_t> EncodeRebindProfile(std::span<const InputRebindOverride> overrides) {
@@ -116,6 +145,8 @@ InputAssetLoadResult<std::vector<InputRebindOverride>> DecodeRebindProfile(std::
 
     std::vector<InputRebindOverride> overrides;
     overrides.resize(count);
+    std::unordered_set<std::uint64_t> bindingIds;
+    bindingIds.reserve(count);
     for (InputRebindOverride& entry : overrides) {
         std::uint32_t key = 0U;
         if (!reader.ReadUInt64(entry.bindingId) || !reader.ReadUInt32(key) || !reader.ReadUInt8(entry.gamepadIndex)) {
@@ -123,6 +154,22 @@ InputAssetLoadResult<std::vector<InputRebindOverride>> DecodeRebindProfile(std::
                 .succeeded = false, .asset = {}, .error = "Corrupt rebind profile entry"};
         }
         entry.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
+        if (key > static_cast<std::uint32_t>(
+                      std::numeric_limits<std::uint16_t>::max()) ||
+            entry.bindingId == 0U || !bindingIds.insert(entry.bindingId).second ||
+            !IsValidRebindKey(entry.key) ||
+            entry.gamepadIndex >= InputDeviceState::kMaxGamepads) {
+            return InputAssetLoadResult<std::vector<InputRebindOverride>>{
+                .succeeded = false,
+                .asset = {},
+                .error = "Invalid rebind profile entry"};
+        }
+    }
+    if (!reader.Exhausted()) {
+        return InputAssetLoadResult<std::vector<InputRebindOverride>>{
+            .succeeded = false,
+            .asset = {},
+            .error = "Trailing bytes in rebind profile"};
     }
     return InputAssetLoadResult<std::vector<InputRebindOverride>>{.succeeded = true, .asset = std::move(overrides), .error = {}};
 }
@@ -132,6 +179,9 @@ InputAssetLoadResult<std::vector<InputRebindOverride>> ReadRebindProfile(const s
 }
 
 bool WriteRebindProfile(const std::filesystem::path& path, std::span<const InputRebindOverride> overrides) {
+    if (!IsValidRebindProfile(overrides)) {
+        return false;
+    }
     return io::WriteBytesAtomically(path, EncodeRebindProfile(overrides));
 }
 

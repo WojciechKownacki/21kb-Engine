@@ -1,7 +1,9 @@
 #include "CliCommands.hpp"
 #include "MiniJson.hpp"
 
+#include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -16,6 +18,10 @@
 #include <string>
 #include <system_error>
 #include <vector>
+
+#if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
+#define KB_PHYSICS_JOLT_PLUGIN_PATH ""
+#endif
 
 namespace {
 
@@ -46,6 +52,28 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     Require(output.is_open(), "kb_cli test file could not be opened");
     output << text;
     Require(output.good(), "kb_cli test file could not be written");
+}
+
+void WriteProjectDescriptor(const std::filesystem::path& root, bool withPhysics) {
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.name = "KbCliRuntimeTest";
+    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
+    if (withPhysics) {
+        Require(
+            !std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty(),
+            "kb_cli physics runtime test requires a dynamic Jolt plugin");
+        descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = "Physics.Jolt",
+            // Match the portable filename persisted by the real editor. The
+            // production loader, not an absolute test-only path, must resolve
+            // the current Debug/Release build layout.
+            .binaryPath = std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.filename().string(),
+            .enabled = true,
+        });
+    }
+    Require(
+        kb::project::ProjectManager::SaveProject(root / "Project.21kbproject", descriptor),
+        "kb_cli test project descriptor could not be written");
 }
 
 [[nodiscard]] bool Contains(const std::string& text, std::string_view needle) {
@@ -110,6 +138,7 @@ void RunArgumentListTests() {
 void PrepareProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
+    WriteProjectDescriptor(root, false);
     WriteTextFile(root / "Assets" / "Logic" / "Player.lua", R"(
 function Ready(self, dt)
     Log("player ready")
@@ -199,6 +228,28 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "[log] player ready"), "run did not capture Log output");
     Require(Contains(run.output, "PlayerTicked"), "run did not report emitted events");
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
+
+    kb::project::ProjectDescriptor brokenDescriptor;
+    brokenDescriptor.name = "KbCliMissingPluginTest";
+    brokenDescriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Missing",
+        .binaryPath = "kb_plugin_that_does_not_exist.dll",
+        .enabled = true,
+    });
+    Require(
+        kb::project::ProjectManager::SaveProject(
+            TestRoot() / "Project.21kbproject",
+            brokenDescriptor),
+        "kb_cli missing-plugin descriptor could not be written");
+    const CommandRun missingPlugin = Run(&kb::cli::RunRunCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--frames", "1",
+    });
+    Require(missingPlugin.exitCode == 1,
+        "run silently continued when a project-configured plugin could not load");
+    Require(Contains(missingPlugin.output, "[module error]"),
+        "run did not expose the project plugin load diagnostic");
 }
 
 // LIB-013: PlayerController.lua is no longer duplicated as a hardcoded
@@ -211,6 +262,7 @@ void RunRunCommandTests() {
 void PreparePlayerControllerTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
+    WriteProjectDescriptor(root, false);
 
     const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
     Require(initAgent.exitCode == 0, "player controller template project init-agent failed");
@@ -293,6 +345,7 @@ void RunPlayerControllerTemplateTests() {
 void PrepareProjectileTemplateProject() {
     ResetTestRoot();
     const std::filesystem::path root = TestRoot();
+    WriteProjectDescriptor(root, true);
 
     const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root.string() });
     Require(initAgent.exitCode == 0, "projectile template project init-agent failed");
@@ -301,8 +354,403 @@ void PrepareProjectileTemplateProject() {
     Require(std::filesystem::exists(root / "Assets" / "Prefabs" / "Projectile.kbprefab"),
         "kb_cli init-agent did not write the real Projectile.kbprefab artifact");
 
+    // An independent observer proves the Jolt update wrote its simulated pose
+    // back to Transform in the production CLI frame loop; a successful
+    // Physics.SetVelocity call alone would only prove API registration.
+    WriteTextFile(root / "Assets" / "Logic" / "PhysicsRuntimeProbe.lua", R"(
+local controlsApplied = false
+local projectileReported = false
+local forceReported = false
+local impulseReported = false
+local velocityReported = false
+local angularReported = false
+local kinematicReported = false
+local sleepApplied = false
+local sleepFrames = 0
+local sleepInitialX = 0.0
+local sleepHeld = false
+local wakeApplied = false
+local wakeReported = false
+local negativeCasesReported = false
+local completed = false
+local queriesReported = false
+local characterMoveApplied = false
+local characterReported = false
+local jointImpulseApplied = false
+local jointReported = false
+local lib123Completed = false
+
+function Tick(self, dt)
+    local projectile = World.FindByName("Projectile")
+    local forceBody = World.FindByName("ForceBody")
+    local impulseBody = World.FindByName("ImpulseBody")
+    local velocityBody = World.FindByName("VelocityBody")
+    local kinematicBody = World.FindByName("KinematicBody")
+    local sleepBody = World.FindByName("SleepBody")
+    local queryTarget = World.FindByName("QueryTarget")
+    local character = World.FindByName("CharacterProbe")
+    local jointOwner = World.FindByName("JointOwner")
+    local jointConnected = World.FindByName("JointConnected")
+
+    if not controlsApplied then
+        local forceApplied = Physics.AddForce(forceBody, 60.0, 0.0, 0.0)
+        local impulseApplied = Physics.AddImpulse(impulseBody, 2.0, 0.0, 0.0)
+        local impulseVelocity = Physics.GetVelocity(impulseBody)
+        local velocitySet = Physics.SetVelocity(velocityBody, 6.0, 0.0, 0.0)
+        local velocityReadback = Physics.GetVelocity(velocityBody)
+        local angularSet = Physics.SetAngularVelocity(impulseBody, 0.0, 0.0, 3.0)
+        local angularVelocity = Physics.GetAngularVelocity(impulseBody)
+        local kinematicMoved = Physics.MoveKinematic(kinematicBody, 9.0, 0.0, 3.0)
+        if forceApplied and impulseApplied and impulseVelocity.found and impulseVelocity.x > 1.5
+            and velocitySet and velocityReadback.found and velocityReadback.x > 5.5
+            and angularSet and angularVelocity.found and angularVelocity.z > 2.5
+            and kinematicMoved then
+            controlsApplied = true
+            Log("physics runtime controls applied")
+        end
+    end
+
+    if not projectileReported then
+        local position = Transform.GetPosition(projectile)
+        if position ~= nil and position.x > 0.1 then
+            projectileReported = true
+            Log("physics runtime body moved")
+        end
+    end
+
+    if controlsApplied and not forceReported then
+        local position = Transform.GetPosition(forceBody)
+        if position ~= nil and position.x > 3.25 then
+            forceReported = true
+            Log("physics runtime force integrated")
+        end
+    end
+
+    -- The impulse and SetVelocity operations must produce write-back motion,
+    -- not merely succeed or return a cached vector in the call frame.
+    if controlsApplied and not impulseReported then
+        local position = Transform.GetPosition(impulseBody)
+        if position ~= nil and position.x > 6.25 then
+            impulseReported = true
+            Log("physics runtime impulse integrated")
+        end
+    end
+    if controlsApplied and not velocityReported then
+        local position = Transform.GetPosition(velocityBody)
+        if position ~= nil and position.x > 30.5 then
+            velocityReported = true
+            Log("physics runtime velocity moved")
+        end
+    end
+    -- Lua has no Transform rotation reader, so the backend's next-frame
+    -- angular-velocity read is the observable state here. Reading it after a
+    -- real Jolt step proves it survived the step instead of being a wrapper
+    -- return value from SetAngularVelocity.
+    if controlsApplied and not angularReported then
+        local angularVelocity = Physics.GetAngularVelocity(impulseBody)
+        if angularVelocity.found and angularVelocity.z > 2.5 then
+            angularReported = true
+            Log("physics runtime angular velocity persisted")
+        end
+    end
+
+    if controlsApplied and not kinematicReported then
+        local position = Transform.GetPosition(kinematicBody)
+        if position ~= nil and position.z > 2.5 then
+            kinematicReported = true
+            Log("physics runtime kinematic moved")
+        end
+    end
+
+    -- Sleep must halt an already-velocity-bearing live body over multiple
+    -- fixed steps; Wake must subsequently let a new impulse move it. Jolt
+    -- may clear an inactive body's velocity, so the impulse is intentionally
+    -- applied after Wake rather than assuming an undocumented preservation
+    -- policy for sleeping velocity.
+    if controlsApplied and not sleepApplied then
+        local position = Transform.GetPosition(sleepBody)
+        local velocitySet = Physics.SetVelocity(sleepBody, 6.0, 0.0, 0.0)
+        local slept = Physics.Sleep(sleepBody)
+        if position ~= nil and velocitySet and slept and Physics.IsSleeping(sleepBody) then
+            sleepInitialX = position.x
+            sleepApplied = true
+            Log("physics runtime sleep applied")
+        end
+    elseif sleepApplied and not sleepHeld and not wakeApplied then
+        sleepFrames = sleepFrames + 1
+        local position = Transform.GetPosition(sleepBody)
+        if sleepFrames >= 3 and position ~= nil and math.abs(position.x - sleepInitialX) < 0.01
+            and Physics.IsSleeping(sleepBody) then
+            sleepHeld = true
+            Log("physics runtime sleep held body")
+        end
+    end
+    if sleepHeld and not wakeApplied and Physics.Wake(sleepBody)
+        and Physics.AddImpulse(sleepBody, 2.0, 0.0, 0.0) and not Physics.IsSleeping(sleepBody) then
+        wakeApplied = true
+        Log("physics runtime wake applied")
+    end
+    if wakeApplied and not wakeReported then
+        local position = Transform.GetPosition(sleepBody)
+        if position ~= nil and position.x > sleepInitialX + 0.25 then
+            wakeReported = true
+            Log("physics runtime wake moved body")
+        end
+    end
+
+    -- Negative calls use a real loaded backend but an entity with no live
+    -- body. MoveKinematic additionally rejects a live Dynamic body. These
+    -- must fail honestly and must not emit a script diagnostic.
+    if controlsApplied and not negativeCasesReported then
+        local invalidVelocity = Physics.GetVelocity(0)
+        local invalidAngularVelocity = Physics.GetAngularVelocity(0)
+        local staticVelocity = Physics.GetVelocity(queryTarget)
+        local staticAngularVelocity = Physics.GetAngularVelocity(queryTarget)
+        local kinematicVelocity = Physics.GetVelocity(kinematicBody)
+        local kinematicAngularVelocity = Physics.GetAngularVelocity(kinematicBody)
+        if not Physics.AddForce(0, 1.0, 0.0, 0.0)
+            and not Physics.AddImpulse(0, 1.0, 0.0, 0.0)
+            and not Physics.SetVelocity(0, 1.0, 0.0, 0.0)
+            and invalidVelocity ~= nil and not invalidVelocity.found
+            and not Physics.SetAngularVelocity(0, 0.0, 0.0, 1.0)
+            and invalidAngularVelocity ~= nil and not invalidAngularVelocity.found
+            and not Physics.Sleep(0) and not Physics.Wake(0) and not Physics.IsSleeping(0) then
+            -- A loaded backend must also reject the wrong *live* body kind,
+            -- not only an unknown entity. Rigidbody controls are Dynamic
+            -- only; Kinematic bodies accept only MoveKinematic.
+            local staticRejected = not Physics.AddForce(queryTarget, 1.0, 0.0, 0.0)
+                and not Physics.AddImpulse(queryTarget, 1.0, 0.0, 0.0)
+                and not Physics.SetVelocity(queryTarget, 1.0, 0.0, 0.0)
+                and staticVelocity ~= nil and not staticVelocity.found
+                and not Physics.SetAngularVelocity(queryTarget, 0.0, 0.0, 1.0)
+                and staticAngularVelocity ~= nil and not staticAngularVelocity.found
+                and not Physics.Sleep(queryTarget) and not Physics.Wake(queryTarget) and not Physics.IsSleeping(queryTarget)
+                and not Physics.MoveKinematic(queryTarget, 15.0, 0.0, 0.0)
+            local kinematicRejected = not Physics.AddForce(kinematicBody, 1.0, 0.0, 0.0)
+                and not Physics.AddImpulse(kinematicBody, 1.0, 0.0, 0.0)
+                and not Physics.SetVelocity(kinematicBody, 1.0, 0.0, 0.0)
+                and kinematicVelocity ~= nil and not kinematicVelocity.found
+                and not Physics.SetAngularVelocity(kinematicBody, 0.0, 0.0, 1.0)
+                and kinematicAngularVelocity ~= nil and not kinematicAngularVelocity.found
+                and not Physics.Sleep(kinematicBody) and not Physics.Wake(kinematicBody) and not Physics.IsSleeping(kinematicBody)
+            if staticRejected and kinematicRejected and not Physics.MoveKinematic(forceBody, 0.0, 0.0, 0.0) then
+                negativeCasesReported = true
+                Log("physics runtime controls reject invalid bodies")
+            end
+        end
+    end
+
+    -- CharacterMove only returns true once the Jolt fixed system has created
+    -- its real CharacterVirtual. The later Transform read proves that the
+    -- virtual character, not merely its Lua binding, wrote a simulated pose.
+    if not characterMoveApplied and Physics.CharacterMove(character, 3.0, 0.0) then
+        characterMoveApplied = true
+        Log("physics runtime character move applied")
+    end
+    if characterMoveApplied and not characterReported then
+        local position = Transform.GetPosition(character)
+        local velocity = Physics.CharacterVelocity(character)
+        if position ~= nil and position.x > 0.25
+            and velocity.found and velocity.x > 2.5 then
+            characterReported = true
+            Log("physics runtime character virtual moved")
+        end
+    end
+
+    -- The owner is impulsed only after live Jolt bodies exist. A fixed joint
+    -- with matching world anchors must move the connected body while keeping
+    -- their two-unit separation; an unconsumed/missing JointComponent cannot
+    -- satisfy both observations.
+    if not jointImpulseApplied and Physics.AddImpulse(jointOwner, 8.0, 0.0, 0.0) then
+        jointImpulseApplied = true
+        Log("physics runtime joint impulse applied")
+    end
+    if jointImpulseApplied and not jointReported then
+        local ownerPosition = Transform.GetPosition(jointOwner)
+        local connectedPosition = Transform.GetPosition(jointConnected)
+        if ownerPosition ~= nil and connectedPosition ~= nil
+            and connectedPosition.x > 23.25
+            and math.abs((connectedPosition.x - ownerPosition.x) - 2.0) < 0.2 then
+            jointReported = true
+            Log("physics runtime joint constrained")
+        end
+    end
+
+    if not completed and projectileReported and forceReported and impulseReported and velocityReported
+        and angularReported and kinematicReported and sleepHeld and wakeReported and negativeCasesReported then
+        completed = true
+        Log("physics runtime LIB-124 complete")
+    end
+
+    if not queriesReported then
+        local ray = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 8)
+        local sphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 8)
+        local box = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, 8)
+        local capsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, 8)
+        local overlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, 8)
+        local overlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, 8)
+        local overlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, 8)
+        local closest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, 8)
+        -- Every query must reject the same real body when its layer is not
+        -- selected. This is intentionally not an empty-world test: mask 4
+        -- differs from QueryTarget's serialized layer 8 while all geometry
+        -- remains identical to the positive calls above.
+        local maskedRay = Physics.Raycast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 4)
+        local maskedSphere = Physics.SphereCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 4)
+        local maskedBox = Physics.BoxCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.2, 0.2, 4)
+        local maskedCapsule = Physics.CapsuleCast(12.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.2, 0.8, 4)
+        local maskedOverlapSphere = Physics.OverlapSphere(15.0, 0.0, 0.0, 0.75, 4)
+        local maskedOverlapBox = Physics.OverlapBox(15.0, 0.0, 0.0, 0.75, 0.75, 0.75, 4)
+        local maskedOverlapCapsule = Physics.OverlapCapsule(15.0, 0.0, 0.0, 0.4, 1.5, 4)
+        local maskedClosest = Physics.ClosestPoint(queryTarget, 15.0, 3.0, 0.0, 4)
+        -- PhysicsObserver is a valid scene entity but intentionally has no
+        -- Rigidbody/Collider, so ClosestPoint must return its honest miss
+        -- result through the live backend without a script diagnostic.
+        local invalidClosest = Physics.ClosestPoint(self.entity, 15.0, 3.0, 0.0)
+        if ray.hit and ray.entity == queryTarget
+            and sphere.hit and sphere.entity == queryTarget
+            and box.hit and box.entity == queryTarget
+            and capsule.hit and capsule.entity == queryTarget
+            and overlapSphere.overlapping and overlapSphere.entity == queryTarget
+            and overlapBox.overlapping and overlapBox.entity == queryTarget
+            and overlapCapsule.overlapping and overlapCapsule.entity == queryTarget
+            and closest.found and closest.distance > 2.4 and closest.distance < 2.6
+            and not maskedRay.hit and not maskedSphere.hit and not maskedBox.hit
+            and not maskedCapsule.hit and not maskedOverlapSphere.overlapping
+            and not maskedOverlapBox.overlapping and not maskedOverlapCapsule.overlapping
+            and not maskedClosest.found and not invalidClosest.found then
+            queriesReported = true
+            Log("physics runtime LIB-125 complete")
+        end
+    end
+
+    if not lib123Completed and characterReported and jointReported then
+        lib123Completed = true
+        Log("physics runtime LIB-123 complete")
+    end
+end
+)");
+
     kb::scene::Scene scene;
-    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" }));
+    const kb::scene::SceneObject projectile =
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Projectile" });
+    scene.Components().Rigidbodies().Set(
+        projectile.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+            .mass = 1.0F,
+            .useGravity = false,
+        });
+    scene.Components().Colliders().Set(
+        projectile.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Sphere,
+            .radius = 0.25F,
+            .friction = 0.35F,
+            .restitution = 0.2F,
+        });
+
+    const auto createProbeBody = [&scene](
+                                     const char* name,
+                                     kb::scene::RigidbodyBodyType bodyType,
+                                     float x) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ x, 0.0F, 0.0F },
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = bodyType,
+                .mass = 1.0F,
+                .useGravity = false,
+            });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.25F,
+            });
+        return object;
+    };
+    createProbeBody("ForceBody", kb::scene::RigidbodyBodyType::Dynamic, 3.0F);
+    createProbeBody("ImpulseBody", kb::scene::RigidbodyBodyType::Dynamic, 6.0F);
+    createProbeBody("KinematicBody", kb::scene::RigidbodyBodyType::Kinematic, 9.0F);
+    createProbeBody("VelocityBody", kb::scene::RigidbodyBodyType::Dynamic, 30.0F);
+    createProbeBody("SleepBody", kb::scene::RigidbodyBodyType::Dynamic, 36.0F);
+    const kb::scene::SceneObject queryTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "QueryTarget",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 15.0F, 0.0F, 0.0F },
+            },
+        });
+    scene.Components().Rigidbodies().Set(
+        queryTarget.Entity(),
+        kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Static,
+        });
+    scene.Components().Colliders().Set(
+        queryTarget.Entity(),
+        kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box,
+            .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+            .layer = 8U,
+        });
+
+    const kb::scene::SceneObject character = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{
+            .name = "CharacterProbe",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 4.0F, 4.0F },
+            },
+        });
+    scene.Components().CharacterControllers().Set(
+        character.Entity(),
+        kb::scene::CharacterControllerComponent{
+            .radius = 0.4F,
+            .height = 1.8F,
+            .useGravity = false,
+        });
+
+    const auto createJointBody = [&scene](const char* name, float x) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{
+                .name = name,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ x, 0.0F, 4.0F },
+                },
+            });
+        scene.Components().Rigidbodies().Set(
+            object.Entity(),
+            kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 1.0F,
+                .useGravity = false,
+            });
+        scene.Components().Colliders().Set(
+            object.Entity(),
+            kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 0.25F,
+            });
+        return object;
+    };
+    const kb::scene::SceneObject jointOwner = createJointBody("JointOwner", 21.0F);
+    const kb::scene::SceneObject jointConnected = createJointBody("JointConnected", 23.0F);
+    scene.Components().Joints().Set(
+        jointOwner.Entity(),
+        kb::scene::JointComponent{
+            .type = kb::scene::JointType::Fixed,
+            .connectedEntity = jointConnected.Entity(),
+            .anchor = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+            .connectedAnchor = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F },
+        });
+    static_cast<void>(scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "PhysicsObserver" }));
     std::error_code error;
     std::filesystem::create_directories(root / "Assets" / "Scenes", error);
     Require(!error, "projectile template scene directory could not be created");
@@ -311,26 +759,12 @@ void PrepareProjectileTemplateProject() {
         "projectile template scene could not be saved");
 }
 
-// LIB-014: a minimal Projectile template - movement via Physics.SetVelocity
-// (LIB-124), collision via OnCollisionEnter (LIB-127), destruction via
-// World.Destroy - run through the SAME editor-independent `kb_cli run`
-// workflow LIB-013's PlayerController template established. `kb_cli run`
-// does not load a project's physics plugin (MountProjectAssets only mounts
-// assets; CliRunCommand.cpp constructs a plain Scene with no
-// ProjectDescriptor at all) - a real, separate, out-of-scope infrastructure
-// gap discovered while writing this test (extending the CLI to load
-// project-configured plugins is a genuinely different task, not "add a
-// template"). This test therefore proves what IS true through this
-// harness: the template is syntactically valid, runs cleanly (0
-// diagnostics) with no physics backend registered, Ready fires every frame
-// it should, and Physics.SetVelocity fails honestly (applied=false, no
-// crash - exactly IPhysicsBackend's documented no-backend contract) rather
-// than ever fabricating a launch. The REAL physics-driven proof - the
-// projectile actually moving, hitting a target, launching, and being
-// destroyed - is in PhysicsSceneSystemTests.cpp's
-// RunPhysicsSceneSystemFallingBodyTest (LIB-014 section), which drives a
-// real Jolt-backed Scene directly (the same ScriptRuntimeHost/frame-loop
-// machinery kb_cli run itself wraps, without the CLI process boundary).
+// LIB-014/LIB-123: the shipped Projectile template runs through the same
+// editor-independent production `kb_cli run` workflow as a built game tool:
+// Project.21kbproject -> dynamic Physics.Jolt module -> serialized
+// Rigidbody/Collider/CharacterController/Joint -> Jolt fixed update ->
+// Transform write-back -> Lua.
+// The observer above makes the final write-back visible in the command log.
 void RunProjectileTemplateTests() {
     PrepareProjectileTemplateProject();
     const std::string root = TestRoot().string();
@@ -347,16 +781,56 @@ void RunProjectileTemplateTests() {
     });
     Require(attach.exitCode == 0, "projectile template could not attach to the scene");
 
+    const CommandRun attachProbe = Run(&kb::cli::RunSceneAttachCommand, {
+        "--project", root,
+        "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "PhysicsObserver",
+        "--script", "/Game/Logic/PhysicsRuntimeProbe.lua",
+    });
+    Require(attachProbe.exitCode == 0, "physics runtime observer could not attach to the scene");
+
     const CommandRun run = Run(&kb::cli::RunRunCommand, {
         "--project", root,
         "--scene", "Assets/Scenes/Main.21kbscene",
-        "--frames", "5",
+        "--frames", "40",
     });
     Require(run.exitCode == 0, "projectile template run reported diagnostics");
+    Require(Contains(run.output, "[module] active Physics.Jolt"),
+        "kb_cli run did not load the project-configured Physics.Jolt module");
     Require(Contains(run.output, "[log] projectile ready"), "projectile template did not run Ready");
-    Require(!Contains(run.output, "[log] projectile launched"),
-        "projectile template must NOT report a launch when kb_cli run has no physics backend loaded - Physics.SetVelocity must keep honestly failing, never fabricate success");
-    Require(Contains(run.output, "0 diagnostics"), "projectile template run was not clean even though Physics.SetVelocity fails every frame");
+    Require(Contains(run.output, "[log] projectile launched"),
+        "projectile template did not reach the live Jolt rigid body");
+    Require(Contains(run.output, "[log] physics runtime body moved"),
+        "Jolt did not write the simulated body pose back to Transform in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime controls applied"),
+        "full LIB-124 rigidbody control API did not apply through live Jolt");
+    Require(Contains(run.output, "[log] physics runtime force integrated"),
+        "Jolt did not integrate Physics.AddForce in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime impulse integrated"),
+        "Jolt did not integrate Physics.AddImpulse into observable motion in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime velocity moved"),
+        "Jolt did not apply Physics.SetVelocity to observable motion in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime angular velocity persisted"),
+        "Jolt did not retain Physics.SetAngularVelocity across a fixed step in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime kinematic moved"),
+        "Jolt did not execute Physics.MoveKinematic in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime sleep held body"),
+        "Physics.Sleep did not halt a live body across fixed steps in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime wake moved body"),
+        "Physics.Wake did not resume a live body's motion in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime controls reject invalid bodies"),
+        "LIB-124 calls did not reject invalid/non-kinematic bodies honestly in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime LIB-124 complete"),
+        "LIB-124 production runtime probe did not complete");
+    Require(Contains(run.output, "[log] physics runtime LIB-125 complete"),
+        "LIB-125 cast/overlap/closest-point production runtime probe did not complete");
+    Require(Contains(run.output, "[log] physics runtime character virtual moved"),
+        "Jolt CharacterVirtual did not move and write its pose back in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime joint constrained"),
+        "serialized JointComponent did not constrain live Jolt bodies in kb_cli runtime");
+    Require(Contains(run.output, "[log] physics runtime LIB-123 complete"),
+        "LIB-123 character/joint production runtime probe did not complete");
+    Require(Contains(run.output, "0 diagnostics"), "projectile physics runtime was not clean");
 }
 
 void RunApiCommandTests() {
@@ -556,9 +1030,12 @@ int main() {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
-    RunProjectileTemplateTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
+    // Keep the production physics fixture on disk after the test process so
+    // the built kb_cli executable can be run against it as a separate-process
+    // runtime verification.
+    RunProjectileTemplateTests();
     return EXIT_SUCCESS;
 }

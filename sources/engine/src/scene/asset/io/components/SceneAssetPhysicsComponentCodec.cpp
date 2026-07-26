@@ -90,4 +90,32 @@ void SceneAssetPhysicsComponentCodec::WriteCharacterController(std::vector<std::
     SceneAssetBinaryIO::WriteUInt8(output, characterController.useGravity ? 1U : 0U);
 }
 
+bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& input, ScenePrefabJointComponent& output) {
+    std::uint32_t type = 0;
+    if (!input.ReadUInt32(type) ||
+        type > static_cast<std::uint32_t>(JointType::Point) ||
+        !input.ReadUInt64(output.connectedNodeStableId) ||
+        !SceneAssetPrimitiveCodec::ReadVec3(input, output.anchor) ||
+        !SceneAssetPrimitiveCodec::ReadVec3(input, output.connectedAnchor) ||
+        !SceneAssetPrimitiveCodec::ReadVec3(input, output.axis) ||
+        !input.ReadFloat(output.minLimit) ||
+        !input.ReadFloat(output.maxLimit) ||
+        !input.ReadBool(output.enableLimit)) {
+        return false;
+    }
+    output.type = static_cast<JointType>(type);
+    return true;
+}
+
+void SceneAssetPhysicsComponentCodec::WriteJoint(std::vector<std::uint8_t>& output, const ScenePrefabJointComponent& joint) {
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(joint.type));
+    SceneAssetBinaryIO::WriteUInt64(output, joint.connectedNodeStableId);
+    SceneAssetPrimitiveCodec::WriteVec3(output, joint.anchor);
+    SceneAssetPrimitiveCodec::WriteVec3(output, joint.connectedAnchor);
+    SceneAssetPrimitiveCodec::WriteVec3(output, joint.axis);
+    SceneAssetBinaryIO::WriteFloat(output, joint.minLimit);
+    SceneAssetBinaryIO::WriteFloat(output, joint.maxLimit);
+    SceneAssetBinaryIO::WriteUInt8(output, joint.enableLimit ? 1U : 0U);
+}
+
 } // namespace kb::scene
