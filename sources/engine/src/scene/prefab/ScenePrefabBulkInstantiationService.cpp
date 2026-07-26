@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::scene {
@@ -137,6 +139,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<RigidbodyComponent> rigidbodies;
     std::vector<ColliderComponent> colliders;
     std::vector<CharacterControllerComponent> characterControllers;
+    std::vector<JointComponent> joints;
     std::vector<TagsComponent> tags;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
@@ -184,6 +187,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController)) {
             RepeatComponents(characterControllers, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const CharacterControllerComponent>{ characterControllers });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Joint)) {
+            RepeatComponents(joints, std::span<const JointComponent>{ archetype.joints }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const JointComponent>{ joints });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
             RepeatComponents(tags, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
@@ -241,6 +248,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController)) {
             AddCommandComponentPatternView(views, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const CharacterControllerComponent>{ archetype.characterControllers }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Joint)) {
+            AddCommandComponentPatternView(views, std::span<const JointComponent>{ archetype.joints }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const JointComponent>{ archetype.joints }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
             AddCommandComponentPatternView(views, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
@@ -653,6 +664,64 @@ void QueueHierarchy(
     return entities;
 }
 
+void ResolvePrefabJointReferences(
+    Scene& scene,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    std::size_t instanceCount) {
+    if (nodes.empty()) {
+        return;
+    }
+
+    std::vector<std::size_t> jointNodeIndices;
+    jointNodeIndices.reserve(nodes.size());
+    for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+        if (nodes[nodeIndex].components.joint.has_value()) {
+            jointNodeIndices.push_back(nodeIndex);
+        }
+    }
+    if (jointNodeIndices.empty()) {
+        return;
+    }
+
+    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
+    nodeIndexByStableId.reserve(nodes.size());
+    for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+        nodeIndexByStableId.emplace(nodes[nodeIndex].stableId, nodeIndex);
+    }
+
+    std::vector<std::size_t> connectedNodeIndices;
+    connectedNodeIndices.reserve(jointNodeIndices.size());
+    for (const std::size_t jointNodeIndex : jointNodeIndices) {
+        const ScenePrefabJointComponent& prefabJoint = *nodes[jointNodeIndex].components.joint;
+        if (prefabJoint.connectedNodeStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+            connectedNodeIndices.push_back(nodes.size());
+            continue;
+        }
+        const auto connectedNode = nodeIndexByStableId.find(prefabJoint.connectedNodeStableId);
+        if (connectedNode == nodeIndexByStableId.end()) {
+            throw std::invalid_argument("Scene prefab joint references a missing stable node id");
+        }
+        connectedNodeIndices.push_back(connectedNode->second);
+    }
+
+    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t jointIndex = 0U; jointIndex < jointNodeIndices.size(); ++jointIndex) {
+            const std::size_t connectedNodeIndex = connectedNodeIndices[jointIndex];
+            if (connectedNodeIndex == nodes.size()) {
+                continue;
+            }
+
+            const SceneEntity owner = entities[EntityIndex(instanceIndex, jointNodeIndices[jointIndex], nodes.size())];
+            JointComponent* joint = scene.Components().Joints().TryGet(owner);
+            if (joint == nullptr) {
+                throw std::runtime_error("Scene prefab joint component was not created");
+            }
+            joint->connectedEntity = entities[EntityIndex(instanceIndex, connectedNodeIndex, nodes.size())];
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -785,6 +854,7 @@ void QueueHierarchy(
         const auto createStart = PrefabStatsClock::now();
         const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
+        ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -843,12 +913,17 @@ void QueueHierarchy(
     const std::uint64_t commandPlaybackNanoseconds = ElapsedNanoseconds(playbackStart, PrefabStatsClock::now());
     const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
     const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
+    std::vector<SceneEntity> resolvedEntities(entities.size());
+    for (std::size_t index = 0U; index < entities.size(); ++index) {
+        resolvedEntities[index] = playback.Resolve(entities[index]);
+    }
+    ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;
     std::uint32_t maxGeneratedEntityIndex = kb::ecs::kInvalidGeneratedEntityIndex;
     const std::vector<ScenePrefabInstance> instances =
-        BuildInstances(scene, nodes, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, playback, settings, count, collectInstances, instanceObjectSlabNanoseconds, hierarchyRecordNanoseconds, nameAssignmentNanoseconds, maxGeneratedEntityIndex);
+        BuildInstances(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, settings, count, collectInstances, instanceObjectSlabNanoseconds, hierarchyRecordNanoseconds, nameAssignmentNanoseconds, maxGeneratedEntityIndex);
 
     const kb::ecs::CommandBufferPlaybackResult::Stats& playbackStats = playback.PlaybackStats();
     const std::size_t componentSourceBytesRead = ComponentSourceBytesRead(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads });

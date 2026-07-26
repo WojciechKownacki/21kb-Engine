@@ -7,7 +7,7 @@
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 11U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 12U;
 
 [[nodiscard]] std::uint16_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint16_t mask = 0U;
@@ -31,6 +31,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 11U;
     }
     if (components.characterController.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::CharacterController);
+    }
+    if (components.joint.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Joint);
     }
     if (components.tags.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tags);
@@ -97,6 +100,19 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.characterController.has_value()) {
             archetype.characterControllers.push_back(*node.components.characterController);
+        }
+        if (node.components.joint.has_value()) {
+            const ScenePrefabJointComponent& prefabJoint = *node.components.joint;
+            archetype.joints.push_back(JointComponent{
+                .type = prefabJoint.type,
+                .connectedEntity = {},
+                .anchor = prefabJoint.anchor,
+                .connectedAnchor = prefabJoint.connectedAnchor,
+                .axis = prefabJoint.axis,
+                .minLimit = prefabJoint.minLimit,
+                .maxLimit = prefabJoint.maxLimit,
+                .enableLimit = prefabJoint.enableLimit,
+            });
         }
         if (node.components.tags.has_value()) {
             archetype.tags.push_back(*node.components.tags);

@@ -6,11 +6,12 @@
 
 namespace kb::scene {
 
-void ScenePrefabCaptureTraversal::Append(Scene& scene, SceneObject object, const ScenePrefabCaptureSettings& settings, ScenePrefab& prefab, std::uint32_t parentNode) {
+void ScenePrefabCaptureTraversal::Append(Scene& scene, SceneObject object, const ScenePrefabCaptureSettings& settings, ScenePrefab& prefab, std::uint32_t parentNode, std::vector<SceneEntity>& capturedEntities) {
     const std::uint32_t nodeIndex = prefab.AddNode(ScenePrefabCaptureNodeBuilder::Build(scene, object, parentNode));
+    capturedEntities.push_back(object.Entity());
 
     for (const SceneObject child : ScenePrefabChildrenReader::Read(object, settings)) {
-        Append(scene, child, settings, prefab, nodeIndex);
+        Append(scene, child, settings, prefab, nodeIndex, capturedEntities);
     }
 }
 

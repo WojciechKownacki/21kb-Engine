@@ -24,7 +24,8 @@ public:
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext,
-        EditorSceneBgfxViewport& sceneViewport) noexcept;
+        EditorSceneBgfxViewport& sceneViewport,
+        bool routeSceneCamera) noexcept;
 
     [[nodiscard]] bool HandleMouseWheel(int x, int y, int wheelDelta);
 
@@ -36,6 +37,7 @@ private:
     const EditorMetrics& metrics_;
     EditorSceneContext& sceneContext_;
     EditorSceneBgfxViewport& sceneViewport_;
+    bool routeSceneCamera_ = true;
 };
 #endif
 

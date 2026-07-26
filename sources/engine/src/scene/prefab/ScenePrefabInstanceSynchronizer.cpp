@@ -155,6 +155,47 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     return stableObjects;
 }
 
+[[nodiscard]] bool ResolveJointReferences(Scene& scene, const ScenePrefab& prefab, std::span<const SceneObject> objects) {
+    const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
+    if (nodes.size() != objects.size()) {
+        return false;
+    }
+
+    std::unordered_map<std::uint64_t, SceneObject> objectsByStableId = BuildStableObjectMap(prefab, objects);
+    SceneComponents components = scene.Components();
+    for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+        const SceneObject owner = objects[nodeIndex];
+        if (!owner.IsValid() || !scene.Entities().IsAlive(owner)) {
+            return false;
+        }
+        const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
+        if (!prefabJoint.has_value()) {
+            components.Joints().Remove(owner.Entity());
+            continue;
+        }
+
+        SceneEntity connectedEntity{};
+        if (prefabJoint->connectedNodeStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+            const auto connected = objectsByStableId.find(prefabJoint->connectedNodeStableId);
+            if (connected == objectsByStableId.end() || !connected->second.IsValid() || !scene.Entities().IsAlive(connected->second)) {
+                return false;
+            }
+            connectedEntity = connected->second.Entity();
+        }
+        components.Joints().Set(owner.Entity(), JointComponent{
+            .type = prefabJoint->type,
+            .connectedEntity = connectedEntity,
+            .anchor = prefabJoint->anchor,
+            .connectedAnchor = prefabJoint->connectedAnchor,
+            .axis = prefabJoint->axis,
+            .minLimit = prefabJoint->minLimit,
+            .maxLimit = prefabJoint->maxLimit,
+            .enableLimit = prefabJoint->enableLimit,
+        });
+    }
+    return true;
+}
+
 [[nodiscard]] bool RebuildTrackedObjects(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& previousBaseline, const ScenePrefab& nextBaseline) {
     const std::span<const SceneObject> currentObjects = instance.Objects();
     const std::vector<SceneObject> oldObjects{ currentObjects.begin(), currentObjects.end() };
@@ -187,6 +228,9 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     }
 
     DestroyRemovedObjects(scene, oldObjects, rebuiltObjects);
+    if (!ResolveJointReferences(scene, nextBaseline, rebuiltObjects)) {
+        return false;
+    }
     instance.SetObjects(std::move(rebuiltObjects));
     return true;
 }

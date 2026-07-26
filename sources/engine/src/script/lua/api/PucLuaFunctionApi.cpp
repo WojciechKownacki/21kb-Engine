@@ -1975,6 +1975,7 @@ int LuaPhysicsClosestPoint(lua_State* state) {
         Arg("pointX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
         Arg("pointY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
         Arg("pointZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
     };
     const ScriptFunctionCallResult result = context->CallFunction("Physics.ClosestPoint", arguments);
     if (!result.Succeeded()) {
@@ -2193,6 +2194,147 @@ int LuaPointerButton(lua_State* state) {
     return 1;
 }
 
+int LuaInputRebind(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const char* key = luaL_checkstring(state, 3);
+    const int gamepadIndex = static_cast<int>(luaL_optinteger(state, 4, 0));
+    const bool allowConflict = lua_toboolean(state, 5) != 0;
+    const int player = static_cast<int>(luaL_optinteger(state, 6, 0));
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("context", ScriptValue{LuaContextId(state, 1)}),
+        Arg("binding", ScriptValue{LuaContextId(state, 2)}),
+        Arg("key", ScriptValue{std::string{key != nullptr ? key : ""}}),
+        Arg("gamepadIndex", ScriptValue{gamepadIndex}),
+        Arg("allowConflict", ScriptValue{allowConflict}),
+    };
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{player}));
+    }
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Input.Rebind", arguments);
+    lua_createtable(state, 0, 2);
+    lua_pushboolean(
+        state,
+        result.Output("applied")
+                .value_or(ScriptValue{false})
+                .AsBool()
+            ? 1
+            : 0);
+    lua_setfield(state, -2, "applied");
+    const std::string conflict =
+        result.Output("conflict")
+            .value_or(ScriptValue{std::string{}})
+            .AsString();
+    lua_pushlstring(state, conflict.data(), conflict.size());
+    lua_setfield(state, -2, "conflict");
+    return 1;
+}
+
+int LuaInputSaveRebindProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const char* path = luaL_checkstring(state, 2);
+    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("context", ScriptValue{LuaContextId(state, 1)}),
+        Arg(
+            "path",
+            ScriptValue{std::string{path != nullptr ? path : ""}}),
+    };
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{player}));
+    }
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Input.SaveRebindProfile", arguments);
+    lua_createtable(state, 0, 2);
+    lua_pushboolean(
+        state,
+        result.Output("saved")
+                .value_or(ScriptValue{false})
+                .AsBool()
+            ? 1
+            : 0);
+    lua_setfield(state, -2, "saved");
+    const std::string error =
+        result.Output("error")
+            .value_or(ScriptValue{std::string{}})
+            .AsString();
+    lua_pushlstring(state, error.data(), error.size());
+    lua_setfield(state, -2, "error");
+    return 1;
+}
+
+int LuaInputLoadRebindProfile(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const char* path = luaL_checkstring(state, 2);
+    const int player = static_cast<int>(luaL_optinteger(state, 3, 0));
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("context", ScriptValue{LuaContextId(state, 1)}),
+        Arg(
+            "path",
+            ScriptValue{std::string{path != nullptr ? path : ""}}),
+    };
+    if (player > 0) {
+        arguments.push_back(Arg("player", ScriptValue{player}));
+    }
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Input.LoadRebindProfile", arguments);
+    lua_createtable(state, 0, 2);
+    lua_pushboolean(
+        state,
+        result.Output("loaded")
+                .value_or(ScriptValue{false})
+                .AsBool()
+            ? 1
+            : 0);
+    lua_setfield(state, -2, "loaded");
+    const std::string error =
+        result.Output("error")
+            .value_or(ScriptValue{std::string{}})
+            .AsString();
+    lua_pushlstring(state, error.data(), error.size());
+    lua_setfield(state, -2, "error");
+    return 1;
+}
+
+int LuaPointerScroll(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnumber(state, 0.0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Scroll", {});
+    lua_pushnumber(state, static_cast<lua_Number>(
+        result.Output("delta").value_or(ScriptValue{0.0F}).AsFloat()));
+    return 1;
+}
+
+int LuaPointerRay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Ray", {});
+    lua_createtable(state, 0, 7);
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
 int LuaInputPriorityConstant(lua_State* state, std::string_view functionName) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2322,7 +2464,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 20);
+    lua_createtable(state, 0, 23);
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaAudioPlay>, 1);
     lua_setfield(state, -2, "Play");
@@ -2461,6 +2603,11 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Vector3", &LuaInputVector3, context);
     SetClosure(state, "AddMappingContext", &LuaInputAddMappingContext, context);
     SetClosure(state, "RemoveMappingContext", &LuaInputRemoveMappingContext, context);
+    SetClosure(state, "Rebind", &LuaInputRebind, context);
+    SetClosure(
+        state, "SaveRebindProfile", &LuaInputSaveRebindProfile, context);
+    SetClosure(
+        state, "LoadRebindProfile", &LuaInputLoadRebindProfile, context);
     SetClosure(state, "ActionBool", &LuaInputActionBool, context);
     SetClosure(state, "ActionFloat", &LuaInputActionFloat, context);
     SetClosure(state, "Action2D", &LuaInputAction2D, context);
@@ -2478,10 +2625,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "StopVibration", &LuaInputStopVibration, context);
     lua_setfield(state, environmentIndex, "Input");
 
-    lua_createtable(state, 0, 3);
+    lua_createtable(state, 0, 5);
     SetClosure(state, "Position", &LuaPointerPosition, context);
     SetClosure(state, "Delta", &LuaPointerDelta, context);
     SetClosure(state, "Button", &LuaPointerButton, context);
+    SetClosure(state, "Scroll", &LuaPointerScroll, context);
+    SetClosure(state, "Ray", &LuaPointerRay, context);
     lua_setfield(state, environmentIndex, "Pointer");
 }
 

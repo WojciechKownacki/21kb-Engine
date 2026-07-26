@@ -429,6 +429,63 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return mainPresented || floatingPresented;
 }
 
+void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
+    HWND coordinateWindow = state.window;
+    std::optional<EditorResolvedPanelContent> scenePanel;
+
+    POINT cursor{};
+    if (GetCursorPos(&cursor) != 0) {
+        const HWND hitWindow = WindowFromPoint(cursor);
+        const HWND rootWindow = hitWindow != nullptr
+            ? GetAncestor(hitWindow, GA_ROOT)
+            : nullptr;
+        if (rootWindow != nullptr && rootWindow != state.window) {
+            scenePanel = EditorPanelContentResolver::ResolvePanel(
+                DockPanelKind::Scene,
+                rootWindow,
+                state.window,
+                state.dockModel,
+                state.floatingWindows,
+                state.metrics);
+            if (scenePanel.has_value()) {
+                coordinateWindow = rootWindow;
+            }
+        }
+    }
+    if (!scenePanel.has_value()) {
+        coordinateWindow = state.window;
+        scenePanel = EditorPanelContentResolver::ResolvePanel(
+            DockPanelKind::Scene,
+            state.window,
+            state.window,
+            state.dockModel,
+            state.floatingWindows,
+            state.metrics);
+    }
+    if (!scenePanel.has_value()) {
+        state.inputCollector.ClearPointerViewport();
+        return;
+    }
+
+    const EditorViewportPreviewState& preview =
+        state.sceneContext.ViewportPreview(scenePanel->panelId);
+    const RECT renderArea =
+        SceneViewportToolbarRenderer::Resolve(scenePanel->content, preview).renderArea;
+    const std::uint32_t displayWidth = static_cast<std::uint32_t>(
+        std::max<LONG>(0, renderArea.right - renderArea.left));
+    const std::uint32_t displayHeight = static_cast<std::uint32_t>(
+        std::max<LONG>(0, renderArea.bottom - renderArea.top));
+    if (displayWidth == 0U || displayHeight == 0U) {
+        state.inputCollector.ClearPointerViewport();
+        return;
+    }
+    state.inputCollector.ConfigurePointerViewport(
+        coordinateWindow,
+        renderArea,
+        preview.RenderWidthForPanel(displayWidth),
+        preview.RenderHeightForPanel(displayHeight));
+}
+
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // LIB-153: the editor is the host that owns the physical XInput devices, so it owns
     // the haptics actuator too. Function-local static: one process-wide backend whose
@@ -449,6 +506,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     hapticsActive = true;
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
+    ConfigurePlayModePointerViewport(state);
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
     kb::scene::SceneRuntime runtime = state.sceneContext.Scene().Runtime();
     if (!runtime.EcsProfilerEnabled()) {

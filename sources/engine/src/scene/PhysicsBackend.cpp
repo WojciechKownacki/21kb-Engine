@@ -93,9 +93,9 @@ PhysicsOverlapResult PhysicsBackend::OverlapShape(Scene& scene, const PhysicsSha
     return backend != nullptr ? backend->OverlapShape(shape, center, layerMask) : PhysicsOverlapResult{};
 }
 
-PhysicsClosestPointResult PhysicsBackend::ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point) noexcept {
+PhysicsClosestPointResult PhysicsBackend::ClosestPoint(Scene& scene, SceneEntity entity, Vec3 point, std::uint32_t layerMask) noexcept {
     IPhysicsBackend* backend = FindBackend(scene);
-    return backend != nullptr ? backend->ClosestPoint(entity, point) : PhysicsClosestPointResult{};
+    return backend != nullptr ? backend->ClosestPoint(entity, point, layerMask) : PhysicsClosestPointResult{};
 }
 
 // LIB-126: unlike every closest-result method above (which returns a fresh

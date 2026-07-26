@@ -1,6 +1,8 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/project/ProjectManager.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -8,9 +10,12 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <unordered_set>
+#include <vector>
 
 namespace kb::cli {
 
@@ -126,11 +131,72 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
 
     const bool quiet = arguments.Flag("--quiet");
 
-    kb::scene::Scene scene;
+    std::error_code pathError;
+    const std::filesystem::path projectRoot =
+        std::filesystem::absolute(std::filesystem::path{ *project }, pathError).lexically_normal();
+    if (pathError || !std::filesystem::is_directory(projectRoot, pathError) || pathError) {
+        io.err << "error: project directory was not found: " << *project << '\n';
+        return 1;
+    }
+
+    const std::filesystem::path projectFile = projectRoot / "Project.21kbproject";
+    kb::project::ProjectDescriptorReadResult loadedProject =
+        kb::project::ProjectManager::LoadProject(projectFile);
+    if (!loadedProject.succeeded) {
+        io.err << "error: could not load project descriptor "
+               << projectFile.generic_string() << ": " << loadedProject.error << '\n';
+        return 1;
+    }
+
+    // A persisted editor descriptor intentionally stores portable plugin
+    // filenames. Prefer a project-local binary when one is packaged beside
+    // the project; otherwise leave the filename intact so EngineModuleLoader
+    // can resolve the current build/install layout.
+    std::vector<std::string> requiredModules;
+    for (kb::project::ProjectPluginReference& plugin : loadedProject.descriptor.plugins) {
+        if (!plugin.enabled) {
+            continue;
+        }
+        if (!plugin.name.empty()) {
+            requiredModules.push_back(plugin.name);
+        }
+        const std::filesystem::path configuredPath{ plugin.binaryPath };
+        if (configuredPath.empty() || configuredPath.is_absolute()) {
+            continue;
+        }
+        const std::filesystem::path projectLocalPath = projectRoot / configuredPath;
+        std::error_code pluginPathError;
+        if (std::filesystem::is_regular_file(projectLocalPath, pluginPathError) && !pluginPathError) {
+            plugin.binaryPath = projectLocalPath.string();
+        }
+    }
+
+    const std::string physicsLayersAsset = loadedProject.descriptor.physicsLayersAsset;
+    kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
+    if (!scene.ModuleDiagnostics().empty()) {
+        for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
+            io.err << "[module error] " << diagnostic << '\n';
+        }
+        return 1;
+    }
+    for (const std::string& module : requiredModules) {
+        if (!scene.IsModuleActive(module)) {
+            io.err << "error: configured module did not become active: " << module << '\n';
+            return 1;
+        }
+        io.out << "[module] active " << module << '\n';
+    }
+
     std::string error;
     std::size_t discovered = 0U;
-    if (!MountProjectAssets(scene, *project, error, &discovered)) {
+    if (!MountProjectAssets(scene, projectRoot.string(), error, &discovered)) {
         io.err << "error: " << error << '\n';
+        return 1;
+    }
+    if (!physicsLayersAsset.empty() &&
+        !kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, physicsLayersAsset)) {
+        io.err << "error: project physics layers could not be loaded and applied: "
+               << physicsLayersAsset << '\n';
         return 1;
     }
 
@@ -147,7 +213,7 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
             }
             scenePath = metadata->physicalPath;
         } else {
-            scenePath = ResolveInputPath(*sceneOption, *project);
+            scenePath = ResolveInputPath(*sceneOption, projectRoot.string());
         }
     } else {
         io.err << "error: run requires --scene <path>\n";
@@ -172,7 +238,8 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "running " << scenePath.filename().generic_string()
            << " for " << frames << " frames (dt " << deltaSeconds << "s, "
-           << discovered << " assets discovered)\n";
+           << discovered << " assets discovered, "
+           << scene.ActiveModuleCount() << " modules active)\n";
 
     DiagnosticPrinter printer{ .scene = scene, .err = io.err, .printed = {}, .total = 0U };
     std::size_t executedBehaviours = 0U;

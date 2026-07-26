@@ -5,13 +5,16 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputHaptics.hpp"
+#include "engine/input/InputRebinding.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <charconv>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +62,18 @@ ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {ScriptFunctionArgument{std::string{pin}, ScriptValue{value}}},
+        .errors = {}};
+}
+
+ScriptFunctionCallResult RebindOperationResult(
+    std::string_view statusPin, bool succeeded, std::string error = {}) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{
+                std::string{statusPin}, ScriptValue{succeeded}},
+            ScriptFunctionArgument{"error", ScriptValue{std::move(error)}},
+        },
         .errors = {}};
 }
 
@@ -167,6 +182,15 @@ bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
     return id;
 }
 
+[[nodiscard]] bool ParseUnsignedId(
+    std::string_view text, std::uint64_t& id) noexcept {
+    id = 0U;
+    const auto parsed =
+        std::from_chars(text.data(), text.data() + text.size(), id);
+    return parsed.ec == std::errc{} &&
+        parsed.ptr == text.data() + text.size();
+}
+
 bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -203,6 +227,177 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
         const bool had = input.HasMappingContext(id);
         input.RemoveMappingContext(id);
         return BoolResult("removed", had);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterRebind(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.Rebind";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"context", ScriptValueType::String, true},
+        ScriptFunctionPin{"binding", ScriptValueType::String, true},
+        ScriptFunctionPin{"key", ScriptValueType::String, true},
+        ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, false},
+        ScriptFunctionPin{"allowConflict", ScriptValueType::Bool, false},
+        PlayerPin(),
+    };
+    desc.signature.outputs = {
+        ScriptFunctionPin{"applied", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"conflict", ScriptValueType::String, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context,
+                       std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* contextArg = FindArg(arguments, "context");
+        const ScriptValue* bindingArg = FindArg(arguments, "binding");
+        const ScriptValue* keyArg = FindArg(arguments, "key");
+        const ScriptValue* gamepadArg = FindArg(arguments, "gamepadIndex");
+        const ScriptValue* allowConflictArg =
+            FindArg(arguments, "allowConflict");
+
+        std::uint64_t contextId = 0U;
+        std::uint64_t bindingId = 0U;
+        const std::string contextText =
+            contextArg != nullptr ? contextArg->AsString() : std::string{};
+        const std::string bindingText =
+            bindingArg != nullptr ? bindingArg->AsString() : std::string{};
+        const std::string keyText =
+            keyArg != nullptr ? keyArg->AsString() : std::string{};
+        const kb::input::InputKey key = kb::input::ParseInputKey(keyText);
+        const int gamepadIndex =
+            gamepadArg != nullptr ? gamepadArg->AsInt() : 0;
+        const bool validKey =
+            key != kb::input::InputKey::None ||
+            keyText == kb::input::ToString(kb::input::InputKey::None);
+        if (!ParseUnsignedId(contextText, contextId) ||
+            !ParseUnsignedId(bindingText, bindingId) || bindingId == 0U ||
+            !validKey || gamepadIndex < 0 ||
+            gamepadIndex >= kb::input::InputDeviceState::kMaxGamepads) {
+            return ScriptFunctionCallResult{
+                .executed = true,
+                .outputs = {
+                    ScriptFunctionArgument{"applied", ScriptValue{false}},
+                    ScriptFunctionArgument{
+                        "conflict", ScriptValue{std::string{}}},
+                },
+                .errors = {}};
+        }
+
+        const kb::input::InputRuntimeRebindResult result =
+            context.scene->Input(PlayerFromArgs(arguments))
+                .Rebind(
+                    contextId, bindingId, key,
+                    static_cast<std::uint8_t>(gamepadIndex),
+                    allowConflictArg != nullptr &&
+                        allowConflictArg->AsBool());
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{"applied", ScriptValue{result.applied}},
+                ScriptFunctionArgument{
+                    "conflict",
+                    ScriptValue{
+                        result.conflict.has_value()
+                            ? std::to_string(
+                                  result.conflict->conflictingBindingId)
+                            : std::string{}}},
+            },
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterSaveRebindProfile(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.SaveRebindProfile";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"context", ScriptValueType::String, true},
+        ScriptFunctionPin{"path", ScriptValueType::String, true},
+        PlayerPin(),
+    };
+    desc.signature.outputs = {
+        ScriptFunctionPin{"saved", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"error", ScriptValueType::String, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context,
+                       std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* contextArg = FindArg(arguments, "context");
+        const ScriptValue* pathArg = FindArg(arguments, "path");
+        std::uint64_t contextId = 0U;
+        const std::string contextText =
+            contextArg != nullptr ? contextArg->AsString() : std::string{};
+        const std::string path =
+            pathArg != nullptr ? pathArg->AsString() : std::string{};
+        if (!ParseUnsignedId(contextText, contextId) || path.empty()) {
+            return RebindOperationResult(
+                "saved", false, "invalid context id or profile path");
+        }
+        kb::input::InputSubsystem& input =
+            context.scene->Input(PlayerFromArgs(arguments));
+        if (!input.HasMappingContext(contextId)) {
+            return RebindOperationResult(
+                "saved", false, "mapping context is not active");
+        }
+        const std::span<const kb::input::InputRebindOverride> profile =
+            input.RebindProfile(contextId);
+        const bool saved = kb::input::WriteRebindProfile(
+            std::filesystem::path{path}, profile);
+        return RebindOperationResult(
+            "saved", saved,
+            saved ? std::string{} : "could not write rebind profile");
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterLoadRebindProfile(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.LoadRebindProfile";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"context", ScriptValueType::String, true},
+        ScriptFunctionPin{"path", ScriptValueType::String, true},
+        PlayerPin(),
+    };
+    desc.signature.outputs = {
+        ScriptFunctionPin{"loaded", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"error", ScriptValueType::String, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context,
+                       std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* contextArg = FindArg(arguments, "context");
+        const ScriptValue* pathArg = FindArg(arguments, "path");
+        std::uint64_t contextId = 0U;
+        const std::string contextText =
+            contextArg != nullptr ? contextArg->AsString() : std::string{};
+        const std::string path =
+            pathArg != nullptr ? pathArg->AsString() : std::string{};
+        if (!ParseUnsignedId(contextText, contextId) || path.empty()) {
+            return RebindOperationResult(
+                "loaded", false, "invalid context id or profile path");
+        }
+        kb::input::InputAssetLoadResult<
+            std::vector<kb::input::InputRebindOverride>>
+            loaded =
+                kb::input::ReadRebindProfile(std::filesystem::path{path});
+        if (!loaded.succeeded) {
+            return RebindOperationResult(
+                "loaded", false, std::move(loaded.error));
+        }
+        const bool applied =
+            context.scene->Input(PlayerFromArgs(arguments))
+                .SetRebindProfile(contextId, loaded.asset);
+        return RebindOperationResult(
+            "loaded", applied,
+            applied ? std::string{}
+                    : "mapping context could not be resolved");
     };
     return host.RegisterFunction(std::move(desc));
 }
@@ -274,6 +469,62 @@ bool RegisterPointerButton(ScriptRuntimeHost& host) {
         const kb::input::InputKey key = MouseButtonKey(buttonArg != nullptr ? buttonArg->AsInt() : 0);
         const bool pressed = context.scene->Input().DeviceState().IsKeyDown(key);
         return BoolResult("pressed", pressed);
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterPointerScroll(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Scroll";
+    desc.signature.outputs = {ScriptFunctionPin{"delta", ScriptValueType::Float, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const float delta = context.scene->Input().DeviceState().GetValue(
+            kb::input::InputKey::MouseWheel);
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"delta", ScriptValue{delta}}},
+            .errors = {},
+        };
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterPointerRay(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Pointer.Ray";
+    desc.signature.outputs = {
+        ScriptFunctionPin{"valid", ScriptValueType::Bool, true},
+        ScriptFunctionPin{"originX", ScriptValueType::Float, true},
+        ScriptFunctionPin{"originY", ScriptValueType::Float, true},
+        ScriptFunctionPin{"originZ", ScriptValueType::Float, true},
+        ScriptFunctionPin{"directionX", ScriptValueType::Float, true},
+        ScriptFunctionPin{"directionY", ScriptValueType::Float, true},
+        ScriptFunctionPin{"directionZ", ScriptValueType::Float, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        const kb::scene::SceneRenderCameraRay cameraRay =
+            kb::scene::SceneRenderFeedback::ScreenPointToRay(
+                *context.scene, device.PointerX(), device.PointerY());
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{"valid", ScriptValue{cameraRay.valid}},
+                ScriptFunctionArgument{"originX", ScriptValue{cameraRay.ray.origin.x}},
+                ScriptFunctionArgument{"originY", ScriptValue{cameraRay.ray.origin.y}},
+                ScriptFunctionArgument{"originZ", ScriptValue{cameraRay.ray.origin.z}},
+                ScriptFunctionArgument{"directionX", ScriptValue{cameraRay.ray.direction.x}},
+                ScriptFunctionArgument{"directionY", ScriptValue{cameraRay.ray.direction.y}},
+                ScriptFunctionArgument{"directionZ", ScriptValue{cameraRay.ray.direction.z}},
+            },
+            .errors = {},
+        };
     };
     return host.RegisterFunction(std::move(desc));
 }
@@ -424,6 +675,9 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterValueQueryXYZ(host, "Input.Vector3") && ok;
     ok = RegisterAddMappingContext(host, "Input.AddMappingContext") && ok;
     ok = RegisterRemoveMappingContext(host, "Input.RemoveMappingContext") && ok;
+    ok = RegisterRebind(host) && ok;
+    ok = RegisterSaveRebindProfile(host) && ok;
+    ok = RegisterLoadRebindProfile(host) && ok;
 
     ok = RegisterActionBoolQuery(host, "Input.ActionBool") && ok;
     ok = RegisterValueQuery(host, "Input.ActionFloat") && ok;
@@ -435,6 +689,8 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterPointerPosition(host) && ok;
     ok = RegisterPointerDelta(host) && ok;
     ok = RegisterPointerButton(host) && ok;
+    ok = RegisterPointerScroll(host) && ok;
+    ok = RegisterPointerRay(host) && ok;
 
     ok = RegisterPriorityConstant(host, "Input.PriorityGameplay", kb::input::InputContextPriority::Gameplay) && ok;
     ok = RegisterPriorityConstant(host, "Input.PriorityUI", kb::input::InputContextPriority::UI) && ok;

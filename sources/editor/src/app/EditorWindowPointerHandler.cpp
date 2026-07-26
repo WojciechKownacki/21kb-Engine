@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorMouseWheelRouter.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "app/pointer/EditorLeftButtonDoubleClickRouter.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 #include "app/pointer/EditorLeftButtonUpRouter.hpp"
@@ -117,7 +118,15 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
 LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM wparam, LPARAM lparam) {
     POINT point{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
     ScreenToClient(messageWindow, &point);
-    EditorMouseWheelRouter mouseWheel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    EditorMouseWheelRouter mouseWheel(
+        messageWindow,
+        mainWindow_,
+        dockModel_,
+        floatingWindows_,
+        metrics_,
+        sceneContext_,
+        sceneViewport_,
+        !playMode_.IsPlaying());
     if (mouseWheel.HandleMouseWheel(point.x, point.y, GET_WHEEL_DELTA_WPARAM(wparam))) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;

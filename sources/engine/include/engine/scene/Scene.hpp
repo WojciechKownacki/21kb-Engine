@@ -3,8 +3,12 @@
 #include "engine/ecs/WorldConfig.hpp"
 #include "engine/scene/SceneMode.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::input {
@@ -119,6 +123,12 @@ public:
     [[nodiscard]] kb::save::SaveGame& AmbientSettings() noexcept;
     [[nodiscard]] const kb::save::SaveGame& AmbientSettings() const noexcept;
     void ReloadModules();
+    // Read-only module lifecycle state for production hosts (players/tools) that
+    // must reject a configured plugin failure instead of silently continuing
+    // without the requested backend.
+    [[nodiscard]] bool IsModuleActive(std::string_view name) const noexcept;
+    [[nodiscard]] std::size_t ActiveModuleCount() const noexcept;
+    [[nodiscard]] std::span<const std::string> ModuleDiagnostics() const noexcept;
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     // Independent input state for a specific local user (LIB-115). Lazily creates

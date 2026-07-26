@@ -73,7 +73,7 @@ public:
 
     [[nodiscard]] bool IsKeyDown(InputKey key, std::uint8_t gamepadIndex = 0U) const noexcept {
         if (key == InputKey::TouchDown) {
-            return touchPointCount_ > 0U;
+            return HasActiveTouch();
         }
         if (gamepadIndex == 0U || DeviceKindOf(key) != InputDeviceKind::Gamepad) {
             return digital_[Index(key)];
@@ -85,7 +85,7 @@ public:
     // that a single accessor works for both during action evaluation.
     [[nodiscard]] float GetValue(InputKey key, std::uint8_t gamepadIndex = 0U) const noexcept {
         if (key == InputKey::TouchDown) {
-            return touchPointCount_ > 0U ? 1.0F : 0.0F;
+            return HasActiveTouch() ? 1.0F : 0.0F;
         }
         if (gamepadIndex == 0U || DeviceKindOf(key) != InputDeviceKind::Gamepad) {
             if (IsAnalogKey(key)) {
@@ -117,8 +117,9 @@ public:
         return std::span<const InputTouchPoint>{touchPoints_.data(), touchPointCount_};
     }
 
-    // Absolute pointer position (LIB-117), in the host window's client pixel
-    // space - NOT reset by Reset(), so it keeps its last known value across the
+    // Absolute pointer position (LIB-117), in active render-viewport pixels
+    // after the platform host's window/viewport mapping - NOT reset by Reset(),
+    // so it keeps its last known value across the
     // Reset()-then-refill cycle every Collect() call does (the platform layer
     // re-sets it immediately after Reset() whenever it has a reading; unlike a
     // delta there is no "avoid a jump" reason to zero it first).
@@ -169,6 +170,15 @@ public:
     }
 
 private:
+    [[nodiscard]] bool HasActiveTouch() const noexcept {
+        for (std::size_t index = 0U; index < touchPointCount_; ++index) {
+            if (touchPoints_[index].phase != InputTouchPhase::Ended) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] static std::size_t Index(InputKey key) noexcept {
         const auto raw = static_cast<std::size_t>(key);
         return raw < kKeyCount ? raw : 0U;
