@@ -214,9 +214,10 @@ enum class PhysicsContactPhase : std::uint8_t {
 // entity-local ScriptEvent ("OnCollisionEnter" etc., target=`target`) -
 // mirrors the SAME producer-queues/consumer-drains-once-per-frame pattern
 // SceneState::pendingSceneLifecycleEvents (LIB-073) already established,
-// not a new mechanism. `point`/`normal` are only meaningful for
-// Enter/Stay (Jolt's OnContactRemoved cannot access body/manifold data at
-// all - see JoltPhysicsSceneSystem.cpp) and are zero for Exit.
+// not a new mechanism. `point` is the deterministic world-space contact
+// point and `normal` is recipient-local (points from `target` toward
+// `other`). Exit retains the pair's final live manifold payload because
+// physics SDK removal callbacks do not carry manifold data themselves.
 struct PendingCollisionEvent {
     SceneEntity target;
     SceneEntity other;
