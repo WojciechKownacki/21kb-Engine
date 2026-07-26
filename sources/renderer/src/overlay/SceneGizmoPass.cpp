@@ -1,9 +1,6 @@
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
-#include "kb/render/SceneDepthPolicy.hpp"
-
-#include <bx/math.h>
 
 #include <algorithm>
 #include <array>
@@ -387,140 +384,26 @@ void AppendLine(std::vector<Vertex>& output, std::array<float, 3> a, std::array<
     AppendLineVertex(output, b, color, alpha);
 }
 
-using CameraPlaneCorners = std::array<std::array<float, 3>, 4U>;
-
-[[nodiscard]] CameraPlaneCorners CameraPlane(
-    const EditorCameraWireframeDesc& camera,
-    float depth,
-    float halfWidth,
-    float halfHeight) noexcept {
-    const std::array<float, 3> center =
-        Add(camera.position, Mul(camera.forward, depth));
-    const std::array<float, 3> horizontal = Mul(camera.right, halfWidth);
-    const std::array<float, 3> vertical = Mul(camera.up, halfHeight);
-    return CameraPlaneCorners{{
-        Add(center, Add(Mul(horizontal, -1.0F), Mul(vertical, -1.0F))),
-        Add(center, Add(horizontal, Mul(vertical, -1.0F))),
-        Add(center, Add(horizontal, vertical)),
-        Add(center, Add(Mul(horizontal, -1.0F), vertical)),
-    }};
-}
-
-void AppendCameraPlane(
-    std::vector<Vertex>& output,
-    const CameraPlaneCorners& corners,
-    float alpha) {
-    for (std::size_t corner = 0U; corner < corners.size(); ++corner) {
-        AppendLine(
-            output,
-            corners[corner],
-            corners[(corner + 1U) % corners.size()],
-            kCameraWireframeColor,
-            alpha);
-    }
-}
-
-[[nodiscard]] std::array<bool, 4U> CameraPlaneCornerVisibility(
-    const CameraPlaneCorners& corners,
-    const SceneRenderCamera& sceneCamera) noexcept {
-    std::array<float, 16> viewProjection{};
-    bx::mtxMul(
-        viewProjection.data(),
-        sceneCamera.view.data(),
-        sceneCamera.projection.data());
-
-    std::array<bool, 4U> visible{};
-    for (std::size_t corner = 0U; corner < corners.size(); ++corner) {
-        const std::array<float, 4U> worldPosition{
-            corners[corner][0],
-            corners[corner][1],
-            corners[corner][2],
-            1.0F,
-        };
-        std::array<float, 4U> clipPosition{};
-        bx::vec4MulMtx(
-            clipPosition.data(),
-            worldPosition.data(),
-            viewProjection.data());
-        const float w = clipPosition[3];
-        const bool depthVisible = SceneDepthPolicy::HomogeneousDepth()
-            ? std::abs(clipPosition[2]) <= w
-            : clipPosition[2] >= 0.0F && clipPosition[2] <= w;
-        visible[corner] =
-            w > 0.000001F &&
-            std::abs(clipPosition[0]) <= w &&
-            std::abs(clipPosition[1]) <= w &&
-            depthVisible;
-    }
-    return visible;
-}
-
-void AppendVisibleCameraFarPlane(
-    std::vector<Vertex>& output,
-    const CameraPlaneCorners& corners,
-    const SceneRenderCamera& sceneCamera,
-    float alpha) {
-    const std::array<bool, 4U> visible =
-        CameraPlaneCornerVisibility(corners, sceneCamera);
-    for (std::size_t corner = 0U; corner < corners.size(); ++corner) {
-        const std::size_t nextCorner = (corner + 1U) % corners.size();
-        if (!visible[corner] && !visible[nextCorner]) {
-            continue;
-        }
-        AppendLine(
-            output,
-            corners[corner],
-            corners[nextCorner],
-            kCameraWireframeColor,
-            alpha);
-    }
-}
-
 void AppendCameraWireframe(
     std::vector<Vertex>& output,
-    const EditorCameraWireframeDesc& camera,
-    const SceneRenderCamera& sceneCamera) {
-    const float nearClip = std::max(0.0001F, camera.nearClip);
-    const float farClip = std::max(nearClip + 0.0001F, camera.farClip);
-    const float aspect = std::max(0.0001F, camera.aspect);
-
-    float nearHalfHeight = 0.0F;
-    float farHalfHeight = 0.0F;
-    if (camera.projection == EditorCameraWireframeProjection::Orthographic) {
-        nearHalfHeight = std::max(0.0001F, camera.orthographicHeight) * 0.5F;
-        farHalfHeight = nearHalfHeight;
-    } else {
-        const float fovRadians =
-            std::clamp(camera.verticalFovDegrees, 1.0F, 179.0F) *
-            0.5F * kPi / 180.0F;
-        const float slope = std::tan(fovRadians);
-        nearHalfHeight = slope * nearClip;
-        farHalfHeight = slope * farClip;
-    }
-
-    const CameraPlaneCorners nearPlane =
-        CameraPlane(camera, nearClip, nearHalfHeight * aspect, nearHalfHeight);
-    const CameraPlaneCorners farPlane =
-        CameraPlane(camera, farClip, farHalfHeight * aspect, farHalfHeight);
-    AppendCameraPlane(output, nearPlane, 0.92F);
-    AppendVisibleCameraFarPlane(output, farPlane, sceneCamera, 0.72F);
-    for (std::size_t corner = 0U; corner < nearPlane.size(); ++corner) {
+    const EditorCameraWireframeDesc& camera) {
+    for (const EditorCameraWireframeLine& line :
+         BuildEditorCameraWireframeLines(camera)) {
         AppendLine(
             output,
-            nearPlane[corner],
-            farPlane[corner],
+            line.from,
+            line.to,
             kCameraWireframeColor,
-            0.86F);
+            line.alpha);
     }
 }
 
 void AppendCameraWireframes(
     std::vector<Vertex>& output,
-    std::span<const EditorCameraWireframeDesc> cameras,
-    const SceneRenderCamera& sceneCamera) {
+    std::span<const EditorCameraWireframeDesc> cameras) {
     output.reserve(output.size() + cameras.size() * 24U);
     for (const EditorCameraWireframeDesc& camera : cameras) {
-        AppendCameraWireframe(output, camera, sceneCamera);
+        AppendCameraWireframe(output, camera);
     }
 }
 
@@ -867,10 +750,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         !desc.lightWireframes.empty() ||
         !desc.physicsDebugLines.empty()) {
         std::vector<Vertex> lineVertices;
-        AppendCameraWireframes(
-            lineVertices,
-            desc.cameraWireframes,
-            *desc.camera);
+        AppendCameraWireframes(lineVertices, desc.cameraWireframes);
         AppendLightWireframes(lineVertices, desc.lightWireframes);
         AppendPhysicsDebugLines(lineVertices, desc.physicsDebugLines);
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(lineVertices.size());

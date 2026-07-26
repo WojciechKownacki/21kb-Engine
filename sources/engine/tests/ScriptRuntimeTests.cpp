@@ -8696,6 +8696,15 @@ void RunScriptInputApiTest() {
     std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{ { 50U, context } };
 
     kb::scene::Scene scene;
+    kb::tests::Require(
+        scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+            .id = kb::assets::AssetId{50U},
+            .type = "InputMappingContext",
+            .name = "Gameplay",
+            .virtualPath = "/Game/Input/Gameplay.21kbinputcontext",
+            .runtimeLoadable = true,
+        }),
+        "Input mapping context metadata could not be registered");
     scene.Input().SetResolvers(
         [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
             const auto found = actions.find(id);
@@ -8714,12 +8723,12 @@ void RunScriptInputApiTest() {
 
     const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
     const std::vector<kb::script::ScriptFunctionArgument> addContextArgs{
-        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "50" } } },
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "/Game/Input/Gameplay.21kbinputcontext" } } },
         kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
     };
     const kb::script::ScriptFunctionCallResult added = host.Functions().Call("Input.AddMappingContext", addContextArgs, callContext);
     kb::tests::Require(added.Succeeded() && added.Output("added").has_value() && added.Output("added")->AsBool(),
-        "Input.AddMappingContext direct call failed");
+        "Input.AddMappingContext did not resolve a project virtual path");
 
     scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
     scene.Input().MutableDeviceState().SetKeyDown(InputKey::W, true);

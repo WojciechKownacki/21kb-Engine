@@ -867,6 +867,11 @@ void RunCommandApplicationContractTest() {
             spawnedOrder.emplace_back("Tick");
         }),
         "Command application contract test spawned Tick registration failed");
+    kb::tests::Require(
+        native->RegisterLifecycle(kSpawnedAsset, kb::script::ScriptLifecycleEvent::LateTick, [&](kb::script::ScriptExecutionContext&) {
+            spawnedOrder.emplace_back("LateTick");
+        }),
+        "Command application contract test spawned LateTick registration failed");
 
     kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Command application contract test backend registration failed");
 
@@ -880,8 +885,12 @@ void RunCommandApplicationContractTest() {
     kb::tests::Require(spawnedOrder.empty(), "Engine21kbLibrary command application must not dispatch lifecycle events to an entity spawned during the same phase's already-collected snapshot");
 
     static_cast<void>(system.ExecuteFrame(scene, 1.0F / 60.0F));
-    kb::tests::Require(spawnedOrder.size() == 2U && spawnedOrder[0] == "Created" && spawnedOrder[1] == "Tick",
-        "Engine21kbLibrary command application must dispatch Created then Tick to the spawned entity starting the next frame");
+    kb::tests::Require(
+        spawnedOrder.size() == 3U &&
+            spawnedOrder[0] == "Created" &&
+            spawnedOrder[1] == "Tick" &&
+            spawnedOrder[2] == "LateTick",
+        "Engine21kbLibrary command application must dispatch Created, Tick, then LateTick to the spawned entity starting the next frame");
 }
 
 // LIB-006 audit gap closed 2026-07-17: RunCommandApplicationContractTest

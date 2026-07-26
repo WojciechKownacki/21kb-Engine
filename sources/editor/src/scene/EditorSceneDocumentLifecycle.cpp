@@ -125,10 +125,14 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
-    EnsureScriptRuntime();
+    // Establish the complete play-session state before attaching the Script
+    // module. On its first attachment the module immediately runs
+    // Created/Activated/Ready, so clearing mapping contexts or Lua instances
+    // afterwards invalidates state that Ready legitimately initialized.
     ResetScriptRuntimeStateForPlayMode();
     kb::scene::SceneInputActivation::Apply(*scene_);
     ActivateProjectInput();
+    EnsureScriptRuntime();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
