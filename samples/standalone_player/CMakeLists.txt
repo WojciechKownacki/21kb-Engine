@@ -4,11 +4,15 @@ endif()
 
 add_executable(kb_standalone_player
     main.cpp
+    StandaloneInputRuntime.cpp
+    StandaloneInputRuntime.hpp
 )
 
 target_link_libraries(kb_standalone_player
     PRIVATE
         kb_renderer
+        user32
+        gdi32
 )
 
 set_target_properties(kb_standalone_player PROPERTIES

@@ -1,10 +1,10 @@
-#include "platform/win32/Win32InputCollector.hpp"
+#include "engine/platform/win32/Win32InputCollector.hpp"
 
 #if defined(_WIN32)
 
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputKey.hpp"
-#include "platform/win32/Win32InputKeyMap.hpp"
+#include "engine/platform/win32/Win32InputKeyMap.hpp"
 
 #include <Xinput.h>
 
@@ -12,21 +12,19 @@
 #include <cmath>
 #include <cstdint>
 
-namespace kb::editor {
+namespace kb::input {
 namespace {
-
-using kb::input::InputKey;
 
 [[nodiscard]] bool KeyDown(int virtualKey) noexcept {
     return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 }
 
-[[nodiscard]] bool EditorIsForeground(HWND editorWindow) noexcept {
+[[nodiscard]] bool OwnerProcessIsForeground(HWND ownerWindow) noexcept {
     const HWND foreground = GetForegroundWindow();
-    if (foreground == nullptr || editorWindow == nullptr) {
+    if (foreground == nullptr || ownerWindow == nullptr) {
         return false;
     }
-    // Accept any window owned by this process (main window + floating panels).
+    // Accept any window owned by this process, including editor floating panels.
     DWORD foregroundProcess = 0U;
     static_cast<void>(GetWindowThreadProcessId(foreground, &foregroundProcess));
     return foregroundProcess == GetCurrentProcessId();
@@ -37,19 +35,17 @@ struct StickAxes {
     float y = 0.0F;
 };
 
-// Radial dead zone (XInput recommendation): ignore small magnitudes so a resting
-// stick reads exactly zero, then rescale the remainder to a clean 0..1 range so
-// there is no value jump at the dead-zone edge.
 [[nodiscard]] StickAxes NormalizeStick(SHORT rawX, SHORT rawY, SHORT deadZone) noexcept {
     const float x = static_cast<float>(rawX);
     const float y = static_cast<float>(rawY);
     const float magnitude = std::sqrt((x * x) + (y * y));
     if (magnitude <= static_cast<float>(deadZone)) {
-        return StickAxes{};
+        return {};
     }
     constexpr float kMaxMagnitude = 32767.0F;
     const float clamped = std::min(magnitude, kMaxMagnitude);
-    const float scaled = (clamped - static_cast<float>(deadZone)) / (kMaxMagnitude - static_cast<float>(deadZone));
+    const float scaled = (clamped - static_cast<float>(deadZone)) /
+        (kMaxMagnitude - static_cast<float>(deadZone));
     return StickAxes{.x = (x / magnitude) * scaled, .y = (y / magnitude) * scaled};
 }
 
@@ -57,31 +53,29 @@ struct StickAxes {
     if (value <= XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
         return 0.0F;
     }
-    return static_cast<float>(value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) / (255.0F - static_cast<float>(XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
+    return static_cast<float>(value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) /
+        (255.0F - static_cast<float>(XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
 }
 
-// LIB-116: polls every XInput slot (0..kMaxGamepads-1), not just the first
-// connected controller, so local multiplayer can bind different players to
-// different physical gamepads (see InputDeviceState's gamepadIndex parameter
-// and InputKeyMapping::gamepadIndex). XInputGetState returns
-// ERROR_DEVICE_NOT_CONNECTED for an absent slot, which SetKeyDown/SetAnalog's
-// untouched default (false/0) already represents correctly.
-void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
-    static_assert(kb::input::InputDeviceState::kMaxGamepads <= XUSER_MAX_COUNT,
+void CollectGamepads(InputDeviceState& state) noexcept {
+    static_assert(InputDeviceState::kMaxGamepads <= XUSER_MAX_COUNT,
         "Polling more gamepad slots than XInput supports");
-    for (std::uint8_t index = 0U; index < kb::input::InputDeviceState::kMaxGamepads; ++index) {
+    for (std::uint8_t index = 0U; index < InputDeviceState::kMaxGamepads; ++index) {
         XINPUT_STATE gamepadState{};
         const bool connected = XInputGetState(index, &gamepadState) == ERROR_SUCCESS;
         state.SetGamepadConnected(index, connected);
         if (!connected) {
             continue;
         }
+
         const XINPUT_GAMEPAD& pad = gamepadState.Gamepad;
         for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
             state.SetKeyDown(binding.key, (pad.wButtons & binding.mask) != 0, index);
         }
-        const StickAxes left = NormalizeStick(pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
-        const StickAxes right = NormalizeStick(pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+        const StickAxes left = NormalizeStick(
+            pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+        const StickAxes right = NormalizeStick(
+            pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
         state.SetAnalog(InputKey::GamepadLeftStickX, left.x, index);
         state.SetAnalog(InputKey::GamepadLeftStickY, left.y, index);
         state.SetAnalog(InputKey::GamepadRightStickX, right.x, index);
@@ -93,9 +87,9 @@ void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
 
 } // namespace
 
-void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND editorWindow) noexcept {
+void Win32InputCollector::Collect(InputDeviceState& state, HWND ownerWindow) noexcept {
     state.Reset();
-    const bool focused = EditorIsForeground(editorWindow);
+    const bool focused = OwnerProcessIsForeground(ownerWindow);
     state.SetHasFocus(focused);
     if (!focused) {
         hasPreviousMouse_ = false;
@@ -115,20 +109,15 @@ void Win32InputCollector::Collect(kb::input::InputDeviceState& state, HWND edito
         previousMouse_ = cursor;
         hasPreviousMouse_ = true;
 
-        // LIB-117: absolute position, unlike the delta above, has no "avoid a
-        // jump on the first tracked frame" concern - always update it. Reported
-        // in the editor window's client pixel space (not raw desktop screen
-        // coordinates), matching what a windowed game would report for its own
-        // window.
         POINT client = cursor;
-        if (ScreenToClient(editorWindow, &client) != 0) {
+        if (ScreenToClient(ownerWindow, &client) != 0) {
             state.SetPointerPosition(static_cast<float>(client.x), static_cast<float>(client.y));
         }
     }
 
-    CollectGamepad(state);
+    CollectGamepads(state);
 }
 
-} // namespace kb::editor
+} // namespace kb::input
 
 #endif
