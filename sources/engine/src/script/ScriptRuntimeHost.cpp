@@ -42,8 +42,13 @@ public:
     ~ScriptRuntimeHostSceneSystem() override;
 
     void OnCreate(kb::scene::SceneSystemContext& context) override;
+    void OnFrameStart(kb::scene::SceneSystemContext& context) override;
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override;
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
+    [[nodiscard]] bool RequiresFixedStep() const override { return system_.RequiresFixedStep(); }
+    [[nodiscard]] kb::scene::SceneUpdatePhase UpdatePhase() const noexcept override { return system_.UpdatePhase(); }
+    [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override { return system_.FixedUpdatePhase(); }
 
 private:
     void CollectDiagnostics();
@@ -106,8 +111,18 @@ void ScriptRuntimeHostSceneSystem::OnCreate(kb::scene::SceneSystemContext& conte
     CollectDiagnostics();
 }
 
+void ScriptRuntimeHostSceneSystem::OnFrameStart(kb::scene::SceneSystemContext& context) {
+    system_.OnFrameStart(context);
+    CollectDiagnostics();
+}
+
 void ScriptRuntimeHostSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
     system_.OnUpdate(context);
+    CollectDiagnostics();
+}
+
+void ScriptRuntimeHostSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    system_.OnFixedUpdate(context);
     CollectDiagnostics();
 }
 

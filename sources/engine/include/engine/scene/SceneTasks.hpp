@@ -74,11 +74,9 @@ public:
     [[nodiscard]] std::uint64_t Start(std::function<TaskPollResult(float)> poll, SceneEntity owner, SceneEntity creator = {});
     // LIB-098: identical to Start above, EXCEPT this task is driven by
     // AdvanceFixedSteps instead of Advance — poll's float argument is the
-    // number of FixedTick STEPS that occurred this frame (0, 1, or more —
-    // never seconds). Needed because FixedTick's step count is computed
-    // inside ScriptRuntimeSceneSystem::ExecuteFrame's own fixed-step loop
-    // and was never previously surfaced anywhere Task could observe it —
-    // a Frame-domain task driven by wall-clock delta cannot correctly
+    // number of FixedTick STEPS being advanced (never seconds). The installed
+    // ScriptRuntimeSceneSystem drives it from the authoritative scene fixed
+    // callback; a Frame-domain task driven by wall-clock delta cannot correctly
     // count "N fixed steps," since fixed-step count and elapsed seconds
     // are decoupled (0 to maxFixedStepsPerFrame steps can occur for the
     // same deltaSeconds, depending on accumulated backlog).
@@ -107,11 +105,9 @@ public:
     // doc comment for why. Only polls Frame-domain tasks (Start);
     // StartFixedStep tasks are untouched here.
     [[nodiscard]] std::vector<TaskCompletionRecord> Advance(float deltaSeconds);
-    // LIB-098: called once per frame by ScriptRuntimeSceneSystem, AFTER its
-    // fixed-step loop, with the number of FixedTick steps that occurred
-    // THIS frame (0 while paused — FixedTick's own accumulator already
-    // freezes during scene pause, LIB-094, so stepCount is naturally 0
-    // then; no separate pause check is needed). If stepCount is 0, no poll
+    // LIB-098: called by ScriptRuntimeSceneSystem after authoritative
+    // FixedTick steps (or by direct ExecuteFrame's compatible loop). If
+    // stepCount is 0, no poll
     // is called at all this frame — the same "never call poll for a reason
     // that didn't happen" rule Advance follows above. Only polls
     // StartFixedStep tasks; Frame-domain tasks (Start) are untouched here.

@@ -22,8 +22,17 @@ public:
     ScriptRuntimeSceneSystem(ScriptRuntime& runtime, ScriptRuntimeAssetPreparer& assetPreparer) noexcept;
 
     void OnCreate(kb::scene::SceneSystemContext& context) override;
+    void OnFrameStart(kb::scene::SceneSystemContext& context) override;
     void OnUpdate(kb::scene::SceneSystemContext& context) override;
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override;
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+    [[nodiscard]] kb::scene::SceneUpdatePhase UpdatePhase() const noexcept override {
+        return kb::scene::SceneUpdatePhase::PostFixed;
+    }
+    [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override {
+        return kb::scene::SceneFixedUpdatePhase::PreSimulation;
+    }
 
     [[nodiscard]] const ScriptRuntimeExecutionResult& ExecuteStartup(kb::scene::Scene& scene, float deltaSeconds);
     [[nodiscard]] const ScriptRuntimeExecutionResult& ExecuteFrame(kb::scene::Scene& scene, float deltaSeconds);
@@ -56,6 +65,10 @@ private:
         bool created = false;
     };
 
+    void BeginFrame(kb::scene::Scene& scene, float deltaSeconds);
+    void ExecuteVariableFrame(kb::scene::Scene& scene, float deltaSeconds);
+    void ExecuteFixedStep(kb::scene::Scene& scene, float fixedDeltaSeconds);
+    void ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept;
     void PrepareScene(kb::scene::Scene& scene);
     // LIB-073: drains kb::scene::SceneLoadedContent's pending
     // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
@@ -77,9 +90,8 @@ private:
     void DispatchCompletedTasks(kb::scene::Scene& scene, float deltaSeconds);
     // LIB-098: identical shape to DispatchCompletedTasks above, but drives
     // kb::scene::SceneTasks::AdvanceFixedSteps (StartFixedStep tasks)
-    // instead of Advance — called right after the fixed-step loop below
-    // with the number of FixedTick steps this frame actually produced,
-    // the one piece of state that loop previously never surfaced anywhere.
+    // instead of Advance. Production calls it after each authoritative scene
+    // FixedTick; direct ExecuteFrame uses the same per-step path.
     void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
     // LIB-143: advances every live Particles.Create instance in the scene
     // (kb::scene::SceneParticleSystems::Advance) - spawn/integrate/kill, same
@@ -128,6 +140,7 @@ private:
 
     ScriptRuntime& runtime_;
     ScriptRuntimeAssetPreparer* assetPreparer_ = nullptr;
+    kb::scene::Scene* attachedScene_ = nullptr;
     ScriptRuntimeFrameSettings frameSettings_{};
     float fixedAccumulatorSeconds_ = 0.0F;
     ScriptRuntimeExecutionResult lastResult_;
