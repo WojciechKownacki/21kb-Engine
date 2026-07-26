@@ -1,9 +1,12 @@
 #include "engine/script/VisualGraphScriptBackend.hpp"
 
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneTasks.hpp"
 #include "engine/visual/VisualGraphBehaviourRuntime.hpp"
 #include "engine/visual/VisualGraphDiagnostic.hpp"
 
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace kb::script {
@@ -87,6 +90,12 @@ ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteLifecycle(const kb
         SubscribeCustomEventsToBus(behaviour, context);
     } else if (context.Lifecycle() == ScriptLifecycleEvent::Destroyed) {
         UnsubscribeCustomEventsFromBus(kb::assets::AssetId{behaviour.behaviourAssetId}, context.Self(), context.Events());
+        // The execution context owns the graph state-machine continuation.
+        // Destroying the behaviour must release it after the Destroyed graph
+        // has had its final chance to run; otherwise a dead instance remains
+        // retained indefinitely and can resume stale work if its entity id is
+        // observed again.
+        instances_.Remove(context.Self(), kb::assets::AssetId{behaviour.behaviourAssetId});
     }
     return ToScriptResult(result, behaviour, context.Self());
 }
@@ -118,7 +127,13 @@ kb::visual::VisualGraphRuntimeExecutionContext& VisualGraphScriptBackend::Contex
 
 void VisualGraphScriptBackend::StoreCommonInputs(kb::visual::VisualGraphRuntimeExecutionContext& context, const ScriptExecutionContext& scriptContext) const {
     context.Store(0U, "self", kb::visual::VisualGraphRuntimeValue{scriptContext.Self().Id(), kb::visual::VisualGraphValueType::Entity});
+    context.Store(0U, "asset", kb::visual::VisualGraphRuntimeValue{scriptContext.Asset().value, kb::visual::VisualGraphValueType::Hash});
     context.Store(0U, "deltaSeconds", kb::visual::VisualGraphRuntimeValue{scriptContext.DeltaSeconds()});
+    context.SetTaskIsRunningQuery(
+        &scriptContext.GetScene(),
+        [](const void* userData, std::uint64_t taskId) noexcept {
+            return static_cast<kb::scene::Scene*>(const_cast<void*>(userData))->Tasks().Exists(taskId);
+        });
 }
 
 void VisualGraphScriptBackend::AppendEmittedEvents(
@@ -128,20 +143,18 @@ void VisualGraphScriptBackend::AppendEmittedEvents(
     kb::assets::AssetId assetId) const {
     for (const kb::visual::VisualGraphEmittedEvent& event : graphContext.EmittedEventRecords()) {
         if (event.target.IsValid()) {
-            scriptContext.EmitTo(event.target, event.name, ToScriptArguments(event.arguments));
+            scriptContext.EmitTo(event.target, event.name, ToScriptArguments(event.arguments), true);
         } else {
-            scriptContext.Emit(event.name, ToScriptArguments(event.arguments));
+            scriptContext.Emit(event.name, ToScriptArguments(event.arguments), true);
         }
     }
     // LIB-112: ALSO broadcast the SAME emitted events through ScriptEventBus
-    // (LIB-105) — additive, never a replacement for the loop above (which
-    // stays exactly as it was before this task). See
-    // BroadcastEmittedEventsToBus's own doc comment for why.
+    // (LIB-105). The bus copy excludes engine-owned behaviour bridges because
+    // the loop above already queues the event for ScriptRuntime dispatch;
+    // regular native/Lua bus subscribers still receive it.
     if (ScriptEventBus* eventBus = scriptContext.Events(); eventBus != nullptr) {
-        BroadcastEmittedEventsToBus(graphContext, scriptContext.GetScene(), *eventBus);
+        BroadcastEmittedEventsToBus(graphContext, scriptContext.GetScene(), *eventBus, sender, assetId, true);
     }
-    static_cast<void>(sender);
-    static_cast<void>(assetId);
 }
 
 // LIB-112: EMIT direction of the gameplay event bridge. Every event a
@@ -154,6 +167,10 @@ void VisualGraphScriptBackend::AppendEmittedEvents(
 // valid maps to a targeted Emit reaching only that entity's bus
 // subscriptions — the graph author's existing "emit to everyone" vs "emit
 // to this entity" choice on the EmitEvent node carries over unchanged.
+// `mirroredToBehaviourDispatcher` suppresses only engine-owned behaviour
+// bridge subscriptions when AppendEmittedEvents also queued the same event
+// through ScriptRuntime. A graph run originating solely from the bus passes
+// false, so its onward emissions remain reachable by other graph bridges.
 // This means a native Events.Subscribe listener, a Lua Events.Subscribe
 // listener, or another Visual Graph behaviour's bus-subscribed CustomEvent
 // node (SubscribeCustomEventsToBus below) now all receive events a graph
@@ -162,13 +179,25 @@ void VisualGraphScriptBackend::AppendEmittedEvents(
 void VisualGraphScriptBackend::BroadcastEmittedEventsToBus(
     kb::visual::VisualGraphRuntimeExecutionContext& graphContext,
     kb::scene::Scene& scene,
-    ScriptEventBus& eventBus) const {
+    ScriptEventBus& eventBus,
+    kb::scene::SceneEntity sender,
+    kb::assets::AssetId senderAsset,
+    bool mirroredToBehaviourDispatcher) const {
     for (const kb::visual::VisualGraphEmittedEvent& event : graphContext.EmittedEventRecords()) {
         ScriptEvent scriptEvent;
         scriptEvent.name = event.name;
+        scriptEvent.sender = sender;
         scriptEvent.target = event.target;
+        scriptEvent.senderAsset = senderAsset;
         scriptEvent.arguments = ToScriptArguments(event.arguments);
-        static_cast<void>(eventBus.Emit(scene, scriptEvent, event.target));
+        static_cast<void>(eventBus.Emit(
+            scene,
+            scriptEvent,
+            event.target,
+            {},
+            mirroredToBehaviourDispatcher
+                ? ScriptEventBusAudience::ExcludeBehaviourBridges
+                : ScriptEventBusAudience::AllSubscribers));
     }
 }
 
@@ -222,7 +251,7 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
         if (function.customEventName.empty()) {
             continue;
         }
-        const EventSubscriptionHandle handle = eventBus->Subscribe(
+        const EventSubscriptionHandle handle = eventBus->SubscribeBehaviourBridge(
             function.customEventName,
             [this, &scene, eventBus, entity, assetId](const ScriptEvent& event) {
                 // Re-resolve the LIVE BehaviourComponent (not a captured
@@ -231,7 +260,9 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
                 // check, exactly like a normal DispatchEvent-driven call
                 // would see.
                 const kb::scene::BehaviourComponent* liveBehaviour = scene.Components().Behaviours().TryGet(entity);
-                if (liveBehaviour == nullptr) {
+                if (liveBehaviour == nullptr || !liveBehaviour->enabled ||
+                    liveBehaviour->backend != kb::scene::BehaviourBackend::VisualGraph ||
+                    liveBehaviour->behaviourAssetId != assetId.value) {
                     return;
                 }
                 kb::visual::VisualGraphBehaviourInstance* instance = instances_.Find(entity, assetId);
@@ -245,8 +276,17 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
                 // way a normal Tick/lifecycle dispatch is.
                 instance->context.Store(0U, "deltaSeconds", kb::visual::VisualGraphRuntimeValue{0.0F});
                 const std::vector<kb::visual::VisualGraphCustomEventArgument> arguments = ToVisualGraphArguments(event);
-                static_cast<void>(kb::visual::VisualGraphBehaviourRuntime::ExecuteCustomEvent(
-                    *liveBehaviour, entity, event.name, arguments, artifacts_, bindings_, instance->context));
+                const kb::visual::VisualGraphBehaviourExecutionResult execution =
+                    kb::visual::VisualGraphBehaviourRuntime::ExecuteCustomEvent(
+                        *liveBehaviour, entity, event.name, arguments, artifacts_, bindings_, instance->context);
+                if (!execution.Succeeded()) {
+                    std::string message = "visual graph event bridge failed for \"" + event.name + "\"";
+                    for (const kb::visual::VisualGraphDiagnostic& diagnostic : execution.diagnostics) {
+                        message += ": ";
+                        message += diagnostic.message;
+                    }
+                    throw std::runtime_error(std::move(message));
+                }
                 // A bus-triggered graph run can itself EmitEvent — drain
                 // those onward through the bus too, the same as any other
                 // execution path (AppendEmittedEvents above); there is no
@@ -255,7 +295,7 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
                 // emitted FROM a bus-triggered run — an honest, documented
                 // asymmetry, not a silent drop.
                 if (eventBus != nullptr) {
-                    BroadcastEmittedEventsToBus(instance->context, scene, *eventBus);
+                    BroadcastEmittedEventsToBus(instance->context, scene, *eventBus, entity, assetId, false);
                 }
             },
             entity);

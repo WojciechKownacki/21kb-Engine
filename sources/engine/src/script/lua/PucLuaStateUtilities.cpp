@@ -19,6 +19,15 @@ std::string PucLuaErrorReporter::ErrorFromTop(lua_State* state) {
     return error == nullptr ? std::string{ "lua error" } : std::string{ error };
 }
 
+std::string PucLuaErrorReporter::ErrorWithTracebackFromTop(lua_State* state) {
+    const char* message = lua_tostring(state, -1);
+    if (message == nullptr) {
+        message = "lua error";
+    }
+    luaL_traceback(state, state, message, 1);
+    return ErrorFromTop(state);
+}
+
 std::string PucLuaErrorReporter::ChunkFromDebug(lua_Debug& debug) {
     if (debug.source == nullptr) {
         return {};

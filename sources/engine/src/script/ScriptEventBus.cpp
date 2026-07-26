@@ -100,13 +100,13 @@ private:
 }
 
 // LIB-106: whether a subscription with the given `owner`/`channel` satisfies
-// every non-default axis of `filter` — tag/component/scene are evaluated
+// every non-default axis of `filter` — tag/component/scene/player are evaluated
 // against the OWNER ENTITY (a subscription with no owner, or a filter axis
 // requiring one, never matches — the same "no entity identity to match
 // against" rule Emit's entity `target` already applies), `channel` against
 // the subscription's OWN declared channel (see EventRecipientFilter's doc
 // comment). Called only in the up-front snapshot pass (matching Emit's
-// existing tag/component/scene-agnostic scope before this task) — NOT
+// existing tag/component/scene/player-agnostic scope before this task) — NOT
 // re-checked per invocation the way LIB-040's OwnerGone recheck is, since
 // tag/component mutating mid-dispatch is a much lower-stakes race than an
 // entity dying mid-dispatch and re-checking it would be new scope beyond
@@ -115,7 +115,7 @@ private:
     if (!filter.channel.empty() && channel != filter.channel) {
         return false;
     }
-    const bool needsOwner = !filter.tag.empty() || !filter.component.empty() || filter.sceneId != 0U;
+    const bool needsOwner = !filter.tag.empty() || !filter.component.empty() || filter.sceneId != 0U || filter.playerId.has_value();
     if (!needsOwner) {
         return true;
     }
@@ -134,12 +134,34 @@ private:
     if (filter.sceneId != 0U && scene.LoadedContent().OwningScene(owner) != filter.sceneId) {
         return false;
     }
+    if (filter.playerId.has_value()) {
+        const kb::scene::InputComponent* input = scene.Components().Inputs().TryGet(owner);
+        if (input == nullptr || input->localUser.value != *filter.playerId) {
+            return false;
+        }
+    }
     return true;
 }
 
 } // namespace
 
 EventSubscriptionHandle ScriptEventBus::Subscribe(std::string eventName, NativeEventSubscriptionCallback callback, kb::scene::SceneEntity owner, std::string channel) {
+    return SubscribeInternal(std::move(eventName), std::move(callback), owner, std::move(channel), false);
+}
+
+EventSubscriptionHandle ScriptEventBus::SubscribeBehaviourBridge(
+    std::string eventName,
+    NativeEventSubscriptionCallback callback,
+    kb::scene::SceneEntity owner) {
+    return SubscribeInternal(std::move(eventName), std::move(callback), owner, {}, true);
+}
+
+EventSubscriptionHandle ScriptEventBus::SubscribeInternal(
+    std::string eventName,
+    NativeEventSubscriptionCallback callback,
+    kb::scene::SceneEntity owner,
+    std::string channel,
+    bool behaviourBridge) {
     if (eventName.empty() || callback == nullptr) {
         return kInvalidEventSubscriptionHandle;
     }
@@ -149,6 +171,7 @@ EventSubscriptionHandle ScriptEventBus::Subscribe(std::string eventName, NativeE
         .eventName = std::move(eventName),
         .owner = owner,
         .channel = std::move(channel),
+        .behaviourBridge = behaviourBridge,
         .callback = std::move(callback),
     });
     return handle;
@@ -168,7 +191,92 @@ bool ScriptEventBus::Unsubscribe(EventSubscriptionHandle handle) noexcept {
     return true;
 }
 
-ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const ScriptEvent& event, kb::scene::SceneEntity target, const EventRecipientFilter& filter) {
+std::shared_ptr<const ScriptEventObservation> ScriptEventBus::Observe(
+    std::string eventName,
+    kb::scene::SceneEntity recipient) {
+    if (eventName.empty()) {
+        return {};
+    }
+
+    // Completed/cancelled waits leave only expired weak entries. Prune them
+    // at the next registration boundary so sequential unique event names
+    // cannot grow this registry without bound.
+    std::size_t liveObservationCount = 0U;
+    for (auto eventIterator = observations_.begin(); eventIterator != observations_.end();) {
+        std::erase_if(eventIterator->second, [](const auto& entry) { return entry.second.expired(); });
+        liveObservationCount += eventIterator->second.size();
+        if (eventIterator->second.empty()) {
+            eventIterator = observations_.erase(eventIterator);
+        } else {
+            ++eventIterator;
+        }
+    }
+
+    ObservationRecipients& recipients = observations_[eventName];
+    if (const auto existing = recipients.find(recipient.Id()); existing != recipients.end()) {
+        if (std::shared_ptr<ScriptEventObservation> observation = existing->second.lock()) {
+            return observation;
+        }
+        recipients.erase(existing);
+    }
+    if (liveObservationCount >= kMaxPendingDeferredEvents) {
+        if (recipients.empty()) {
+            observations_.erase(eventName);
+        }
+        return {};
+    }
+
+    auto observation = std::make_shared<ScriptEventObservation>();
+    recipients.emplace(recipient.Id(), observation);
+    return observation;
+}
+
+void ScriptEventBus::NotifyObservations(std::string_view eventName, kb::scene::SceneEntity target) {
+    const auto eventIterator = observations_.find(eventName);
+    if (eventIterator == observations_.end()) {
+        return;
+    }
+    ObservationRecipients& recipients = eventIterator->second;
+    const auto notify = [&recipients](std::uint64_t recipientId) {
+        const auto iterator = recipients.find(recipientId);
+        if (iterator == recipients.end()) {
+            return;
+        }
+        if (std::shared_ptr<ScriptEventObservation> observation = iterator->second.lock()) {
+            ++observation->sequence_;
+        } else {
+            recipients.erase(iterator);
+        }
+    };
+
+    notify(0U);
+    if (target.IsValid()) {
+        notify(target.Id());
+    } else {
+        for (auto iterator = recipients.begin(); iterator != recipients.end();) {
+            if (iterator->first == 0U) {
+                ++iterator;
+                continue;
+            }
+            if (std::shared_ptr<ScriptEventObservation> observation = iterator->second.lock()) {
+                ++observation->sequence_;
+                ++iterator;
+            } else {
+                iterator = recipients.erase(iterator);
+            }
+        }
+    }
+    if (recipients.empty()) {
+        observations_.erase(eventIterator);
+    }
+}
+
+ScriptEventDeliveryResult ScriptEventBus::Emit(
+    kb::scene::Scene& scene,
+    const ScriptEvent& event,
+    kb::scene::SceneEntity target,
+    const EventRecipientFilter& filter,
+    ScriptEventBusAudience audience) {
     const ScopedElapsedNanosecondsTimer timer{ telemetry_.lastEmitElapsedNanoseconds, telemetry_.totalEmitElapsedNanoseconds };
     ++telemetry_.emitCalls;
     ScriptEventDeliveryResult result{};
@@ -204,6 +312,9 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
     // remainder of this call, so any subscriber invoked below that itself
     // calls Emit reentrantly is counted at the incremented depth.
     const EmitDepthGuard depthGuard{ emitDepth_ };
+    if (!event.observationAlreadyNotified) {
+        NotifyObservations(event.name, target);
+    }
     // Snapshot the matching handles before invoking anything: a subscriber
     // callback may itself Subscribe/Unsubscribe (including unsubscribing
     // itself or a sibling scheduled later in this same pass) — mutating
@@ -213,6 +324,9 @@ ScriptEventDeliveryResult ScriptEventBus::Emit(kb::scene::Scene& scene, const Sc
     std::vector<EventSubscriptionHandle> matching;
     for (const Subscription& subscription : subscriptions_) {
         if (subscription.eventName != event.name) {
+            continue;
+        }
+        if (audience == ScriptEventBusAudience::ExcludeBehaviourBridges && subscription.behaviourBridge) {
             continue;
         }
         if (OwnerGone(scene, subscription.owner)) {

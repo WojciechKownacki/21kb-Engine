@@ -101,6 +101,7 @@ public:
         std::span<const ScriptValue> defaults,
         std::span<const std::uint8_t> hasDefaults);
     [[nodiscard]] std::span<const PucLuaExposedVariableInstance> InstanceVariables(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) const noexcept;
+    [[nodiscard]] std::size_t SuspendedCoroutineCount() const noexcept;
     [[nodiscard]] bool SetInstanceVariable(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value);
     // Editor-authored per-instance override: unlike SetInstanceVariable it
     // CREATES the (entity,asset) instance record if it does not exist yet (so it
@@ -131,6 +132,8 @@ public:
         ScriptExecutionContext& context) override;
 
 private:
+    friend class PucLuaEventsApi;
+
     [[nodiscard]] ScriptBackendExecutionResult ExecuteFunction(
         const kb::scene::BehaviourComponent& behaviour,
         std::string_view functionName,

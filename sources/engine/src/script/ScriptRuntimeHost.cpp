@@ -1,5 +1,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include "script/ScriptFunctionDocumentation.hpp"
+
 #include "engine/library/EngineLibraryModule.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -231,8 +233,11 @@ const ScriptApiNameRegistry& ScriptRuntimeHost::ApiNames() const noexcept {
 
 bool ScriptRuntimeHost::RegisterFunction(ScriptFunctionDesc function) {
     const std::string functionName = function.signature.name;
+    if (function.signature.description.empty()) {
+        function.signature.description = BuiltInScriptFunctionDescription(functionName);
+    }
     const std::string visualGraphSymbol = "Function." + functionName;
-    if (functionName.empty() ||
+    if (functionName.empty() || function.signature.description.empty() ||
         state_->runtime.Functions().FindSignature(functionName) != nullptr ||
         state_->visualGraphRuntimeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr ||
         state_->visualGraphNativeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr) {
