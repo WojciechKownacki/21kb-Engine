@@ -46,10 +46,14 @@ public:
         RECT thumb{};
         int maxScroll = 0;
     };
-    [[nodiscard]] static AddComponentScrollInfo AddComponentScrollGeometry(const RECT& content, const EditorSceneContext& sceneContext);
-    // True when (x, y) is inside the open menu's scrollable list (so the wheel
-    // scrolls the menu instead of the whole inspector).
-    [[nodiscard]] static bool AddComponentListContains(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
+    // Popup geometry is expressed in the owner window's client coordinates.
+    // The menu is painted by InspectorAddComponentOverlayWindow, above docked
+    // and viewport child windows rather than inside the Inspector's clip.
+    [[nodiscard]] static std::optional<RECT> AddComponentOverlayRect(const RECT& content, const EditorSceneContext& sceneContext);
+    static void PaintAddComponentOverlay(HDC dc, const RECT& bounds, const EditorTheme& theme, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static Hit HitTestAddComponentOverlay(const RECT& bounds, const EditorSceneContext& sceneContext, int x, int y) noexcept;
+    [[nodiscard]] static AddComponentScrollInfo AddComponentOverlayScrollGeometry(const RECT& bounds, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool AddComponentOverlayListContains(const RECT& bounds, const EditorSceneContext& sceneContext, int x, int y);
 #endif
 };
 

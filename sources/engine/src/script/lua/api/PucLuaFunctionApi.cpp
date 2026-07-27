@@ -2418,7 +2418,13 @@ int LuaPointerRay(lua_State* state) {
         lua_pushnil(state);
         return 1;
     }
-    const ScriptFunctionCallResult result = context->CallFunction("Pointer.Ray", {});
+    const lua_Integer player = luaL_optinteger(state, 1, 0);
+    const std::array<ScriptFunctionArgument, 1> arguments{
+        ScriptFunctionArgument{
+            "player",
+            ScriptValue{static_cast<std::int32_t>(player)}}};
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Pointer.Ray", arguments);
     lua_createtable(state, 0, 7);
     for (const ScriptFunctionArgument& output : result.outputs) {
         PucLuaValueBridge::Push(state, output.value);

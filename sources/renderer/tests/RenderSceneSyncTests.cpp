@@ -2282,7 +2282,7 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
 
     // No camera: invalid frustum, all-bits mask - the authored visible flag alone decides.
     kb::scene::SceneRenderVisibilityFrame frame;
-    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, 64U, 64U, nullptr, nullptr, frame);
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, nullptr, 5U, 0U, 64U, 64U, nullptr, nullptr, frame);
     Require(!frame.frustumValid, "LIB-144 publisher must report an invalid frustum when the submit had no camera");
     Require(!frame.cameraValid, "LIB-145 publisher must report no camera for a camera-less submit");
     Require(frame.viewportWidth == 64U && frame.viewportHeight == 64U, "LIB-145 publisher must record the submitted viewport extent");
@@ -2300,7 +2300,7 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     camera.view = identity;
     camera.projection = identity;
     camera.cullingMask = 1U;
-    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 64U, 64U, nullptr, nullptr, frame);
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &camera, 5U, 0U, 64U, 64U, nullptr, nullptr, frame);
     Require(frame.frustumValid, "LIB-144 publisher must extract a valid frustum from a real camera");
     Require(frame.cameraValid && frame.view == identity && frame.projection == identity,
         "LIB-145 publisher must copy the submit camera's view/projection matrices into the frame");

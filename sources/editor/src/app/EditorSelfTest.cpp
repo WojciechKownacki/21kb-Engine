@@ -20,6 +20,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/InspectorPanelSectionRows.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
@@ -658,6 +659,30 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
     const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
     report.Check(actor.IsValid(), "Create actor for component affordances");
 
+    const int closedInspectorHeight = InspectorPanelRenderer::ContentHeight(kContent, context);
+    context.Inspector().ToggleAddComponentBrowser();
+    const int openInspectorHeight = InspectorPanelRenderer::ContentHeight(kContent, context);
+    const std::optional<RECT> addComponentOverlay = InspectorPanelRenderer::AddComponentOverlayRect(kContent, context);
+    report.Check(
+        openInspectorHeight == closedInspectorHeight,
+        "Add Component popup is out-of-flow and does not extend the Inspector content");
+    report.Check(
+        addComponentOverlay.has_value() &&
+            addComponentOverlay->right > addComponentOverlay->left &&
+            addComponentOverlay->bottom > addComponentOverlay->top,
+        "Add Component popup resolves independent owner-window overlay bounds");
+    if (addComponentOverlay.has_value()) {
+        const int searchX = static_cast<int>((addComponentOverlay->left + addComponentOverlay->right) / 2);
+        const int searchY = addComponentOverlay->top + 46;
+        const InspectorPanelRenderer::Hit overlayHit =
+            InspectorPanelRenderer::HitTestAddComponentOverlay(*addComponentOverlay, context, searchX, searchY);
+        report.Check(
+            overlayHit.section == InspectorSectionId::AddComponent &&
+                overlayHit.property == InspectorPropertyId::AddComponentSearch,
+            "Add Component overlay owns its search hit-test independently of the Inspector panel");
+    }
+    context.Inspector().CloseAddComponentBrowser();
+
     // (1) Mesh Renderer remove-component "×".
     report.Check(context.AddComponentToEntity(actor, "MeshRenderer"), "Add Mesh Renderer component");
     report.Check(context.Scene().Components().MeshRenderers().Has(actor), "Mesh Renderer component present after add");
@@ -1097,10 +1122,53 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     context.Scene().Components().MeshRenderers().Set(mesh, renderer);
     context.SelectEntity(mesh);
 
+    context.Inspector().ToggleDisclosure(InspectorDisclosureId::MeshRendererAdvanced);
+    static_cast<void>(context.Inspector().TickDisclosures(1.0F));
+    InspectorPanelRenderer::Hit advancedPassiveHit{};
+    for (int y = kContent.top; y < kContent.bottom && advancedPassiveHit.kind == InspectorHitKind::None; ++y) {
+        for (int x = kContent.left; x < kContent.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+            if (hit.section == InspectorSectionId::MeshRenderer &&
+                hit.kind == InspectorHitKind::TextField &&
+                hit.property == InspectorPropertyId::None &&
+                hit.index >= 0) {
+                advancedPassiveHit = hit;
+                break;
+            }
+        }
+    }
+    report.Check(
+        advancedPassiveHit.kind == InspectorHitKind::Row || advancedPassiveHit.kind == InspectorHitKind::TextField,
+        "Expanded Inspector Advanced fields expose passive row hover targets");
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, advancedPassiveHit));
+    report.Check(
+        context.Inspector().IsHovered(
+            advancedPassiveHit.kind,
+            InspectorSectionId::MeshRenderer,
+            InspectorPropertyId::None,
+            advancedPassiveHit.index),
+        "Inspector Advanced hover state identifies exactly the visible child row");
+    report.Check(
+        inspector_panel_rows::FieldValueHovered(
+            context.Inspector(),
+            InspectorSectionId::MeshRenderer,
+            InspectorPropertyId::None,
+            advancedPassiveHit.index) &&
+        !inspector_panel_rows::FieldValueHovered(
+            context.Inspector(),
+            InspectorSectionId::MeshRenderer,
+            InspectorPropertyId::None),
+        "Property-less Inspector value hover matches only its indexed Advanced field");
+    context.Inspector().ToggleDisclosure(InspectorDisclosureId::MeshRendererAdvanced);
+    static_cast<void>(context.Inspector().TickDisclosures(1.0F));
+    static_cast<void>(InspectorPanelInteraction::UpdateHover(context, {}));
+
     InspectorPanelRenderer::Hit materialHit{};
     InspectorPanelRenderer::Hit materialPickerHit{};
     InspectorPanelRenderer::Hit overridePickerHit{};
     InspectorPanelRenderer::Hit slotHit{};
+    InspectorPanelRenderer::Hit castsShadowHit{};
+    InspectorPanelRenderer::Hit receivesShadowHit{};
     for (int y = kContent.top; y < kContent.bottom; ++y) {
         for (int x = kContent.left; x < kContent.right; ++x) {
             const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
@@ -1121,12 +1189,24 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
                 (hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker || hit.property == InspectorPropertyId::MeshRendererMaterialSlotPicker0)) {
                 overridePickerHit = hit;
             }
+            if (castsShadowHit.kind == InspectorHitKind::None &&
+                hit.kind == InspectorHitKind::BoolField &&
+                hit.property == InspectorPropertyId::MeshRendererCastsShadow) {
+                castsShadowHit = hit;
+            }
+            if (receivesShadowHit.kind == InspectorHitKind::None &&
+                hit.kind == InspectorHitKind::BoolField &&
+                hit.property == InspectorPropertyId::MeshRendererReceivesShadow) {
+                receivesShadowHit = hit;
+            }
         }
     }
     report.Check(materialHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material row hit-tests as the main material assignment target");
     report.Check(materialPickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material row exposes a material picker button");
     report.Check(slotHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer material override row hit-tests as a concrete material slot target");
     report.Check(overridePickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material Override row exposes a material picker button");
+    report.Check(castsShadowHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer exposes the Casts Shadow runtime toggle");
+    report.Check(receivesShadowHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer exposes the Receives Shadow runtime toggle");
 
     auto refreshMeshEntityFromSelection = [&]() {
         const kb::scene::SceneEntity selected = context.SelectedEntity();
@@ -1134,6 +1214,52 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             mesh = selected;
         }
     };
+
+    context.AcknowledgeSceneRenderSubmitted();
+    const POINT castsShadowPoint = Center(castsShadowHit.rect);
+    report.Check(
+        InspectorPanelInteraction::HandlePointerDown(context, castsShadowHit, castsShadowPoint.x, castsShadowPoint.y),
+        "Clicking Mesh Renderer Casts Shadow is handled");
+    const kb::scene::MeshRendererComponent* castsShadowDisabled =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        castsShadowDisabled != nullptr && !castsShadowDisabled->castsShadow && castsShadowDisabled->receivesShadow,
+        "Mesh Renderer Casts Shadow click updates only the runtime caster flag");
+    report.Check(context.SceneRenderFullDirty(), "Mesh Renderer Casts Shadow click schedules renderer resynchronization");
+    report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer Casts Shadow toggle");
+    refreshMeshEntityFromSelection();
+    const kb::scene::MeshRendererComponent* castsShadowUndone =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(castsShadowUndone != nullptr && castsShadowUndone->castsShadow, "Undo restores Mesh Renderer Casts Shadow");
+    report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer Casts Shadow toggle");
+    refreshMeshEntityFromSelection();
+    const kb::scene::MeshRendererComponent* castsShadowRedone =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(castsShadowRedone != nullptr && !castsShadowRedone->castsShadow, "Redo reapplies Mesh Renderer Casts Shadow");
+
+    context.AcknowledgeSceneRenderSubmitted();
+    const POINT receivesShadowPoint = Center(receivesShadowHit.rect);
+    report.Check(
+        InspectorPanelInteraction::HandlePointerDown(context, receivesShadowHit, receivesShadowPoint.x, receivesShadowPoint.y),
+        "Clicking Mesh Renderer Receives Shadow is handled");
+    const kb::scene::MeshRendererComponent* receivesShadowDisabled =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        receivesShadowDisabled != nullptr &&
+            !receivesShadowDisabled->castsShadow &&
+            !receivesShadowDisabled->receivesShadow,
+        "Mesh Renderer Receives Shadow click updates only the runtime receiver flag");
+    report.Check(context.SceneRenderFullDirty(), "Mesh Renderer Receives Shadow click schedules renderer resynchronization");
+    report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer Receives Shadow toggle");
+    refreshMeshEntityFromSelection();
+    const kb::scene::MeshRendererComponent* receivesShadowUndone =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(receivesShadowUndone != nullptr && receivesShadowUndone->receivesShadow, "Undo restores Mesh Renderer Receives Shadow");
+    report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer Receives Shadow toggle");
+    refreshMeshEntityFromSelection();
+    const kb::scene::MeshRendererComponent* receivesShadowRedone =
+        context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(receivesShadowRedone != nullptr && !receivesShadowRedone->receivesShadow, "Redo reapplies Mesh Renderer Receives Shadow");
 
     const kb::assets::AssetId materialId{ 31337U };
     report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{

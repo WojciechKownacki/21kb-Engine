@@ -64,28 +64,38 @@ namespace {
 
 } // namespace
 
-void SceneRenderFeedback::Publish(Scene& scene, SceneRenderVisibilityFrame& frame) noexcept {
+void SceneRenderFeedback::Publish(Scene& scene, SceneRenderVisibilityFrame& frame) {
     SceneState& state = SceneAccess::State(scene);
-    std::swap(state.renderVisibilityFrame.entries, frame.entries);
-    state.renderVisibilityFrame.frustumValid = frame.frustumValid;
-    state.renderVisibilityFrame.cameraValid = frame.cameraValid;
-    state.renderVisibilityFrame.viewportId = frame.viewportId;
-    state.renderVisibilityFrame.viewportWidth = frame.viewportWidth;
-    state.renderVisibilityFrame.viewportHeight = frame.viewportHeight;
-    state.renderVisibilityFrame.frustumPlanes = frame.frustumPlanes;
-    state.renderVisibilityFrame.view = frame.view;
-    state.renderVisibilityFrame.projection = frame.projection;
+    SceneRenderVisibilityFrame& destination =
+        state.renderVisibilityFrames[frame.localUser.value];
+    std::swap(destination.entries, frame.entries);
+    destination.frustumValid = frame.frustumValid;
+    destination.cameraValid = frame.cameraValid;
+    destination.viewportId = frame.viewportId;
+    destination.localUser = frame.localUser;
+    destination.viewportWidth = frame.viewportWidth;
+    destination.viewportHeight = frame.viewportHeight;
+    destination.frustumPlanes = frame.frustumPlanes;
+    destination.view = frame.view;
+    destination.projection = frame.projection;
+    state.lastRenderVisibilityLocalUserId = frame.localUser.value;
     ++state.renderVisibilityPublishCount;
 }
 
 void SceneRenderFeedback::Clear(Scene& scene) noexcept {
     SceneState& state = SceneAccess::State(scene);
-    state.renderVisibilityFrame = SceneRenderVisibilityFrame{};
+    state.renderVisibilityFrames.clear();
+    state.lastRenderVisibilityLocalUserId = 0U;
     state.renderVisibilityPublishCount = 0U;
 }
 
 bool SceneRenderFeedback::HasFrame(const Scene& scene) noexcept {
     return SceneAccess::State(scene).renderVisibilityPublishCount != 0U;
+}
+
+bool SceneRenderFeedback::HasFrame(
+    const Scene& scene, kb::input::LocalUserId localUser) noexcept {
+    return FindFrame(scene, localUser) != nullptr;
 }
 
 std::uint64_t SceneRenderFeedback::PublishCount(const Scene& scene) noexcept {
@@ -104,10 +114,14 @@ SceneRenderBounds SceneRenderFeedback::WorldBounds(const Scene& scene, SceneEnti
 
 bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& center, float radius) noexcept {
     const SceneState& state = SceneAccess::State(scene);
-    if (state.renderVisibilityPublishCount == 0U || !state.renderVisibilityFrame.frustumValid) {
+    const auto frameIt =
+        state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    if (state.renderVisibilityPublishCount == 0U ||
+        frameIt == state.renderVisibilityFrames.end() ||
+        !frameIt->second.frustumValid) {
         return false;
     }
-    for (const SceneRenderFrustumPlane& plane : state.renderVisibilityFrame.frustumPlanes) {
+    for (const SceneRenderFrustumPlane& plane : frameIt->second.frustumPlanes) {
         const float distance = plane.x * center.x + plane.y * center.y + plane.z * center.z + plane.w;
         if (distance < -radius) {
             return false;
@@ -118,8 +132,14 @@ bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& 
 
 SceneRenderScreenPoint SceneRenderFeedback::WorldToScreen(const Scene& scene, const kb::math::Vec3& worldPoint) noexcept {
     const SceneState& state = SceneAccess::State(scene);
-    const SceneRenderVisibilityFrame& frame = state.renderVisibilityFrame;
-    if (state.renderVisibilityPublishCount == 0U || !frame.cameraValid || frame.viewportWidth == 0U || frame.viewportHeight == 0U) {
+    const auto frameIt =
+        state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    if (state.renderVisibilityPublishCount == 0U ||
+        frameIt == state.renderVisibilityFrames.end()) {
+        return {};
+    }
+    const SceneRenderVisibilityFrame& frame = frameIt->second;
+    if (!frame.cameraValid || frame.viewportWidth == 0U || frame.viewportHeight == 0U) {
         return {};
     }
 
@@ -146,8 +166,25 @@ SceneRenderScreenPoint SceneRenderFeedback::WorldToScreen(const Scene& scene, co
 
 SceneRenderCameraRay SceneRenderFeedback::ScreenPointToRay(const Scene& scene, float screenX, float screenY) noexcept {
     const SceneState& state = SceneAccess::State(scene);
-    const SceneRenderVisibilityFrame& frame = state.renderVisibilityFrame;
-    if (state.renderVisibilityPublishCount == 0U || !frame.cameraValid || frame.viewportWidth == 0U || frame.viewportHeight == 0U) {
+    return ScreenPointToRay(
+        scene,
+        kb::input::LocalUserId{state.lastRenderVisibilityLocalUserId},
+        screenX,
+        screenY);
+}
+
+SceneRenderCameraRay SceneRenderFeedback::ScreenPointToRay(
+    const Scene& scene,
+    kb::input::LocalUserId localUser,
+    float screenX,
+    float screenY) noexcept {
+    const SceneRenderVisibilityFrame* framePtr = FindFrame(scene, localUser);
+    if (framePtr == nullptr) {
+        return {};
+    }
+    const SceneRenderVisibilityFrame& frame = *framePtr;
+    if (!frame.cameraValid || frame.viewportWidth == 0U ||
+        frame.viewportHeight == 0U) {
         return {};
     }
     const float xScale = frame.projection[0];
@@ -257,13 +294,30 @@ const SceneRenderVisibilityEntry* SceneRenderFeedback::FindEntry(const Scene& sc
     if (state.renderVisibilityPublishCount == 0U) {
         return nullptr;
     }
-    const std::vector<SceneRenderVisibilityEntry>& entries = state.renderVisibilityFrame.entries;
+    const auto frameIt =
+        state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    if (frameIt == state.renderVisibilityFrames.end()) {
+        return nullptr;
+    }
+    const std::vector<SceneRenderVisibilityEntry>& entries =
+        frameIt->second.entries;
     const auto it = std::lower_bound(
         entries.begin(),
         entries.end(),
         entity.Id(),
         [](const SceneRenderVisibilityEntry& entry, std::uint64_t entityId) noexcept { return entry.entityId < entityId; });
     return it == entries.end() || it->entityId != entity.Id() ? nullptr : &(*it);
+}
+
+const SceneRenderVisibilityFrame* SceneRenderFeedback::FindFrame(
+    const Scene& scene, kb::input::LocalUserId localUser) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    if (state.renderVisibilityPublishCount == 0U) {
+        return nullptr;
+    }
+    const auto frameIt = state.renderVisibilityFrames.find(localUser.value);
+    return frameIt == state.renderVisibilityFrames.end() ? nullptr
+                                                         : &frameIt->second;
 }
 
 } // namespace kb::scene

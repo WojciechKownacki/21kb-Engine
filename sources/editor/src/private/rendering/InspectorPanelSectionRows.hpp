@@ -14,10 +14,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace kb::editor::inspector_panel_rows {
+
+inline constexpr int kDisclosureRowHeight = 18;
+inline constexpr int kDisclosureTextOffset = 29;
+
 namespace {
 
 constexpr int kSectionHeaderHeight = 24;
@@ -34,7 +39,6 @@ constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kComponentMenuButtonSize = 18;
 constexpr int kTextBaselineOffsetY = 1;
-
 [[nodiscard]] inline COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -120,6 +124,20 @@ inline void DrawTriangle(HDC dc, RECT rect, bool expanded, COLORREF color) {
 
 } // namespace
 
+[[nodiscard]] inline bool FieldValueHovered(
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    int index = -1) noexcept {
+    // Property-less display fields must always carry an exact row index. Treating
+    // -1 as the usual wildcard here highlights every read-only sibling.
+    if (property == InspectorPropertyId::None && index < 0) {
+        return false;
+    }
+    return state.IsHovered(InspectorHitKind::TextField, section, property, index) ||
+        state.IsHovered(InspectorHitKind::FloatField, section, property, index);
+}
+
 inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool removeButton = false) {
     const bool hovered = state.IsHovered(InspectorHitKind::SectionHeader, section, InspectorPropertyId::None);
     GdiDrawing::FillRectColor(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
@@ -141,8 +159,10 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
         ScopedFont xFont(11, FW_SEMIBOLD);
         const ScopedGdiObject selectedXFont(dc, xFont.handle);
         RECT glyph = button;
-        glyph.top -= 1;
-        glyph.bottom -= 1;
+        // The lowercase font metrics place "x" optically below the button's
+        // centre. Lift the shared component-remove glyph by one rendered pixel.
+        glyph.top -= 2;
+        glyph.bottom -= 2;
         Text(dc, glyph, "x", Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
@@ -220,7 +240,12 @@ inline void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const In
 // editor buffer is shown only in the specific row being edited, never in every
 // sibling row that happens to reuse the same property id.
 inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value, int editIndex = -1) {
-    if (RowHovered(state, property, editIndex)) {
+    const bool indexedPassiveField = property == InspectorPropertyId::None && editIndex >= 0;
+    const bool passiveHovered =
+        indexedPassiveField &&
+        (state.IsHovered(InspectorHitKind::Row, section, property, editIndex) ||
+            state.IsHovered(InspectorHitKind::TextField, section, property, editIndex));
+    if (RowHovered(state, property, editIndex) || passiveHovered) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
@@ -232,7 +257,8 @@ inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
-    DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property, editIndex) || state.IsHovered(InspectorHitKind::FloatField, section, property, editIndex) || editing);
+    const bool valueHovered = FieldValueHovered(state, section, property, editIndex);
+    DrawValueBox(dc, valueRect, theme, shown, valueHovered || editing);
 }
 
 [[nodiscard]] inline RECT AssetPickerButtonRect(RECT valueRect) noexcept {
@@ -293,6 +319,35 @@ inline void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const Inspec
     }
 }
 
+struct DisplayField {
+    std::string_view label;
+    std::string_view value;
+};
+
+inline void DrawDisclosureRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    std::string_view label,
+    bool expanded) {
+    const bool hovered = state.IsHovered(InspectorHitKind::Row, section, property);
+    GdiDrawing::FillRectColor(dc, row, hovered ? HoverFill(theme) : Color(theme.background));
+    // Match the disclosure triangle geometry used by top-level category headers.
+    const RECT chevron = Rect(row.left + 9, row.top, row.left + kDisclosureTextOffset, row.bottom);
+    DrawTriangle(dc, Shrink(chevron, 4, 4, 4, 4), expanded, Color(theme.textSecondary));
+    ScopedFont font(11, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(
+        dc,
+        Rect(row.left + kDisclosureTextOffset, row.top, row.right - kDisclosureTextOffset, row.bottom),
+        label,
+        Color(theme.textSecondary),
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 class SectionWriter {
 public:
     SectionWriter(HDC dc, RECT bounds, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool menuButton = false)
@@ -311,6 +366,50 @@ public:
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) { if (!collapsed_) { DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z); Advance(); } }
     void Rotation(std::string_view label, const kb::scene::Quat& value) { if (!collapsed_) { DrawRotationRow(dc_, Row(), theme_, state_, label, value); Advance(); } }
+    void Disclosure(std::string_view label, InspectorPropertyId property, bool expanded) {
+        if (collapsed_) {
+            return;
+        }
+        DrawDisclosureRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kDisclosureRowHeight), theme_, state_, section_, property, label, expanded);
+        y_ += kDisclosureRowHeight;
+        DrawDivider(dc_, bounds_.left, bounds_.right, y_);
+        y_ += kDividerHeight;
+    }
+    void AnimatedFields(std::span<const DisplayField> fields, float expansion, int hoverIndexBase = 0) {
+        if (collapsed_ || fields.empty()) {
+            return;
+        }
+        const int fullHeight = static_cast<int>(fields.size()) * (kFieldRowHeight + kDividerHeight);
+        const int visibleHeight = std::clamp(static_cast<int>(std::lround(static_cast<float>(fullHeight) * expansion)), 0, fullHeight);
+        if (visibleHeight == 0) {
+            return;
+        }
+        // Child rows align their label text with the disclosure title's leading
+        // edge. DrawFieldRow adds kRowPadX internally, so inset its bounds by
+        // only the remaining distance.
+        const int contentLeft = bounds_.left + kDisclosureTextOffset - kRowPadX;
+        const int savedDc = SaveDC(dc_);
+        IntersectClipRect(dc_, contentLeft, y_, bounds_.right, y_ + visibleHeight);
+        int drawY = y_;
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+            const DisplayField& field = fields[index];
+            DrawFieldRow(
+                dc_,
+                Rect(contentLeft, drawY, bounds_.right, drawY + kFieldRowHeight),
+                theme_,
+                state_,
+                section_,
+                InspectorPropertyId::None,
+                field.label,
+                field.value,
+                hoverIndexBase + static_cast<int>(index));
+            drawY += kFieldRowHeight;
+            DrawDivider(dc_, contentLeft, bounds_.right, drawY);
+            drawY += kDividerHeight;
+        }
+        RestoreDC(dc_, savedDc);
+        y_ += visibleHeight;
+    }
     [[nodiscard]] int Bottom() const noexcept { return y_; }
 
 private:

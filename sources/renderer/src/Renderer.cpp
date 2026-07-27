@@ -860,6 +860,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         renderScene,
         overlayCamera,
         desc.target.viewport.id.value,
+        desc.target.viewport.localUserId,
         width,
         height,
         &sceneRenderer_->Resources(),
