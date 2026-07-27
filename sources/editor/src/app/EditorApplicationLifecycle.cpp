@@ -44,6 +44,10 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.sceneViewport.SetAaTraceReporter([&state](std::string_view message) {
         state.sceneContext.Console().Info("AA", std::string{ message });
     });
+    state.sceneContext.SetRenderSceneReleaseHandler(
+        [&state](const kb::scene::Scene& scene) {
+            state.sceneViewport.ReleaseScene(scene);
+        });
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 
@@ -57,6 +61,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
+    state.sceneContext.SetRenderSceneReleaseHandler({});
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 

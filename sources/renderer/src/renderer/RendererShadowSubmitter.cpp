@@ -13,12 +13,19 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
         return {};
     }
 
+    const CameraRenderProxyDesc* sceneCamera =
+        desc.renderScene.FindPrimaryCameraProxy(desc.sceneDesc.target.viewport.id.value);
+    const std::uint32_t cameraCullingMask = desc.sceneDesc.cameraOverride.has_value()
+        ? desc.sceneDesc.cameraOverride->cullingMask
+        : (sceneCamera != nullptr ? sceneCamera->cullingMask : 0xFFFFFFFFU);
+
     DirectionalShadowSetup shadowSetup = DirectionalShadowPassPlanner{}.Build(
         desc.renderScene,
         desc.sceneRenderer.Resources(),
         desc.sceneRenderer.ResourceMap(),
         desc.lightingConfig,
-        BGFX_INVALID_HANDLE);
+        BGFX_INVALID_HANDLE,
+        cameraCullingMask);
     if (!shadowSetup.valid || !desc.shadowMap.Ensure(desc.lightingConfig.shadowMapSize)) {
         return {};
     }

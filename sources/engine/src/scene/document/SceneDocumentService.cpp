@@ -1,5 +1,6 @@
 #include "engine/scene/SceneDocumentService.hpp"
 
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -61,6 +62,13 @@ SceneDocumentLoadResult SceneDocumentService::Load(const std::filesystem::path& 
 }
 
 bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& document) {
+    // A non-additive load replaces the gameplay world while reusing the Scene
+    // container and its module backends. Stop scene-owned voices before their
+    // source entities disappear, then discard marker events produced by the
+    // outgoing world. The backend itself remains registered for the new world.
+    kb::audio::AudioPlayback::StopAll(scene);
+    static_cast<void>(
+        kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene));
     ClearSceneRoots(scene);
     if (!document.worldPrefab.Empty()) {
         const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);

@@ -1430,6 +1430,12 @@ void RunRendererAppliesMaterialInstanceParameterOverrideTest() {
     Require(afterFirstSubmit.materialErrorCount == 0U, "MAT-140: the first submit must not report a material error");
     renderer.EndFrame();
 
+    Require(!scene.MaterialInstances().SetParameterScalar(instance, "missingParameter", 0.9F),
+        "MAT-140: renderer schema bridge must reject an unknown parameter at the API call");
+    Require(!scene.MaterialInstances().SetParameterBool(instance, "roughnessOverride", true),
+        "MAT-140: renderer schema bridge must reject a wrong parameter type at the API call");
+    Require(scene.MaterialInstances().Parameters(instance).empty(),
+        "MAT-140: rejected schema mutations must not reach scene override storage");
     Require(scene.MaterialInstances().SetParameterScalar(instance, "roughnessOverride", 0.9F),
         "MAT-140 renderer override test could not set a parameter override");
     Require(renderer.BeginFrame(), "MAT-140 renderer override test renderer did not begin second frame");
@@ -1478,7 +1484,7 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.outputTransform.exposureStops = 1.25F;
     settings.outputTransform.gamma = 2.4F;
     settings.outputTransform.tonemap = FullscreenTextureTonemapOperator::AgxApprox;
-    settings.outputTransform.colorGradingLutStrength = 0.75F;
+    settings.outputTransform.colorGradingLutStrength = 0.0F;
     settings.outputTransform.autoExposure.enabled = false;
     settings.outputTransform.autoExposure.meteredAverageLuminance = 0.3F;
     settings.outputTransform.autoExposure.middleGray = 0.22F;
@@ -1500,7 +1506,7 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     Require(!loaded->tonemapEnabled && loaded->autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::Manual,
         "PostProcess profile asset round trip lost tonemapEnabled/autoExposureMetering");
     Require(NearlyEqual(loaded->outputTransform.exposureStops, 1.25F) && NearlyEqual(loaded->outputTransform.gamma, 2.4F) &&
-            loaded->outputTransform.tonemap == FullscreenTextureTonemapOperator::AgxApprox && NearlyEqual(loaded->outputTransform.colorGradingLutStrength, 0.75F),
+            loaded->outputTransform.tonemap == FullscreenTextureTonemapOperator::AgxApprox && NearlyEqual(loaded->outputTransform.colorGradingLutStrength, 0.0F),
         "PostProcess profile asset round trip lost outputTransform fields");
     Require(!loaded->outputTransform.autoExposure.enabled && NearlyEqual(loaded->outputTransform.autoExposure.meteredAverageLuminance, 0.3F) &&
             NearlyEqual(loaded->outputTransform.autoExposure.middleGray, 0.22F) && NearlyEqual(loaded->outputTransform.autoExposure.minExposureStops, -4.0F) &&
@@ -1512,6 +1518,11 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
     Require(!missing.has_value(), "PostProcess profile asset load must honestly fail for a nonexistent file, not return defaults");
+
+    ScenePostProcessSettings unsupportedLut = settings;
+    unsupportedLut.outputTransform.colorGradingLutStrength = 0.75F;
+    Require(!PostProcessProfileAssetLoader::SaveProfile(path, unsupportedLut),
+        "PostProcess profile save must reject a non-neutral LUT strength while no custom LUT asset path exists");
 
     std::filesystem::remove(path, removeError);
 }

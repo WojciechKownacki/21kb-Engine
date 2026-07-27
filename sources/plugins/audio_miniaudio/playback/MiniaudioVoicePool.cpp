@@ -24,7 +24,9 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip file could not be resolved" };
     }
 
-    PruneVoicesForClip(desc.clipAssetId, desc.priority);
+    if (!PruneVoicesForClip(desc.clipAssetId, desc.priority)) {
+        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip pool is full of higher-priority voices" };
+    }
     if (!PruneVoiceCapacity(desc.priority)) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio one-shot pool is full of higher-priority voices" };
     }
@@ -95,7 +97,7 @@ void MiniaudioVoicePool::SyncAttachedVoices(
                 const float scale = occlusionSampler->Sample(
                     scene,
                     kb::scene::SceneAudioOcclusionAccess::Settings(scene),
-                    iter->voiceId,
+                    MiniaudioOcclusionKey{ MiniaudioOcclusionKeyKind::Voice, iter->voiceId },
                     listenerPosition,
                     position,
                     iter->ownerEntityId);
@@ -254,10 +256,7 @@ std::uint64_t MiniaudioVoicePool::AllocateVoiceId() noexcept {
     return voiceId;
 }
 
-void MiniaudioVoicePool::PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept {
-    // The per-clip cap stays a silent CLAMP (the newest request always wins its slot -
-    // the pre-LIB-148 semantics); incomingPriority only shapes WHICH victim falls.
-    static_cast<void>(incomingPriority);
+bool MiniaudioVoicePool::PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept {
     std::size_t count = 0U;
     for (const VoiceRecord& voice : voices_) {
         if (voice.clipAssetId == clipAssetId) {
@@ -281,11 +280,15 @@ void MiniaudioVoicePool::PruneVoicesForClip(std::uint64_t clipAssetId, std::uint
             }
         }
         if (victim == voices_.end()) {
-            return;
+            return true;
+        }
+        if (victim->priority > incomingPriority) {
+            return false;
         }
         voices_.erase(victim);
         --count;
     }
+    return true;
 }
 
 bool MiniaudioVoicePool::PruneVoiceCapacity(std::uint8_t incomingPriority) noexcept {

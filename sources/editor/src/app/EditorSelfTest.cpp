@@ -4192,6 +4192,36 @@ void RunMaterialGraphEditSceneDirtyScopeSuite(Report& report) {
         "Finding 29: the mesh equipped with the edited material (via slot override) is marked dirty by id");
 }
 
+void RunRenderSceneReleaseLifecycleSuite(Report& report) {
+    EditorSceneContext context;
+    std::vector<std::uint64_t> releasedSceneIds;
+    context.SetRenderSceneReleaseHandler(
+        [&releasedSceneIds](const kb::scene::Scene& scene) {
+            releasedSceneIds.push_back(scene.Id());
+        });
+
+    const std::uint64_t originalSceneId = context.Scene().Id();
+    report.Check(
+        context.NewScene(EditorDirtySceneResolution::Discard),
+        "LIB-146 creating a new document succeeds");
+    report.Check(
+        releasedSceneIds.size() == 1U &&
+            releasedSceneIds.front() == originalSceneId,
+        "LIB-146 document replacement releases renderer resources for the live scene id");
+
+    report.Check(
+        context.SaveCurrentScene(),
+        "LIB-146 replacement scene can be persisted before host scene reload");
+    report.Check(
+        context.ReloadSceneFromProject(),
+        "LIB-146 project scene reload succeeds");
+    report.Check(
+        releasedSceneIds.size() == 2U &&
+            releasedSceneIds.back() == originalSceneId &&
+            context.Scene().Id() != originalSceneId,
+        "LIB-146 scene object replacement releases the old renderer key before destruction");
+}
+
 // Interaction cost budget: every mouse move during a drag runs hit-tests and a repaint, so a single
 // pointer event has to stay well under a frame or the editor drops to single-digit FPS on a real graph.
 void RunMaterialGraphInteractionCostSuite(Report& report) {
@@ -5470,6 +5500,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "material_graph_diagnostic_jump", &RunMaterialGraphDiagnosticJumpSuite);
     RunSuiteInScratch(report, "material_preview_camera_control", &RunMaterialPreviewCameraControlSuite);
     RunSuiteInScratch(report, "material_graph_edit_scene_dirty_scope", &RunMaterialGraphEditSceneDirtyScopeSuite);
+    RunSuiteInScratch(report, "render_scene_release_lifecycle", &RunRenderSceneReleaseLifecycleSuite);
     RunSuiteInScratch(report, "floating_window_resize", &RunFloatingWindowResizeSuite);
     RunSuiteInScratch(report, "material_graph_interaction_cost", &RunMaterialGraphInteractionCostSuite);
     RunSuiteInScratch(report, "material_editor_global_save", &RunMaterialEditorGlobalSaveSuite);

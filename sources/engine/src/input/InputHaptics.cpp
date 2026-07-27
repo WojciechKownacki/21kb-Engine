@@ -41,6 +41,37 @@ bool InputHaptics::SetVibration(kb::scene::Scene& scene, std::uint32_t gamepadIn
     return backend != nullptr && backend->SetVibration(gamepadIndex, lowFrequency, highFrequency);
 }
 
+bool InputHaptics::BindLocalUser(kb::scene::Scene& scene, LocalUserId localUser, std::uint32_t gamepadIndex) {
+    IInputHapticsBackend* backend = FindBackend(scene);
+    if (backend == nullptr) {
+        return false;
+    }
+    const InputHapticsCapability capability = backend->Capability(gamepadIndex);
+    if (capability.maxGamepads == 0U || gamepadIndex >= capability.maxGamepads) {
+        return false;
+    }
+    kb::scene::SceneAccess::State(scene).hapticsGamepadByLocalUser[localUser.value] = gamepadIndex;
+    return true;
+}
+
+std::uint32_t InputHaptics::GamepadForLocalUser(const kb::scene::Scene& scene, LocalUserId localUser) noexcept {
+    const kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    const auto iterator = state.hapticsGamepadByLocalUser.find(localUser.value);
+    return iterator == state.hapticsGamepadByLocalUser.end() ? localUser.value : iterator->second;
+}
+
+InputHapticsCapability InputHaptics::CapabilityForLocalUser(kb::scene::Scene& scene, LocalUserId localUser) {
+    return Capability(scene, GamepadForLocalUser(scene, localUser));
+}
+
+bool InputHaptics::SetVibrationForLocalUser(
+    kb::scene::Scene& scene,
+    LocalUserId localUser,
+    float lowFrequency,
+    float highFrequency) {
+    return SetVibration(scene, GamepadForLocalUser(scene, localUser), lowFrequency, highFrequency);
+}
+
 void InputHaptics::StopAll(kb::scene::Scene& scene) noexcept {
     IInputHapticsBackend* backend = FindBackend(scene);
     if (backend != nullptr) {

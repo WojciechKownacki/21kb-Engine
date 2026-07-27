@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/input/InputLocalUser.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -26,12 +28,8 @@ struct InputHapticsCapability {
     std::string disabledReason;
 };
 
-// LIB-153: the host-registered haptics actuator. Devices are addressed by gamepad index
-// (the same 0..kMaxGamepads-1 slots InputDeviceState already models). Per-LOCAL-USER
-// addressing deliberately routes through the device index for now: the engine's local
-// users share one physical device state and InputLocalUser.hpp explicitly defers the
-// user->device binding layer ("InputKey has no per-device-instance axis yet") - when that
-// layer lands, it maps users to these same indices.
+// LIB-153: the host-registered haptics actuator. Backends address physical gamepad slots;
+// InputHaptics owns the scene-local LocalUserId -> slot routing above this interface.
 class IInputHapticsBackend {
 public:
     virtual ~IInputHapticsBackend() = default;
@@ -57,6 +55,14 @@ public:
     [[nodiscard]] static bool HasBackend(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static InputHapticsCapability Capability(kb::scene::Scene& scene, std::uint32_t gamepadIndex);
     [[nodiscard]] static bool SetVibration(kb::scene::Scene& scene, std::uint32_t gamepadIndex, float lowFrequency, float highFrequency);
+    [[nodiscard]] static bool BindLocalUser(kb::scene::Scene& scene, LocalUserId localUser, std::uint32_t gamepadIndex);
+    [[nodiscard]] static std::uint32_t GamepadForLocalUser(const kb::scene::Scene& scene, LocalUserId localUser) noexcept;
+    [[nodiscard]] static InputHapticsCapability CapabilityForLocalUser(kb::scene::Scene& scene, LocalUserId localUser);
+    [[nodiscard]] static bool SetVibrationForLocalUser(
+        kb::scene::Scene& scene,
+        LocalUserId localUser,
+        float lowFrequency,
+        float highFrequency);
     static void StopAll(kb::scene::Scene& scene) noexcept;
 };
 

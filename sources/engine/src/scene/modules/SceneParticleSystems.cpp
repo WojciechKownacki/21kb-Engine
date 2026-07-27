@@ -94,6 +94,10 @@ std::uint32_t SceneParticleSystems::LiveParticleCount(std::uint64_t id) const no
     return SceneParticleSystemService::LiveParticleCount(scene_, id);
 }
 
+std::vector<ParticleSystemFinishedEvent> SceneParticleSystems::DrainFinishedEvents() {
+    return SceneParticleSystemService::DrainFinishedEvents(scene_);
+}
+
 void SceneParticleSystems::Advance(float deltaSeconds) {
     SceneParticleSystemService::Advance(scene_, deltaSeconds);
 }

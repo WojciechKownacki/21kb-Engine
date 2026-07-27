@@ -92,7 +92,7 @@ private:
 
     [[nodiscard]] std::uint64_t AllocateVoiceId() noexcept;
     [[nodiscard]] VoiceRecord* FindVoice(std::uint64_t voiceId) noexcept;
-    void PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept;
+    [[nodiscard]] bool PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept;
     // LIB-148: evicts the lowest-priority (ties: oldest) voice while at capacity. Returns
     // false when every live voice outranks `incomingPriority` - the caller must then
     // honestly refuse the new voice instead of stealing a higher-priority one.

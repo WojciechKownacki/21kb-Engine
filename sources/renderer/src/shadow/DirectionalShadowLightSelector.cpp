@@ -19,13 +19,15 @@ namespace {
 
 } // namespace
 
-DirectionalShadowLightSelection DirectionalShadowLightSelector::Select(const RenderScene& renderScene) noexcept {
+DirectionalShadowLightSelection DirectionalShadowLightSelector::Select(
+    const RenderScene& renderScene,
+    std::uint32_t cameraCullingMask) noexcept {
     DirectionalShadowLightSelection selected{};
     std::uint64_t selectedEntityId = 0U;
     float selectedScore = 0.0F;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
         const LightRenderProxyDesc& light = proxy.desc;
-        if (!IsShadowDirectionalLight(light)) {
+        if (!IsShadowDirectionalLight(light) || (light.layer & cameraCullingMask) == 0U) {
             continue;
         }
         const float score = light.intensity * MaxLightChannel(light);

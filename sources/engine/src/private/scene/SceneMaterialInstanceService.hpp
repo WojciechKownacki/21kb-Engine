@@ -3,6 +3,7 @@
 #include "engine/scene/SceneMaterialInstances.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -24,6 +25,8 @@ public:
     [[nodiscard]] static std::uint64_t Parent(const Scene& scene, std::uint64_t id) noexcept;
     // LIB-140
     [[nodiscard]] static std::span<const MaterialParameterOverride> Parameters(const Scene& scene, std::uint64_t id) noexcept;
+    static void SetParameterSchemaValidator(Scene& scene, std::shared_ptr<const MaterialParameterSchemaValidator> validator) noexcept;
+    [[nodiscard]] static bool HasParameterSchemaValidator(const Scene& scene) noexcept;
     [[nodiscard]] static bool SetParameterScalar(Scene& scene, std::uint64_t id, std::string_view name, float value) noexcept;
     [[nodiscard]] static bool SetParameterBool(Scene& scene, std::uint64_t id, std::string_view name, bool value) noexcept;
     [[nodiscard]] static bool ClearParameter(Scene& scene, std::uint64_t id, std::string_view name) noexcept;

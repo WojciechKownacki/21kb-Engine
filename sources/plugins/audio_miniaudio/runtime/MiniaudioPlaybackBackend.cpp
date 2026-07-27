@@ -46,6 +46,16 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
     // LIB-149: owner-attached voices follow their owner's transform and die with it -
     // BEFORE the finished sweep, so an owner-released voice never lingers a frame.
     voicePool_.SyncAttachedVoices(context.GetScene(), occlusionSampler, listenerPosition);
+    if (occlusionSampler != nullptr) {
+        occlusionSampler_.EndTick();
+    } else {
+        occlusionSampler_.Clear();
+    }
+    kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(
+        context.GetScene(),
+        occlusionSampler != nullptr
+            ? occlusionSampler_.RuntimeStats()
+            : kb::scene::AudioOcclusionRuntimeStats{});
     // LIB-152: fire crossed markers BEFORE the finished sweep, so markers at/near the end
     // of a clip still queue their event on the tick the voice completes.
     voicePool_.DispatchMarkers(context.GetScene());

@@ -125,7 +125,7 @@ void MiniaudioSourceRegistry::SyncSource(
         settings.volume *= occlusionSampler->Sample(
             scene,
             kb::scene::SceneAudioOcclusionAccess::Settings(scene),
-            entity.Id(),
+            MiniaudioOcclusionKey{ MiniaudioOcclusionKeyKind::Source, entity.Id() },
             listenerPosition,
             transform.worldPosition,
             entity.Id());

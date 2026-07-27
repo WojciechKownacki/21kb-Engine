@@ -2519,6 +2519,37 @@ int LuaInputSetVibration(lua_State* state) {
     return 1;
 }
 
+int LuaInputBindHapticsUser(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("localUser", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("gamepadIndex", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.BindHapticsUser", arguments);
+    lua_pushboolean(state, result.Output("bound").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputSetUserVibration(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("localUser", ScriptValue{ static_cast<int>(luaL_checkinteger(state, 1)) }),
+        Arg("lowFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("highFrequency", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.SetUserVibration", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaInputStopVibration(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2729,6 +2760,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "IsGamepadConnected", &LuaInputIsGamepadConnected, context);
     SetClosure(state, "HasHaptics", &LuaInputHasHaptics, context);
     SetClosure(state, "SetVibration", &LuaInputSetVibration, context);
+    SetClosure(state, "BindHapticsUser", &LuaInputBindHapticsUser, context);
+    SetClosure(state, "SetUserVibration", &LuaInputSetUserVibration, context);
     SetClosure(state, "StopVibration", &LuaInputStopVibration, context);
     lua_setfield(state, environmentIndex, "Input");
 

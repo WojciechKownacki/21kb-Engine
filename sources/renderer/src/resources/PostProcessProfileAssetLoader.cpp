@@ -100,7 +100,16 @@ namespace {
     if (keyword == "outputTransform.exposureStops") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.exposureStops);
     if (keyword == "outputTransform.gamma") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.gamma);
     if (keyword == "outputTransform.tonemap") return ParseTonemapOperator(Trim(rest), settings.outputTransform.tonemap);
-    if (keyword == "outputTransform.colorGradingLutStrength") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.colorGradingLutStrength);
+    if (keyword == "outputTransform.colorGradingLutStrength") {
+        float strength = 0.0F;
+        if (!ParseFiniteMaterialFloatToken(Trim(rest), strength) || strength != 0.0F) {
+            // No custom LUT asset/binding exists yet. Reject a non-neutral value instead of
+            // accepting a serialized control that the identity LUT cannot make observable.
+            return false;
+        }
+        settings.outputTransform.colorGradingLutStrength = 0.0F;
+        return true;
+    }
     if (keyword == "outputTransform.autoExposure.enabled") return ParseBoolToken(rest, settings.outputTransform.autoExposure.enabled);
     if (keyword == "outputTransform.autoExposure.meteredAverageLuminance") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.meteredAverageLuminance);
     if (keyword == "outputTransform.autoExposure.middleGray") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.middleGray);
@@ -194,6 +203,9 @@ std::optional<ScenePostProcessSettings> PostProcessProfileAssetLoader::LoadProfi
 }
 
 bool PostProcessProfileAssetLoader::SaveProfile(const std::filesystem::path& path, const ScenePostProcessSettings& settings) {
+    if (settings.outputTransform.colorGradingLutStrength != 0.0F) {
+        return false;
+    }
     return detail::WriteMaterialFileAtomically(path, [&settings](std::ostream& output) {
         WriteProfile(output, settings);
     });

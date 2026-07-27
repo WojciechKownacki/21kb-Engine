@@ -1,4 +1,4 @@
-#include "platform/win32/Win32XInputHapticsBackend.hpp"
+#include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
 
@@ -9,11 +9,12 @@
 #include <algorithm>
 #include <cmath>
 
-namespace kb::editor {
+namespace kb::input {
 namespace {
 
 [[nodiscard]] WORD ToMotorMagnitude(float value) noexcept {
-    const float clamped = std::isfinite(value) ? std::clamp(value, 0.0F, 1.0F) : 0.0F;
+    const float clamped =
+        std::isfinite(value) ? std::clamp(value, 0.0F, 1.0F) : 0.0F;
     return static_cast<WORD>(clamped * 65535.0F);
 }
 
@@ -28,24 +29,28 @@ Win32XInputHapticsBackend::~Win32XInputHapticsBackend() {
     StopAll();
 }
 
-kb::input::InputHapticsCapability Win32XInputHapticsBackend::Capability(std::uint32_t gamepadIndex) {
-    if (gamepadIndex >= kb::input::InputDeviceState::kMaxGamepads) {
-        return kb::input::InputHapticsCapability{
-            .maxGamepads = kb::input::InputDeviceState::kMaxGamepads,
+InputHapticsCapability Win32XInputHapticsBackend::Capability(
+    std::uint32_t gamepadIndex) {
+    if (gamepadIndex >= InputDeviceState::kMaxGamepads) {
+        return InputHapticsCapability{
+            .maxGamepads = InputDeviceState::kMaxGamepads,
             .disabledReason = "gamepad index is outside XInput's slot range",
         };
     }
-    return kb::input::InputHapticsCapability{
+    return InputHapticsCapability{
         .supported = true,
         .connected = IsConnected(gamepadIndex),
         .dualMotor = true,
-        .maxGamepads = kb::input::InputDeviceState::kMaxGamepads,
+        .maxGamepads = InputDeviceState::kMaxGamepads,
         .disabledReason = {},
     };
 }
 
-bool Win32XInputHapticsBackend::SetVibration(std::uint32_t gamepadIndex, float lowFrequency, float highFrequency) {
-    if (gamepadIndex >= kb::input::InputDeviceState::kMaxGamepads) {
+bool Win32XInputHapticsBackend::SetVibration(
+    std::uint32_t gamepadIndex,
+    float lowFrequency,
+    float highFrequency) {
+    if (gamepadIndex >= InputDeviceState::kMaxGamepads) {
         return false;
     }
     XINPUT_VIBRATION vibration{
@@ -56,10 +61,12 @@ bool Win32XInputHapticsBackend::SetVibration(std::uint32_t gamepadIndex, float l
 }
 
 void Win32XInputHapticsBackend::StopAll() noexcept {
-    for (std::uint32_t index = 0U; index < kb::input::InputDeviceState::kMaxGamepads; ++index) {
+    for (std::uint32_t index = 0U;
+         index < InputDeviceState::kMaxGamepads;
+         ++index) {
         XINPUT_VIBRATION silence{};
         static_cast<void>(XInputSetState(index, &silence));
     }
 }
 
-} // namespace kb::editor
+} // namespace kb::input
