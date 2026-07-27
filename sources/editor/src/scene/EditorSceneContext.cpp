@@ -1179,6 +1179,7 @@ void EditorSceneContext::EnsureScriptRuntime() {
                 }
             }
             console->Info("Script", message);
+            EditorCrashBreadcrumbs::Write("runtime_script_log", message);
             return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
         };
         static_cast<void>(host.RegisterFunction(std::move(logDesc)));
