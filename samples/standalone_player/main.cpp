@@ -5,6 +5,7 @@
 #include "engine/platform/win32/Win32InputCollector.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -16,6 +17,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -303,6 +305,71 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     return material;
 }
 
+[[nodiscard]] bool SaveSelfTestGraphMaterial(
+    const std::filesystem::path& path) {
+    return kb::render::RenderMaterialAssetWriter::Save(
+        path, MakeSelfTestGraphMaterial());
+}
+
+[[nodiscard]] bool CookSelfTestGraphMaterial(
+    const StandaloneOptions& options,
+    std::string_view virtualPath,
+    std::uint64_t assetId) {
+#if defined(KB_STANDALONE_GRAPH_SHADERC_PATH)
+    const kb::render::RenderMaterialAssetData material =
+        MakeSelfTestGraphMaterial();
+    const kb::render::RenderMaterialGraphCompileResult compiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            material.graph,
+            kb::render::RenderMaterialGraphBuildContext{
+                .assetId = assetId,
+                .sourcePath = std::string{virtualPath}});
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr,
+            "kb_standalone_player: self-test graph compile failed diagnostics=%zu\n",
+            compiled.diagnostics.size());
+        return false;
+    }
+
+    kb::render::RenderMaterialGraphShaderArtifactRequest request{};
+    request.shadercPath = KB_STANDALONE_GRAPH_SHADERC_PATH;
+    request.varyingDefPath = KB_STANDALONE_GRAPH_SHADER_VARYING_DEF;
+    request.includeDirs = {
+        KB_STANDALONE_GRAPH_SHADER_INCLUDE_DIR,
+        KB_STANDALONE_GRAPH_BGFX_SHADER_INCLUDE_DIR};
+    request.cacheRoot = options.graphCacheRoot.generic_string();
+    request.pass = "BaseOpaque";
+    const kb::render::RenderMaterialGraphShaderBackend backend =
+        kb::render::RenderMaterialGraphShaderBackend::Dxbc;
+    const kb::render::RenderMaterialGraphShaderArtifactResult cooked =
+        kb::render::CookRenderMaterialGraphShaderArtifact(
+            compiled.shader,
+            std::span<const kb::render::RenderMaterialGraphShaderBackend>{
+                &backend, 1U},
+            request);
+    if (!cooked.Succeeded()) {
+        std::fprintf(stderr,
+            "kb_standalone_player: self-test graph cook failed diagnostics=%zu\n",
+            cooked.diagnostics.size());
+        for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic :
+             cooked.diagnostics) {
+            std::fprintf(stderr,
+                "kb_standalone_player: cook diagnostic: %s\n",
+                diagnostic.message.c_str());
+        }
+        return false;
+    }
+    return true;
+#else
+    static_cast<void>(options);
+    static_cast<void>(virtualPath);
+    static_cast<void>(assetId);
+    std::fprintf(stderr,
+        "kb_standalone_player: self-test requires KB_STANDALONE_GRAPH_SHADERC_PATH\n");
+    return false;
+#endif
+}
+
 [[nodiscard]] bool PrepareGraphSelfTestPackage(StandaloneOptions& options, std::filesystem::path& packageRoot) {
 #if defined(KB_STANDALONE_GRAPH_SHADERC_PATH)
     packageRoot = std::filesystem::temp_directory_path() /
@@ -317,36 +384,12 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     }
 
     WriteTriangleObj(packageRoot / "triangle.obj");
-    kb::render::RenderMaterialAssetData material = MakeSelfTestGraphMaterial();
-    if (!kb::render::RenderMaterialAssetWriter::Save(packageRoot / "graph.kbmat", material)) {
+    if (!SaveSelfTestGraphMaterial(packageRoot / "graph.kbmat")) {
         std::fprintf(stderr, "kb_standalone_player: self-test graph material write failed\n");
         return false;
     }
-
-    const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
-        material.graph,
-        kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x9900U, .sourcePath = "/Game/graph.kbmat" });
-    if (!compiled.Succeeded()) {
-        std::fprintf(stderr, "kb_standalone_player: self-test graph compile failed diagnostics=%zu\n", compiled.diagnostics.size());
-        return false;
-    }
-
-    kb::render::RenderMaterialGraphShaderArtifactRequest request{};
-    request.shadercPath = KB_STANDALONE_GRAPH_SHADERC_PATH;
-    request.varyingDefPath = KB_STANDALONE_GRAPH_SHADER_VARYING_DEF;
-    request.includeDirs = { KB_STANDALONE_GRAPH_SHADER_INCLUDE_DIR, KB_STANDALONE_GRAPH_BGFX_SHADER_INCLUDE_DIR };
-    request.cacheRoot = options.graphCacheRoot.generic_string();
-    request.pass = "BaseOpaque";
-    const kb::render::RenderMaterialGraphShaderBackend backend = kb::render::RenderMaterialGraphShaderBackend::Dxbc;
-    const kb::render::RenderMaterialGraphShaderArtifactResult cooked = kb::render::CookRenderMaterialGraphShaderArtifact(
-        compiled.shader,
-        std::span<const kb::render::RenderMaterialGraphShaderBackend>{ &backend, 1U },
-        request);
-    if (!cooked.Succeeded()) {
-        std::fprintf(stderr, "kb_standalone_player: self-test graph cook failed diagnostics=%zu\n", cooked.diagnostics.size());
-        for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : cooked.diagnostics) {
-            std::fprintf(stderr, "kb_standalone_player: cook diagnostic: %s\n", diagnostic.message.c_str());
-        }
+    if (!CookSelfTestGraphMaterial(
+            options, "/Game/graph.kbmat", 0x9900U)) {
         return false;
     }
 
@@ -415,16 +458,20 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     return true;
 }
 
-[[nodiscard]] kb::render::RenderSceneSubmitDesc HeadlessSubmitDesc() noexcept {
+[[nodiscard]] kb::render::RenderSceneSubmitDesc HeadlessSubmitDesc(
+    std::uint32_t viewportId = 1U,
+    std::uint32_t viewportIndex = 0U,
+    kb::input::LocalUserId localUser = kb::input::kPrimaryLocalUser) noexcept {
     return kb::render::RenderSceneSubmitDesc{
         .target = kb::render::RenderSceneTargetBinding{
             .frameBuffer = BGFX_INVALID_HANDLE,
             .colorTexture = BGFX_INVALID_HANDLE,
             .depthTexture = BGFX_INVALID_HANDLE,
             .viewport = kb::render::RenderViewportDesc{
-                .id = kb::render::RenderViewportId{1U},
+                .id = kb::render::RenderViewportId{viewportId},
                 .extent = kb::render::RenderExtent{kHeadlessWidth, kHeadlessHeight},
-                .viewportIndex = 0U,
+                .viewportIndex = viewportIndex,
+                .localUserId = localUser.value,
             },
         },
         .clearRgba = 0x101018FFU,
@@ -698,6 +745,31 @@ struct StandaloneProjectRuntimeConfig {
             "kb_standalone_player: camera runtime package directory failed\n");
         return false;
     }
+    WriteTriangleObj(packageRoot / "Assets" / "triangle.obj");
+    if (!SaveSelfTestGraphMaterial(
+            packageRoot / "Assets" / "graph.kbmat")) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime material write failed\n");
+        return false;
+    }
+    {
+        std::ofstream script{
+            packageRoot / "Assets" / "MeshRuntime.lua",
+            std::ios::trunc};
+        script
+            << "function Tick(self, dt)\n"
+            << "    MeshRenderer.SetMesh('/Game/triangle.obj', self.entity)\n"
+            << "    MeshRenderer.SetMaterial('/Game/graph.kbmat', self.entity)\n"
+            << "    MeshRenderer.SetMaterialSlot(0, '/Game/graph.kbmat', self.entity)\n"
+            << "    local instance = MaterialInstance.Create('/Game/graph.kbmat')\n"
+            << "    MeshRenderer.SetMaterialInstance(instance, self.entity)\n"
+            << "end\n";
+        if (!script) {
+            std::fprintf(stderr,
+                "kb_standalone_player: camera runtime Lua write failed\n");
+            return false;
+        }
+    }
 
     kb::project::ProjectDescriptor descriptor{};
     descriptor.name = "CameraRuntimeSelfTest";
@@ -710,6 +782,33 @@ struct StandaloneProjectRuntimeConfig {
     }
 
     kb::scene::Scene authoringScene;
+    if (!RegisterRuntimeAssetLoaders(authoringScene) ||
+        !authoringScene.Assets().MountProject(packageRoot) ||
+        authoringScene.Assets().Discover() != 3U) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime asset discovery failed\n");
+        return false;
+    }
+    const kb::assets::AssetMetadata* meshMetadata =
+        authoringScene.Assets().Manager().Registry().FindByPath(
+            "/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata =
+        authoringScene.Assets().Manager().Registry().FindByPath(
+            "/Game/graph.kbmat");
+    const kb::assets::AssetMetadata* scriptMetadata =
+        authoringScene.Assets().Manager().Registry().FindByPath(
+            "/Game/MeshRuntime.lua");
+    if (meshMetadata == nullptr || materialMetadata == nullptr ||
+        scriptMetadata == nullptr ||
+        !CookSelfTestGraphMaterial(
+            options, "/Game/graph.kbmat", materialMetadata->id.value)) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime asset preparation failed\n");
+        return false;
+    }
+    const std::uint64_t expectedMeshAssetId = meshMetadata->id.value;
+    const std::uint64_t expectedMaterialAssetId = materialMetadata->id.value;
+    const std::uint64_t scriptAssetId = scriptMetadata->id.value;
     const kb::scene::SceneObject fallbackCamera =
         authoringScene.Entities().CreateObject(kb::scene::SceneObjectDesc{
             .name = "Fallback Camera",
@@ -747,6 +846,45 @@ struct StandaloneProjectRuntimeConfig {
             .primary = true,
             .viewportId = 1U,
             .priority = 100,
+            .cullingMask = 0x00000001U,
+            .clearMode = kb::scene::CameraClearMode::DepthOnly,
+            .clearColor = kb::scene::Vec3{0.25F, 0.5F, 0.75F},
+        });
+
+    const kb::scene::SceneObject secondaryPlayerCamera =
+        authoringScene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Secondary Player Camera",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{-8.0F, 3.0F, -5.0F},
+            },
+        });
+    authoringScene.Components().Cameras().Set(
+        secondaryPlayerCamera.Entity(),
+        kb::scene::CameraComponent{
+            .projection = kb::scene::CameraProjection::Perspective,
+            .verticalFovDegrees = 51.0F,
+            .nearClip = 0.5F,
+            .farClip = 222.0F,
+            .primary = true,
+            .viewportId = 2U,
+            .priority = 200,
+            .cullingMask = 0x00000002U,
+            .clearMode = kb::scene::CameraClearMode::SolidColor,
+            .clearColor = kb::scene::Vec3{0.75F, 0.25F, 0.5F},
+        });
+    const kb::scene::SceneObject scriptedMesh =
+        authoringScene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Scripted Mesh",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{6.0F, 2.0F, 0.0F},
+            },
+        });
+    authoringScene.Components().Behaviours().Set(
+        scriptedMesh.Entity(),
+        kb::scene::BehaviourComponent{
+            .behaviourAssetId = scriptAssetId,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
         });
     if (!kb::scene::SceneDocumentService::Save(
             authoringScene,
@@ -759,9 +897,12 @@ struct StandaloneProjectRuntimeConfig {
 
     options.projectPath = packageRoot;
     options.rendererType = bgfx::RendererType::Noop;
+    options.expectedGraphGpuCount = 1U;
     std::fprintf(stdout,
-        "kb_standalone_player: camera_runtime_package=%s\n",
-        packageRoot.string().c_str());
+        "kb_standalone_player: camera_runtime_package=%s mesh=%llx material=%llx\n",
+        packageRoot.string().c_str(),
+        static_cast<unsigned long long>(expectedMeshAssetId),
+        static_cast<unsigned long long>(expectedMaterialAssetId));
     std::fflush(stdout);
     return true;
 }
@@ -770,7 +911,11 @@ struct StandaloneProjectRuntimeConfig {
     const kb::scene::Scene& scene,
     const kb::render::Renderer& renderer) {
     const kb::scene::SceneRenderCameraRay ray =
-        kb::scene::SceneRenderFeedback::ScreenPointToRay(scene, 32.0F, 32.0F);
+        kb::scene::SceneRenderFeedback::ScreenPointToRay(
+            scene, kb::input::kPrimaryLocalUser, 32.0F, 32.0F);
+    const kb::scene::SceneRenderCameraRay secondaryRay =
+        kb::scene::SceneRenderFeedback::ScreenPointToRay(
+            scene, kb::input::LocalUserId{2U}, 32.0F, 32.0F);
     const bool selectedPoseReachedRenderer =
         ray.valid &&
         std::fabs(ray.ray.origin.x - 6.0F) < 0.01F &&
@@ -778,44 +923,117 @@ struct StandaloneProjectRuntimeConfig {
         std::fabs(ray.ray.origin.z + 4.0F) < 0.01F;
 
     bool serializedFieldsLoaded = false;
+    bool scriptedMeshAssigned = false;
+    bool scriptedMaterialSlotAssigned = false;
+    bool scriptedMaterialInstanceAssigned = false;
     for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
-        if (scene.Entities().Name(root) != "Selected Camera") {
-            continue;
+        if (scene.Entities().Name(root) == "Scripted Mesh") {
+            const kb::scene::MeshRendererComponent* meshRenderer =
+                scene.Components().MeshRenderers().TryGet(root);
+            scriptedMeshAssigned =
+                meshRenderer != nullptr &&
+                meshRenderer->meshAssetId != 0U &&
+                meshRenderer->materialAssetId != 0U;
+            scriptedMaterialSlotAssigned =
+                meshRenderer != nullptr &&
+                meshRenderer->materialSlotOverrideCount == 1U &&
+                meshRenderer->materialSlotAssetIds[0] ==
+                    meshRenderer->materialAssetId;
+            scriptedMaterialInstanceAssigned =
+                meshRenderer != nullptr &&
+                meshRenderer->materialInstanceHandle != 0U &&
+                scene.MaterialInstances().Exists(
+                    meshRenderer->materialInstanceHandle) &&
+                scene.MaterialInstances().Parent(
+                    meshRenderer->materialInstanceHandle) ==
+                    meshRenderer->materialAssetId;
         }
-        const kb::scene::CameraComponent* camera =
-            scene.Components().Cameras().TryGet(root);
-        serializedFieldsLoaded =
-            camera != nullptr &&
-            camera->projection == kb::scene::CameraProjection::Perspective &&
-            std::fabs(camera->verticalFovDegrees - 37.0F) < 0.001F &&
-            std::fabs(camera->orthographicHeight - 14.0F) < 0.001F &&
-            std::fabs(camera->nearClip - 0.25F) < 0.001F &&
-            std::fabs(camera->farClip - 321.0F) < 0.001F &&
-            camera->primary &&
-            camera->viewportId == 1U &&
-            camera->priority == 100;
-        break;
+        if (scene.Entities().Name(root) == "Selected Camera") {
+            const kb::scene::CameraComponent* camera =
+                scene.Components().Cameras().TryGet(root);
+            serializedFieldsLoaded =
+                camera != nullptr &&
+                camera->projection ==
+                    kb::scene::CameraProjection::Perspective &&
+                std::fabs(camera->verticalFovDegrees - 37.0F) < 0.001F &&
+                std::fabs(camera->orthographicHeight - 14.0F) < 0.001F &&
+                std::fabs(camera->nearClip - 0.25F) < 0.001F &&
+                std::fabs(camera->farClip - 321.0F) < 0.001F &&
+                camera->primary &&
+                camera->viewportId == 1U &&
+                camera->priority == 100 &&
+                camera->cullingMask == 0x00000001U &&
+                camera->clearMode ==
+                    kb::scene::CameraClearMode::DepthOnly &&
+                std::fabs(camera->clearColor.x - 0.25F) < 0.001F &&
+                std::fabs(camera->clearColor.y - 0.5F) < 0.001F &&
+                std::fabs(camera->clearColor.z - 0.75F) < 0.001F;
+        }
     }
 
-    const bool succeeded =
-        kb::scene::SceneRenderFeedback::HasFrame(scene) &&
-        serializedFieldsLoaded &&
-        selectedPoseReachedRenderer;
+    const bool secondaryPlayerPoseReachedRenderer =
+        secondaryRay.valid &&
+        std::fabs(secondaryRay.ray.origin.x + 8.0F) < 0.01F &&
+        std::fabs(secondaryRay.ray.origin.y - 3.0F) < 0.01F &&
+        std::fabs(secondaryRay.ray.origin.z + 5.0F) < 0.01F;
     const kb::render::Renderer::RuntimeSceneResourceStats stats =
         renderer.RuntimeResourceStats();
+    const bool succeeded =
+        kb::scene::SceneRenderFeedback::HasFrame(
+            scene, kb::input::kPrimaryLocalUser) &&
+        kb::scene::SceneRenderFeedback::HasFrame(
+            scene, kb::input::LocalUserId{2U}) &&
+        serializedFieldsLoaded &&
+        scriptedMeshAssigned &&
+        scriptedMaterialSlotAssigned &&
+        scriptedMaterialInstanceAssigned &&
+        selectedPoseReachedRenderer &&
+        secondaryPlayerPoseReachedRenderer &&
+        stats.syncMeshSeenCount >= 1U &&
+        stats.renderSceneMeshProxyCount >= 1U &&
+        stats.referencedMeshAssetCount >= 1U &&
+        stats.referencedMaterialAssetCount >= 1U &&
+        stats.cachedMeshCount >= 1U &&
+        stats.cachedMaterialCount >= 1U &&
+        stats.graphMaterialGpuCount == 1U &&
+        stats.graphMaterialCpuFallbackCount == 0U &&
+        stats.materialErrorCount == 0U;
     std::fprintf(succeeded ? stdout : stderr,
         "kb_standalone_player: camera_runtime result=%s source=project_scene "
-        "camera_component=loaded viewport=1 priority=100 renderer_feedback=%s "
-        "pose=(%.2f,%.2f,%.2f) ray_valid=%u frame=%u sync_cameras=%u proxies=%u\n",
+        "camera_component=loaded clear=depth_only culling_mask=0x1 "
+        "player_views=0:viewport1,2:viewport2 renderer_feedback=%s "
+        "primary_pose=(%.2f,%.2f,%.2f) secondary_pose=(%.2f,%.2f,%.2f) "
+        "rays_valid=(%u,%u) frames=(%u,%u) sync_cameras=%u camera_proxies=%u "
+        "lua_mesh=%u lua_slot=%u lua_instance=%u mesh_proxies=%u "
+        "refs=(%u,%u) cache=(%u,%u) "
+        "graph=(gpu:%u,cpu:%u) material_errors=%u\n",
         succeeded ? "pass" : "fail",
         selectedPoseReachedRenderer ? "selected_camera" : "missing_or_wrong_camera",
         static_cast<double>(ray.ray.origin.x),
         static_cast<double>(ray.ray.origin.y),
         static_cast<double>(ray.ray.origin.z),
+        static_cast<double>(secondaryRay.ray.origin.x),
+        static_cast<double>(secondaryRay.ray.origin.y),
+        static_cast<double>(secondaryRay.ray.origin.z),
         ray.valid ? 1U : 0U,
-        kb::scene::SceneRenderFeedback::HasFrame(scene) ? 1U : 0U,
+        secondaryRay.valid ? 1U : 0U,
+        kb::scene::SceneRenderFeedback::HasFrame(
+            scene, kb::input::kPrimaryLocalUser) ? 1U : 0U,
+        kb::scene::SceneRenderFeedback::HasFrame(
+            scene, kb::input::LocalUserId{2U}) ? 1U : 0U,
         stats.syncCameraSeenCount,
-        stats.renderSceneCameraProxyCount);
+        stats.renderSceneCameraProxyCount,
+        scriptedMeshAssigned ? 1U : 0U,
+        scriptedMaterialSlotAssigned ? 1U : 0U,
+        scriptedMaterialInstanceAssigned ? 1U : 0U,
+        stats.renderSceneMeshProxyCount,
+        stats.referencedMeshAssetCount,
+        stats.referencedMaterialAssetCount,
+        stats.cachedMeshCount,
+        stats.cachedMaterialCount,
+        stats.graphMaterialGpuCount,
+        stats.graphMaterialCpuFallbackCount,
+        stats.materialErrorCount);
     std::fflush(succeeded ? stdout : stderr);
     return succeeded;
 }
@@ -829,6 +1047,32 @@ struct StandaloneProjectRuntimeConfig {
     renderer.EndFrame();
     if (!submitted) {
         std::fprintf(stderr, "kb_standalone_player: SubmitScene failed\n");
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool SubmitRuntimePlayerViews(
+    kb::render::Renderer& renderer, const kb::scene::Scene& scene) {
+    if (!renderer.BeginFrame()) {
+        std::fprintf(stderr, "kb_standalone_player: BeginFrame failed\n");
+        return false;
+    }
+    const std::array<kb::render::Renderer::SceneFrameSubmission, 2> submissions{
+        kb::render::Renderer::SceneFrameSubmission{
+            .scene = &scene,
+            .desc = HeadlessSubmitDesc(
+                1U, 0U, kb::input::kPrimaryLocalUser)},
+        kb::render::Renderer::SceneFrameSubmission{
+            .scene = &scene,
+            .desc = HeadlessSubmitDesc(
+                2U, 1U, kb::input::LocalUserId{2U})},
+    };
+    const bool submitted = renderer.SubmitScenes(submissions);
+    renderer.EndFrame();
+    if (!submitted) {
+        std::fprintf(stderr,
+            "kb_standalone_player: player view submission failed\n");
         return false;
     }
     return true;
@@ -1029,7 +1273,9 @@ int main(int argc, char** argv) {
     // first; InputPollingSystem resolves actions during this same scene update.
     inputCollector.Collect(scene.Input().MutableDeviceState(), surface.Window());
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
-    const bool submitted = SubmitRuntimeFrame(renderer, scene);
+    const bool submitted = options.cameraRuntimeSelfTest
+        ? SubmitRuntimePlayerViews(renderer, scene)
+        : SubmitRuntimeFrame(renderer, scene);
     const bool cameraRuntimeValid =
         !options.cameraRuntimeSelfTest ||
         (submitted && ValidateProjectCameraRuntime(scene, renderer));

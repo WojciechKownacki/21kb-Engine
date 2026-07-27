@@ -45,6 +45,7 @@ public:
         const RenderScene& renderScene,
         const SceneRenderCamera* camera,
         std::uint32_t viewportId,
+        std::uint32_t localUserId,
         std::uint32_t viewportWidth,
         std::uint32_t viewportHeight,
         const RenderResourceRegistry* resources,

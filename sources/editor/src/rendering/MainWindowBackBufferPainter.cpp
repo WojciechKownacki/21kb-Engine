@@ -10,6 +10,7 @@
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/InspectorAddComponentOverlayWindow.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
@@ -27,7 +28,7 @@ struct MainWindowPaintContext {
     const EditorDockModel* dockModel = nullptr;
     const EditorTheme* theme = nullptr;
     const EditorMetrics* metrics = nullptr;
-    const EditorSceneContext* sceneContext = nullptr;
+    EditorSceneContext* sceneContext = nullptr;
     const EditorRenderBackendSettings* renderBackendSettings = nullptr;
     const DockDropPreview* preview = nullptr;
     const DockPointerDrag* dockDrag = nullptr;
@@ -56,6 +57,19 @@ struct MainWindowPaintContext {
             continue;
         }
         return ToRect(panelLayout.content);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<RECT> ResolveInspectorContent(const DockLayout& layout, const EditorDockModel& dockModel) {
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) {
+            continue;
+        }
+        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel != nullptr && panel->kind == DockPanelKind::Inspector) {
+            return ToRect(panelLayout.content);
+        }
     }
     return std::nullopt;
 }
@@ -166,9 +180,14 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] InspectorAddComponentOverlayWindow& MainAddComponentOverlay() {
+    static InspectorAddComponentOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
-void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
+void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
     MainWindowPaintContext context{
         .window = window,
         .dockModel = &dockModel,
@@ -225,6 +244,15 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         MainSceneToolbarDropdownOverlay().Show(window, sceneDropdown->content, sceneDropdown->panelId, theme, sceneContext);
     } else {
         MainSceneToolbarDropdownOverlay().Hide();
+    }
+    if (sceneContext.Inspector().IsAddComponentBrowserOpen()) {
+        if (const std::optional<RECT> inspectorContent = ResolveInspectorContent(layout, dockModel); inspectorContent.has_value()) {
+            MainAddComponentOverlay().Show(window, *inspectorContent, theme, sceneContext);
+        } else {
+            MainAddComponentOverlay().Hide();
+        }
+    } else {
+        MainAddComponentOverlay().Hide();
     }
 }
 

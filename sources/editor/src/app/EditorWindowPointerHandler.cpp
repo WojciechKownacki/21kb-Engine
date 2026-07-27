@@ -12,6 +12,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 
 #include <algorithm>
@@ -49,6 +50,20 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (sceneContext_.Inspector().IsAddComponentBrowserOpen()) {
+        bool addComponentButtonClicked = false;
+        const std::optional<RECT> inspectorContent =
+            EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        if (inspectorContent.has_value()) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspectorContent, sceneContext_, x, y);
+            addComponentButtonClicked =
+                hit.section == InspectorSectionId::AddComponent &&
+                hit.property == InspectorPropertyId::AddComponentButton;
+        }
+        if (!addComponentButtonClicked) {
+            sceneContext_.Inspector().CloseAddComponentBrowser();
+        }
+    }
     EditorLeftButtonDownRouter leftButtonDown(
         mainWindow_,
         dockModel_,

@@ -26,6 +26,37 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
     }
 }
 
+bool InspectorPanelState::IsDisclosureExpanded(InspectorDisclosureId disclosure) const noexcept {
+    return disclosures_[static_cast<std::size_t>(disclosure)].expanded;
+}
+
+float InspectorPanelState::DisclosureExpansion(InspectorDisclosureId disclosure) const noexcept {
+    const float t = std::clamp(disclosures_[static_cast<std::size_t>(disclosure)].linearExpansion, 0.0F, 1.0F);
+    return t * t * (3.0F - 2.0F * t);
+}
+
+void InspectorPanelState::ToggleDisclosure(InspectorDisclosureId disclosure) noexcept {
+    DisclosureState& state = disclosures_[static_cast<std::size_t>(disclosure)];
+    state.expanded = !state.expanded;
+}
+
+bool InspectorPanelState::TickDisclosures(float deltaSeconds) noexcept {
+    constexpr float kTransitionSeconds = 0.18F;
+    const float step = std::max(0.0F, deltaSeconds) / kTransitionSeconds;
+    bool changed = false;
+    for (DisclosureState& state : disclosures_) {
+        const float target = state.expanded ? 1.0F : 0.0F;
+        const float previous = state.linearExpansion;
+        if (state.linearExpansion < target) {
+            state.linearExpansion = std::min(target, state.linearExpansion + step);
+        } else if (state.linearExpansion > target) {
+            state.linearExpansion = std::max(target, state.linearExpansion - step);
+        }
+        changed = changed || state.linearExpansion != previous;
+    }
+    return changed;
+}
+
 void InspectorPanelState::ToggleAddComponentBrowser() {
     scriptComponentMenuOpen_ = false;
     addComponentBrowserOpen_ = !addComponentBrowserOpen_;
