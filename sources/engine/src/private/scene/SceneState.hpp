@@ -517,7 +517,12 @@ public:
     // is monotonic; 0 means "no frame was ever published" and every query honestly returns
     // its empty result - see SceneRenderFeedback.hpp's own doc comment for the full
     // latency/last-submit-wins contract.
-    SceneRenderVisibilityFrame renderVisibilityFrame{};
+    // One feedback frame per local player. A scene may be submitted to several
+    // player-owned viewports in one render frame; keeping only the last submit
+    // made pointer rays and camera conversions use another player's camera.
+    std::unordered_map<std::uint32_t, SceneRenderVisibilityFrame>
+        renderVisibilityFrames;
+    std::uint32_t lastRenderVisibilityLocalUserId = 0U;
     std::uint64_t renderVisibilityPublishCount = 0U;
     // LIB-145: the single-slot async screen-capture request/result channel. A script's
     // RequestScreenCapture fills the pending slot (one in-flight per scene, mirroring

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/EngineMath.hpp"
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
 #include <array>
@@ -65,6 +66,7 @@ struct SceneRenderVisibilityFrame {
     bool frustumValid = false;
     bool cameraValid = false;
     std::uint32_t viewportId = 0;
+    kb::input::LocalUserId localUser = kb::input::kPrimaryLocalUser;
     std::uint32_t viewportWidth = 0;
     std::uint32_t viewportHeight = 0;
     std::array<SceneRenderFrustumPlane, 6> frustumPlanes{};
@@ -125,11 +127,9 @@ struct SceneScreenCaptureRequest {
 // and publishes it here; scripts running the NEXT frame read the result. That one-frame
 // latency is inherent to any "was it rendered" query that avoids forcing GPU/pipeline
 // synchronization, and matches the industry-standard semantics of Unity's
-// Renderer.isVisible. When the same scene is submitted to several viewports in one frame
-// (e.g. docked + detached editor panels), the last submit in the frame's deterministic
-// submission-plan order wins; in the editor every scene-panel submit uses the editor's own
-// viewport camera (cameraOverride), while the standalone player/game runtime submits with
-// the scene's primary CameraComponent.
+// Renderer.isVisible. Feedback is retained independently per local user so split-screen
+// views cannot overwrite each other's active camera. Legacy overloads without a local-user
+// argument continue to address the most recently submitted view.
 //
 // Before the first publish (or after Clear), HasFrame is false and every query returns its
 // honest empty result: IsVisible false, WorldBounds invalid, TestFrustum false (fail-closed
@@ -141,10 +141,11 @@ public:
     // Swaps `frame`'s entries into the scene (the caller's vector keeps the previous
     // frame's capacity for reuse - no per-frame steady-state allocation) and bumps
     // PublishCount. `frame.entries` must already be sorted by entityId ascending.
-    static void Publish(Scene& scene, SceneRenderVisibilityFrame& frame) noexcept;
+    static void Publish(Scene& scene, SceneRenderVisibilityFrame& frame);
     static void Clear(Scene& scene) noexcept;
 
     [[nodiscard]] static bool HasFrame(const Scene& scene) noexcept;
+    [[nodiscard]] static bool HasFrame(const Scene& scene, kb::input::LocalUserId localUser) noexcept;
     [[nodiscard]] static std::uint64_t PublishCount(const Scene& scene) noexcept;
     // False for an entity with no entry in the last published frame (no MeshRenderer proxy,
     // destroyed after the submit, or no frame published yet) - never an error.
@@ -167,6 +168,11 @@ public:
     // detected via projection[15]). Never inverts a matrix - kb::math deliberately has no
     // Mat4 inverse and none is needed.
     [[nodiscard]] static SceneRenderCameraRay ScreenPointToRay(const Scene& scene, float screenX, float screenY) noexcept;
+    [[nodiscard]] static SceneRenderCameraRay ScreenPointToRay(
+        const Scene& scene,
+        kb::input::LocalUserId localUser,
+        float screenX,
+        float screenY) noexcept;
     // LIB-145: convenience composition - the point `distance` units along
     // ScreenPointToRay's ray. False (outWorldPoint untouched) when no camera was published.
     [[nodiscard]] static bool ScreenToWorld(const Scene& scene, float screenX, float screenY, float distance, kb::math::Vec3& outWorldPoint) noexcept;
@@ -190,6 +196,9 @@ public:
     static void CompleteScreenCapture(Scene& scene, std::uint64_t id, bool succeeded) noexcept;
 
 private:
+    [[nodiscard]] static const SceneRenderVisibilityFrame* FindFrame(
+        const Scene& scene,
+        kb::input::LocalUserId localUser) noexcept;
     [[nodiscard]] static const SceneRenderVisibilityEntry* FindEntry(const Scene& scene, SceneEntity entity) noexcept;
 };
 

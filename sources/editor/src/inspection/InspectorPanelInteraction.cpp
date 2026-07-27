@@ -548,6 +548,30 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
+    if (hit.kind == InspectorHitKind::BoolField &&
+        (hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
+            hit.property == InspectorPropertyId::MeshRendererReceivesShadow)) {
+        if (!sceneContext.BeginSceneEditTransaction(
+                hit.property == InspectorPropertyId::MeshRendererCastsShadow
+                ? "Edit Mesh Cast Shadows"
+                : "Edit Mesh Receive Shadows")) {
+            return true;
+        }
+        kb::scene::MeshRendererComponent* renderer =
+            sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer == nullptr) {
+            sceneContext.CancelSceneEditTransaction();
+            return true;
+        }
+        if (hit.property == InspectorPropertyId::MeshRendererCastsShadow) {
+            renderer->castsShadow = !renderer->castsShadow;
+        } else {
+            renderer->receivesShadow = !renderer->receivesShadow;
+        }
+        sceneContext.Scene().Components().MeshRenderers().MarkModified(entity);
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        return true;
+    }
     if (hit.kind != InspectorHitKind::TextField) {
         return true;
     }
@@ -1212,6 +1236,15 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     return true;
 }
 
+[[nodiscard]] std::optional<InspectorDisclosureId> DisclosureForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MeshRendererAdvanced:
+        return InspectorDisclosureId::MeshRendererAdvanced;
+    default:
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
@@ -1223,6 +1256,14 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (const std::optional<InspectorDisclosureId> disclosure = DisclosureForProperty(hit.property);
+        hit.kind == InspectorHitKind::Row && disclosure.has_value()) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().CloseAddComponentBrowser();
+        sceneContext.Inspector().CloseComponentMenus();
+        sceneContext.Inspector().ToggleDisclosure(*disclosure);
+        return true;
+    }
     if (hit.kind == InspectorHitKind::SectionHeader) {
         sceneContext.Inspector().EndTextEdit();
         sceneContext.Inspector().CloseAddComponentBrowser();

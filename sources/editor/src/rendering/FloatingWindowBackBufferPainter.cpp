@@ -7,6 +7,7 @@
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/InspectorAddComponentOverlayWindow.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -23,7 +24,7 @@ struct FloatingWindowPaintContext {
     const DockPanel* panel = nullptr;
     const EditorTheme* theme = nullptr;
     const EditorMetrics* metrics = nullptr;
-    const EditorSceneContext* sceneContext = nullptr;
+    EditorSceneContext* sceneContext = nullptr;
     const EditorRenderBackendSettings* renderBackendSettings = nullptr;
     EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
@@ -79,9 +80,14 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] InspectorAddComponentOverlayWindow& FloatingAddComponentOverlay() {
+    static InspectorAddComponentOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
-void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
+void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
     FloatingWindowPaintContext context{
         .window = window,
         .panel = &panel,
@@ -99,6 +105,14 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         FloatingSceneToolbarDropdownOverlay().Show(window, content, panel.id, theme, sceneContext);
     } else {
         FloatingSceneToolbarDropdownOverlay().Hide();
+    }
+    if (panel.kind == DockPanelKind::Inspector && sceneContext.Inspector().IsAddComponentBrowserOpen()) {
+        RECT content{};
+        GetClientRect(window, &content);
+        content = FloatingPanelContentRect(content, panel, metrics);
+        FloatingAddComponentOverlay().Show(window, content, theme, sceneContext);
+    } else {
+        FloatingAddComponentOverlay().HideForOwner(window);
     }
     if (panel.kind != DockPanelKind::Console) {
         ConsoleDetailTextOverlay::Hide(window);

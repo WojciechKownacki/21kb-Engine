@@ -462,6 +462,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
+    src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
     src/private/rendering/material_graph/MaterialGraphCanvas.hpp
@@ -654,6 +655,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
     src/rendering/MaterialPreviewAppearanceResolver.cpp

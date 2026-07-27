@@ -33,7 +33,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Pointer.Delta", "Returns pointer movement accumulated during the current frame." },
     { "Pointer.Button", "Returns whether the requested pointer button is currently pressed." },
     { "Pointer.Scroll", "Returns normalized pointer-wheel detents accumulated during the current frame." },
-    { "Pointer.Ray", "Builds a world-space ray through the pointer from the last renderer-published active camera." },
+    { "Pointer.Ray", "Builds a world-space ray through the pointer from the renderer-published active camera for a local player." },
     { "Input.PriorityGameplay", "Returns the canonical priority assigned to gameplay input contexts." },
     { "Input.PriorityUI", "Returns the canonical priority assigned to user-interface input contexts." },
     { "Input.PriorityConsole", "Returns the canonical priority assigned to console input contexts." },

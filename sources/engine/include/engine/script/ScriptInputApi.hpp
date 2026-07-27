@@ -62,9 +62,10 @@ class ScriptRuntimeHost;
 //   Pointer.Delta()          -> x:Float, y:Float (= Input.Value semantics on MouseX/MouseY)
 //   Pointer.Button(button:Int) -> pressed:Bool   (0=left, 1=right, 2=middle)
 //   Pointer.Scroll()         -> delta:Float (normalized wheel detents accumulated this frame)
-//   Pointer.Ray()            -> valid:Bool, originX/Y/Z:Float,
+//   Pointer.Ray(player?)     -> valid:Bool, originX/Y/Z:Float,
 //                               directionX/Y/Z:Float
-// Ray uses SceneRenderFeedback's last renderer-published active camera and
+// Ray uses SceneRenderFeedback's renderer-published active camera for the
+// selected local player and
 // viewport (the single source of truth introduced by LIB-145). It reports
 // valid=false before a camera frame has actually been submitted; there is no
 // guessed camera or matrix fallback.

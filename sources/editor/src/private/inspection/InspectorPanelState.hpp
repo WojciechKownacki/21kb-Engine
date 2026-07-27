@@ -2,6 +2,8 @@
 
 #include "rendering/EditorMeshPreviewTypes.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -48,6 +50,14 @@ enum class InspectorHitKind : std::uint8_t {
     ValueTypeOption,
 };
 
+// Animated disclosure groups are shared Inspector UI state. Add a value here
+// when another component needs a collapsible subcategory; rendering, easing and
+// frame ticking remain common.
+enum class InspectorDisclosureId : std::uint8_t {
+    MeshRendererAdvanced,
+    Count,
+};
+
 enum class InspectorPropertyId : std::uint8_t {
     None,
     EntityName,
@@ -87,6 +97,9 @@ enum class InspectorPropertyId : std::uint8_t {
     MeshRendererMaterial,
     MeshRendererMaterialPicker,
     MeshRendererMaterialOverridePicker,
+    MeshRendererAdvanced,
+    MeshRendererCastsShadow,
+    MeshRendererReceivesShadow,
     MeshRendererMaterialSlot0,
     MeshRendererMaterialSlot1,
     MeshRendererMaterialSlot2,
@@ -175,6 +188,11 @@ enum class InspectorPropertyId : std::uint8_t {
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
+
+    [[nodiscard]] bool IsDisclosureExpanded(InspectorDisclosureId disclosure) const noexcept;
+    [[nodiscard]] float DisclosureExpansion(InspectorDisclosureId disclosure) const noexcept;
+    void ToggleDisclosure(InspectorDisclosureId disclosure) noexcept;
+    [[nodiscard]] bool TickDisclosures(float deltaSeconds) noexcept;
 
     [[nodiscard]] bool IsAddComponentBrowserOpen() const noexcept { return addComponentBrowserOpen_; }
     void ToggleAddComponentBrowser();
@@ -277,7 +295,13 @@ private:
     // Every section that is currently collapsed. A set (rather than one bool per
     // section) so any InspectorSectionId — including the physics component
     // sections — collapses without extending a hand-maintained switch.
+    struct DisclosureState {
+        bool expanded = false;
+        float linearExpansion = 0.0F;
+    };
+
     std::set<InspectorSectionId> collapsedSections_;
+    std::array<DisclosureState, static_cast<std::size_t>(InspectorDisclosureId::Count)> disclosures_{};
     bool addComponentBrowserOpen_ = false;
     AddComponentView addComponentView_ = AddComponentView::Categories;
     std::string addComponentCategory_;
