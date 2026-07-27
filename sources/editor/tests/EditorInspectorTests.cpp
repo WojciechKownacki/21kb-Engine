@@ -2215,6 +2215,32 @@ void RunInspectorSectionCollapseTest() {
     }
 }
 
+void RunInspectorDisclosureAnimationTest() {
+    kb::editor::InspectorPanelState state;
+    constexpr kb::editor::InspectorDisclosureId disclosure = kb::editor::InspectorDisclosureId::MeshRendererAdvanced;
+    kb::editor::tests::Require(!state.IsDisclosureExpanded(disclosure), "Inspector disclosure starts collapsed");
+    kb::editor::tests::Require(state.DisclosureExpansion(disclosure) == 0.0F, "Collapsed Inspector disclosure starts with zero visible height");
+    kb::editor::tests::Require(!state.TickDisclosures(0.1F), "Settled Inspector disclosure does not request redundant repaints");
+
+    state.ToggleDisclosure(disclosure);
+    kb::editor::tests::Require(state.IsDisclosureExpanded(disclosure), "Inspector disclosure toggle targets the expanded state");
+    kb::editor::tests::Require(state.TickDisclosures(0.09F), "Inspector disclosure expansion advances on the frame tick");
+    kb::editor::tests::Require(
+        state.DisclosureExpansion(disclosure) > 0.0F && state.DisclosureExpansion(disclosure) < 1.0F,
+        "Inspector disclosure exposes an intermediate animated height");
+    kb::editor::tests::Require(state.TickDisclosures(0.09F), "Inspector disclosure expansion reaches its target");
+    kb::editor::tests::Require(state.DisclosureExpansion(disclosure) == 1.0F, "Expanded Inspector disclosure exposes the complete content");
+    kb::editor::tests::Require(!state.TickDisclosures(0.01F), "Expanded Inspector disclosure settles without perpetual invalidation");
+
+    state.ToggleDisclosure(disclosure);
+    kb::editor::tests::Require(state.TickDisclosures(0.09F), "Inspector disclosure collapse advances on the frame tick");
+    kb::editor::tests::Require(
+        state.DisclosureExpansion(disclosure) > 0.0F && state.DisclosureExpansion(disclosure) < 1.0F,
+        "Inspector disclosure collapse retains an intermediate animated height");
+    kb::editor::tests::Require(state.TickDisclosures(0.09F) && state.DisclosureExpansion(disclosure) == 0.0F,
+        "Inspector disclosure collapse finishes at zero visible height");
+}
+
 // Hover is index-aware so only the physics/script row actually under the cursor
 // highlights — not every sibling row sharing the same property id. Guards the bug
 // where hovering one Collider field highlighted all of them.
@@ -2269,6 +2295,7 @@ namespace kb::editor::tests {
 void RunEditorInspectorTests() {
     RunInspectorPhysicsModelTest();
     RunInspectorSectionCollapseTest();
+    RunInspectorDisclosureAnimationTest();
     RunInspectorHoverIndexTest();
     RunAddComponentBrowserModelTest();
     RunInspectorTextEditDirtyStateTest();

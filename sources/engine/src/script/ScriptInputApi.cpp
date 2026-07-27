@@ -535,6 +535,7 @@ bool RegisterPointerScroll(ScriptRuntimeHost& host) {
 bool RegisterPointerRay(ScriptRuntimeHost& host) {
     ScriptFunctionDesc desc;
     desc.signature.name = "Pointer.Ray";
+    desc.signature.inputs = {PlayerPin()};
     desc.signature.outputs = {
         ScriptFunctionPin{"valid", ScriptValueType::Bool, true},
         ScriptFunctionPin{"originX", ScriptValueType::Float, true},
@@ -544,14 +545,22 @@ bool RegisterPointerRay(ScriptRuntimeHost& host) {
         ScriptFunctionPin{"directionY", ScriptValueType::Float, true},
         ScriptFunctionPin{"directionZ", ScriptValueType::Float, true},
     };
-    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
         if (context.scene == nullptr) {
             return NoScene();
         }
-        const kb::input::InputDeviceState& device = context.scene->Input().DeviceState();
+        const kb::input::LocalUserId localUser = PlayerFromArgs(arguments);
+        // Physical pointer state is scene-global (secondary InputSubsystems
+        // intentionally evaluate the primary device snapshot); only the
+        // active camera is selected per local player.
+        const kb::input::InputDeviceState& device =
+            context.scene->Input().DeviceState();
         const kb::scene::SceneRenderCameraRay cameraRay =
             kb::scene::SceneRenderFeedback::ScreenPointToRay(
-                *context.scene, device.PointerX(), device.PointerY());
+                *context.scene,
+                localUser,
+                device.PointerX(),
+                device.PointerY());
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {

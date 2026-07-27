@@ -4680,6 +4680,28 @@ void RunSceneRenderFeedbackTest() {
             && std::abs(alongRay.x) < 0.001F && std::abs(alongRay.y) < 0.001F && std::abs(alongRay.z - 3.0F) < 0.001F,
         "ScreenToWorld must return the point `distance` units along the center pixel's forward ray");
 
+    kb::scene::SceneRenderVisibilityFrame secondaryPlayerFrame =
+        perspectiveFrame;
+    secondaryPlayerFrame.localUser = kb::input::LocalUserId{2U};
+    secondaryPlayerFrame.viewportId = 2U;
+    secondaryPlayerFrame.view[12] = -5.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, secondaryPlayerFrame);
+    const kb::scene::SceneRenderCameraRay retainedPrimaryRay =
+        kb::scene::SceneRenderFeedback::ScreenPointToRay(
+            scene, kb::input::kPrimaryLocalUser, 50.0F, 50.0F);
+    const kb::scene::SceneRenderCameraRay secondaryPlayerRay =
+        kb::scene::SceneRenderFeedback::ScreenPointToRay(
+            scene, kb::input::LocalUserId{2U}, 50.0F, 50.0F);
+    kb::tests::Require(
+        kb::scene::SceneRenderFeedback::HasFrame(
+            scene, kb::input::kPrimaryLocalUser) &&
+            kb::scene::SceneRenderFeedback::HasFrame(
+                scene, kb::input::LocalUserId{2U}) &&
+            retainedPrimaryRay.valid && secondaryPlayerRay.valid &&
+            std::abs(retainedPrimaryRay.ray.origin.x) < 0.001F &&
+            std::abs(secondaryPlayerRay.ray.origin.x - 5.0F) < 0.001F,
+        "Per-player render feedback must retain both active cameras");
+
     // LIB-145: the async screen-capture request/result channel's native contract.
     kb::tests::Require(kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "") == 0U, "RequestScreenCapture must reject an empty path");
     const std::uint64_t firstCapture = kb::scene::SceneRenderFeedback::RequestScreenCapture(scene, "capture_one.png");
@@ -9180,6 +9202,25 @@ void RunScriptPointerApiTest() {
             kb::tests::NearlyEqual(ray.Output("directionZ")->AsFloat(), 1.0F),
         "Pointer.Ray direct call did not use Pointer.Position with the published active camera");
 
+    kb::scene::SceneRenderVisibilityFrame secondaryCameraFrame = cameraFrame;
+    secondaryCameraFrame.localUser = LocalUserId{2U};
+    secondaryCameraFrame.viewportId = 2U;
+    secondaryCameraFrame.view[12] = -5.0F;
+    kb::scene::SceneRenderFeedback::Publish(scene, secondaryCameraFrame);
+    const std::vector<kb::script::ScriptFunctionArgument> secondaryPlayerArgs{
+        kb::script::ScriptFunctionArgument{
+            .name = "player", .value = kb::script::ScriptValue{2}},
+    };
+    const kb::script::ScriptFunctionCallResult secondaryRay =
+        host.Functions().Call(
+            "Pointer.Ray", secondaryPlayerArgs, callContext);
+    kb::tests::Require(
+        secondaryRay.Succeeded() &&
+            secondaryRay.Output("valid")->AsBool() &&
+            kb::tests::NearlyEqual(
+                secondaryRay.Output("originX")->AsFloat(), 5.0F),
+        "Pointer.Ray(player) did not select that local player's camera");
+
     const kb::assets::AssetId luaAsset{ 8822U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Pointer Caller" });
     scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
@@ -9191,7 +9232,7 @@ void RunScriptPointerApiTest() {
 function Tick(self, dt)
     local pos = Pointer.Position()
     local delta = Pointer.Delta()
-    local ray = Pointer.Ray()
+    local ray = Pointer.Ray(2)
     SetShared("pointer.x", pos.x)
     SetShared("pointer.y", pos.y)
     SetShared("pointer.dx", delta.x)
@@ -9200,6 +9241,7 @@ function Tick(self, dt)
     SetShared("pointer.scroll", Pointer.Scroll())
     SetShared("pointer.rayValid", ray.valid)
     SetShared("pointer.rayDirectionZ", ray.directionZ)
+    SetShared("pointer.rayOriginX", ray.originX)
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Pointer Lua wrapper script did not load");
@@ -9213,8 +9255,9 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("pointer.scroll")->AsFloat(), 1.5F),
         "Lua Pointer.Scroll returned the wrong normalized wheel delta");
     kb::tests::Require(host.SharedState().Get("pointer.rayValid")->AsBool() &&
-            kb::tests::NearlyEqual(host.SharedState().Get("pointer.rayDirectionZ")->AsFloat(), 1.0F),
-        "Lua Pointer.Ray did not use the renderer-published active camera");
+            kb::tests::NearlyEqual(host.SharedState().Get("pointer.rayDirectionZ")->AsFloat(), 1.0F) &&
+            kb::tests::NearlyEqual(host.SharedState().Get("pointer.rayOriginX")->AsFloat(), 5.0F),
+        "Lua Pointer.Ray(player) did not use that player's renderer-published active camera");
 }
 
 // LIB-118: the named priority constants must reach script with the exact

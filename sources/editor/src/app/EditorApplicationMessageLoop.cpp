@@ -578,16 +578,16 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         }
     }
 
-    // Advance the Add Component menu's category<->components slide animation. Keeps
-    // the loop pacing at frame rate (instead of parking in WaitMessage) and
-    // repaints the Inspector each interpolated step until it settles.
+    // Advance Inspector slide animations. Keep the loop pacing at frame rate
+    // instead of parking in WaitMessage, and repaint every interpolated step.
     const bool addComponentSliding = state.sceneContext.Inspector().TickAddComponentSlide(deltaSeconds);
-    if (addComponentSliding) {
+    const bool disclosureSliding = state.sceneContext.Inspector().TickDisclosures(deltaSeconds);
+    if (addComponentSliding || disclosureSliding) {
         InvalidateInspectorPanels(state);
     }
 
     const bool viewportsPresented = PresentVisibleViewports(state);
-    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved || addComponentSliding;
+    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved || addComponentSliding || disclosureSliding;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {

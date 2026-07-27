@@ -14,6 +14,7 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     const RenderScene& renderScene,
     const SceneRenderCamera* camera,
     std::uint32_t viewportId,
+    std::uint32_t localUserId,
     std::uint32_t viewportWidth,
     std::uint32_t viewportHeight,
     const RenderResourceRegistry* resources,
@@ -22,6 +23,7 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(camera);
     outFrame.frustumValid = frustum.valid;
     outFrame.viewportId = viewportId;
+    outFrame.localUser = kb::input::LocalUserId{localUserId};
     outFrame.viewportWidth = viewportWidth;
     outFrame.viewportHeight = viewportHeight;
     outFrame.cameraValid = camera != nullptr;
