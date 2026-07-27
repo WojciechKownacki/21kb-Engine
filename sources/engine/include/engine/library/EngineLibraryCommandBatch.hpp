@@ -120,7 +120,13 @@ public:
         if (!entity.IsAlive(*scene_)) {
             return false;
         }
-        commandBuffer_.Worker(0).DestroyEntity(entity.Entity());
+        // Existing scene entities must be destroyed through the scene
+        // lifetime service at Flush(), not directly by CommandBuffer. The
+        // latter only removes the ECS row and bypasses hierarchy, prefab,
+        // name and render-proxy cleanup owned by SceneEntities::Destroy.
+        // Recording remains safe inside Query; the scene mutation happens
+        // only after Playback and after the iteration guard has closed.
+        sceneDestroyTargets_.push_back(entity);
         trackedTargets_.push_back(entity);
         return true;
     }
@@ -255,7 +261,14 @@ public:
             kb::scene::SetTagsText(tagsComponent, JoinTagList(pending.tags));
             commandBuffer_.Worker(0).Set<kb::scene::TagsComponent>(pending.entity, tagsComponent);
         }
-        return commandBuffer_.Playback(scene_->Runtime().EcsWorld());
+        std::optional<kb::ecs::CommandBufferPlaybackResult> playback = commandBuffer_.Playback(scene_->Runtime().EcsWorld());
+        for (const EntityHandle& target : sceneDestroyTargets_) {
+            // Liveness was checked above. Destroy is intentionally routed
+            // through the scene facade so hierarchy and editor/runtime caches
+            // cannot retain a dead ECS entity after a batch flush.
+            scene_->Entities().Destroy(target.Entity());
+        }
+        return playback;
     }
 
 private:
@@ -393,6 +406,10 @@ private:
     // Query loop's worth of entities), and re-checking the same entity
     // twice is harmless.
     std::vector<EntityHandle> trackedTargets_;
+    // Existing entities queued for destruction. Deferred BatchEntity objects
+    // still use CommandBuffer's native destroy path because they have no
+    // SceneEntity until that playback creates them.
+    std::vector<EntityHandle> sceneDestroyTargets_;
     // LIB-080: one entry per target that received an AddTag/RemoveTag this
     // batch, holding its coalesced final tag set — materialized into a single
     // tag command per target at Flush().
