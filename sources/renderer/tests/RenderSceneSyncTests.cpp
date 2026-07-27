@@ -1839,6 +1839,14 @@ void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
         .castsShadow = true,
         .visible = true,
     }));
+    static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 12U,
+        .kind = RenderLightKind::Directional,
+        .intensity = 1000.0F,
+        .castsShadow = true,
+        .visible = true,
+        .layer = 2U,
+    }));
 
     RenderResourceRegistry resources;
     SceneRenderResourceMap resourceMap;
@@ -1847,7 +1855,8 @@ void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
         resources,
         resourceMap,
         SceneRenderLightingConfig{},
-        BGFX_INVALID_HANDLE);
+        BGFX_INVALID_HANDLE,
+        1U);
 
     Require(setup.valid, "Directional shadow planner did not build setup for the shadow-casting directional light");
     Require(setup.lightEntityId == 11U, "Directional shadow planner selected a directional light with castsShadow disabled");
@@ -2228,6 +2237,29 @@ void RunSceneParticleRenderSynchronizerTest() {
     }
     Require(particleProxyCount == liveAfterSpawn, "SceneParticleRenderSynchronizer must submit exactly one mesh proxy per live particle");
     Require(renderScene.MeshProxyCount() == liveAfterSpawn, "SceneParticleRenderSynchronizer must not leave any unrelated mesh proxies behind");
+
+    // A second scene starts its instance ids at 1 too. Synchronizing it through the same
+    // renderer-owned bridge must not overwrite scene A's stale-slot history.
+    kb::scene::Scene secondScene;
+    Require(secondScene.Assets().MountProject(root), "LIB-143 second-scene project mount failed");
+    Require(secondScene.Assets().Discover() == 1U, "LIB-143 second-scene discovery failed");
+    Require(secondScene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 535353U },
+                .type = "RenderMaterial",
+                .name = "FakeParticleSyncMaterial",
+                .virtualPath = "/Game/FakeParticleSyncMaterial.kbmat",
+                .physicalPath = "FakeParticleSyncMaterial.kbmat",
+                .contentHash = 1U,
+            }),
+        "LIB-143 second-scene material registration failed");
+    const kb::scene::SceneEntity secondOwner = secondScene.Entities().CreateEntity();
+    secondScene.Runtime().SynchronizeTransforms();
+    const std::uint64_t secondInstance = secondScene.Particles().Create(effectAssetId, secondOwner);
+    Require(secondInstance == instance, "LIB-143 regression setup requires colliding per-scene instance ids");
+    Require(secondScene.Particles().Emit(secondInstance, 1U), "LIB-143 second-scene emit failed");
+    RenderScene secondRenderScene;
+    synchronizer.Sync(secondScene, secondRenderScene, 0U);
+    Require(secondRenderScene.MeshProxyCount() == 1U, "LIB-143 second scene did not synchronize independently");
 
     // Stop first (halts new emission only, per SceneParticleSystems::Stop's own contract) -
     // otherwise emissionRatePerSecond=1000 would keep replacing dying particles with new

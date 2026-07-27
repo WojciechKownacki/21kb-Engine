@@ -16,6 +16,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -374,6 +375,13 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
                         .clipAssetId = fillClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 200U });
                     kb::tests::Require(filled.Succeeded(), "Filling the one-shot pool with high-priority voices must succeed up to capacity");
                 }
+                if (c == 0) {
+                    const kb::audio::AudioPlayResult refusedPerClip = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
+                        .clipAssetId = fillClip.value, .volume = 0.0F, .loop = true, .spatial = false, .priority = 50U });
+                    kb::tests::Require(!refusedPerClip.Succeeded()
+                            && refusedPerClip.error == "audio clip pool is full of higher-priority voices",
+                        "A full per-clip bucket must not let a low-priority request steal a high-priority voice");
+                }
             }
             // A fresh clip at low priority: its per-clip bucket is empty, so nothing is
             // evicted within the clip, and the full pool of higher-priority voices refuses it.
@@ -408,14 +416,36 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
 
             kb::audio::AudioPlayback::StopAll(scene);
 
-            // Scene change: destroying every audio entity (the ClearSceneRoots half of a
-            // non-additive Scene.Load) drops their sources on the next Sync without
-            // stranding the backend - a fresh one-shot still plays afterward.
-            scene.Entities().Destroy(source.Entity());
-            scene.Entities().Destroy(occludedSourceObject.Entity());
-            for (int i = 0; i < 3; ++i) {
-                static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
-            }
+            // A real non-additive scene change stops the outgoing pool before
+            // destroying source entities, while retaining the registered backend.
+            const kb::audio::AudioPlayResult carriedVoice =
+                kb::audio::AudioPlayback::PlayOneShot(
+                    scene,
+                    kb::audio::AudioPlayDesc{
+                        .clipAssetId = highPriorityClip.value,
+                        .volume = 0.0F,
+                        .loop = true,
+                        .spatial = false,
+                    });
+            kb::tests::Require(
+                carriedVoice.Succeeded(),
+                "Scene-change voice did not start on the real backend");
+            kb::scene::SceneDocument nextScene{};
+            nextScene.guid = "scene:lib154-miniaudio-next";
+            nextScene.name = "MiniaudioNext";
+            kb::tests::Require(
+                kb::scene::SceneDocumentService::LoadIntoScene(
+                    scene, nextScene),
+                "Real Miniaudio non-additive scene change failed");
+            kb::tests::Require(
+                !kb::audio::AudioPlayback::IsVoicePlaying(
+                    scene, carriedVoice.voiceId) &&
+                    !kb::audio::AudioPlayback::StopVoice(
+                        scene, carriedVoice.voiceId),
+                "A non-additive scene change must release pooled one-shots");
+            kb::tests::Require(
+                kb::audio::AudioPlayback::HasBackend(scene),
+                "A scene change must retain the Miniaudio backend");
             const kb::audio::AudioPlayResult afterSceneChange = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
                 .clipAssetId = highPriorityClip.value, .volume = 0.0F, .loop = false, .spatial = false });
             kb::tests::Require(afterSceneChange.Succeeded(), "The backend must remain usable after a scene-change entity teardown");

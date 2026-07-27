@@ -42,6 +42,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Input.IsGamepadConnected", "Returns whether the requested local gamepad is connected." },
     { "Input.HasHaptics", "Queries the haptic capabilities exposed by a local gamepad." },
     { "Input.SetVibration", "Sets low- and high-frequency vibration motors on a local gamepad." },
+    { "Input.BindHapticsUser", "Routes a local user to a physical gamepad haptics slot." },
+    { "Input.SetUserVibration", "Sets vibration through a local user's configured gamepad route." },
     { "Input.StopVibration", "Stops vibration on all local gamepads controlled by the runtime." },
     { "IsActionPressed", "Compatibility alias that returns whether an input action is currently pressed." },
     { "WasActionStarted", "Compatibility alias that reports an input action starting this frame." },

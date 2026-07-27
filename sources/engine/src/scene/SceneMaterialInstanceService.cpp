@@ -1,6 +1,7 @@
 #include "scene/SceneMaterialInstanceService.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
@@ -77,6 +78,16 @@ std::span<const MaterialParameterOverride> SceneMaterialInstanceService::Paramet
     return iterator->parameterOverrides;
 }
 
+void SceneMaterialInstanceService::SetParameterSchemaValidator(
+    Scene& scene,
+    std::shared_ptr<const MaterialParameterSchemaValidator> validator) noexcept {
+    SceneAccess::State(scene).materialParameterSchemaValidator = std::move(validator);
+}
+
+bool SceneMaterialInstanceService::HasParameterSchemaValidator(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).materialParameterSchemaValidator != nullptr;
+}
+
 namespace {
 
 [[nodiscard]] SceneState::MaterialInstanceRecord* FindLiveInstance(SceneState& state, std::uint64_t id) noexcept {
@@ -104,8 +115,14 @@ bool SceneMaterialInstanceService::SetParameterScalar(Scene& scene, std::uint64_
     if (name.empty()) {
         return false;
     }
-    SceneState::MaterialInstanceRecord* instance = FindLiveInstance(SceneAccess::State(scene), id);
+    SceneState& state = SceneAccess::State(scene);
+    SceneState::MaterialInstanceRecord* instance = FindLiveInstance(state, id);
     if (instance == nullptr) {
+        return false;
+    }
+    if (state.materialParameterSchemaValidator == nullptr ||
+        !state.materialParameterSchemaValidator->Validate(
+            scene.Assets().Manager(), instance->parentMaterialAssetId, name, MaterialParameterType::Scalar)) {
         return false;
     }
     UpsertParameter(instance->parameterOverrides, MaterialParameterOverride{
@@ -120,8 +137,14 @@ bool SceneMaterialInstanceService::SetParameterBool(Scene& scene, std::uint64_t 
     if (name.empty()) {
         return false;
     }
-    SceneState::MaterialInstanceRecord* instance = FindLiveInstance(SceneAccess::State(scene), id);
+    SceneState& state = SceneAccess::State(scene);
+    SceneState::MaterialInstanceRecord* instance = FindLiveInstance(state, id);
     if (instance == nullptr) {
+        return false;
+    }
+    if (state.materialParameterSchemaValidator == nullptr ||
+        !state.materialParameterSchemaValidator->Validate(
+            scene.Assets().Manager(), instance->parentMaterialAssetId, name, MaterialParameterType::Bool)) {
         return false;
     }
     UpsertParameter(instance->parameterOverrides, MaterialParameterOverride{

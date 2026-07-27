@@ -3051,6 +3051,26 @@ void RunSceneParticleSystemsLifecycleTest() {
     kb::tests::Require(particles.size() == liveAfterPlay, "SceneParticleSystems::Particles must expose exactly the live particle array");
     kb::tests::Require(std::abs(particles.front().position.x - 5.0F) < 2.0F, "SceneParticleSystems particles must spawn near the owner's world position");
 
+    kb::script::ScriptRuntimeHost particleEventHost{ scene };
+    kb::tests::Require(particleEventHost.Succeeded(), "Particle completion event runtime host did not initialize");
+    constexpr kb::assets::AssetId kParticleOwnerBehaviour{ 424243U };
+    scene.Components().Behaviours().Set(owner, kb::scene::BehaviourComponent{
+        .behaviourAssetId = kParticleOwnerBehaviour.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+    std::uint32_t particleFinishedCount = 0U;
+    std::uint64_t finishedInstanceId = 0U;
+    kb::tests::Require(particleEventHost.NativeBackend().RegisterEvent(
+                           kParticleOwnerBehaviour,
+                           "OnParticleSystemFinished",
+                           [&](kb::script::ScriptExecutionContext&, const kb::script::ScriptEvent& event) {
+                               ++particleFinishedCount;
+                               finishedInstanceId = event.arguments.front().value.AsUInt64();
+                           }),
+        "Particle completion native event listener registration failed");
+    kb::script::ScriptRuntimeSceneSystem particleRuntimeSystem{ particleEventHost.Runtime() };
+
     kb::tests::Require(scene.Particles().Stop(instance), "SceneParticleSystems::Stop must report true for a live instance");
     kb::tests::Require(!scene.Particles().IsPlaying(instance), "SceneParticleSystems::IsPlaying must report false after Stop");
     kb::tests::Require(scene.Particles().LiveParticleCount(instance) == liveAfterPlay, "SceneParticleSystems::Stop must not clear already-live particles, only halt new emission");
@@ -3058,8 +3078,12 @@ void RunSceneParticleSystemsLifecycleTest() {
     // Every particle's lifetime is 0.05s - advancing well past that kills them all, even
     // though the instance is stopped (integration/kill is unconditional, only spawning is
     // gated by `playing`).
-    scene.Particles().Advance(0.2F);
+    static_cast<void>(particleRuntimeSystem.ExecuteFrame(scene, 0.2F));
     kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 0U, "SceneParticleSystems::Advance must kill particles past their lifetime even while stopped");
+    kb::tests::Require(particleFinishedCount == 1U && finishedInstanceId == instance,
+        "ScriptRuntimeSceneSystem must deliver one targeted OnParticleSystemFinished event after the last particle expires");
+    kb::tests::Require(scene.Particles().DrainFinishedEvents().empty(),
+        "ScriptRuntimeSceneSystem must drain particle completion events exactly once");
 
     kb::tests::Require(scene.Particles().Emit(instance, 3U), "SceneParticleSystems::Emit must report true for a live instance");
     kb::tests::Require(scene.Particles().LiveParticleCount(instance) == 3U, "SceneParticleSystems::Emit must spawn exactly the requested count when under capacity");
@@ -3515,6 +3539,19 @@ end
     kb::tests::Require(host.SharedState().Get("luaParticlesReleased").value_or(kb::script::ScriptValue{ false }).AsBool(), "Script particle API Lua wrapper Release did not report success");
 }
 
+class TestMaterialParameterSchemaValidator final
+    : public kb::scene::MaterialParameterSchemaValidator {
+public:
+    [[nodiscard]] bool Validate(
+        const kb::assets::AssetManager&,
+        std::uint64_t,
+        std::string_view name,
+        kb::scene::MaterialParameterType type) const noexcept override {
+        return (name == "roughness" && type == kb::scene::MaterialParameterType::Scalar) ||
+            (name == "useEmissive" && type == kb::scene::MaterialParameterType::Bool);
+    }
+};
+
 // LIB-140: SceneMaterialInstances::SetParameterScalar/SetParameterBool/Parameters/
 // ClearParameter storage - proves the upsert-by-name (last-write-wins), Scalar-vs-Bool value
 // separation, false-for-a-nonexistent-instance/empty-name behavior, and that a released
@@ -3532,6 +3569,16 @@ void RunSceneMaterialInstancesParameterOverridesTest() {
     kb::tests::Require(scene.MaterialInstances().Parameters(instance).empty(), "A freshly created instance must start with no parameter overrides");
 
     kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "", 0.5F), "SetParameterScalar must reject an empty parameter name");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.25F),
+        "SetParameterScalar must reject an unchecked override when no schema validator is installed");
+    scene.MaterialInstances().SetParameterSchemaValidator(
+        std::make_shared<TestMaterialParameterSchemaValidator>());
+    kb::tests::Require(scene.MaterialInstances().HasParameterSchemaValidator(),
+        "SceneMaterialInstances must retain the installed schema validator");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterScalar(instance, "missing", 0.25F),
+        "SetParameterScalar must reject a name absent from the material schema");
+    kb::tests::Require(!scene.MaterialInstances().SetParameterBool(instance, "roughness", false),
+        "SetParameterBool must reject a parameter whose schema type is Scalar");
 
     kb::tests::Require(scene.MaterialInstances().SetParameterScalar(instance, "roughness", 0.25F), "SetParameterScalar must succeed for a live instance");
     kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "useEmissive", true), "SetParameterBool must succeed for a live instance");
@@ -3569,12 +3616,12 @@ void RunSceneMaterialInstancesParameterOverridesTest() {
         kb::tests::Require(foundUpdated, "Overwritten override must still be present under the same name");
     }
 
-    // A name can also change type across calls (SetParameterBool on a name previously set via
-    // SetParameterScalar) - still last-write-wins, no leftover stale numeric value.
-    kb::tests::Require(scene.MaterialInstances().SetParameterBool(instance, "roughness", false), "SetParameterBool must be able to retype an existing Scalar override's name");
+    // Schema type is authoritative: an attempted retype is rejected and cannot mutate the
+    // already-validated override.
+    kb::tests::Require(!scene.MaterialInstances().SetParameterBool(instance, "roughness", false), "SetParameterBool must reject retyping a Scalar schema entry");
     {
         const std::span<const kb::scene::MaterialParameterOverride> parameters = scene.MaterialInstances().Parameters(instance);
-        kb::tests::Require(parameters.size() == 2U, "Retyping an override by name must still not append a duplicate entry");
+        kb::tests::Require(parameters.size() == 2U, "Rejected retyping must not mutate or append an override");
     }
 
     kb::tests::Require(!scene.MaterialInstances().ClearParameter(instance, "neverSet"), "ClearParameter must be idempotent-false for a name with no override set");
@@ -3594,6 +3641,8 @@ void RunSceneMaterialInstancesParameterOverridesTest() {
 // reaches Lua) exercises the same functions correctly.
 void RunScriptMaterialInstanceParameterApiTest() {
     kb::scene::Scene scene;
+    scene.MaterialInstances().SetParameterSchemaValidator(
+        std::make_shared<TestMaterialParameterSchemaValidator>());
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script material instance parameter API host did not initialize");
     kb::tests::Require(host.Functions().FindSignature("MaterialInstance.SetParameterScalar") != nullptr, "Script material instance API did not register MaterialInstance.SetParameterScalar");
@@ -3937,6 +3986,23 @@ void RunAudioMixerAssetIOAndAccessTest() {
         "Audio occlusion Configure/Settings did not round-trip");
     kb::tests::Require(!kb::scene::SceneAudioOcclusionAccess::Settings(otherScene).enabled,
         "Audio occlusion settings must be isolated per scene");
+    kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(
+        scene,
+        kb::scene::AudioOcclusionRuntimeStats{
+            .sampleRequests = 6U,
+            .raycasts = 4U,
+            .occludedSamples = 2U});
+    const kb::scene::AudioOcclusionRuntimeStats& runtimeStats =
+        kb::scene::SceneAudioOcclusionAccess::RuntimeStats(scene);
+    kb::tests::Require(
+        runtimeStats.sampleRequests == 6U &&
+            runtimeStats.raycasts == 4U &&
+            runtimeStats.occludedSamples == 2U,
+        "Audio occlusion runtime telemetry did not round-trip");
+    kb::tests::Require(
+        kb::scene::SceneAudioOcclusionAccess::RuntimeStats(otherScene)
+                .sampleRequests == 0U,
+        "Audio occlusion runtime telemetry must be isolated per scene");
 }
 
 // LIB-147: Audio.SetMixer/ActiveMixer/SetSnapshot/ActiveSnapshot's script layer -
@@ -4366,12 +4432,9 @@ void RunAudioAssetUnloadAndSceneChangeLifecycleTest() {
             "AssetManager::DeleteAsset must remove the registry metadata - the next resolve returns empty, so a new PlayOneShot honestly refuses");
     }
 
-    // (2) A runtime scene change (SceneDocumentService::LoadIntoScene, the additive=false
-    // path a scripted Scene.Load takes) destroys the scene's root entities but does NOT
-    // tear down audio: the backend stays registered and the facade keeps routing. A marker
-    // event still queued for an entity the reload destroyed is drained safely on the next
-    // tick - never delivered to the dead entity, never a crash - and the queue is left
-    // empty. (The positive delivery path is proven in RunScriptAudioVoiceControlApiTest.)
+    // (2) A runtime scene change (the additive=false path a scripted Scene.Load
+    // takes) stops outgoing voices and clears their marker events before destroying
+    // entities. The backend remains registered and can serve the new world.
     {
         kb::scene::Scene scene;
         ProbeAudioPlaybackBackend backend;
@@ -4398,31 +4461,32 @@ end
         static_cast<void>(scene.Runtime().Update(0.016F));
         kb::tests::Require(!scene.Hierarchy().RootEntities().empty(), "LIB-154 scene-change setup must have a live root entity");
 
-        // The non-additive scene change: clears every root entity, reusing the same Scene.
-        kb::scene::SceneDocument nextScene;
-        nextScene.guid = "scene:lib154-next";
-        nextScene.name = "Next";
-        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, nextScene), "LIB-154 non-additive scene change did not load");
-        kb::tests::Require(scene.Hierarchy().RootEntities().empty(), "A non-additive scene change must destroy every root entity");
-        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene),
-            "A runtime scene change must NOT unregister the audio backend (only scene teardown / editor play-mode does)");
-
-        // A marker still queued for the now-destroyed entity is drained without delivery or
-        // a crash on the next tick.
         kb::audio::AudioPlayback::QueueMarkerEvent(scene, kb::audio::PendingAudioMarkerEvent{
                                                               .target = listenerObject.Entity(),
                                                               .voiceId = 1U,
                                                               .marker = "beat",
                                                               .positionSeconds = 0.5F,
                                                           });
+        const int stopAllBeforeLoad = backend.stopAllCount;
+
+        // The non-additive scene change stops audio and clears pending marker
+        // delivery before it destroys every non-persistent root.
+        kb::scene::SceneDocument nextScene;
+        nextScene.guid = "scene:lib154-next";
+        nextScene.name = "Next";
+        kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, nextScene), "LIB-154 non-additive scene change did not load");
+        kb::tests::Require(scene.Hierarchy().RootEntities().empty(), "A non-additive scene change must destroy every root entity");
+        kb::tests::Require(backend.stopAllCount == stopAllBeforeLoad + 1,
+            "A non-additive scene change must stop all voices from the outgoing world");
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene),
+            "A runtime scene change must NOT unregister the audio backend (only scene teardown / editor play-mode does)");
+        kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
+            "A non-additive scene change must discard pending markers from the outgoing world");
         static_cast<void>(scene.Runtime().Update(0.016F));
         kb::tests::Require(!host.SharedState().Get("markerDeliveredAfterSceneChange").value_or(kb::script::ScriptValue{ false }).AsBool(),
             "A marker queued for an entity a scene change destroyed must NOT be delivered");
-        kb::tests::Require(kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene).empty(),
-            "The marker queue must be fully drained by dispatch even when its target was destroyed by a scene change");
 
-        // The facade keeps routing after the scene change, and StopAll - the host's tool for
-        // stopping lingering one-shots across a scene change - still reaches the backend.
+        // The facade keeps routing after the scene change.
         kb::tests::Require(kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{ .clipAssetId = 415401U }).Succeeded(),
             "The audio facade must keep routing PlayOneShot after a scene change");
         const int stopAllBefore = backend.stopAllCount;
@@ -4464,7 +4528,7 @@ void RunScriptInputHapticsApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script input haptics API host did not initialize");
-    for (const char* name : { "Input.HasHaptics", "Input.SetVibration", "Input.StopVibration" }) {
+    for (const char* name : { "Input.HasHaptics", "Input.SetVibration", "Input.BindHapticsUser", "Input.SetUserVibration", "Input.StopVibration" }) {
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script input haptics API did not register a LIB-153 function");
     }
     kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Input.SetVibration") != nullptr,
@@ -4516,6 +4580,14 @@ void RunScriptInputHapticsApiTest() {
         "Input.SetVibration did not carry the motor magnitudes to the backend");
     kb::tests::Require(!callSetVibration(5, 1.0F, 1.0F).Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Input.SetVibration must be honestly false for an out-of-range slot");
+    kb::tests::Require(kb::input::InputHaptics::BindLocalUser(scene, kb::input::LocalUserId{ 7U }, 1U),
+        "InputHaptics must bind a local user to an in-range physical gamepad");
+    kb::tests::Require(kb::input::InputHaptics::GamepadForLocalUser(scene, kb::input::LocalUserId{ 7U }) == 1U
+            && kb::input::InputHaptics::SetVibrationForLocalUser(scene, kb::input::LocalUserId{ 7U }, 0.4F, 0.6F)
+            && backend.lastIndex == 1U,
+        "InputHaptics local-user actuator did not route to the bound physical gamepad");
+    kb::tests::Require(!kb::input::InputHaptics::BindLocalUser(scene, kb::input::LocalUserId{ 7U }, 5U),
+        "InputHaptics must reject an out-of-range local-user binding");
     kb::tests::Require(host.Functions().Call("Input.StopVibration", std::span<const kb::script::ScriptFunctionArgument>{}, context)
                             .Output("stopped").value_or(kb::script::ScriptValue{ false }).AsBool()
             && backend.stopAllCount == 1,
@@ -4535,16 +4607,18 @@ function Tick(self, dt)
     SetShared("luaSupported", haptics.supported)
     SetShared("luaDualMotor", haptics.dualMotor)
     SetShared("luaApplied", Input.SetVibration(0, 0.5, 1.0))
+    SetShared("luaBound", Input.BindHapticsUser(7, 1))
+    SetShared("luaUserApplied", Input.SetUserVibration(7, 0.25, 0.75))
     SetShared("luaStopped", Input.StopVibration())
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Script input haptics Lua wrapper script did not load");
     const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
     kb::tests::Require(tick.Succeeded(), "Script input haptics Lua wrapper execution failed");
-    for (const char* key : { "luaSupported", "luaDualMotor", "luaApplied", "luaStopped" }) {
+    for (const char* key : { "luaSupported", "luaDualMotor", "luaApplied", "luaBound", "luaUserApplied", "luaStopped" }) {
         kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua haptics wrapper did not report success");
     }
-    kb::tests::Require(backend.lastIndex == 0U && kb::tests::NearlyEqual(backend.lastLow, 0.5F) && kb::tests::NearlyEqual(backend.lastHigh, 1.0F) && backend.stopAllCount == 2,
+    kb::tests::Require(backend.lastIndex == 1U && kb::tests::NearlyEqual(backend.lastLow, 0.25F) && kb::tests::NearlyEqual(backend.lastHigh, 0.75F) && backend.stopAllCount == 2,
         "Lua haptics wrappers did not carry values to the backend");
     kb::input::InputHaptics::UnregisterBackend(scene, backend);
     kb::tests::Require(!kb::input::InputHaptics::HasBackend(scene), "UnregisterBackend must clear the scene's haptics backend");

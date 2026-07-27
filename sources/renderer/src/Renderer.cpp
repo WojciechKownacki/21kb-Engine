@@ -1628,12 +1628,18 @@ bool Renderer::RuntimeAssetDiscoveryEnabled() const noexcept {
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
-    runtimeResourceCache_.ReleaseScene(const_cast<kb::scene::Scene&>(scene), sceneRenderer_.get());
+    kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
+    screenCapture_->ReleaseScene(mutableScene);
+    particleRenderSynchronizer_->ReleaseScene(scene.Id());
+    kb::scene::SceneRenderFeedback::Clear(mutableScene);
+    runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
     runtimeAssetDiscovery_.ReleaseScene(scene.Id());
 }
 
 void Renderer::ReleaseAllScenes() noexcept {
+    screenCapture_->Shutdown();
+    particleRenderSynchronizer_->Clear();
     renderSceneStore_.ReleaseAll();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     runtimeAssetDiscovery_.Clear();

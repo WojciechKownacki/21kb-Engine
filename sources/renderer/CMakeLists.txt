@@ -64,6 +64,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/detail/RenderResourceSlotPool.hpp
     include/kb/render/runtime/RuntimeFrameResourceReferences.hpp
     include/kb/render/runtime/RuntimeMaterialResolver.hpp
+    include/kb/render/runtime/RuntimeMaterialParameterValidation.hpp
     include/kb/render/runtime/RuntimeRenderAssetDiscovery.hpp
     include/kb/render/runtime/RuntimeRenderResourceCache.hpp
     include/kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp
@@ -223,6 +224,7 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeFrameResourceReferences.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.hpp
+    src/runtime/RuntimeMaterialParameterValidation.cpp
     src/runtime/RuntimeMaterialResolver.cpp
     src/runtime/RuntimeMaterialResourceEnsurer.cpp
     src/runtime/RuntimeMaterialResourceEnsurer.hpp

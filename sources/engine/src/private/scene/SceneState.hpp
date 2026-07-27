@@ -221,13 +221,12 @@ public:
     struct MaterialInstanceRecord {
         std::uint64_t id = 0U;
         std::uint64_t parentMaterialAssetId = 0U;
-        // LIB-140: unvalidated named overrides - see MaterialParameterOverride's own doc
-        // comment (SceneMaterialInstances.hpp) for why kb::scene cannot validate these
-        // itself.
+        // LIB-140: named overrides admitted through the renderer-owned schema bridge.
         std::vector<MaterialParameterOverride> parameterOverrides;
     };
     std::vector<MaterialInstanceRecord> materialInstances;
     std::uint64_t nextMaterialInstanceId = 1U;
+    std::shared_ptr<const MaterialParameterSchemaValidator> materialParameterSchemaValidator;
     struct FixedTransformSample {
         TransformComponent previous;
         TransformComponent current;
@@ -399,6 +398,7 @@ public:
     // editor's Win32/XInput layer registers it for Play Mode; nullptr = every haptics
     // query honestly reports unsupported).
     kb::input::IInputHapticsBackend* inputHapticsBackend = nullptr;
+    std::unordered_map<std::uint32_t, std::uint32_t> hapticsGamepadByLocalUser;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
     // LIB-142: scene-global active PostProcessProfile asset id (0 = none) - the ONLY
@@ -421,6 +421,7 @@ public:
     // LIB-151: scene-global audio occlusion configuration (disabled by default - zero
     // raycast cost until a game opts in).
     AudioOcclusionSettings audioOcclusionSettings;
+    AudioOcclusionRuntimeStats audioOcclusionRuntimeStats;
     // LIB-152: fired voice markers awaiting script dispatch (mirror of
     // pendingCollisionEvents - queued by the audio backend each tick, drained into
     // ENTITY-LOCAL "OnAudioMarker" events by ScriptRuntimeSceneSystem).
@@ -496,6 +497,7 @@ public:
         std::uint64_t resolvedMaterialAssetId = 0U;
         SceneEntity owner{};
         bool playing = false;
+        bool completionArmed = false;
         kb::math::RandomStream rng{};
         // Fractional particle carried between Advance() calls so a non-integer
         // emissionRatePerSecond*deltaSeconds still emits at the correct long-run average
@@ -508,6 +510,7 @@ public:
         std::vector<ParticleState> particles;
     };
     std::vector<ParticleSystemInstanceRecord> particleSystems;
+    std::vector<ParticleSystemFinishedEvent> pendingParticleSystemFinishedEvents;
     std::uint64_t nextParticleSystemInstanceId = 1U;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by

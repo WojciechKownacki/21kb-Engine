@@ -34,6 +34,7 @@ public:
     [[nodiscard]] static std::uint32_t LiveParticleCount(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::span<const ParticleState> Particles(const Scene& scene, std::uint64_t id) noexcept;
     [[nodiscard]] static std::vector<std::uint64_t> LiveInstanceIds(const Scene& scene);
+    [[nodiscard]] static std::vector<ParticleSystemFinishedEvent> DrainFinishedEvents(Scene& scene);
 
     static void Advance(Scene& scene, float deltaSeconds);
 };

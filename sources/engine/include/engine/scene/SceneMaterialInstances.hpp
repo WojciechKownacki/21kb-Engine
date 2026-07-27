@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -9,6 +10,13 @@
 namespace kb::scene {
 
 class Scene;
+}
+
+namespace kb::assets {
+class AssetManager;
+}
+
+namespace kb::scene {
 
 // LIB-140: mirrors kb::render::RenderMaterialParameterType's scalar-shaped subset -
 // kb::scene never depends on kb::render (see MaterialParameterOverride's own doc comment),
@@ -29,17 +37,30 @@ enum class MaterialParameterType : std::uint8_t {
 // author gives an exposed parameter node, or the synthetic node-id-derived fallback string
 // when left blank - kb::render::RenderMaterialParameterSchema::name IS this string, see
 // RenderMaterialGraphCompiler.cpp's BuildRenderMaterialGraphParameterSchema). kb::scene
-// cannot validate `name`/`type` against the real schema (that data lives entirely in
-// kb::render, compiled from the parent material's graph) - storage here is deliberately
-// unvalidated; real validation happens once, lazily, at render-resolution time
-// (RuntimeMaterialResourceEnsurer's material-instance path) and an unresolvable/wrong-type
-// override is silently dropped there, exactly mirroring how an unresolvable materialAssetId
-// already silently falls back to "no material" rather than crashing.
+// does not parse that schema itself (the renderer remains its single owner). Mutation goes
+// through MaterialParameterSchemaValidator, a renderer-installed bridge, so storage contains
+// only names/types accepted against the authoritative graph schema. The render-resolution
+// path validates again as defense against malformed serialized/internal state.
 struct MaterialParameterOverride {
     std::string name;
     MaterialParameterType type = MaterialParameterType::Scalar;
     float scalarValue = 0.0F;
     bool boolValue = false;
+};
+
+// Renderer-owned schema bridge used by SceneMaterialInstances at the mutation boundary.
+// The engine owns only this narrow contract; the renderer remains the single source of
+// truth for material graph parsing and parameter schemas. Implementations must not retain
+// references to `name`.
+class MaterialParameterSchemaValidator {
+public:
+    virtual ~MaterialParameterSchemaValidator() = default;
+
+    [[nodiscard]] virtual bool Validate(
+        const kb::assets::AssetManager& assets,
+        std::uint64_t parentMaterialAssetId,
+        std::string_view name,
+        MaterialParameterType type) const noexcept = 0;
 };
 
 // LIB-139: read-only half of SceneMaterialInstances, mirroring
@@ -95,12 +116,13 @@ public:
     [[nodiscard]] bool Exists(std::uint64_t id) const noexcept;
     [[nodiscard]] std::uint64_t Parent(std::uint64_t id) const noexcept;
     [[nodiscard]] std::span<const MaterialParameterOverride> Parameters(std::uint64_t id) const noexcept;
-    // LIB-140: upserts a named override by `name` (last-write-wins, mirrors
-    // RegisterEvent's own established upsert-by-key convention). False if `id` names no
-    // currently live instance - true otherwise, even though kb::scene cannot yet confirm
-    // `name` is a real parameter on the parent material's graph (see
-    // MaterialParameterOverride's own doc comment for why, and where the real check
-    // happens).
+    // Installs the renderer-owned schema bridge. Scene ownership makes its lifetime explicit
+    // and prevents dangling callbacks during renderer/plugin unload.
+    void SetParameterSchemaValidator(std::shared_ptr<const MaterialParameterSchemaValidator> validator) noexcept;
+    [[nodiscard]] bool HasParameterSchemaValidator() const noexcept;
+    // Upserts a named override only after the installed validator confirms that `name`
+    // exists on the parent graph, has the requested type, supports runtime overrides and is
+    // runtime-supported. False for a stale handle, missing validator or invalid schema entry.
     [[nodiscard]] bool SetParameterScalar(std::uint64_t id, std::string_view name, float value) noexcept;
     [[nodiscard]] bool SetParameterBool(std::uint64_t id, std::string_view name, bool value) noexcept;
     // Idempotent - false if `id` names no currently live instance, or `name` has no

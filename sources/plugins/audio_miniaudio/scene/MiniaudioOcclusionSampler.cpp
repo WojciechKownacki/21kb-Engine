@@ -17,6 +17,7 @@ constexpr float kArrivalEpsilon = 0.05F;
 } // namespace
 
 void MiniaudioOcclusionSampler::BeginTick(const kb::scene::AudioOcclusionSettings& settings) noexcept {
+    seenThisTick_.clear();
     budgetLeft_ = settings.maxRaycastsPerTick;
     // Rotating fairness: when last tick had more requests than budget, later ticks start
     // sampling further into the request order, so every source is refreshed eventually.
@@ -27,17 +28,30 @@ void MiniaudioOcclusionSampler::BeginTick(const kb::scene::AudioOcclusionSetting
     }
     requestsLastTick_ = requestsThisTick_;
     requestsThisTick_ = 0U;
+    raycastsThisTick_ = 0U;
+    occludedSamplesThisTick_ = 0U;
     ++tickIndex_;
+}
+
+void MiniaudioOcclusionSampler::EndTick() noexcept {
+    for (auto iterator = lastScale_.begin(); iterator != lastScale_.end();) {
+        if (seenThisTick_.contains(iterator->first)) {
+            ++iterator;
+        } else {
+            iterator = lastScale_.erase(iterator);
+        }
+    }
 }
 
 float MiniaudioOcclusionSampler::Sample(
     kb::scene::Scene& scene,
     const kb::scene::AudioOcclusionSettings& settings,
-    std::uint64_t key,
+    MiniaudioOcclusionKey key,
     const kb::scene::Vec3& listenerPosition,
     const kb::scene::Vec3& sourcePosition,
     std::uint64_t excludeEntityId) {
     ++requestsThisTick_;
+    seenThisTick_.insert(key);
 
     const kb::scene::Vec3 toSource = sourcePosition - listenerPosition;
     const float distance = kb::math::Length(toSource);
@@ -54,6 +68,7 @@ float MiniaudioOcclusionSampler::Sample(
         return CachedOr(key, 1.0F);
     }
     --budgetLeft_;
+    ++raycastsThisTick_;
 
     std::array<kb::scene::PhysicsCastResult, 8U> storage{};
     kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> results{ std::span<kb::scene::PhysicsCastResult>{ storage } };
@@ -66,19 +81,33 @@ float MiniaudioOcclusionSampler::Sample(
         }
     }
     const float scale = occluded ? settings.occludedVolumeScale : 1.0F;
+    if (occluded) {
+        ++occludedSamplesThisTick_;
+    }
     lastScale_[key] = scale;
     return scale;
 }
 
+kb::scene::AudioOcclusionRuntimeStats
+MiniaudioOcclusionSampler::RuntimeStats() const noexcept {
+    return kb::scene::AudioOcclusionRuntimeStats{
+        .sampleRequests = requestsThisTick_,
+        .raycasts = raycastsThisTick_,
+        .occludedSamples = occludedSamplesThisTick_};
+}
+
 void MiniaudioOcclusionSampler::Clear() noexcept {
     lastScale_.clear();
+    seenThisTick_.clear();
     budgetLeft_ = 0U;
     skipLeft_ = 0U;
     requestsThisTick_ = 0U;
     requestsLastTick_ = 0U;
+    raycastsThisTick_ = 0U;
+    occludedSamplesThisTick_ = 0U;
 }
 
-float MiniaudioOcclusionSampler::CachedOr(std::uint64_t key, float fallback) const noexcept {
+float MiniaudioOcclusionSampler::CachedOr(MiniaudioOcclusionKey key, float fallback) const noexcept {
     const auto iterator = lastScale_.find(key);
     return iterator == lastScale_.end() ? fallback : iterator->second;
 }

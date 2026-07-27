@@ -50,10 +50,15 @@ void MiniaudioSound::Stop() noexcept {
     if (initialized_) {
         static_cast<void>(ma_sound_stop(&sound_));
     }
+    if (flatInitialized_) {
+        static_cast<void>(ma_sound_stop(&flatSound_));
+    }
 }
 
 bool MiniaudioSound::IsPlaying() const noexcept {
-    return initialized_ && ma_sound_is_playing(&sound_) != MA_FALSE;
+    return initialized_ &&
+        (ma_sound_is_playing(&sound_) != MA_FALSE ||
+            (flatInitialized_ && ma_sound_is_playing(const_cast<ma_sound*>(&flatSound_)) != MA_FALSE));
 }
 
 ma_result MiniaudioSound::SeekSeconds(float positionSeconds) noexcept {
@@ -66,24 +71,36 @@ ma_result MiniaudioSound::SeekSeconds(float positionSeconds) noexcept {
         return MA_INVALID_OPERATION;
     }
     const float clamped = std::max(0.0F, ValidOr(positionSeconds, 0.0F));
-    return ma_sound_seek_to_pcm_frame(&sound_, static_cast<ma_uint64>(static_cast<double>(clamped) * sampleRate));
+    const ma_uint64 frame = static_cast<ma_uint64>(static_cast<double>(clamped) * sampleRate);
+    const ma_result primaryResult = ma_sound_seek_to_pcm_frame(&sound_, frame);
+    if (primaryResult != MA_SUCCESS || !flatInitialized_) {
+        return primaryResult;
+    }
+    return ma_sound_seek_to_pcm_frame(&flatSound_, frame);
 }
 
 void MiniaudioSound::SetVolume(float volume) noexcept {
     if (initialized_) {
-        ma_sound_set_volume(&sound_, std::max(0.0F, ValidOr(volume, 1.0F)));
+        volume_ = std::max(0.0F, ValidOr(volume, 1.0F));
+        ApplyVolumes();
     }
 }
 
 void MiniaudioSound::SetPitch(float pitch) noexcept {
     if (initialized_) {
         ma_sound_set_pitch(&sound_, std::max(0.01F, ValidOr(pitch, 1.0F)));
+        if (flatInitialized_) {
+            ma_sound_set_pitch(&flatSound_, std::max(0.01F, ValidOr(pitch, 1.0F)));
+        }
     }
 }
 
 void MiniaudioSound::SetLooping(bool loop) noexcept {
     if (initialized_) {
         ma_sound_set_looping(&sound_, loop ? MA_TRUE : MA_FALSE);
+        if (flatInitialized_) {
+            ma_sound_set_looping(&flatSound_, loop ? MA_TRUE : MA_FALSE);
+        }
     }
 }
 
@@ -109,16 +126,32 @@ ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::files
     Reset();
     const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);
     initialized_ = result == MA_SUCCESS;
+    if (!initialized_ || !spatial) {
+        return result;
+    }
+    const ma_result flatResult = InitSoundFromFile(engine, path, SoundFlags(false), group, flatSound_);
+    flatInitialized_ = flatResult == MA_SUCCESS;
+    if (!flatInitialized_) {
+        ma_sound_uninit(&sound_);
+        initialized_ = false;
+        return flatResult;
+    }
     return result;
 }
 
 void MiniaudioSound::Reset() noexcept {
-    if (!initialized_) {
-        return;
+    if (flatInitialized_) {
+        static_cast<void>(ma_sound_stop(&flatSound_));
+        ma_sound_uninit(&flatSound_);
+        flatInitialized_ = false;
     }
-    static_cast<void>(ma_sound_stop(&sound_));
-    ma_sound_uninit(&sound_);
-    initialized_ = false;
+    if (initialized_) {
+        static_cast<void>(ma_sound_stop(&sound_));
+        ma_sound_uninit(&sound_);
+        initialized_ = false;
+    }
+    volume_ = 1.0F;
+    spatialBlend_ = 1.0F;
 }
 
 void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
@@ -134,24 +167,40 @@ void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     const float rolloff = std::max(0.0F, ValidOr(settings.rolloff, 1.0F));
     const float dopplerFactor = std::max(0.0F, ValidOr(settings.dopplerFactor, 1.0F));
 
-    ma_sound_set_volume(&sound_, volume);
+    volume_ = volume;
+    spatialBlend_ = flatInitialized_ && settings.spatial ? spatialBlend : 1.0F;
+    ApplyVolumes();
     ma_sound_set_pitch(&sound_, pitch);
-    ma_sound_set_pan(&sound_, pan);
+    ma_sound_set_pan(&sound_, flatInitialized_ ? 0.0F : pan);
     ma_sound_set_looping(&sound_, settings.loop ? MA_TRUE : MA_FALSE);
-    ma_sound_set_spatialization_enabled(&sound_, settings.spatial && spatialBlend > 0.0F ? MA_TRUE : MA_FALSE);
+    ma_sound_set_spatialization_enabled(&sound_, settings.spatial ? MA_TRUE : MA_FALSE);
     ma_sound_set_attenuation_model(&sound_, ToMiniaudioAttenuationModel(settings.attenuationModel));
     ma_sound_set_min_distance(&sound_, minDistance);
     ma_sound_set_max_distance(&sound_, maxDistance);
     ma_sound_set_rolloff(&sound_, rolloff);
     ma_sound_set_doppler_factor(&sound_, dopplerFactor);
     ma_sound_set_position(&sound_, settings.position.x, settings.position.y, settings.position.z);
+    if (flatInitialized_) {
+        ma_sound_set_pitch(&flatSound_, pitch);
+        ma_sound_set_pan(&flatSound_, pan);
+        ma_sound_set_looping(&flatSound_, settings.loop ? MA_TRUE : MA_FALSE);
+        ma_sound_set_spatialization_enabled(&flatSound_, MA_FALSE);
+    }
 }
 
 ma_result MiniaudioSound::Start() noexcept {
     if (!initialized_) {
         return MA_INVALID_OPERATION;
     }
-    return ma_sound_start(&sound_);
+    const ma_result primaryResult = ma_sound_start(&sound_);
+    if (primaryResult != MA_SUCCESS || !flatInitialized_) {
+        return primaryResult;
+    }
+    const ma_result flatResult = ma_sound_start(&flatSound_);
+    if (flatResult != MA_SUCCESS) {
+        static_cast<void>(ma_sound_stop(&sound_));
+    }
+    return flatResult;
 }
 
 bool MiniaudioSound::AtEnd() const noexcept {
@@ -160,6 +209,18 @@ bool MiniaudioSound::AtEnd() const noexcept {
 
 bool MiniaudioSound::IsInitialized() const noexcept {
     return initialized_;
+}
+
+void MiniaudioSound::ApplyVolumes() noexcept {
+    if (!initialized_) {
+        return;
+    }
+    if (!flatInitialized_) {
+        ma_sound_set_volume(&sound_, volume_);
+        return;
+    }
+    ma_sound_set_volume(&sound_, volume_ * spatialBlend_);
+    ma_sound_set_volume(&flatSound_, volume_ * (1.0F - spatialBlend_));
 }
 
 } // namespace kb::audio_miniaudio

@@ -12,9 +12,9 @@ namespace kb::input {
 // keyboard/mouse on the machine); what differs per user is which mapping
 // contexts are active and which action values they resolve to.
 //
-// Device-level multi-gamepad disambiguation (e.g. distinguishing "gamepad index
-// 0" from "gamepad index 1") is a separate concern belonging to the normalized
-// device model, not this id - InputKey has no per-device-instance axis yet.
+// Device-level input-key disambiguation remains a normalized-device concern. Haptics is
+// explicitly routed from this id to a physical gamepad slot by InputHaptics, allowing
+// split-screen users to drive independent actuators without changing InputKey.
 struct LocalUserId {
     std::uint32_t value = 0U;
 

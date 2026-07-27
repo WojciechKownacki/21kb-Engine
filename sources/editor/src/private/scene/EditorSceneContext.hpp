@@ -180,6 +180,11 @@ public:
     [[nodiscard]] bool SaveOpenDocuments();
     [[nodiscard]] bool SaveDirtySceneDocument(std::string_view reason);
     void DiscardDirtySceneDocument(std::string_view reason);
+    // The rendering host owns GPU resources keyed by Scene::Id(). Registering this
+    // callback lets document replacement release those resources while the old scene
+    // identity is still alive, without introducing an engine/render dependency here.
+    void SetRenderSceneReleaseHandler(
+        std::function<void(const kb::scene::Scene&)> handler);
     [[nodiscard]] bool PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution);
     [[nodiscard]] bool BeginPlayModeSceneSession();
     // Push any per-frame script diagnostics (compile/behaviour errors) the
@@ -791,6 +796,7 @@ private:
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
     void ClearSceneDocumentDirty() noexcept;
+    void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
@@ -806,6 +812,7 @@ private:
     kb::project::ProjectDescriptor project_;
     std::filesystem::path projectFile_;
     std::unique_ptr<kb::scene::Scene> scene_;
+    std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;

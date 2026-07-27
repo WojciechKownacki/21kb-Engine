@@ -215,6 +215,7 @@ bool SceneParticleSystemService::Play(Scene& scene, std::uint64_t id) noexcept {
         return false;
     }
     instance->playing = true;
+    instance->completionArmed = true;
     instance->elapsedSeconds = 0.0F;
     return true;
 }
@@ -289,6 +290,9 @@ bool SceneParticleSystemService::Emit(Scene& scene, std::uint64_t id, std::uint3
     if (instance == nullptr) {
         return false;
     }
+    if (count > 0U) {
+        instance->completionArmed = true;
+    }
     const std::optional<ResolvedSimParams> params = ResolveSimParams(scene, *instance);
     if (!params.has_value()) {
         return true; // handle is live; effect asset transiently unresolvable - honest no-op.
@@ -331,6 +335,13 @@ std::vector<std::uint64_t> SceneParticleSystemService::LiveInstanceIds(const Sce
         ids.push_back(instance.id);
     }
     return ids;
+}
+
+std::vector<ParticleSystemFinishedEvent> SceneParticleSystemService::DrainFinishedEvents(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    std::vector<ParticleSystemFinishedEvent> events;
+    events.swap(state.pendingParticleSystemFinishedEvents);
+    return events;
 }
 
 void SceneParticleSystemService::Advance(Scene& scene, float deltaSeconds) {
@@ -386,6 +397,14 @@ void SceneParticleSystemService::Advance(Scene& scene, float deltaSeconds) {
                     instance.emissionAccumulator = std::min(instance.emissionAccumulator, 1.0F);
                 }
             }
+        }
+        if (instance.completionArmed && !instance.playing && instance.particles.empty()) {
+            state.pendingParticleSystemFinishedEvents.push_back(ParticleSystemFinishedEvent{
+                .target = instance.owner,
+                .instanceId = instance.id,
+                .effectAssetId = instance.effectAssetId,
+            });
+            instance.completionArmed = false;
         }
         ++index;
     }

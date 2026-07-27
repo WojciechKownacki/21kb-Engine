@@ -25,6 +25,12 @@ struct ParticleState {
     float lifetime = 1.0F;
 };
 
+struct ParticleSystemFinishedEvent {
+    SceneEntity target{};
+    std::uint64_t instanceId = 0U;
+    std::uint64_t effectAssetId = 0U;
+};
+
 // LIB-143: read-only half of SceneParticleSystems, mirroring
 // SceneMaterialInstanceQueries' const/mutable split - obtained from a `const Scene&`, safe
 // to call from kb::render's per-frame rendering bridge, which never mutates kb::scene state.
@@ -119,6 +125,7 @@ public:
     // note).
     [[nodiscard]] bool Emit(std::uint64_t id, std::uint32_t count);
     [[nodiscard]] std::uint32_t LiveParticleCount(std::uint64_t id) const noexcept;
+    [[nodiscard]] std::vector<ParticleSystemFinishedEvent> DrainFinishedEvents();
 
     // Called once per frame by kb::script::ScriptRuntimeSceneSystem with the same
     // scale/pause-aware deltaSeconds Timer/Task already use (SceneTimers::Advance's exact

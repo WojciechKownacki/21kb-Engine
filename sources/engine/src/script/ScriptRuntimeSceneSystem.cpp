@@ -317,6 +317,20 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
 
 void ScriptRuntimeSceneSystem::AdvanceParticleSystems(kb::scene::Scene& scene, float deltaSeconds) {
     scene.Particles().Advance(deltaSeconds);
+    for (const kb::scene::ParticleSystemFinishedEvent& pending : scene.Particles().DrainFinishedEvents()) {
+        ScriptEvent event;
+        event.name = "OnParticleSystemFinished";
+        event.target = pending.target;
+        event.arguments.push_back(ScriptEventArgument{
+            .name = "instance",
+            .value = ScriptValue{ pending.instanceId, ScriptValueType::Hash },
+        });
+        event.arguments.push_back(ScriptEventArgument{
+            .name = "effect",
+            .value = ScriptValue{ pending.effectAssetId, ScriptValueType::Hash },
+        });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& scene, float deltaSeconds) {
