@@ -787,6 +787,7 @@ private:
     void ActivateProjectInput();
     [[nodiscard]] bool ActivateProjectPhysicsLayers(kb::scene::Scene& scene);
     void EnsureScriptRuntime();
+    void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
     void ClearSceneDocumentDirty() noexcept;
