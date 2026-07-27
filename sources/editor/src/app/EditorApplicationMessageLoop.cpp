@@ -7,7 +7,7 @@
 #include "console/EditorConsoleState.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
-#include "platform/win32/Win32XInputHapticsBackend.hpp"
+#include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -491,7 +491,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // the haptics actuator too. Function-local static: one process-wide backend whose
     // destructor (and the not-playing branch below) silences every motor - leaving Play
     // Mode must never leave a pad buzzing.
-    static Win32XInputHapticsBackend hapticsBackend;
+    static kb::input::Win32XInputHapticsBackend hapticsBackend;
     static bool hapticsActive = false;
     if (!state.playMode.IsPlaying()) {
         if (hapticsActive) {

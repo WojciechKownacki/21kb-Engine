@@ -169,6 +169,25 @@ void RendererScreenCapture::Shutdown() noexcept {
     path_.clear();
 }
 
+void RendererScreenCapture::ReleaseScene(kb::scene::Scene& scene) noexcept {
+    const kb::scene::SceneScreenCaptureRequest pending =
+        kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene);
+    if (pending.id != 0U) {
+        kb::scene::SceneRenderFeedback::ConsumeScreenCaptureRequest(scene, pending.id);
+        kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, pending.id, false);
+    }
+    if (!inFlight_ || sceneId_ != scene.Id()) {
+        return;
+    }
+    ReleaseStaging();
+    inFlight_ = false;
+    kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, requestId_, false);
+    bytes_.clear();
+    path_.clear();
+    sceneId_ = 0U;
+    requestId_ = 0U;
+}
+
 bool RendererScreenCapture::EncodeAndWritePng() const {
     std::vector<std::uint8_t> rgba8;
     ConvertToRgba8(format_, bytes_, width_ * height_, rgba8);

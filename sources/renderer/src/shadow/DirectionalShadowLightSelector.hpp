@@ -15,7 +15,9 @@ class DirectionalShadowLightSelector {
 public:
     DirectionalShadowLightSelector() = delete;
 
-    [[nodiscard]] static DirectionalShadowLightSelection Select(const RenderScene& renderScene) noexcept;
+    [[nodiscard]] static DirectionalShadowLightSelection Select(
+        const RenderScene& renderScene,
+        std::uint32_t cameraCullingMask) noexcept;
 };
 
 } // namespace kb::render

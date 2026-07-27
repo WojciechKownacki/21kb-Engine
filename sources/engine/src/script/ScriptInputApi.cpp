@@ -697,6 +697,57 @@ bool RegisterSetVibration(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
+bool RegisterBindHapticsUser(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.BindHapticsUser";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"localUser", ScriptValueType::Int, true},
+        ScriptFunctionPin{"gamepadIndex", ScriptValueType::Int, true},
+    };
+    desc.signature.outputs = {ScriptFunctionPin{"bound", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* userArg = FindArg(arguments, "localUser");
+        const ScriptValue* indexArg = FindArg(arguments, "gamepadIndex");
+        return BoolResult(
+            "bound",
+            kb::input::InputHaptics::BindLocalUser(
+                *context.scene,
+                kb::input::LocalUserId{ static_cast<std::uint32_t>(userArg != nullptr ? userArg->AsInt() : 0) },
+                static_cast<std::uint32_t>(indexArg != nullptr ? indexArg->AsInt() : 0)));
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
+bool RegisterSetUserVibration(ScriptRuntimeHost& host) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = "Input.SetUserVibration";
+    desc.signature.inputs = {
+        ScriptFunctionPin{"localUser", ScriptValueType::Int, true},
+        ScriptFunctionPin{"lowFrequency", ScriptValueType::Float, true},
+        ScriptFunctionPin{"highFrequency", ScriptValueType::Float, true},
+    };
+    desc.signature.outputs = {ScriptFunctionPin{"applied", ScriptValueType::Bool, true}};
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const ScriptValue* userArg = FindArg(arguments, "localUser");
+        const ScriptValue* lowArg = FindArg(arguments, "lowFrequency");
+        const ScriptValue* highArg = FindArg(arguments, "highFrequency");
+        return BoolResult(
+            "applied",
+            kb::input::InputHaptics::SetVibrationForLocalUser(
+                *context.scene,
+                kb::input::LocalUserId{ static_cast<std::uint32_t>(userArg != nullptr ? userArg->AsInt() : 0) },
+                lowArg != nullptr ? lowArg->AsFloat() : 0.0F,
+                highArg != nullptr ? highArg->AsFloat() : 0.0F));
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 bool RegisterStopVibration(ScriptRuntimeHost& host) {
     ScriptFunctionDesc desc;
     desc.signature.name = "Input.StopVibration";
@@ -750,6 +801,8 @@ bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterIsGamepadConnected(host) && ok;
     ok = RegisterHasHaptics(host) && ok;
     ok = RegisterSetVibration(host) && ok;
+    ok = RegisterBindHapticsUser(host) && ok;
+    ok = RegisterSetUserVibration(host) && ok;
     ok = RegisterStopVibration(host) && ok;
 
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;

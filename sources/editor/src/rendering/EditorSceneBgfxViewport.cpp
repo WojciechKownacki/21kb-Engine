@@ -349,6 +349,11 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     TrackPaintHost(parent);
 }
 
+void EditorSceneBgfxViewport::ReleaseScene(
+    const kb::scene::Scene& scene) noexcept {
+    renderer_.ReleaseScene(scene);
+}
+
 void EditorSceneBgfxViewport::EndPaintLayout() {
     if (!renderFailed_ && !SubmitPendingPaint()) {
         FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");

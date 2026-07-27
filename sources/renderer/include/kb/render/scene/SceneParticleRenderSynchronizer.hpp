@@ -47,9 +47,11 @@ public:
     // resolved this same frame) - see Renderer.cpp's SubmitSceneToViewport for the exact
     // call site.
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene, std::uint32_t targetViewportId);
+    void ReleaseScene(std::uint64_t sceneId, RenderScene* renderScene = nullptr) noexcept;
+    void Clear() noexcept;
 
 private:
-    std::unordered_map<std::uint64_t, std::uint32_t> lastFrameParticleCounts_;
+    std::unordered_map<std::uint64_t, std::unordered_map<std::uint64_t, std::uint32_t>> lastFrameParticleCountsByScene_;
 };
 
 } // namespace kb::render

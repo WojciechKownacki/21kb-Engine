@@ -287,6 +287,16 @@ const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& s
     return SceneAccess::State(scene).audioOcclusionSettings;
 }
 
+void SceneAudioOcclusionAccess::PublishRuntimeStats(
+    Scene& scene, const AudioOcclusionRuntimeStats& stats) noexcept {
+    SceneAccess::State(scene).audioOcclusionRuntimeStats = stats;
+}
+
+const AudioOcclusionRuntimeStats& SceneAudioOcclusionAccess::RuntimeStats(
+    const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioOcclusionRuntimeStats;
+}
+
 void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
     SceneState& state = SceneAccess::State(scene);
     // A running transition completes instantly before retargeting - the new blend always

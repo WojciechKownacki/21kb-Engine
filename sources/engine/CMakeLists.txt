@@ -1139,8 +1139,10 @@ if(WIN32)
     target_sources(kb_engine PRIVATE
         include/engine/platform/win32/Win32InputCollector.hpp
         include/engine/platform/win32/Win32InputKeyMap.hpp
+        include/engine/platform/win32/Win32XInputHapticsBackend.hpp
         src/platform/win32/Win32InputCollector.cpp
         src/platform/win32/Win32InputKeyMap.cpp
+        src/platform/win32/Win32XInputHapticsBackend.cpp
     )
     target_link_libraries(kb_engine PRIVATE user32 xinput)
 endif()

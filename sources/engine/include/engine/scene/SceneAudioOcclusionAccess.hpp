@@ -28,12 +28,25 @@ struct AudioOcclusionSettings {
     std::uint32_t maxRaycastsPerTick = 8U;
 };
 
+// Per-tick production telemetry published by the active audio backend. It makes the hard
+// cost cap and actual collider hits observable without exposing plugin-private objects or
+// inferring occlusion from an audio device's physical output.
+struct AudioOcclusionRuntimeStats {
+    std::uint32_t sampleRequests = 0U;
+    std::uint32_t raycasts = 0U;
+    std::uint32_t occludedSamples = 0U;
+};
+
 class SceneAudioOcclusionAccess {
 public:
     SceneAudioOcclusionAccess() = delete;
 
     static void Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept;
     [[nodiscard]] static const AudioOcclusionSettings& Settings(const Scene& scene) noexcept;
+    static void PublishRuntimeStats(
+        Scene& scene, const AudioOcclusionRuntimeStats& stats) noexcept;
+    [[nodiscard]] static const AudioOcclusionRuntimeStats& RuntimeStats(
+        const Scene& scene) noexcept;
 };
 
 } // namespace kb::scene

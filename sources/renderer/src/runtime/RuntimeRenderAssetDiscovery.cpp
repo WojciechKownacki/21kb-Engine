@@ -11,6 +11,7 @@
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 
 #include <memory>
 
@@ -37,6 +38,7 @@ void RuntimeRenderAssetDiscovery::Ensure(kb::scene::Scene& scene, std::uint64_t 
         RegisterLoaderIfMissing<RenderMaterialTypeAssetLoader>(manager, kRenderMaterialTypeAssetType);
         RegisterLoaderIfMissing<PostProcessProfileAssetLoader>(manager, kPostProcessProfileAssetType);
         RegisterLoaderIfMissing<RenderTextureAssetLoader>(manager, "RenderTexture");
+        InstallRuntimeMaterialParameterValidation(scene);
         // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's
         // own constructor (Scene.cpp, mirrors PhysicsLayersAssetLoader's precedent) - kb::scene
         // never depends on kb::render, so it does not belong in this renderer-only discovery

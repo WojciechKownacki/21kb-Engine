@@ -18,6 +18,7 @@
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
@@ -59,6 +60,7 @@ void RegisterEditorSceneDocumentAssetLoaders(kb::scene::Scene& scene) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
+    kb::render::InstallRuntimeMaterialParameterValidation(scene);
     // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's own
     // constructor (Scene.cpp, mirrors PhysicsLayersAssetLoader's precedent). The built-in
     // particle quad mesh needs no registration at all - see BuiltInParticleQuadMesh.hpp's own
@@ -82,6 +84,17 @@ void EditorSceneContext::DiscardDirtySceneDocument(std::string_view reason) {
     }
     sceneDocumentDirty_ = false;
     console_.Warning("Project", "Unsaved scene changes discarded before " + std::string{ reason } + ".");
+}
+
+void EditorSceneContext::SetRenderSceneReleaseHandler(
+    std::function<void(const kb::scene::Scene&)> handler) {
+    renderSceneReleaseHandler_ = std::move(handler);
+}
+
+void EditorSceneContext::ReleaseRenderedSceneResources() {
+    if (renderSceneReleaseHandler_) {
+        renderSceneReleaseHandler_(*scene_);
+    }
 }
 
 bool EditorSceneContext::PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution) {
@@ -155,6 +168,7 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
+    ReleaseRenderedSceneResources();
 
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -205,6 +219,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         return false;
     }
 
+    ReleaseRenderedSceneResources();
     scene_ = std::move(nextScene);
     plugins_.ClearPendingReload();
     SelectFirstSceneEntityOrClear();
@@ -226,6 +241,7 @@ bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     for (const kb::scene::SceneEntity root : roots) {
         scene_->Entities().Destroy(root);
     }
+    ReleaseRenderedSceneResources();
 
     hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
     currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
@@ -253,6 +269,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string());
         return false;
     }
+    ReleaseRenderedSceneResources();
 
     currentScenePath_ = scenePath;
     SelectFirstSceneEntityOrClear();

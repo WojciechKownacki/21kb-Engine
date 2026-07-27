@@ -17,11 +17,10 @@ class ScriptRuntimeHost;
 // GPU-adjacent state - it is purely a scene-owned indirection record plus a
 // small list of named overrides, explicitly released by the script that
 // created it (never garbage-collected, never tied to an entity's own
-// lifetime). SetParameterScalar/SetParameterBool/ClearParameter cannot
-// validate `name` against the parent material's real graph schema (kb::scene
-// never depends on kb::render) - an unresolvable/wrong-type override is
-// silently dropped at render-resolution time instead (see
-// RuntimeMaterialResourceEnsurer's material-instance path).
+// lifetime). SetParameterScalar/SetParameterBool validate the stable parameter
+// name and type at the call boundary through the renderer-installed
+// MaterialParameterSchemaValidator; unavailable schemas, unknown names and
+// wrong types report applied=false and never enter scene storage.
 struct ScriptMaterialInstanceApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
 };

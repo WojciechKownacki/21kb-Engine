@@ -39,6 +39,7 @@ constexpr std::uint64_t kProxyIdSlotStride = 4096ULL;
 } // namespace
 
 void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene, std::uint32_t targetViewportId) {
+    auto& lastFrameParticleCounts = lastFrameParticleCountsByScene_[scene.Id()];
     const CameraRenderProxyDesc* camera = renderScene.FindPrimaryCameraProxy(targetViewportId);
     const kb::math::Vec3 cameraPosition = camera != nullptr
         ? kb::math::Vec3{ camera->position[0], camera->position[1], camera->position[2] }
@@ -54,7 +55,7 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
 
     // Instances released since last frame: remove every proxy slot they left behind, then
     // stop tracking them.
-    for (auto trackedIterator = lastFrameParticleCounts_.begin(); trackedIterator != lastFrameParticleCounts_.end();) {
+    for (auto trackedIterator = lastFrameParticleCounts.begin(); trackedIterator != lastFrameParticleCounts.end();) {
         if (liveSet.find(trackedIterator->first) != liveSet.end()) {
             ++trackedIterator;
             continue;
@@ -62,7 +63,7 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
         for (std::uint32_t slot = 0U; slot < trackedIterator->second; ++slot) {
             static_cast<void>(renderScene.RemoveMesh(ParticleProxyId(trackedIterator->first, slot)));
         }
-        trackedIterator = lastFrameParticleCounts_.erase(trackedIterator);
+        trackedIterator = lastFrameParticleCounts.erase(trackedIterator);
     }
 
     const kb::assets::AssetId quadMeshAssetId = BuiltInParticleQuadMeshAssetId();
@@ -70,8 +71,8 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
         const std::uint64_t materialAssetId = particles.ResolvedMaterialAsset(instanceId);
         const std::span<const kb::scene::ParticleState> liveParticles = particles.Particles(instanceId);
         const auto currentCount = static_cast<std::uint32_t>(liveParticles.size());
-        const auto trackedIterator = lastFrameParticleCounts_.find(instanceId);
-        const std::uint32_t previousCount = trackedIterator == lastFrameParticleCounts_.end() ? 0U : trackedIterator->second;
+        const auto trackedIterator = lastFrameParticleCounts.find(instanceId);
+        const std::uint32_t previousCount = trackedIterator == lastFrameParticleCounts.end() ? 0U : trackedIterator->second;
 
         // Re-resolved every frame (not cached) so a hot-reloaded .kbvfx file's size/color
         // curves take effect immediately - mirrors SceneParticleSystemService's own
@@ -113,15 +114,34 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
             for (std::uint32_t slot = 0U; slot < currentCount; ++slot) {
                 static_cast<void>(renderScene.RemoveMesh(ParticleProxyId(instanceId, slot)));
             }
-            lastFrameParticleCounts_[instanceId] = 0U;
+            lastFrameParticleCounts[instanceId] = 0U;
             continue;
         }
 
         for (std::uint32_t slot = currentCount; slot < previousCount; ++slot) {
             static_cast<void>(renderScene.RemoveMesh(ParticleProxyId(instanceId, slot)));
         }
-        lastFrameParticleCounts_[instanceId] = currentCount;
+        lastFrameParticleCounts[instanceId] = currentCount;
     }
+}
+
+void SceneParticleRenderSynchronizer::ReleaseScene(std::uint64_t sceneId, RenderScene* renderScene) noexcept {
+    const auto sceneIterator = lastFrameParticleCountsByScene_.find(sceneId);
+    if (sceneIterator == lastFrameParticleCountsByScene_.end()) {
+        return;
+    }
+    if (renderScene != nullptr) {
+        for (const auto& [instanceId, count] : sceneIterator->second) {
+            for (std::uint32_t slot = 0U; slot < count; ++slot) {
+                static_cast<void>(renderScene->RemoveMesh(ParticleProxyId(instanceId, slot)));
+            }
+        }
+    }
+    lastFrameParticleCountsByScene_.erase(sceneIterator);
+}
+
+void SceneParticleRenderSynchronizer::Clear() noexcept {
+    lastFrameParticleCountsByScene_.clear();
 }
 
 } // namespace kb::render

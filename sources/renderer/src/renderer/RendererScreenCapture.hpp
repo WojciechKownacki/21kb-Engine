@@ -37,6 +37,7 @@ public:
     // is Renderer::lastCompletedFrame_ (bgfx::frame()'s return), the same readiness gate
     // the exposure readback uses.
     void Process(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportViewIds& viewIds, std::uint32_t completedFrame);
+    void ReleaseScene(kb::scene::Scene& scene) noexcept;
     void Shutdown() noexcept;
 
 private:

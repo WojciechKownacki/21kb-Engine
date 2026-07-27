@@ -2,6 +2,8 @@
 
 #include "scene/SceneMaterialInstanceService.hpp"
 
+#include <utility>
+
 namespace kb::scene {
 
 SceneMaterialInstanceQueries::SceneMaterialInstanceQueries(const Scene& scene) noexcept
@@ -40,6 +42,14 @@ std::uint64_t SceneMaterialInstances::Parent(std::uint64_t id) const noexcept {
 
 std::span<const MaterialParameterOverride> SceneMaterialInstances::Parameters(std::uint64_t id) const noexcept {
     return SceneMaterialInstanceService::Parameters(scene_, id);
+}
+
+void SceneMaterialInstances::SetParameterSchemaValidator(std::shared_ptr<const MaterialParameterSchemaValidator> validator) noexcept {
+    SceneMaterialInstanceService::SetParameterSchemaValidator(scene_, std::move(validator));
+}
+
+bool SceneMaterialInstances::HasParameterSchemaValidator() const noexcept {
+    return SceneMaterialInstanceService::HasParameterSchemaValidator(scene_);
 }
 
 bool SceneMaterialInstances::SetParameterScalar(std::uint64_t id, std::string_view name, float value) noexcept {
