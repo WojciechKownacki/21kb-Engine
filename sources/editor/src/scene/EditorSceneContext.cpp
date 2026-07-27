@@ -37,8 +37,11 @@
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryManifest.hpp"
+#include "engine/library/EngineLibraryModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -1154,6 +1157,7 @@ EditorSceneContext::~EditorSceneContext() = default;
 
 void EditorSceneContext::EnsureScriptRuntime() {
     if (scriptModuleHost_ != nullptr) {
+        SurfaceScriptLibraryStartupReport();
         return;
     }
     EditorConsoleState* console = &console_;
@@ -1222,6 +1226,70 @@ void EditorSceneContext::EnsureScriptRuntime() {
         console_.Error("Scripts", "Script runtime could not be fully initialized; behaviours may not run.");
     } else {
         console_.Info("Scripts", "Script runtime ready for play mode.");
+    }
+    SurfaceScriptLibraryStartupReport();
+}
+
+void EditorSceneContext::SurfaceScriptLibraryStartupReport() {
+    if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) {
+        return;
+    }
+
+    kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
+    std::istringstream report{ kb::library::FormatStartupReport(host.LibraryStartupReport()) };
+    for (std::string line; std::getline(report, line);) {
+        if (!line.empty()) {
+            console_.Info("Library", std::move(line));
+        }
+    }
+
+    const kb::script::ScriptApiCatalog catalog =
+        kb::script::ScriptApiCatalog::Build(host, scene_->Assets().Manager());
+    const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+    const kb::visual::VisualGraphNodeCatalog visualGraphCatalog = host.CreateVisualGraphNodeCatalog();
+    const std::size_t missingDescriptionCount =
+        static_cast<std::size_t>(std::count_if(
+            catalog.functions.begin(),
+            catalog.functions.end(),
+            [](const kb::script::ScriptApiCatalogFunction& function) {
+                return function.description.empty();
+            }));
+    std::size_t auditedFunctionCount = 0U;
+    std::size_t invalidFunctionMetadataCount = 0U;
+    for (const kb::library::LibraryModuleDesc& module : kb::library::EngineLibraryModule::Catalog()) {
+        for (const kb::library::LibraryFunctionDesc& function : module.functions) {
+            ++auditedFunctionCount;
+            if (!kb::library::FunctionDescMatchesCatalog(function, catalog)) {
+                ++invalidFunctionMetadataCount;
+            }
+        }
+    }
+
+    std::ostringstream summary;
+    summary << "Live API " << kb::library::ToString(manifest.version)
+            << " hash=" << manifest.manifestHash
+            << " functions=" << catalog.functions.size()
+            << " components=" << catalog.components.size()
+            << " luaBindings=" << catalog.luaBindings.size()
+            << " visualGraphNodes=" << visualGraphCatalog.Entries().size()
+            << " lifecycleEvents=" << catalog.lifecycleEvents.size()
+            << " projectEntries=" << catalog.projectEntries.size()
+            << " auditedMetadata=" << auditedFunctionCount
+            << " missingDescriptions=" << missingDescriptionCount
+            << " registryLocked=" << (host.Functions().IsLocked() ? "true" : "false");
+    console_.Info("Library", summary.str());
+
+    if (invalidFunctionMetadataCount != 0U) {
+        console_.Error(
+            "Library",
+            std::to_string(invalidFunctionMetadataCount)
+                + " audited function descriptor(s) do not match the live runtime catalog.");
+    }
+    if (missingDescriptionCount != 0U) {
+        console_.Error(
+            "Library",
+            std::to_string(missingDescriptionCount)
+                + " live function(s) are missing API descriptions.");
     }
 }
 
