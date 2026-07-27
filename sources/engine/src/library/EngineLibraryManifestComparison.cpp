@@ -1,6 +1,7 @@
 #include "engine/library/EngineLibraryManifestComparison.hpp"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace kb::library {
 
@@ -28,6 +29,30 @@ using kb::script::ScriptApiPin;
     return true;
 }
 
+[[nodiscard]] bool InputContractIsBackwardCompatible(
+    const std::vector<ScriptApiPin>& baseline,
+    const std::vector<ScriptApiPin>& current) noexcept {
+    if (current.size() < baseline.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < baseline.size(); ++index) {
+        const ScriptApiPin& oldPin = baseline[index];
+        const ScriptApiPin& newPin = current[index];
+        if (oldPin.name != newPin.name || oldPin.type != newPin.type) {
+            return false;
+        }
+        if (!oldPin.required && newPin.required) {
+            return false;
+        }
+    }
+    return std::ranges::all_of(
+        current.begin() + static_cast<std::ptrdiff_t>(baseline.size()),
+        current.end(),
+        [](const ScriptApiPin& pin) {
+            return !pin.required;
+        });
+}
+
 void CompareFunctions(const ScriptApiCatalog& baseline, const ScriptApiCatalog& current, std::vector<ApiChange>& changes) {
     for (const ScriptApiCatalogFunction& baselineFunction : baseline.functions) {
         const ScriptApiCatalogFunction* currentFunction = current.FindFunction(baselineFunction.name);
@@ -35,8 +60,13 @@ void CompareFunctions(const ScriptApiCatalog& baseline, const ScriptApiCatalog& 
             changes.push_back(ApiChange{ ApiChangeSeverity::Breaking, "function '" + baselineFunction.name + "' was removed" });
             continue;
         }
-        if (!PinListEquals(baselineFunction.inputs, currentFunction->inputs)) {
+        if (!InputContractIsBackwardCompatible(baselineFunction.inputs, currentFunction->inputs)) {
             changes.push_back(ApiChange{ ApiChangeSeverity::Breaking, "function '" + baselineFunction.name + "' input contract changed" });
+        } else if (!PinListEquals(baselineFunction.inputs, currentFunction->inputs)) {
+            changes.push_back(ApiChange{
+                ApiChangeSeverity::Additive,
+                "function '" + baselineFunction.name + "' input contract was extended compatibly",
+            });
         }
         if (!PinListEquals(baselineFunction.outputs, currentFunction->outputs)) {
             changes.push_back(ApiChange{ ApiChangeSeverity::Breaking, "function '" + baselineFunction.name + "' output contract changed" });

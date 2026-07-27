@@ -2179,6 +2179,34 @@ void RunApiCompatibilityComparisonTest() {
     }
     {
         kb::script::ScriptApiCatalog current = baseline;
+        current.functions.front().inputs.push_back(kb::script::ScriptApiPin{
+            .name = "optionalExtension",
+            .type = kb::script::ScriptValueType::Int,
+            .required = false,
+        });
+        const kb::library::ApiCompatibilityReport optionalInput = kb::library::CompareApiCatalogs(baseline, current);
+        kb::tests::Require(
+            !optionalInput.HasBreakingChanges(),
+            "Engine21kbLibrary compatibility check must allow an appended optional input");
+        kb::tests::Require(
+            !optionalInput.changes.empty()
+                && optionalInput.changes.front().severity == kb::library::ApiChangeSeverity::Additive,
+            "Engine21kbLibrary compatibility check must report an appended optional input as additive");
+    }
+    {
+        kb::script::ScriptApiCatalog current = baseline;
+        current.functions.front().inputs.push_back(kb::script::ScriptApiPin{
+            .name = "requiredExtension",
+            .type = kb::script::ScriptValueType::Int,
+            .required = true,
+        });
+        const kb::library::ApiCompatibilityReport requiredInput = kb::library::CompareApiCatalogs(baseline, current);
+        kb::tests::Require(
+            requiredInput.HasBreakingChanges(),
+            "Engine21kbLibrary compatibility check must reject an appended required input");
+    }
+    {
+        kb::script::ScriptApiCatalog current = baseline;
         kb::tests::Require(!current.functions.front().inputs.empty() || !current.functions.front().outputs.empty(),
             "Engine21kbLibrary compatibility test fixture's first function must have at least one pin");
         if (!current.functions.front().outputs.empty()) {
