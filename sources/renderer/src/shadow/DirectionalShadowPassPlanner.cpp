@@ -132,13 +132,15 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
     SceneRenderLightingConfig lightingConfig,
-    bgfx::TextureHandle shadowDepthTexture) const noexcept {
+    bgfx::TextureHandle shadowDepthTexture,
+    std::uint32_t cameraCullingMask) const noexcept {
     DirectionalShadowSetup setup{};
     if (!lightingConfig.shadowsEnabled) {
         return setup;
     }
 
-    const DirectionalShadowLightSelection selectedLight = DirectionalShadowLightSelector::Select(renderScene);
+    const DirectionalShadowLightSelection selectedLight =
+        DirectionalShadowLightSelector::Select(renderScene, cameraCullingMask);
     if (selectedLight.light == nullptr) {
         return setup;
     }

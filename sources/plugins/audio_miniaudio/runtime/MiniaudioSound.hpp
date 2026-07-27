@@ -61,8 +61,14 @@ public:
     [[nodiscard]] float PlaybackSeconds() const noexcept;
 
 private:
+    void ApplyVolumes() noexcept;
+
     ma_sound sound_{};
+    ma_sound flatSound_{};
     bool initialized_ = false;
+    bool flatInitialized_ = false;
+    float volume_ = 1.0F;
+    float spatialBlend_ = 1.0F;
 };
 
 } // namespace kb::audio_miniaudio

@@ -95,6 +95,7 @@ public:
     void ClearPresentRequest() noexcept;
     void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
+    void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
