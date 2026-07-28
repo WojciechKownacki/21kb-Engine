@@ -132,26 +132,68 @@ struct RootMotionDelta {
     return RootMotionDelta{ .translation = pose.position, .rotation = pose.rotation };
 }
 
-[[nodiscard]] const AnimationTransformTrack* RootTrack(
+[[nodiscard]] const AnimationClip& ReferenceClip(
+    const AnimatorRuntimeState& state) {
+    return *state.motions.front().clip;
+}
+
+struct BlendSelection {
+    std::size_t lower = 0U;
+    std::size_t upper = 0U;
+    float alpha = 0.0F;
+};
+
+[[nodiscard]] BlendSelection SelectBlend(
+    const AnimatorRuntimeRecord& record,
     const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition) {
+    if (state.motions.size() == 1U) return {};
+    const float value = record.parameters[state.blendParameterIndex].floatValue;
+    const auto upper = std::upper_bound(
+        definition.blendChildren.begin(), definition.blendChildren.end(), value,
+        [](float needle, const AnimatorControllerState::BlendChild& child) {
+            return needle < child.threshold;
+        });
+    if (upper == definition.blendChildren.begin()) return {};
+    if (upper == definition.blendChildren.end()) {
+        const std::size_t last = definition.blendChildren.size() - 1U;
+        return BlendSelection{ .lower = last, .upper = last };
+    }
+    const std::size_t upperIndex =
+        static_cast<std::size_t>(upper - definition.blendChildren.begin());
+    const std::size_t lowerIndex = upperIndex - 1U;
+    const float range =
+        definition.blendChildren[upperIndex].threshold -
+        definition.blendChildren[lowerIndex].threshold;
+    return BlendSelection{
+        .lower = lowerIndex,
+        .upper = upperIndex,
+        .alpha = std::clamp(
+            (value - definition.blendChildren[lowerIndex].threshold) / range,
+            0.0F, 1.0F),
+    };
+}
+
+[[nodiscard]] const AnimationTransformTrack* RootTrack(
+    const AnimatorRuntimeState::Motion& motion,
     const AnimatorControllerLayer& layer) {
-    const AnimationClip& clip = *state.clip;
+    const AnimationClip& clip = *motion.clip;
     for (const AnimationTransformTrack& track : clip.tracks) {
         if (track.targetPath.empty() && (track.bindingMask & layer.mask) != 0U) return &track;
     }
     return nullptr;
 }
 
-[[nodiscard]] RootMotionDelta StateRootMotion(
-    const AnimatorRuntimeState& state,
+[[nodiscard]] RootMotionDelta MotionRootMotion(
+    const AnimatorRuntimeState::Motion& motion,
     const AnimatorControllerLayer& layer,
     double startSeconds,
     double deltaSeconds) {
-    const AnimationTransformTrack* track = RootTrack(state, layer);
+    const AnimationTransformTrack* track = RootTrack(motion, layer);
     if (track == nullptr) {
         throw std::runtime_error("Root motion requires an owner track on the controller's first layer");
     }
-    const AnimationClip& clip = *state.clip;
+    const AnimationClip& clip = *motion.clip;
     const RootMotionDelta start = RootPose(*track, static_cast<float>(startSeconds));
     if (!clip.looping) {
         const float end = static_cast<float>(std::min(
@@ -170,6 +212,25 @@ struct RootMotionDelta {
     return Relative(Relative(first, start), Compose(Pow(cycle, cycles), endFromFirst));
 }
 
+[[nodiscard]] RootMotionDelta StateRootMotion(
+    const AnimatorRuntimeRecord& record,
+    const AnimatorRuntimeState& state,
+    const AnimatorControllerState& stateDefinition,
+    const AnimatorControllerLayer& layer,
+    double startSeconds,
+    double deltaSeconds) {
+    const BlendSelection selection = SelectBlend(record, state, stateDefinition);
+    RootMotionDelta lower = MotionRootMotion(
+        state.motions[selection.lower], layer, startSeconds, deltaSeconds);
+    if (selection.lower == selection.upper) return lower;
+    const RootMotionDelta upper = MotionRootMotion(
+        state.motions[selection.upper], layer, startSeconds, deltaSeconds);
+    lower.translation = lower.translation +
+        (upper.translation - lower.translation) * selection.alpha;
+    lower.rotation = kb::math::Slerp(lower.rotation, upper.rotation, selection.alpha);
+    return lower;
+}
+
 [[nodiscard]] RootMotionDelta ExtractRootMotion(
     const AnimatorRuntimeRecord& record,
     double scaledDelta,
@@ -178,12 +239,27 @@ struct RootMotionDelta {
     const AnimatorControllerLayer& definition = record.controller->layers.front();
     const AnimatorRuntimeLayer& layer = record.layers.front();
     RootMotionDelta delta = StateRootMotion(
-        layer.states[layer.currentState], definition, layer.currentTimeSeconds, scaledDelta);
+        record, layer.states[layer.currentState],
+        definition.states[layer.currentState], definition,
+        layer.currentTimeSeconds, scaledDelta);
     if (layer.transitioning) {
         const RootMotionDelta previous = StateRootMotion(
-            layer.states[layer.previousState], definition, layer.previousTimeSeconds, scaledDelta);
-        const float transition = static_cast<float>(std::clamp(
-            (layer.transitionElapsedSeconds + frameDelta) / layer.transitionDurationSeconds, 0.0, 1.0));
+            record, layer.states[layer.previousState],
+            definition.states[layer.previousState], definition,
+            layer.previousTimeSeconds, scaledDelta);
+        const double transitionStart = std::clamp(
+            layer.transitionElapsedSeconds / layer.transitionDurationSeconds, 0.0, 1.0);
+        const double transitionEnd = std::clamp(
+            (layer.transitionElapsedSeconds + frameDelta) / layer.transitionDurationSeconds, 0.0, 1.0);
+        const double transitioningDuration = std::clamp(
+            layer.transitionDurationSeconds - layer.transitionElapsedSeconds, 0.0, frameDelta);
+        const double transitionRemainder = frameDelta - transitioningDuration;
+        const float transition = frameDelta > 0.0
+            ? static_cast<float>(
+                  (transitioningDuration * (transitionStart + transitionEnd) * 0.5 +
+                   transitionRemainder) /
+                  frameDelta)
+            : static_cast<float>(transitionStart);
         delta.translation = previous.translation +
             (delta.translation - previous.translation) * transition;
         delta.rotation = kb::math::Slerp(previous.rotation, delta.rotation, transition);
@@ -218,13 +294,33 @@ void AdvanceTime(double& time, double delta, const AnimationClip& clip) {
     }
 }
 
-std::size_t EventCrossingCount(const AnimatorRuntimeState& state, double start, double delta, std::size_t limit) {
-    if (delta <= 0.0 || state.clip->events.empty()) return 0U;
-    const double duration = static_cast<double>(state.clip->durationSeconds);
+[[nodiscard]] const AnimatorRuntimeState::Motion& EventMotion(
+    const AnimatorRuntimeRecord& record,
+    const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition) {
+    // A blend tree emits one deterministic marker stream: the dominant
+    // child (ties select the upper child). This avoids duplicate gameplay
+    // events while both clips contribute to the pose.
+    const BlendSelection selection = SelectBlend(record, state, definition);
+    return state.motions[
+        selection.alpha < 0.5F ? selection.lower : selection.upper];
+}
+
+std::size_t EventCrossingCount(
+    const AnimatorRuntimeRecord& record,
+    const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition,
+    double start,
+    double delta,
+    std::size_t limit) {
+    const AnimatorRuntimeState::Motion& motion =
+        EventMotion(record, state, definition);
+    if (delta <= 0.0 || motion.clip->events.empty()) return 0U;
+    const double duration = static_cast<double>(motion.clip->durationSeconds);
     std::size_t total = 0U;
-    for (const AnimationEventKeyframe& event : state.clip->events) {
+    for (const AnimationEventKeyframe& event : motion.clip->events) {
         std::size_t count = 0U;
-        if (state.clip->looping) {
+        if (motion.clip->looping) {
             double first = static_cast<double>(event.timeSeconds) - start;
             if (first <= 0.0) first += duration;
             if (first <= delta) {
@@ -243,28 +339,32 @@ std::size_t EventCrossingCount(const AnimatorRuntimeState& state, double start, 
 }
 
 void QueueStateEvents(
+    const AnimatorRuntimeRecord& record,
     const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition,
     double start,
     double delta,
     SceneEntity target,
     std::string_view layerName,
     std::string_view stateName,
     std::vector<AnimationEventRecord>& pending) {
-    if (delta <= 0.0 || state.clip->events.empty()) return;
-    const double duration = static_cast<double>(state.clip->durationSeconds);
+    const AnimatorRuntimeState::Motion& motion =
+        EventMotion(record, state, definition);
+    if (delta <= 0.0 || motion.clip->events.empty()) return;
+    const double duration = static_cast<double>(motion.clip->durationSeconds);
     const auto append = [&](const AnimationEventKeyframe& event) {
         pending.push_back(AnimationEventRecord{
             .target = target,
             .eventId = event.id,
-            .clipAssetId = state.clip.Id().value,
+            .clipAssetId = motion.clip.Id().value,
             .layer = std::string{ layerName },
             .state = std::string{ stateName },
-            .normalizedTime = event.timeSeconds / state.clip->durationSeconds,
+            .normalizedTime = event.timeSeconds / motion.clip->durationSeconds,
         });
     };
-    if (!state.clip->looping) {
+    if (!motion.clip->looping) {
         const double end = std::min(start + delta, duration);
-        for (const AnimationEventKeyframe& event : state.clip->events) {
+        for (const AnimationEventKeyframe& event : motion.clip->events) {
             if (static_cast<double>(event.timeSeconds) > start && static_cast<double>(event.timeSeconds) <= end) append(event);
         }
         return;
@@ -274,7 +374,7 @@ void QueueStateEvents(
     const std::size_t lastCycle = static_cast<std::size_t>(std::floor(end / duration));
     for (std::size_t cycle = 0U; cycle <= lastCycle; ++cycle) {
         const double cycleOffset = static_cast<double>(cycle) * duration;
-        for (const AnimationEventKeyframe& event : state.clip->events) {
+        for (const AnimationEventKeyframe& event : motion.clip->events) {
             const double occurrence = cycleOffset + static_cast<double>(event.timeSeconds);
             if (occurrence > start && occurrence <= end) append(event);
         }
@@ -298,20 +398,44 @@ bool SetParameter(Scene& scene, SceneEntity entity, std::string_view name, Anima
 void EvaluateState(
     AnimatorRuntimeRecord& record,
     const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition,
     double time,
     std::uint64_t mask,
     bool from) {
-    const AnimationClip& clip = *state.clip;
+    const BlendSelection selection = SelectBlend(record, state, definition);
     const float sampleTime = static_cast<float>(time);
-    for (std::size_t trackIndex = 0U; trackIndex < clip.tracks.size(); ++trackIndex) {
-        const AnimationTransformTrack& track = clip.tracks[trackIndex];
-        if ((track.bindingMask & mask) == 0U) continue;
-        AnimatorRuntimeBinding& binding = record.bindings[state.targetIndices[trackIndex]];
+    for (std::size_t bindingIndex = 0U;
+         bindingIndex < record.bindings.size(); ++bindingIndex) {
+        const auto sampleMotion = [&](std::size_t motionIndex)
+            -> std::optional<LocalTransform> {
+            const AnimatorRuntimeState::Motion& motion = state.motions[motionIndex];
+            const AnimationClip& clip = *motion.clip;
+            for (std::size_t trackIndex = 0U;
+                 trackIndex < clip.tracks.size(); ++trackIndex) {
+                if (motion.targetIndices[trackIndex] != bindingIndex ||
+                    (clip.tracks[trackIndex].bindingMask & mask) == 0U) continue;
+                return Sample(clip.tracks[trackIndex], sampleTime);
+            }
+            return std::nullopt;
+        };
+        const std::optional<LocalTransform> lower = sampleMotion(selection.lower);
+        const std::optional<LocalTransform> upper =
+            selection.upper == selection.lower
+                ? lower
+                : sampleMotion(selection.upper);
+        if (!lower && !upper) continue;
+        const LocalTransform pose = selection.lower == selection.upper
+            ? lower.value_or(record.bindings[bindingIndex].bindTransform)
+            : Blend(
+                  lower.value_or(record.bindings[bindingIndex].bindTransform),
+                  upper.value_or(record.bindings[bindingIndex].bindTransform),
+                  selection.alpha);
+        AnimatorRuntimeBinding& binding = record.bindings[bindingIndex];
         if (from) {
-            binding.fromPose = Sample(track, sampleTime);
+            binding.fromPose = pose;
             binding.fromTouched = true;
         } else {
-            binding.toPose = Sample(track, sampleTime);
+            binding.toPose = pose;
             binding.toTouched = true;
         }
     }
@@ -334,6 +458,240 @@ bool ConditionMatches(
         }
     }
     return false;
+}
+
+[[nodiscard]] bool IsFinite(const AnimatorIkTarget& target) noexcept {
+    return std::isfinite(target.worldPosition.x) &&
+        std::isfinite(target.worldPosition.y) &&
+        std::isfinite(target.worldPosition.z) &&
+        std::isfinite(target.worldRotation.x) &&
+        std::isfinite(target.worldRotation.y) &&
+        std::isfinite(target.worldRotation.z) &&
+        std::isfinite(target.worldRotation.w) &&
+        target.worldRotation.x * target.worldRotation.x +
+                target.worldRotation.y * target.worldRotation.y +
+                target.worldRotation.z * target.worldRotation.z +
+                target.worldRotation.w * target.worldRotation.w >
+            1.0e-8F &&
+        std::isfinite(target.positionWeight) &&
+        std::isfinite(target.rotationWeight) &&
+        target.positionWeight >= 0.0F && target.positionWeight <= 1.0F &&
+        target.rotationWeight >= 0.0F && target.rotationWeight <= 1.0F;
+}
+
+[[nodiscard]] float SafeDivide(float numerator, float denominator) noexcept {
+    return std::abs(denominator) <= 1.0e-6F ? numerator : numerator / denominator;
+}
+
+void SetWorldPose(
+    Scene& scene, SceneEntity entity, Vec3 worldPosition, Quat worldRotation,
+    bool setPosition) {
+    TransformComponent* transform = scene.Transforms().TryGet(entity);
+    if (transform == nullptr) {
+        throw std::runtime_error("Animator rig constraint target has no Transform");
+    }
+    const SceneEntity parent = scene.Hierarchy().Parent(entity);
+    if (!parent.IsValid()) {
+        if (setPosition) transform->localPosition = worldPosition;
+        transform->localRotation = kb::math::Normalize(worldRotation);
+    } else {
+        const TransformComponent* parentTransform =
+            scene.Transforms().TryGet(parent);
+        if (parentTransform == nullptr) {
+            throw std::runtime_error("Animator rig constraint parent has no Transform");
+        }
+        const Quat inverseParent =
+            kb::math::Inverse(parentTransform->worldRotation);
+        if (setPosition) {
+            const Vec3 unrotated = kb::math::Rotate(
+                inverseParent, worldPosition - parentTransform->worldPosition);
+            transform->localPosition = Vec3{
+                SafeDivide(unrotated.x, parentTransform->worldScale.x),
+                SafeDivide(unrotated.y, parentTransform->worldScale.y),
+                SafeDivide(unrotated.z, parentTransform->worldScale.z),
+            };
+        }
+        transform->localRotation =
+            kb::math::Normalize(inverseParent * worldRotation);
+    }
+    scene.Transforms().MarkModified(entity);
+}
+
+[[nodiscard]] Vec3 StableBendDirection(
+    Vec3 direction, Vec3 poleDirection, Vec3 currentBoneDirection) {
+    Vec3 normal = kb::math::Cross(direction, poleDirection);
+    if (kb::math::Dot(normal, normal) <= 1.0e-8F) {
+        normal = kb::math::Cross(direction, currentBoneDirection);
+    }
+    if (kb::math::Dot(normal, normal) <= 1.0e-8F) {
+        const Vec3 fallback =
+            std::abs(direction.y) < 0.99F ? Vec3{ 0.0F, 1.0F, 0.0F }
+                                         : Vec3{ 0.0F, 0.0F, 1.0F };
+        normal = kb::math::Cross(direction, fallback);
+    }
+    return kb::math::Normalize(
+        kb::math::Cross(kb::math::Normalize(normal), direction));
+}
+
+void ApplyTwoBoneIk(
+    Scene& scene, const AnimatorRuntimeConstraint& constraint,
+    const AnimatorRigConstraint& definition,
+    const AnimatorIkTarget& target, const AnimatorIkTarget* pole) {
+    const TransformComponent* root =
+        scene.Transforms().TryGet(constraint.constrained);
+    const TransformComponent* mid = scene.Transforms().TryGet(constraint.mid);
+    const TransformComponent* tip = scene.Transforms().TryGet(constraint.tip);
+    if (root == nullptr || mid == nullptr || tip == nullptr) {
+        throw std::runtime_error("TwoBoneIK lost a bound Transform");
+    }
+    const Vec3 rootPosition = root->worldPosition;
+    const Vec3 midPosition = mid->worldPosition;
+    const Vec3 tipPosition = tip->worldPosition;
+    const float upperLength = kb::math::Length(midPosition - rootPosition);
+    const float lowerLength = kb::math::Length(tipPosition - midPosition);
+    if (upperLength <= 1.0e-5F || lowerLength <= 1.0e-5F) {
+        throw std::runtime_error("TwoBoneIK requires non-zero bone lengths");
+    }
+    const float positionWeight = definition.weight * target.positionWeight;
+    if (positionWeight > 0.0F) {
+        Vec3 targetDelta = target.worldPosition - rootPosition;
+        float targetDistance = kb::math::Length(targetDelta);
+        if (targetDistance <= 1.0e-5F) {
+            throw std::runtime_error(
+                "TwoBoneIK target cannot coincide with its root");
+        }
+        const Vec3 targetDirection = targetDelta * (1.0F / targetDistance);
+        targetDistance = std::clamp(
+            targetDistance,
+            std::abs(upperLength - lowerLength) + 1.0e-5F,
+            upperLength + lowerLength - 1.0e-5F);
+        const Vec3 poleDirection = pole != nullptr
+            ? pole->worldPosition - rootPosition
+            : midPosition - rootPosition;
+        const Vec3 bendDirection = StableBendDirection(
+            targetDirection, poleDirection, midPosition - rootPosition);
+        const float cosine = std::clamp(
+            (upperLength * upperLength + targetDistance * targetDistance -
+             lowerLength * lowerLength) /
+                (2.0F * upperLength * targetDistance),
+            -1.0F, 1.0F);
+        const float sine =
+            std::sqrt(std::max(0.0F, 1.0F - cosine * cosine));
+        const Vec3 desiredMid = rootPosition +
+            targetDirection * (cosine * upperLength) +
+            bendDirection * (sine * upperLength);
+        const Quat desiredRootRotation = kb::math::Normalize(
+            kb::math::FromToRotation(
+                midPosition - rootPosition, desiredMid - rootPosition) *
+            root->worldRotation);
+        SetWorldPose(
+            scene, constraint.constrained, rootPosition,
+            kb::math::Slerp(
+                root->worldRotation, desiredRootRotation, positionWeight),
+            false);
+        scene.Runtime().SynchronizeTransforms();
+
+        mid = scene.Transforms().TryGet(constraint.mid);
+        tip = scene.Transforms().TryGet(constraint.tip);
+        const Quat desiredMidRotation = kb::math::Normalize(
+            kb::math::FromToRotation(
+                tip->worldPosition - mid->worldPosition,
+                target.worldPosition - mid->worldPosition) *
+            mid->worldRotation);
+        SetWorldPose(
+            scene, constraint.mid, mid->worldPosition,
+            kb::math::Slerp(
+                mid->worldRotation, desiredMidRotation, positionWeight),
+            false);
+        scene.Runtime().SynchronizeTransforms();
+    }
+
+    tip = scene.Transforms().TryGet(constraint.tip);
+    const float rotationWeight = definition.weight * target.rotationWeight;
+    if (rotationWeight > 0.0F) {
+        SetWorldPose(
+            scene, constraint.tip, tip->worldPosition,
+            kb::math::Slerp(
+                tip->worldRotation, target.worldRotation, rotationWeight),
+            false);
+        scene.Runtime().SynchronizeTransforms();
+    }
+}
+
+void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
+    if (record.rigConstraints.empty()) return;
+    scene.Runtime().SynchronizeTransforms();
+    for (const AnimatorRuntimeConstraint& constraint : record.rigConstraints) {
+        if (!scene.Entities().IsActive(constraint.constrained)) continue;
+        const AnimatorRigConstraint& definition =
+            record.controller->rigConstraints[constraint.definitionIndex];
+        const auto targetIt = record.ikTargets.find(definition.target);
+        if (targetIt == record.ikTargets.end()) continue;
+        const AnimatorIkTarget& target = targetIt->second;
+        switch (definition.type) {
+        case AnimatorRigConstraintType::TwoBoneIK: {
+            const auto poleIt = definition.poleTarget.empty()
+                ? record.ikTargets.end()
+                : record.ikTargets.find(definition.poleTarget);
+            ApplyTwoBoneIk(
+                scene, constraint, definition, target,
+                poleIt == record.ikTargets.end() ? nullptr : &poleIt->second);
+            break;
+        }
+        case AnimatorRigConstraintType::Aim: {
+            const float aimWeight =
+                definition.weight * target.positionWeight;
+            if (aimWeight <= 0.0F) break;
+            const TransformComponent* transform =
+                scene.Transforms().TryGet(constraint.constrained);
+            if (transform == nullptr) {
+                throw std::runtime_error("Aim constraint lost its Transform");
+            }
+            const Vec3 direction =
+                target.worldPosition - transform->worldPosition;
+            if (kb::math::Dot(direction, direction) <= 1.0e-8F) {
+                throw std::runtime_error(
+                    "Aim target cannot coincide with its constrained Transform");
+            }
+            const Quat desired = kb::math::LookRotation(
+                direction,
+                kb::math::Rotate(
+                    target.worldRotation, Vec3{ 0.0F, 1.0F, 0.0F }));
+            SetWorldPose(
+                scene, constraint.constrained, transform->worldPosition,
+                kb::math::Slerp(
+                    transform->worldRotation, desired,
+                    aimWeight),
+                false);
+            scene.Runtime().SynchronizeTransforms();
+            break;
+        }
+        case AnimatorRigConstraintType::CopyTransform: {
+            const float positionWeight =
+                definition.weight * target.positionWeight;
+            const float rotationWeight =
+                definition.weight * target.rotationWeight;
+            if (positionWeight <= 0.0F && rotationWeight <= 0.0F) break;
+            const TransformComponent* transform =
+                scene.Transforms().TryGet(constraint.constrained);
+            if (transform == nullptr) {
+                throw std::runtime_error(
+                    "CopyTransform constraint lost its Transform");
+            }
+            SetWorldPose(
+                scene, constraint.constrained,
+                transform->worldPosition +
+                    (target.worldPosition - transform->worldPosition) *
+                        positionWeight,
+                kb::math::Slerp(
+                    transform->worldRotation, target.worldRotation,
+                    rotationWeight),
+                true);
+            scene.Runtime().SynchronizeTransforms();
+            break;
+        }
+        }
+    }
 }
 
 void ConsumeTransitionTriggers(
@@ -361,8 +719,10 @@ bool StartTransition(
     layer.previousState = layer.currentState;
     layer.previousTimeSeconds = layer.currentTimeSeconds;
     layer.currentState = stateIndex;
-    layer.currentTimeSeconds = StateTime(normalizedTime, *layer.states[stateIndex].clip);
-    AdvanceTime(layer.currentTimeSeconds, 0.0, *layer.states[stateIndex].clip);
+    layer.currentTimeSeconds =
+        StateTime(normalizedTime, ReferenceClip(layer.states[stateIndex]));
+    AdvanceTime(
+        layer.currentTimeSeconds, 0.0, ReferenceClip(layer.states[stateIndex]));
     layer.transitionElapsedSeconds = 0.0;
     layer.transitionDurationSeconds = durationSeconds;
     layer.transitioning = durationSeconds > 0.0F;
@@ -379,7 +739,8 @@ void EvaluateControllerTransitions(AnimatorRuntimeRecord& record) {
         if (layer.transitioning) continue;
         const AnimatorControllerLayer& definition = record.controller->layers[layerIndex];
         const std::string& currentState = definition.states[layer.currentState].name;
-        const float duration = layer.states[layer.currentState].clip->durationSeconds;
+        const float duration =
+            ReferenceClip(layer.states[layer.currentState]).durationSeconds;
         const float normalizedTime = duration > 0.0F
             ? static_cast<float>(layer.currentTimeSeconds / static_cast<double>(duration))
             : 0.0F;
@@ -410,6 +771,8 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
     AnimatorRuntimeRecord candidate{};
     candidate.entity = entity;
     candidate.controller = controller;
+    candidate.controllerLoadGeneration =
+        manager.LoadGeneration(kb::assets::AssetId{ controllerAssetId });
     candidate.parameters.reserve(controller->parameters.size());
     for (const auto& definition : controller->parameters) {
         candidate.parameters.push_back(AnimatorParameterValue{
@@ -424,25 +787,63 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         AnimatorRuntimeLayer layer{};
         layer.states.reserve(layerDefinition.states.size());
         for (const AnimatorControllerState& stateDefinition : layerDefinition.states) {
-            auto clip = manager.Load<AnimationClip>(ResolveClip(manager, stateDefinition.clipReference));
-            if (!clip.IsLoaded()) return false;
             AnimatorRuntimeState state{};
-            state.clip = std::move(clip);
-            state.targetIndices.reserve(state.clip->tracks.size());
-            for (const AnimationTransformTrack& track : state.clip->tracks) {
-                const SceneEntity target = ResolveTarget(scene, entity, track.targetPath);
-                const TransformComponent* transform = scene.Transforms().TryGet(target);
-                if (!target.IsValid() || transform == nullptr) return false;
-                auto binding = std::find_if(candidate.bindings.begin(), candidate.bindings.end(),
-                    [target](const AnimatorRuntimeBinding& value) { return value.target == target; });
-                if (binding == candidate.bindings.end()) {
-                    candidate.bindings.push_back(AnimatorRuntimeBinding{
-                        .target = target,
-                        .bindTransform = transform->LocalPayload(),
-                    });
-                    binding = candidate.bindings.end() - 1;
+            std::vector<std::string_view> references;
+            if (!stateDefinition.clipReference.empty()) {
+                references.push_back(stateDefinition.clipReference);
+            } else {
+                for (const AnimatorControllerState::BlendChild& child :
+                     stateDefinition.blendChildren) {
+                    references.push_back(child.clipReference);
                 }
-                state.targetIndices.push_back(static_cast<std::size_t>(binding - candidate.bindings.begin()));
+            }
+            for (const std::string_view reference : references) {
+                auto clip =
+                    manager.Load<AnimationClip>(ResolveClip(manager, reference));
+                if (!clip.IsLoaded()) return false;
+                if (!state.motions.empty() &&
+                    (clip->durationSeconds !=
+                         state.motions.front().clip->durationSeconds ||
+                     clip->looping != state.motions.front().clip->looping)) {
+                    return false;
+                }
+                AnimatorRuntimeState::Motion motion{};
+                motion.clip = std::move(clip);
+                motion.targetIndices.reserve(motion.clip->tracks.size());
+                for (const AnimationTransformTrack& track : motion.clip->tracks) {
+                    const SceneEntity target =
+                        ResolveTarget(scene, entity, track.targetPath);
+                    const TransformComponent* transform =
+                        scene.Transforms().TryGet(target);
+                    if (!target.IsValid() || transform == nullptr) return false;
+                    auto binding = std::find_if(
+                        candidate.bindings.begin(), candidate.bindings.end(),
+                        [target](const AnimatorRuntimeBinding& value) {
+                            return value.target == target;
+                        });
+                    if (binding == candidate.bindings.end()) {
+                        candidate.bindings.push_back(AnimatorRuntimeBinding{
+                            .target = target,
+                            .bindTransform = transform->LocalPayload(),
+                        });
+                        binding = candidate.bindings.end() - 1;
+                    }
+                    motion.targetIndices.push_back(static_cast<std::size_t>(
+                        binding - candidate.bindings.begin()));
+                }
+                state.motions.push_back(std::move(motion));
+            }
+            if (state.motions.empty()) return false;
+            if (!stateDefinition.blendChildren.empty()) {
+                const auto parameter = std::find_if(
+                    controller->parameters.begin(), controller->parameters.end(),
+                    [&](const AnimatorParameterDefinition& value) {
+                        return value.name == stateDefinition.blendParameter &&
+                            value.type == AnimatorParameterType::Float;
+                    });
+                if (parameter == controller->parameters.end()) return false;
+                state.blendParameterIndex = static_cast<std::size_t>(
+                    parameter - controller->parameters.begin());
             }
             layer.states.push_back(std::move(state));
         }
@@ -450,6 +851,29 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         if (layer.currentState >= layer.states.size()) return false;
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
+    }
+    candidate.rigConstraints.reserve(controller->rigConstraints.size());
+    for (std::size_t definitionIndex = 0U;
+         definitionIndex < controller->rigConstraints.size();
+         ++definitionIndex) {
+        const AnimatorRigConstraint& definition =
+            controller->rigConstraints[definitionIndex];
+        AnimatorRuntimeConstraint constraint{
+            .definitionIndex = definitionIndex,
+            .constrained = ResolveTarget(
+                scene, entity, definition.constrainedPath),
+        };
+        if (!constraint.constrained.IsValid()) return false;
+        if (definition.type == AnimatorRigConstraintType::TwoBoneIK) {
+            constraint.mid = ResolveTarget(scene, entity, definition.midPath);
+            constraint.tip = ResolveTarget(scene, entity, definition.tipPath);
+            if (!constraint.mid.IsValid() || !constraint.tip.IsValid() ||
+                scene.Hierarchy().Parent(constraint.mid) != constraint.constrained ||
+                scene.Hierarchy().Parent(constraint.tip) != constraint.mid) {
+                return false;
+            }
+        }
+        candidate.rigConstraints.push_back(std::move(constraint));
     }
     SceneAccess::State(scene).animators[entity.Id()] = std::move(candidate);
     return true;
@@ -480,8 +904,10 @@ bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_vi
     AnimatorRuntimeLayer& layer = record->layers[layerIndex];
     layer.currentState = stateIndex;
     layer.previousState = stateIndex;
-    layer.currentTimeSeconds = StateTime(normalizedTime, *layer.states[stateIndex].clip);
-    AdvanceTime(layer.currentTimeSeconds, 0.0, *layer.states[stateIndex].clip);
+    layer.currentTimeSeconds =
+        StateTime(normalizedTime, ReferenceClip(layer.states[stateIndex]));
+    AdvanceTime(
+        layer.currentTimeSeconds, 0.0, ReferenceClip(layer.states[stateIndex]));
     layer.previousTimeSeconds = layer.currentTimeSeconds;
     layer.transitioning = false;
     layer.transitionElapsedSeconds = 0.0;
@@ -533,6 +959,35 @@ bool SceneAnimatorService::SetTrigger(Scene& scene, SceneEntity entity, std::str
     return SetParameter(scene, entity, name, AnimatorParameterType::Trigger, [value](AnimatorParameterValue& parameter) { parameter.boolValue = value; });
 }
 
+bool SceneAnimatorService::SetIkTarget(
+    Scene& scene, SceneEntity entity, std::string_view name,
+    const AnimatorIkTarget& target) noexcept {
+    AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || name.empty() || !IsFinite(target)) return false;
+    const bool declared = std::any_of(
+        record->controller->rigConstraints.begin(),
+        record->controller->rigConstraints.end(),
+        [name](const AnimatorRigConstraint& constraint) {
+            return constraint.target == name || constraint.poleTarget == name;
+        });
+    if (!declared) return false;
+    AnimatorIkTarget normalized = target;
+    normalized.worldRotation =
+        kb::math::Normalize(normalized.worldRotation);
+    record->ikTargets.insert_or_assign(std::string{ name }, normalized);
+    return true;
+}
+
+bool SceneAnimatorService::ClearIkTarget(
+    Scene& scene, SceneEntity entity, std::string_view name) noexcept {
+    AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr) return false;
+    const auto target = record->ikTargets.find(name);
+    if (target == record->ikTargets.end()) return false;
+    record->ikTargets.erase(target);
+    return true;
+}
+
 std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene, SceneEntity entity, std::string_view layerName) {
     const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
     if (record == nullptr) return std::nullopt;
@@ -540,7 +995,8 @@ std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene,
     if (layerIndex >= record->layers.size()) return std::nullopt;
     const AnimatorRuntimeLayer& layer = record->layers[layerIndex];
     const AnimatorControllerLayer& definition = record->controller->layers[layerIndex];
-    const float duration = layer.states[layer.currentState].clip->durationSeconds;
+    const float duration =
+        ReferenceClip(layer.states[layer.currentState]).durationSeconds;
     return AnimatorStateInfo{
         .state = definition.states[layer.currentState].name,
         .previousState = definition.states[layer.previousState].name,
@@ -589,7 +1045,13 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         }
         retained[value.entity.Id()] = true;
         AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), value.entity);
-        if (record == nullptr || record->controller.Id().value != value.animator.controllerAssetId) {
+        const kb::assets::AssetId controllerAssetId{
+            value.animator.controllerAssetId
+        };
+        if (record == nullptr ||
+            record->controller.Id() != controllerAssetId ||
+            record->controllerLoadGeneration !=
+                scene.Assets().Manager().LoadGeneration(controllerAssetId)) {
             if (!Attach(scene, value.entity, value.animator.controllerAssetId)) {
                 throw std::runtime_error("Animator component could not load its controller or bind the authored hierarchy");
             }
@@ -605,7 +1067,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     for (auto it = state.animators.begin(); it != state.animators.end();) {
         const Animator* component = state.componentStorage.Animators().TryGet(it->second.entity);
-        if (component != nullptr && (!component->enabled || !retained.contains(it->first))) {
+        if (component == nullptr || !component->enabled || !retained.contains(it->first)) {
             it = state.animators.erase(it);
         } else {
             ++it;
@@ -639,14 +1101,23 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
         const double scaledDelta = static_cast<double>(deltaSeconds) * static_cast<double>(record.speed);
         for (const AnimatorRuntimeLayer& layer : record.layers) {
             const std::size_t available = SceneAnimators::kMaxPendingEvents - eventCount;
-            const std::size_t currentCount = EventCrossingCount(layer.states[layer.currentState], layer.currentTimeSeconds, scaledDelta, available);
+            const AnimatorControllerLayer& definition =
+                record.controller->layers[static_cast<std::size_t>(
+                    &layer - record.layers.data())];
+            const std::size_t currentCount = EventCrossingCount(
+                record, layer.states[layer.currentState],
+                definition.states[layer.currentState],
+                layer.currentTimeSeconds, scaledDelta, available);
             if (currentCount > available) {
                 throw std::length_error("AnimatorSceneSystem exceeded the pending animation-event capacity");
             }
             eventCount += currentCount;
             if (layer.transitioning) {
                 const std::size_t remaining = SceneAnimators::kMaxPendingEvents - eventCount;
-                const std::size_t previousCount = EventCrossingCount(layer.states[layer.previousState], layer.previousTimeSeconds, scaledDelta, remaining);
+                const std::size_t previousCount = EventCrossingCount(
+                    record, layer.states[layer.previousState],
+                    definition.states[layer.previousState],
+                    layer.previousTimeSeconds, scaledDelta, remaining);
                 if (previousCount > remaining) {
                     throw std::length_error("AnimatorSceneSystem exceeded the pending animation-event capacity");
                 }
@@ -735,22 +1206,36 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             const AnimatorControllerLayer& definition = record.controller->layers[layerIndex];
             if (layer.transitioning) {
                 QueueStateEvents(
-                    layer.states[layer.previousState], layer.previousTimeSeconds, scaledDelta, record.entity,
+                    record, layer.states[layer.previousState],
+                    definition.states[layer.previousState],
+                    layer.previousTimeSeconds, scaledDelta, record.entity,
                     definition.name, definition.states[layer.previousState].name, state.pendingAnimationEvents);
             }
             QueueStateEvents(
-                layer.states[layer.currentState], layer.currentTimeSeconds, scaledDelta, record.entity,
+                record, layer.states[layer.currentState],
+                definition.states[layer.currentState],
+                layer.currentTimeSeconds, scaledDelta, record.entity,
                 definition.name, definition.states[layer.currentState].name, state.pendingAnimationEvents);
-            AdvanceTime(layer.currentTimeSeconds, scaledDelta, *layer.states[layer.currentState].clip);
+            AdvanceTime(
+                layer.currentTimeSeconds, scaledDelta,
+                ReferenceClip(layer.states[layer.currentState]));
             if (layer.transitioning) {
-                AdvanceTime(layer.previousTimeSeconds, scaledDelta, *layer.states[layer.previousState].clip);
+                AdvanceTime(
+                    layer.previousTimeSeconds, scaledDelta,
+                    ReferenceClip(layer.states[layer.previousState]));
                 layer.transitionElapsedSeconds = std::min(layer.transitionElapsedSeconds + static_cast<double>(deltaSeconds), layer.transitionDurationSeconds);
                 for (AnimatorRuntimeBinding& binding : record.bindings) {
                     binding.fromTouched = false;
                     binding.toTouched = false;
                 }
-                EvaluateState(record, layer.states[layer.previousState], layer.previousTimeSeconds, definition.mask, true);
-                EvaluateState(record, layer.states[layer.currentState], layer.currentTimeSeconds, definition.mask, false);
+                EvaluateState(
+                    record, layer.states[layer.previousState],
+                    definition.states[layer.previousState],
+                    layer.previousTimeSeconds, definition.mask, true);
+                EvaluateState(
+                    record, layer.states[layer.currentState],
+                    definition.states[layer.currentState],
+                    layer.currentTimeSeconds, definition.mask, false);
                 const float transition = static_cast<float>(layer.transitionElapsedSeconds / layer.transitionDurationSeconds);
                 for (AnimatorRuntimeBinding& binding : record.bindings) {
                     if (!binding.fromTouched && !binding.toTouched) continue;
@@ -766,12 +1251,17 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 }
             } else {
                 const AnimatorRuntimeState& runtimeState = layer.states[layer.currentState];
-                const AnimationClip& clip = *runtimeState.clip;
-                for (std::size_t trackIndex = 0U; trackIndex < clip.tracks.size(); ++trackIndex) {
-                    const AnimationTransformTrack& track = clip.tracks[trackIndex];
-                    if ((track.bindingMask & definition.mask) == 0U) continue;
-                    AnimatorRuntimeBinding& binding = record.bindings[runtimeState.targetIndices[trackIndex]];
-                    binding.output = Blend(binding.output, Sample(track, static_cast<float>(layer.currentTimeSeconds)), definition.weight);
+                for (AnimatorRuntimeBinding& binding : record.bindings) {
+                    binding.toTouched = false;
+                }
+                EvaluateState(
+                    record, runtimeState,
+                    definition.states[layer.currentState],
+                    layer.currentTimeSeconds, definition.mask, false);
+                for (AnimatorRuntimeBinding& binding : record.bindings) {
+                    if (!binding.toTouched) continue;
+                    binding.output =
+                        Blend(binding.output, binding.toPose, definition.weight);
                     binding.outputTouched = true;
                 }
             }
@@ -797,6 +1287,24 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             transform->localRotation = kb::math::Normalize(
                 transform->localRotation * animatorMotion.rotation);
             scene.Transforms().MarkModified(record.entity);
+        }
+    }
+    for (auto& [id, record] : state.animators) {
+        static_cast<void>(id);
+        if (scene.Entities().IsActive(record.entity)) {
+            const Animator* component =
+                scene.Components().Animators().TryGet(record.entity);
+            if (component != nullptr &&
+                component->rootMotionOwner != AnimatorRootMotionOwner::None &&
+                std::any_of(
+                    record.rigConstraints.begin(), record.rigConstraints.end(),
+                    [&](const AnimatorRuntimeConstraint& constraint) {
+                        return constraint.constrained == record.entity;
+                    })) {
+                throw std::runtime_error(
+                    "Rig constraints cannot drive the root-motion owner Transform");
+            }
+            ApplyRigConstraints(scene, record);
         }
     }
 }

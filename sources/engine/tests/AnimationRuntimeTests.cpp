@@ -76,6 +76,10 @@ void RunAnimationRuntimeTests() {
         { .name = "Root Layer", .defaultState = "Walk State", .weight = 1.0F, .mask = 1U, .states = {
             { .name = "Walk State", .clipReference = "/Game/Animation/Move.kbanim" },
             { .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
+            { .name = "Blend State", .blendParameter = "Speed", .blendChildren = {
+                { .threshold = 0.0F, .clipReference = "/Game/Animation/Move.kbanim" },
+                { .threshold = 10.0F, .clipReference = "/Game/Animation/Run Fast.kbanim" },
+            } },
         }, .transitions = {
             { .fromState = "Walk State", .toState = "Run State", .durationSeconds = 0.2F,
               .conditions = {
@@ -118,6 +122,51 @@ void RunAnimationRuntimeTests() {
     Require(kb::scene::AnimationAssetIO::SaveController(
                 root / "Assets" / "Animation" / "Turn.kbanimcontroller", turnController),
         "Root-rotation AnimatorController production asset could not be saved");
+    kb::scene::AnimatorController rigController{};
+    rigController.layers = {
+        { .name = "Rig Layer", .defaultState = "Bind", .states = {
+            { .name = "Bind", .clipReference = "/Game/Animation/Move.kbanim" },
+        } },
+    };
+    rigController.rigConstraints = {
+        {
+            .name = "Arm IK",
+            .type = kb::scene::AnimatorRigConstraintType::TwoBoneIK,
+            .constrainedPath = "Upper",
+            .midPath = "Upper/Lower",
+            .tipPath = "Upper/Lower/Hand",
+            .target = "HandTarget",
+            .poleTarget = "ElbowPole",
+        },
+        {
+            .name = "Look",
+            .type = kb::scene::AnimatorRigConstraintType::Aim,
+            .constrainedPath = "Look",
+            .target = "LookTarget",
+        },
+        {
+            .name = "Follower",
+            .type = kb::scene::AnimatorRigConstraintType::CopyTransform,
+            .constrainedPath = "Follower",
+            .target = "CopyTarget",
+        },
+    };
+    Require(kb::scene::AnimationAssetIO::SaveController(
+                root / "Assets" / "Animation" / "Rig.kbanimcontroller",
+                rigController),
+        "Rig AnimatorController production asset could not be saved");
+    kb::scene::AnimatorController invalidBlendController = controller;
+    invalidBlendController.layers[0].states[2].blendParameter = "Grounded";
+    Require(!kb::scene::AnimationAssetIO::SaveController(
+                root / "Assets" / "Animation" / "InvalidBlend.kbanimcontroller",
+                invalidBlendController),
+        "Blend tree accepted a non-Float parameter");
+    kb::scene::AnimatorController invalidRigController = rigController;
+    invalidRigController.rigConstraints[0].weight = 0.0F;
+    Require(!kb::scene::AnimationAssetIO::SaveController(
+                root / "Assets" / "Animation" / "InvalidRig.kbanimcontroller",
+                invalidRigController),
+        "Rig asset accepted a zero-weight dead constraint");
     const auto scriptPath = root / "Assets" / "Logic" / "Animate.lua";
     std::filesystem::create_directories(scriptPath.parent_path());
     {
@@ -145,19 +194,56 @@ function Tick(self)
 end
 )";
     }
+    const auto rigScriptPath = root / "Assets" / "Logic" / "Rig.lua";
+    {
+        std::ofstream script{ rigScriptPath, std::ios::binary | std::ios::trunc };
+        script << R"(function Tick(self)
+    if GetShared("rigConfigured") then return end
+    local hand, handError = CallFunction("Animator.SetIKTarget", {
+        name = "HandTarget", x = 1.0, y = 1.0, z = 0.0,
+        rotationWeight = 0.0
+    })
+    local pole, poleError = CallFunction("Animator.SetIKTarget", {
+        name = "ElbowPole", x = 0.0, y = 0.0, z = 1.0
+    })
+    local look, lookError = CallFunction("Animator.SetIKTarget", {
+        name = "LookTarget", x = 0.0, y = 0.0, z = 5.0
+    })
+    local copy, copyError = CallFunction("Animator.SetIKTarget", {
+        name = "CopyTarget", x = 3.0, y = 2.0, z = 1.0,
+        rotationY = 0.70710678, rotationW = 0.70710678
+    })
+    if handError or poleError or lookError or copyError then
+        SetShared("rigError", handError or poleError or lookError or copyError)
+        return
+    end
+    SetShared("rigConfigured", hand and pole and look and copy)
+end
+)";
+    }
     const auto scenePath = root / "AnimationRuntime.21kbscene";
 
     {
         kb::scene::Scene scene;
         Require(scene.Assets().MountProject(root), "Animation runtime project mount failed");
-        Require(scene.Assets().Discover() == 6U, "Animation runtime discovery did not register clips, controllers, and script");
+        Require(scene.Assets().Discover() == 8U, "Animation runtime discovery did not register clips, controllers, and script");
         const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Character.kbanimcontroller");
         Require(metadata != nullptr && metadata->type == kb::scene::kAnimatorControllerAssetType,
             "AnimatorController was not classified by the production asset registry");
         Require(metadata->dependencies.size() == 2U,
             "AnimatorController did not publish its deduplicated clip dependency to the asset registry");
+        const auto loadedController =
+            kb::scene::AnimationAssetIO::LoadController(controllerPath);
+        Require(loadedController.has_value() &&
+                loadedController->layers[0].states[2].blendChildren.size() == 2U &&
+                loadedController->layers[0].states[2].blendParameter == "Speed",
+            "AnimatorController asset round trip lost its typed 1D blend tree");
         const auto* scriptMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Animate.lua");
         Require(scriptMetadata != nullptr, "Animator runtime script was not discovered");
+        const auto* rigScriptMetadata =
+            scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Rig.lua");
+        Require(rigScriptMetadata != nullptr,
+            "Rig runtime script was not discovered");
 
         {
             kb::scene::Scene authored;
@@ -299,12 +385,208 @@ end
         Require(std::abs(turningRotation.y - 0.38268343F) <= 0.001F &&
                 std::abs(turningRotation.w - 0.92387953F) <= 0.001F,
             "Animator-owned root motion did not extract and accumulate the root-track quaternion delta");
+
+        const kb::scene::SceneObject blendedOwner =
+            scene.Entities().CreateObject({ .name = "Blend Tree Character" });
+        const kb::scene::SceneObject blendedArm =
+            scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(blendedArm.SetParent(blendedOwner),
+            "Blend-tree hierarchy could not bind the controller");
+        scene.Components().Animators().Set(blendedOwner.Entity(), kb::scene::Animator{
+            .controllerAssetId = metadata->id.value,
+            .speed = 1.0F,
+            .enabled = true,
+            .rootMotionOwner = kb::scene::AnimatorRootMotionOwner::Animator,
+        });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().SetFloat(blendedOwner.Entity(), "Speed", 5.0F) &&
+                scene.Animators().Play(
+                    blendedOwner.Entity(), "Root Layer", "Blend State", 0.0F),
+            "Blend-tree state could not be driven through the production Animator API");
+        static_cast<void>(scene.Runtime().Update(0.2F));
+        Require(NearlyEqual(
+                    scene.Transforms().Get(blendedOwner.Entity()).localPosition.x,
+                    4.0F),
+            "1D blend tree did not blend both retained clips through root-motion runtime");
+
+        const auto* rigMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Rig.kbanimcontroller");
+        Require(rigMetadata != nullptr && rigMetadata->dependencies.size() == 1U,
+            "Rig controller asset/dependency was not discovered");
+        const kb::scene::SceneObject rigOwner =
+            scene.Entities().CreateObject({ .name = "Rig Character" });
+        const kb::scene::SceneObject rigArm =
+            scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(rigArm.SetParent(rigOwner),
+            "Rig controller clip hierarchy could not bind");
+        const kb::scene::SceneObject upper =
+            scene.Entities().CreateObject({ .name = "Upper" });
+        const kb::scene::SceneObject lower =
+            scene.Entities().CreateObject({
+                .name = "Lower",
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = { 1.0F, 0.0F, 0.0F },
+                },
+            });
+        const kb::scene::SceneObject hand =
+            scene.Entities().CreateObject({
+                .name = "Hand",
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = { 1.0F, 0.0F, 0.0F },
+                },
+            });
+        const kb::scene::SceneObject look =
+            scene.Entities().CreateObject({ .name = "Look" });
+        const kb::scene::SceneObject follower =
+            scene.Entities().CreateObject({ .name = "Follower" });
+        Require(upper.SetParent(rigOwner) && lower.SetParent(upper) &&
+                hand.SetParent(lower) && look.SetParent(rigOwner) &&
+                follower.SetParent(rigOwner),
+            "Rig constraint hierarchy could not be authored");
+        scene.Components().Animators().Set(rigOwner.Entity(), kb::scene::Animator{
+            .controllerAssetId = rigMetadata->id.value,
+            .speed = 1.0F,
+            .enabled = true,
+        });
+        scene.Components().Behaviours().Set(
+            rigOwner.Entity(), kb::scene::BehaviourComponent{
+                .behaviourAssetId = rigScriptMetadata->id.value,
+                .backend = kb::scene::BehaviourBackend::Lua,
+                .enabled = true,
+            });
+        kb::script::ScriptRuntimeHost rigScriptHost{ scene };
+        Require(rigScriptHost.Succeeded() &&
+                rigScriptHost.Functions().FindSignature("Animator.SetIKTarget") != nullptr &&
+                rigScriptHost.Functions().FindSignature("Animator.ClearIKTarget") != nullptr &&
+                rigScriptHost.InstallSceneSystem(),
+            "Typed IK target functions were not registered in the production script host");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(rigScriptHost.SharedState().Get("rigConfigured").has_value() &&
+                rigScriptHost.SharedState().Get("rigConfigured")->AsBool() &&
+                !rigScriptHost.SharedState().Get("rigError").has_value(),
+            "Project Lua script did not configure all typed IK targets");
+        const kb::scene::TransformComponent handTransform =
+            scene.Transforms().Get(hand.Entity());
+        Require(kb::math::Length(
+                    handTransform.worldPosition -
+                    kb::scene::Vec3{ 1.0F, 1.0F, 0.0F }) <= 0.01F,
+            "TwoBoneIK did not drive the bound hierarchy to its runtime target");
+        const kb::scene::TransformComponent lookTransform =
+            scene.Transforms().Get(look.Entity());
+        const kb::scene::Vec3 lookForward = kb::math::Rotate(
+            lookTransform.worldRotation, kb::scene::Vec3{ 0.0F, 0.0F, 1.0F });
+        Require(lookForward.z >= 0.999F,
+            "Aim rig constraint did not orient its bound Transform");
+        const kb::scene::TransformComponent followerTransform =
+            scene.Transforms().Get(follower.Entity());
+        Require(kb::math::Length(
+                    followerTransform.worldPosition -
+                    kb::scene::Vec3{ 3.0F, 2.0F, 1.0F }) <= 0.001F &&
+                std::abs(followerTransform.worldRotation.y - 0.70710678F) <= 0.001F,
+            "CopyTransform rig constraint did not consume the typed world target");
+        Require(scene.Animators().SetIkTarget(
+                    rigOwner.Entity(), "HandTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = {},
+                        .positionWeight = 0.0F,
+                        .rotationWeight = 0.0F,
+                    }),
+            "A disabled TwoBoneIK target could not be updated");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Runtime().DrainSceneSystemErrors().empty(),
+            "Zero-weight TwoBoneIK evaluated a degenerate target instead of remaining inactive");
+        Require(!scene.Animators().SetIkTarget(
+                    rigOwner.Entity(), "HandTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 1.0F, 1.0F, 0.0F },
+                        .worldRotation = { 0.0F, 0.0F, 0.0F, 0.0F },
+                    }),
+            "IK target accepted a zero quaternion and silently fabricated a rotation");
+        Require(scene.Animators().ClearIkTarget(rigOwner.Entity(), "CopyTarget") &&
+                !scene.Animators().ClearIkTarget(rigOwner.Entity(), "CopyTarget") &&
+                !scene.Animators().SetIkTarget(
+                    rigOwner.Entity(), "Undeclared",
+                    kb::scene::AnimatorIkTarget{}),
+            "IK target lifecycle accepted an undeclared or already-cleared target");
+        rigController.rigConstraints[2].target = "ReloadedCopyTarget";
+        Require(kb::scene::AnimationAssetIO::SaveController(
+                    root / "Assets" / "Animation" / "Rig.kbanimcontroller",
+                    rigController) &&
+                scene.Assets().Manager().Unload(rigMetadata->id),
+            "Edited rig controller could not invalidate its retained runtime asset");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(!scene.Animators().SetIkTarget(
+                    rigOwner.Entity(), "CopyTarget",
+                    kb::scene::AnimatorIkTarget{}) &&
+                scene.Animators().SetIkTarget(
+                    rigOwner.Entity(), "ReloadedCopyTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { -2.0F, 4.0F, 1.0F },
+                        .rotationWeight = 0.0F,
+                    }),
+            "Animator retained the pre-save rig definition after its canonical asset was invalidated");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(kb::math::Length(
+                    scene.Transforms().Get(follower.Entity()).worldPosition -
+                    kb::scene::Vec3{ -2.0F, 4.0F, 1.0F }) <= 0.001F,
+            "Reloaded rig definition did not drive the live runtime hierarchy");
+
+        const kb::scene::SceneObject transitionOwner =
+            scene.Entities().CreateObject({ .name = "Transition Root Motion Character" });
+        const kb::scene::SceneObject transitionArm =
+            scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(transitionArm.SetParent(transitionOwner),
+            "Transition root-motion hierarchy could not bind the controller");
+        scene.Components().Animators().Set(transitionOwner.Entity(), kb::scene::Animator{
+            .controllerAssetId = metadata->id.value,
+            .speed = 1.0F,
+            .enabled = true,
+            .rootMotionOwner = kb::scene::AnimatorRootMotionOwner::Animator,
+        });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().CrossFade(
+                    transitionOwner.Entity(), "Root Layer", "Run State", 0.2F, 0.0F),
+            "Root-motion transition could not be started through the production API");
+        static_cast<void>(scene.Runtime().Update(0.2F));
+        Require(NearlyEqual(
+                    scene.Transforms().Get(transitionOwner.Entity()).localPosition.x, 4.0F),
+            "Cross-faded root motion depended on render-frame slicing instead of integrating transition ownership");
+        Require(scene.Animators().Play(
+                    transitionOwner.Entity(), "Root Layer", "Walk State", 0.0F),
+            "Root-motion transition could not reset its production playhead");
+        kb::scene::TransformComponent* resetTransitionTransform =
+            scene.Transforms().TryGet(transitionOwner.Entity());
+        Require(resetTransitionTransform != nullptr,
+            "Transition root-motion owner lost its Transform");
+        resetTransitionTransform->localPosition = {};
+        resetTransitionTransform->localRotation = {};
+        scene.Transforms().MarkModified(transitionOwner.Entity());
+        Require(scene.Animators().CrossFade(
+                    transitionOwner.Entity(), "Root Layer", "Run State", 0.2F, 0.0F),
+            "Frame-sliced root-motion transition could not be started");
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        Require(NearlyEqual(
+                    scene.Transforms().Get(transitionOwner.Entity()).localPosition.x, 4.0F),
+            "Cross-faded root motion produced a different result across equivalent render-frame slicing");
+
+        const float transitionPosition =
+            scene.Transforms().Get(transitionOwner.Entity()).localPosition.x;
+        scene.Components().Animators().Remove(transitionOwner.Entity());
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        Require(!scene.Animators().Exists(transitionOwner.Entity()) &&
+                NearlyEqual(
+                    scene.Transforms().Get(transitionOwner.Entity()).localPosition.x,
+                    transitionPosition),
+            "Removing the authored Animator left an orphan runtime writer active");
     }
 
     {
         kb::scene::Scene scene;
         Require(scene.Assets().MountProject(root), "Serialized animation scene project mount failed");
-        Require(scene.Assets().Discover() == 6U, "Serialized animation scene project discovery failed");
+        Require(scene.Assets().Discover() == 8U, "Serialized animation scene project discovery failed");
         Require(kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath),
             "Serialized animation scene could not be loaded into runtime");
         const auto loadedRoots = scene.Hierarchy().RootEntities();
@@ -359,7 +641,7 @@ end
         });
         kb::scene::Scene scene{ std::move(descriptor) };
         Require(scene.Assets().MountProject(root), "Root-motion Jolt project mount failed");
-        Require(scene.Assets().Discover() == 6U, "Root-motion Jolt assets were not discovered");
+        Require(scene.Assets().Discover() == 8U, "Root-motion Jolt assets were not discovered");
         const auto* metadata =
             scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Character.kbanimcontroller");
         Require(metadata != nullptr, "Root-motion Jolt controller metadata was not found");
@@ -473,6 +755,13 @@ end
             "Rigidbody root motion burst the full variable-frame delta into one fixed substep");
         const float slicedBeforeOwnerChange =
             scene.Transforms().Get(slicedBody.Entity()).localPosition.x;
+        scene.Entities().SetActive(slicedBody.Entity(), false);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        Require(std::abs(
+                    scene.Transforms().Get(slicedBody.Entity()).localPosition.x -
+                    slicedBeforeOwnerChange) <= 0.01F,
+            "Jolt consumed queued root motion after its authoritative entity became inactive");
+        scene.Entities().SetActive(slicedBody.Entity(), true);
         kb::scene::Animator* slicedAnimator =
             scene.Components().Animators().TryGet(slicedBody.Entity());
         Require(slicedAnimator != nullptr,
