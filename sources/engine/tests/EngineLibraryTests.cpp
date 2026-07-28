@@ -166,6 +166,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Scene.Load",
         "Assets.Load",
         "Save.SetInt",
+        "Timeline.Create",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -185,7 +186,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 21U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 22U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -197,8 +198,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Renderer", "Assets", "Save", "Collections", "Text" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-one domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Renderer", "Assets", "Save", "Collections", "Text" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-two domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
@@ -2553,7 +2554,7 @@ void RunEngineLibraryComponentRegistryTest() {
 // absent rather than fabricating an entry.
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 17U, "Engine21kbLibrary event schema registry must catalog exactly the 17 built-in events this engine emits today");
+    kb::tests::Require(catalog.size() == 18U, "Engine21kbLibrary event schema registry must catalog exactly the 18 built-in events this engine emits today");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
         kb::tests::Require(!desc.name.empty(), "Engine21kbLibrary event schema registry entry must have a non-empty name");
@@ -2566,7 +2567,7 @@ void RunEngineLibraryEventSchemaRegistryTest() {
     }
 
     const std::vector<std::string> expectedNames{ "SceneLoading", "SceneLoaded", "SceneActivated", "SceneUnloading", "SceneUnloaded", "TimerFired", "TaskCompleted", "TaskFailed",
-        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent" };
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit", "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit", "OnAudioMarker", "OnPrefabInstantiated", "OnAnimationEvent", "OnTimelineMarker" };
     for (const std::string& name : expectedNames) {
         kb::tests::Require(kb::library::EngineLibraryEventRegistry::Find(name) != nullptr, "Engine21kbLibrary event schema registry is missing an entry for a real engine-emitted event");
     }
@@ -2615,6 +2616,32 @@ void RunEngineLibraryEventSchemaRegistryTest() {
             onAnimationEvent->arguments[5].name == "state" && onAnimationEvent->arguments[5].type == kb::script::ScriptValueType::String &&
             onAnimationEvent->arguments[6].name == "normalizedTime" && onAnimationEvent->arguments[6].type == kb::script::ScriptValueType::Float,
         "OnAnimationEvent's versioned catalog schema must match its fixed typed dispatch payload");
+    const kb::library::LibraryEventDesc* onTimelineMarker =
+        kb::library::EngineLibraryEventRegistry::Find("OnTimelineMarker");
+    kb::tests::Require(
+        onTimelineMarker != nullptr &&
+            onTimelineMarker->version ==
+                kb::library::LibraryEventVersion{ 1U, 0U } &&
+            onTimelineMarker->arguments.size() == 6U &&
+            onTimelineMarker->arguments[0].name == "schemaMajor" &&
+            onTimelineMarker->arguments[0].type ==
+                kb::script::ScriptValueType::Int &&
+            onTimelineMarker->arguments[1].name == "schemaMinor" &&
+            onTimelineMarker->arguments[1].type ==
+                kb::script::ScriptValueType::Int &&
+            onTimelineMarker->arguments[2].name == "instance" &&
+            onTimelineMarker->arguments[2].type ==
+                kb::script::ScriptValueType::Hash &&
+            onTimelineMarker->arguments[3].name == "asset" &&
+            onTimelineMarker->arguments[3].type ==
+                kb::script::ScriptValueType::Hash &&
+            onTimelineMarker->arguments[4].name == "marker" &&
+            onTimelineMarker->arguments[4].type ==
+                kb::script::ScriptValueType::Hash &&
+            onTimelineMarker->arguments[5].name == "time" &&
+            onTimelineMarker->arguments[5].type ==
+                kb::script::ScriptValueType::Float,
+        "OnTimelineMarker's versioned catalog schema must match its fixed typed dispatch payload");
 }
 
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the

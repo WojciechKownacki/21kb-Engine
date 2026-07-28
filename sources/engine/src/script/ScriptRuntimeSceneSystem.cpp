@@ -13,6 +13,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
+#include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -118,6 +119,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -169,6 +171,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
 }
@@ -188,6 +191,7 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     // post-fixed script update drains them before Tick in the same frame.
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
@@ -426,6 +430,39 @@ void ScriptRuntimeSceneSystem::DispatchPendingAnimationEvents(kb::scene::Scene& 
         const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(scene, event, pending.target);
         for (const std::string& error : delivery.errors) {
             lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+        }
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingTimelineMarkerEvents(
+    kb::scene::Scene& scene, float deltaSeconds) {
+    static_cast<void>(deltaSeconds);
+    for (const kb::scene::TimelineMarkerEvent& pending :
+         scene.Timelines().DrainMarkerEvents()) {
+        ScriptEvent event;
+        event.name = "OnTimelineMarker";
+        event.target = pending.target;
+        event.arguments.push_back(
+            { "schemaMajor", ScriptValue{ pending.schemaMajor } });
+        event.arguments.push_back(
+            { "schemaMinor", ScriptValue{ pending.schemaMinor } });
+        event.arguments.push_back(
+            { "instance",
+              ScriptValue{
+                  pending.instanceId, ScriptValueType::Hash } });
+        event.arguments.push_back(
+            { "asset",
+              ScriptValue{ pending.assetId, ScriptValueType::Hash } });
+        event.arguments.push_back(
+            { "marker",
+              ScriptValue{ pending.markerId, ScriptValueType::Hash } });
+        event.arguments.push_back(
+            { "time", ScriptValue{ pending.timeSeconds } });
+        const ScriptEventDeliveryResult delivery =
+            runtime_.Events().Emit(scene, event, pending.target);
+        for (const std::string& error : delivery.errors) {
+            lastResult_.diagnostics.push_back(
+                ScriptDiagnostic{ .message = error });
         }
     }
 }
