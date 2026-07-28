@@ -51,6 +51,7 @@ using kb::core::JsonValue;
 constexpr std::string_view kSchema =
     "21kb.editor-automation/v1";
 constexpr std::uintmax_t kMaxScenarioBytes = 64U * 1024U * 1024U;
+constexpr double kPi = 3.14159265358979323846;
 
 struct StepOutcome {
     bool succeeded = false;
@@ -201,6 +202,80 @@ ResolveProjectPath(
     return candidate;
 }
 
+void ReplaceAll(
+    std::string& text, std::string_view token,
+    std::string_view replacement) {
+    std::size_t position = 0U;
+    while ((position = text.find(token, position)) !=
+           std::string::npos) {
+        text.replace(position, token.size(), replacement);
+        position += replacement.size();
+    }
+}
+
+[[nodiscard]] std::string ExpandContentTokens(
+    const ScenarioState& state, std::string content) {
+    const std::string projectRoot =
+        std::filesystem::absolute(EditorProjectPaths::ProjectRoot())
+            .lexically_normal()
+            .generic_string();
+    const std::string artifactRoot =
+        state.automation.ArtifactRoot().parent_path()
+            .lexically_normal()
+            .generic_string();
+    ReplaceAll(content, "{{PROJECT_ROOT}}", projectRoot);
+    ReplaceAll(content, "{{ARTIFACT_ROOT}}", artifactRoot);
+    return content;
+}
+
+void WriteLittleEndian16(std::ostream& output, std::uint16_t value) {
+    output.put(static_cast<char>(value & 0xffU));
+    output.put(static_cast<char>((value >> 8U) & 0xffU));
+}
+
+void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
+    output.put(static_cast<char>(value & 0xffU));
+    output.put(static_cast<char>((value >> 8U) & 0xffU));
+    output.put(static_cast<char>((value >> 16U) & 0xffU));
+    output.put(static_cast<char>((value >> 24U) & 0xffU));
+}
+
+[[nodiscard]] bool WritePcmWave(
+    const std::filesystem::path& path, std::uint32_t sampleRate,
+    std::uint32_t durationMilliseconds, double frequency,
+    double amplitude) {
+    const std::uint32_t sampleCount = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(sampleRate) *
+         durationMilliseconds) /
+        1000U);
+    const std::uint32_t dataBytes = sampleCount * 2U;
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output.write("RIFF", 4);
+    WriteLittleEndian32(output, 36U + dataBytes);
+    output.write("WAVEfmt ", 8);
+    WriteLittleEndian32(output, 16U);
+    WriteLittleEndian16(output, 1U);
+    WriteLittleEndian16(output, 1U);
+    WriteLittleEndian32(output, sampleRate);
+    WriteLittleEndian32(output, sampleRate * 2U);
+    WriteLittleEndian16(output, 2U);
+    WriteLittleEndian16(output, 16U);
+    output.write("data", 4);
+    WriteLittleEndian32(output, dataBytes);
+    for (std::uint32_t sample = 0U; sample < sampleCount; ++sample) {
+        const double phase =
+            2.0 * kPi * frequency *
+            (static_cast<double>(sample) /
+             static_cast<double>(sampleRate));
+        const auto value = static_cast<std::int16_t>(
+            std::sin(phase) * amplitude * 32767.0);
+        WriteLittleEndian16(
+            output, static_cast<std::uint16_t>(value));
+    }
+    return output.good();
+}
+
 [[nodiscard]] kb::scene::SceneEntity ResolveEntity(
     const ScenarioState& state, std::string_view alias) {
     const auto found = state.entities.find(std::string{ alias });
@@ -223,6 +298,22 @@ ResolveProjectPath(
         resolved = row.entity;
     }
     return resolved;
+}
+
+[[nodiscard]] bool HasAuthoredComponent(
+    kb::scene::Scene& scene, kb::scene::SceneEntity entity,
+    std::string_view component) {
+    if (component == "AudioSource") {
+        return scene.Components().AudioSources().Has(entity);
+    }
+    if (component == "AudioListener") {
+        return scene.Components().AudioListeners().Has(entity);
+    }
+    if (component == "Animator") {
+        return scene.Components().Animators().Has(entity);
+    }
+    return kb::script::ScriptSceneComponentApi::HasComponent(
+        scene, entity, component);
 }
 
 [[nodiscard]] kb::assets::AssetId ResolveAsset(
@@ -390,6 +481,8 @@ ReadScriptValue(
         const auto path = StringMember(step, "path", error);
         const auto content = StringMember(step, "content", error);
         if (!path || !content) return { false, error };
+        const std::string expanded =
+            ExpandContentTokens(state, *content);
         const auto resolved = ResolveProjectPath(*path, error);
         if (!resolved) return { false, error };
         std::error_code directoryError;
@@ -401,12 +494,52 @@ ReadScriptValue(
         std::ofstream output(
             *resolved, std::ios::binary | std::ios::trunc);
         output.write(
-            content->data(),
-            static_cast<std::streamsize>(content->size()));
+            expanded.data(),
+            static_cast<std::streamsize>(expanded.size()));
         if (!output.good()) {
             return { false, "file write failed" };
         }
         return { true, resolved->string() };
+    }
+
+    if (*operation == "write_pcm_wave") {
+        const auto path = StringMember(step, "path", error);
+        const double duration =
+            NumberMember(step, "duration_ms", error, false)
+                .value_or(250.0);
+        const double sampleRate =
+            NumberMember(step, "sample_rate", error, false)
+                .value_or(16000.0);
+        const double frequency =
+            NumberMember(step, "frequency_hz", error, false)
+                .value_or(440.0);
+        const double amplitude =
+            NumberMember(step, "amplitude", error, false)
+                .value_or(0.15);
+        if (!path || !error.empty()) return { false, error };
+        if (duration < 1.0 || duration > 10000.0 ||
+            std::floor(duration) != duration ||
+            sampleRate < 8000.0 || sampleRate > 48000.0 ||
+            std::floor(sampleRate) != sampleRate ||
+            frequency < 20.0 || frequency >= sampleRate * 0.5 ||
+            amplitude < 0.0 || amplitude > 1.0) {
+            return { false, "invalid PCM wave parameters" };
+        }
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        std::error_code directoryError;
+        std::filesystem::create_directories(
+            resolved->parent_path(), directoryError);
+        if (directoryError) {
+            return { false, "could not create wave directory" };
+        }
+        const bool written = WritePcmWave(
+            *resolved, static_cast<std::uint32_t>(sampleRate),
+            static_cast<std::uint32_t>(duration), frequency,
+            amplitude);
+        return {
+            written,
+            written ? resolved->string() : "wave write failed" };
     }
 
     if (*operation == "copy_fixture") {
@@ -811,7 +944,7 @@ ReadScriptValue(
             if (!component) return { false, error };
             found =
                 found &&
-                kb::script::ScriptSceneComponentApi::HasComponent(
+                HasAuthoredComponent(
                     state.context.Scene(), entity, *component);
         }
         const bool expected =

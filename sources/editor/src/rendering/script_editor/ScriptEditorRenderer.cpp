@@ -30,16 +30,37 @@ void FillColor(HDC dc, const RECT& rect, COLORREF color) {
 
 } // namespace
 
-void ScriptEditorRenderer::Paint(HWND window, const ScriptEditorDocument& document, const ScriptEditorViewport& viewport, ScriptEditorMetrics& metrics, bool caretVisible, bool focused) {
-    RECT client{};
-    GetClientRect(window, &client);
-    const int width = static_cast<int>(client.right - client.left);
-    const int height = static_cast<int>(client.bottom - client.top);
-
-    PAINTSTRUCT paint{};
-    HDC windowDc = BeginPaint(window, &paint);
-    HDC dc = CreateCompatibleDC(windowDc);
-    HBITMAP bitmap = CreateCompatibleBitmap(windowDc, width, height);
+bool ScriptEditorRenderer::PaintTo(
+    HDC target,
+    const RECT& bounds,
+    const ScriptEditorDocument& document,
+    const ScriptEditorViewport& viewport,
+    ScriptEditorMetrics& metrics,
+    bool caretVisible,
+    bool focused,
+    HWND interactionWindow) {
+    if (target == nullptr) {
+        return false;
+    }
+    const int width = static_cast<int>(
+        std::max(0L, bounds.right - bounds.left));
+    const int height = static_cast<int>(
+        std::max(0L, bounds.bottom - bounds.top));
+    if (width == 0 || height == 0) {
+        return false;
+    }
+    const RECT client{ 0, 0, width, height };
+    HDC dc = CreateCompatibleDC(target);
+    HBITMAP bitmap = CreateCompatibleBitmap(target, width, height);
+    if (dc == nullptr || bitmap == nullptr) {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (dc != nullptr) {
+            DeleteDC(dc);
+        }
+        return false;
+    }
     HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
     HGDIOBJ oldFont = SelectObject(dc, MonospaceFont());
     SetBkMode(dc, TRANSPARENT);
@@ -109,17 +130,33 @@ void ScriptEditorRenderer::Paint(HWND window, const ScriptEditorDocument& docume
     const RECT thumb = ScriptEditorLayout::ScrollbarThumb(document, viewport, client, metrics);
     if (thumb.bottom > thumb.top) {
         POINT cursor{};
-        GetCursorPos(&cursor);
-        ScreenToClient(window, &cursor);
-        const bool hot = cursor.x >= thumb.left && cursor.x < thumb.right && cursor.y >= thumb.top && cursor.y < thumb.bottom;
+        const bool hot =
+            interactionWindow != nullptr &&
+            GetCursorPos(&cursor) != 0 &&
+            ScreenToClient(interactionWindow, &cursor) != 0 &&
+            cursor.x >= thumb.left && cursor.x < thumb.right &&
+            cursor.y >= thumb.top && cursor.y < thumb.bottom;
         FillColor(dc, RECT{ thumb.left + 3, thumb.top + 2, thumb.right - 3, thumb.bottom - 2 }, hot ? kScrollThumbHot : kScrollThumb);
     }
 
-    BitBlt(windowDc, 0, 0, width, height, dc, 0, 0, SRCCOPY);
+    const bool copied = BitBlt(
+        target, bounds.left, bounds.top, width, height,
+        dc, 0, 0, SRCCOPY) != 0;
     SelectObject(dc, oldFont);
     SelectObject(dc, oldBitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);
+    return copied;
+}
+
+void ScriptEditorRenderer::Paint(HWND window, const ScriptEditorDocument& document, const ScriptEditorViewport& viewport, ScriptEditorMetrics& metrics, bool caretVisible, bool focused) {
+    RECT client{};
+    GetClientRect(window, &client);
+    PAINTSTRUCT paint{};
+    HDC windowDc = BeginPaint(window, &paint);
+    static_cast<void>(PaintTo(
+        windowDc, client, document, viewport, metrics,
+        caretVisible, focused, window));
     EndPaint(window, &paint);
 }
 

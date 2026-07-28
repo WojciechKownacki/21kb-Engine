@@ -10,7 +10,6 @@
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
-#include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -508,20 +507,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     ConfigurePlayModePointerViewport(state);
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
-    kb::scene::SceneRuntime runtime = state.sceneContext.Scene().Runtime();
-    if (!runtime.EcsProfilerEnabled()) {
-        runtime.SetEcsProfilerEnabled(true);
-    }
-    static_cast<void>(runtime.Update(deltaSeconds));
-    // Surface any scene-system fault (e.g. a plugin's system throwing) that the
-    // scheduler isolated this frame, so a broken plugin does not silently stop
-    // scripts/behaviours from running with no message in the Console.
-    for (const std::string& systemError : runtime.DrainSceneSystemErrors()) {
-        state.sceneContext.Console().Error("Scripts", systemError);
-    }
-    state.sceneContext.SurfaceScriptDiagnostics();
-    state.sceneContext.MarkSceneRenderDirty();
-    if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
+    if (!state.sceneContext.TickPlayModeSceneSession(deltaSeconds)) {
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     }
