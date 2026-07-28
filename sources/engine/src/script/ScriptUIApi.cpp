@@ -126,6 +126,21 @@ ScriptFunctionCallResult SetVisible(const ScriptFunctionCallContext& context, st
 ScriptFunctionCallResult Show(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, true); }
 ScriptFunctionCallResult Hide(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, false); }
 
+// LIB-177: a deliberately setup-only O(n) name scan. The result is a typed
+// UIElementId handle (ScriptValueType::Hash) that callers retain and pass to
+// the mutation/event APIs; no per-frame lookup cache is hidden in the API.
+ScriptFunctionCallResult Find(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("UI.Find requires an active scene");
+    const auto element = context.scene->UIDocuments().Find(Target(context, arguments), Arg(arguments, "name")->AsString());
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            { "element", ScriptValue{ element.value_or(0U), ScriptValueType::Hash } },
+            { "found", ScriptValue{ element.has_value() } },
+        },
+    };
+}
+
 ScriptFunctionCallResult SetText(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     std::string error;
     auto control = ExistingControl(context, arguments, error);
@@ -284,6 +299,8 @@ bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
         RegisterFunction(host, "UI.Destroy", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Destroy) &&
         RegisterFunction(host, "UI.Show", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Show) &&
         RegisterFunction(host, "UI.Hide", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Hide) &&
+        RegisterFunction(host, "UI.Find", Targeted({ { "name", ScriptValueType::String, true } }),
+            { { "element", ScriptValueType::Hash, true }, { "found", ScriptValueType::Bool, true } }, &Find) &&
         RegisterFunction(host, "UI.SetText", Targeted({ { "element", ScriptValueType::Hash, true }, { "text", ScriptValueType::String, true } }), applied, &SetText) &&
         RegisterFunction(host, "UI.SetImage", Targeted({ { "element", ScriptValueType::Hash, true }, { "image", ScriptValueType::Hash, true } }), applied, &SetImage) &&
         RegisterFunction(host, "UI.SetToggle", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Bool, true } }), applied, &SetToggle) &&
