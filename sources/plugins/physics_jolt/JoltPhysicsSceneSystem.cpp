@@ -57,6 +57,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -89,6 +90,7 @@ constexpr std::uint32_t MaxBodies = 65536U;
 constexpr std::uint32_t NumBodyMutexes = 0U;
 constexpr std::uint32_t MaxBodyPairs = 65536U;
 constexpr std::uint32_t MaxContactConstraints = 10240U;
+constexpr std::size_t MaxQueuedRootMotionSegments = 256U;
 // LIB-129: a named layer (ColliderComponent::layer's lowest set bit, 0-31 -
 // see kb::scene::PhysicsLayersAsset) combined with static/dynamic motion
 // type into a single Jolt ObjectLayer - see ToObjectLayer below for why
@@ -535,6 +537,84 @@ struct CharacterRecord {
     float gravityScale = 1.0F;
     bool useGravity = true;
 };
+
+struct RootMotionSegment {
+    Vec3 localTranslation{};
+    Quat localRotation{};
+    float durationSeconds = 0.0F;
+    std::uint64_t controllerAssetId = 0U;
+};
+
+using RootMotionQueue = std::deque<RootMotionSegment>;
+
+[[nodiscard]] Quat QueuedEndRotation(
+    Quat worldRotation, const RootMotionQueue* queue) noexcept {
+    if (queue != nullptr) {
+        for (const RootMotionSegment& segment : *queue) {
+            worldRotation = kb::math::Normalize(
+                worldRotation * segment.localRotation);
+        }
+    }
+    return worldRotation;
+}
+
+[[nodiscard]] bool IsWorldUpright(Quat rotation) noexcept {
+    const Vec3 up = kb::math::Rotate(rotation, Vec3{ 0.0F, 1.0F, 0.0F });
+    return std::abs(up.x) <= 1.0e-5F &&
+        std::abs(up.z) <= 1.0e-5F &&
+        up.y >= 1.0F - 1.0e-5F;
+}
+
+[[nodiscard]] RootMotionSegment ComposeRootMotion(
+    const RootMotionSegment& lhs, const RootMotionSegment& rhs) noexcept {
+    return RootMotionSegment{
+        .localTranslation = lhs.localTranslation +
+            kb::math::Rotate(lhs.localRotation, rhs.localTranslation),
+        .localRotation = kb::math::Normalize(lhs.localRotation * rhs.localRotation),
+        .durationSeconds = lhs.durationSeconds + rhs.durationSeconds,
+        .controllerAssetId = rhs.controllerAssetId,
+    };
+}
+
+[[nodiscard]] RootMotionSegment RelativeRootMotion(
+    const RootMotionSegment& from, const RootMotionSegment& to) noexcept {
+    const Quat inverse = kb::math::Inverse(from.localRotation);
+    return RootMotionSegment{
+        .localTranslation = kb::math::Rotate(
+            inverse, to.localTranslation - from.localTranslation),
+        .localRotation = kb::math::Normalize(inverse * to.localRotation),
+        .durationSeconds = std::max(0.0F, to.durationSeconds - from.durationSeconds),
+        .controllerAssetId = to.controllerAssetId,
+    };
+}
+
+[[nodiscard]] RootMotionSegment ConsumeRootMotion(
+    RootMotionQueue& queue, float durationSeconds) noexcept {
+    RootMotionSegment consumed{};
+    float remaining = durationSeconds;
+    while (remaining > 1.0e-7F && !queue.empty()) {
+        RootMotionSegment& segment = queue.front();
+        if (segment.durationSeconds <= remaining + 1.0e-7F) {
+            consumed = ComposeRootMotion(consumed, segment);
+            remaining = std::max(0.0F, remaining - segment.durationSeconds);
+            queue.pop_front();
+            continue;
+        }
+
+        const float fraction = std::clamp(
+            remaining / segment.durationSeconds, 0.0F, 1.0F);
+        const RootMotionSegment slice{
+            .localTranslation = segment.localTranslation * fraction,
+            .localRotation = kb::math::Slerp(Quat{}, segment.localRotation, fraction),
+            .durationSeconds = remaining,
+            .controllerAssetId = segment.controllerAssetId,
+        };
+        segment = RelativeRootMotion(slice, segment);
+        consumed = ComposeRootMotion(consumed, slice);
+        remaining = 0.0F;
+    }
+    return consumed;
+}
 
 [[nodiscard]] JPH::EMotionType ToMotionType(RigidbodyBodyType bodyType) noexcept {
     switch (bodyType) {
@@ -996,6 +1076,7 @@ public:
     // far a platform the character is standing on moves this step.
     void OnFixedUpdate(SceneSystemContext& context) {
         SynchronizeBodies(context);
+        ApplyPendingRigidbodyRootMotion(context);
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
         UpdateCharacters(context);
@@ -1006,6 +1087,59 @@ public:
         WriteBackCharacters(context);
         FinalizeWriteBackLocalPoses(context);
         DispatchContactEvents(context);
+    }
+
+    void ApplyPendingRigidbodyRootMotion(SceneSystemContext& context) {
+        const float deltaSeconds = context.DeltaSeconds();
+        if (deltaSeconds <= 0.0F) return;
+        for (auto it = pendingRigidbodyRootMotion_.begin(); it != pendingRigidbodyRootMotion_.end();) {
+            const SceneEntity entity{ it->first };
+            const kb::scene::Animator* animator =
+                context.GetScene().Components().Animators().TryGet(entity);
+            const RigidbodyComponent* rigidbody = context.GetScene().Components().Rigidbodies().TryGet(entity);
+            const TransformComponent* transform = context.Transforms().TryGet(entity);
+            const auto body = bodies_.find(it->first);
+            if (animator == nullptr ||
+                !animator->enabled ||
+                animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::Rigidbody ||
+                it->second.empty() ||
+                it->second.front().controllerAssetId != animator->controllerAssetId ||
+                context.GetScene().Components().CharacterControllers().TryGet(entity) != nullptr ||
+                rigidbody == nullptr || transform == nullptr ||
+                rigidbody->bodyType != RigidbodyBodyType::Kinematic) {
+                it = pendingRigidbodyRootMotion_.erase(it);
+                continue;
+            }
+            if (body == bodies_.end()) {
+                ++it;
+                continue;
+            }
+
+            BodyRecord* bodyRecord = FindKinematicBody(entity);
+            if (bodyRecord == nullptr) {
+                ++it;
+                continue;
+            }
+            const RootMotionSegment motion = ConsumeRootMotion(it->second, deltaSeconds);
+            const Vec3 worldTranslation = kb::math::Rotate(transform->worldRotation, motion.localTranslation);
+            const Quat targetRotation = kb::math::Normalize(transform->worldRotation * motion.localRotation);
+            const Vec3 targetPosition = transform->worldPosition + worldTranslation;
+            if (!MoveKinematic(entity, targetPosition, targetRotation, deltaSeconds)) {
+                ++it;
+                continue;
+            }
+            // Root motion is queued and applied inside this fixed update,
+            // after SynchronizeBodies. Its velocity has exactly this one
+            // Step to reach the target, so the generic pre-fixed
+            // MoveKinematic preservation flag must not carry it into the
+            // following substep and repeat the delta.
+            bodyRecord->pendingKinematicMove = false;
+            if (it->second.empty()) {
+                it = pendingRigidbodyRootMotion_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     void OnDestroy() {
@@ -1170,6 +1304,94 @@ public:
             return {};
         }
         return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(record->character->GetGroundVelocity()) };
+    }
+
+    bool QueueCharacterRootMotion(
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
+        if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
+            !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
+            scene_->Components().CharacterControllers().TryGet(entity) == nullptr ||
+            scene_->Components().Rigidbodies().TryGet(entity) != nullptr ||
+            scene_->Components().Colliders().TryGet(entity) != nullptr) {
+            return false;
+        }
+        const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+        if (animator == nullptr ||
+            !animator->enabled ||
+            animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::CharacterController) {
+            return false;
+        }
+        const TransformComponent* transform = scene_->Transforms().TryGet(entity);
+        auto queued = pendingCharacterRootMotion_.find(entity.Id());
+        if (queued != pendingCharacterRootMotion_.end() &&
+            !queued->second.empty() &&
+            queued->second.front().controllerAssetId != animator->controllerAssetId) {
+            queued->second.clear();
+        }
+        const RootMotionQueue* queue =
+            queued == pendingCharacterRootMotion_.end() ? nullptr : &queued->second;
+        const Quat queuedRotation = transform == nullptr
+            ? Quat{}
+            : QueuedEndRotation(transform->worldRotation, queue);
+        if (transform == nullptr || !IsWorldUpright(queuedRotation) ||
+            !IsWorldUpright(kb::math::Normalize(queuedRotation * localRotation)) ||
+            std::abs(kb::math::Rotate(queuedRotation, localTranslation).y) > 1.0e-5F ||
+            (queue != nullptr && queue->size() >= MaxQueuedRootMotionSegments)) {
+            return false;
+        }
+        if (durationSeconds == 0.0F) {
+            if (queued != pendingCharacterRootMotion_.end() && queued->second.empty()) {
+                pendingCharacterRootMotion_.erase(queued);
+            }
+            return true;
+        }
+        RootMotionQueue& mutableQueue = pendingCharacterRootMotion_[entity.Id()];
+        mutableQueue.push_back(RootMotionSegment{
+            .localTranslation = localTranslation,
+            .localRotation = localRotation,
+            .durationSeconds = durationSeconds,
+            .controllerAssetId = animator->controllerAssetId,
+        });
+        return true;
+    }
+
+    bool QueueRigidbodyRootMotion(
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
+        if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
+            !std::isfinite(durationSeconds) || durationSeconds < 0.0F) return false;
+        const RigidbodyComponent* rigidbody = scene_->Components().Rigidbodies().TryGet(entity);
+        const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+        if (animator == nullptr ||
+            !animator->enabled ||
+            animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::Rigidbody ||
+            rigidbody == nullptr || rigidbody->bodyType != RigidbodyBodyType::Kinematic ||
+            scene_->Components().Colliders().TryGet(entity) == nullptr ||
+            scene_->Components().CharacterControllers().TryGet(entity) != nullptr) {
+            return false;
+        }
+        auto queued = pendingRigidbodyRootMotion_.find(entity.Id());
+        if (queued != pendingRigidbodyRootMotion_.end() &&
+            !queued->second.empty() &&
+            queued->second.front().controllerAssetId != animator->controllerAssetId) {
+            queued->second.clear();
+        }
+        if (durationSeconds == 0.0F) {
+            if (queued != pendingRigidbodyRootMotion_.end() && queued->second.empty()) {
+                pendingRigidbodyRootMotion_.erase(queued);
+            }
+            return true;
+        }
+        if (queued != pendingRigidbodyRootMotion_.end() &&
+            queued->second.size() >= MaxQueuedRootMotionSegments) {
+            return false;
+        }
+        pendingRigidbodyRootMotion_[entity.Id()].push_back(RootMotionSegment{
+            .localTranslation = localTranslation,
+            .localRotation = localRotation,
+            .durationSeconds = durationSeconds,
+            .controllerAssetId = animator->controllerAssetId,
+        });
+        return true;
     }
 
     [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
@@ -1429,6 +1651,13 @@ private:
                 ++it;
             }
         }
+        for (auto it = pendingRigidbodyRootMotion_.begin(); it != pendingRigidbodyRootMotion_.end();) {
+            if (seen.find(it->first) == seen.end()) {
+                it = pendingRigidbodyRootMotion_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     // LIB-130: runs AFTER SynchronizeBodies (above) in the same OnFixedUpdate
@@ -1600,6 +1829,13 @@ private:
                 ++it;
             }
         }
+        for (auto it = pendingCharacterRootMotion_.begin(); it != pendingCharacterRootMotion_.end();) {
+            if (seen.find(it->first) == seen.end()) {
+                it = pendingCharacterRootMotion_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     // Only a shape change (CharacterSignature) destroys+recreates the real JPH::CharacterVirtual;
@@ -1706,6 +1942,36 @@ private:
             const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
             newVelocity += desiredVelocity - desiredVelocity.Dot(up) * up;
 
+            const auto rootMotion = pendingCharacterRootMotion_.find(entityId);
+            if (rootMotion != pendingCharacterRootMotion_.end()) {
+                const SceneEntity entity{ entityId };
+                const kb::scene::Animator* animator =
+                    context.GetScene().Components().Animators().TryGet(entity);
+                if (animator == nullptr ||
+                    !animator->enabled ||
+                    animator->rootMotionOwner !=
+                        kb::scene::AnimatorRootMotionOwner::CharacterController ||
+                    rootMotion->second.empty() ||
+                    rootMotion->second.front().controllerAssetId !=
+                        animator->controllerAssetId ||
+                    context.GetScene().Components().Rigidbodies().TryGet(entity) != nullptr ||
+                    context.GetScene().Components().Colliders().TryGet(entity) != nullptr) {
+                    pendingCharacterRootMotion_.erase(rootMotion);
+                } else {
+                    const RootMotionSegment motion =
+                        ConsumeRootMotion(rootMotion->second, deltaSeconds);
+                    const Quat worldRotation = FromJolt(character->GetRotation());
+                    const Vec3 worldTranslation =
+                        kb::math::Rotate(worldRotation, motion.localTranslation);
+                    newVelocity += ToJolt(worldTranslation * (1.0F / deltaSeconds));
+                    character->SetRotation(ToJolt(kb::math::Normalize(
+                        worldRotation * motion.localRotation)));
+                    if (rootMotion->second.empty()) {
+                        pendingCharacterRootMotion_.erase(rootMotion);
+                    }
+                }
+            }
+
             character->SetLinearVelocity(newVelocity);
 
             // LIB-131 step offset: ExtendedUpdate's own WalkStairs pass, magnitude taken from
@@ -1745,6 +2011,7 @@ private:
 
     void RemoveAllCharacters() {
         characters_.clear();
+        pendingCharacterRootMotion_.clear();
     }
 
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
@@ -2017,6 +2284,7 @@ private:
             RemoveBody(body.bodyId);
         }
         bodies_.clear();
+        pendingRigidbodyRootMotion_.clear();
     }
 
     JoltRuntime runtime_;
@@ -2028,6 +2296,7 @@ private:
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    std::unordered_map<std::uint64_t, RootMotionQueue> pendingRigidbodyRootMotion_;
     kb::scene::Scene* scene_ = nullptr;
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
@@ -2035,6 +2304,7 @@ private:
     std::unordered_map<std::uint64_t, JointRecord> joints_;
     std::vector<JointSnapshot> jointScratch_;
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;
+    std::unordered_map<std::uint64_t, RootMotionQueue> pendingCharacterRootMotion_;
     std::vector<CharacterSnapshot> characterScratch_;
     std::vector<SceneEntity> writeBackEntities_;
     JoltCollisionContactListener contactListener_;

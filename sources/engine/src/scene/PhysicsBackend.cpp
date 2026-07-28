@@ -185,4 +185,18 @@ PhysicsVectorResult PhysicsBackend::CharacterGroundVelocity(Scene& scene, SceneE
     return backend != nullptr ? backend->CharacterGroundVelocity(entity) : PhysicsVectorResult{};
 }
 
+bool PhysicsBackend::QueueCharacterRootMotion(
+    Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr &&
+        backend->QueueCharacterRootMotion(entity, localTranslation, localRotation, durationSeconds);
+}
+
+bool PhysicsBackend::QueueRigidbodyRootMotion(
+    Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr &&
+        backend->QueueRigidbodyRootMotion(entity, localTranslation, localRotation, durationSeconds);
+}
+
 } // namespace kb::scene

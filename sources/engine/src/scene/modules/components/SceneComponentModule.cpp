@@ -61,6 +61,10 @@ SceneAudioListenerComponentQueries SceneComponentQueries::AudioListeners() const
     return SceneAudioListenerComponentQueries{ scene_ };
 }
 
+SceneAnimatorComponentQueries SceneComponentQueries::Animators() const noexcept {
+    return SceneAnimatorComponentQueries{ scene_ };
+}
+
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
 }
@@ -115,6 +119,10 @@ SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
 
 SceneAudioListenerComponents SceneComponents::AudioListeners() const noexcept {
     return SceneAudioListenerComponents{ scene_ };
+}
+
+SceneAnimatorComponents SceneComponents::Animators() const noexcept {
+    return SceneAnimatorComponents{ scene_ };
 }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {

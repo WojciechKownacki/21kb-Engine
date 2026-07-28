@@ -1,5 +1,7 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
 
+#include <cmath>
+
 #include <charconv>
 #include <sstream>
 #include <string_view>
@@ -393,6 +395,29 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "audioListener.enabled") {
         return ParseBool(property.value, Ensure(node.components.audioListener).enabled);
+    }
+    if (property.propertyPath == "animator") {
+        return ApplyComponentPresence(property.value, node.components.animator);
+    }
+    if (property.propertyPath == "animator.controllerAssetId") {
+        return ParseNumber(property.value, Ensure(node.components.animator).controllerAssetId);
+    }
+    if (property.propertyPath == "animator.speed") {
+        float speed = 0.0F;
+        if (!ParseNumber(property.value, speed) || !std::isfinite(speed) || speed < 0.0F) return false;
+        Ensure(node.components.animator).speed = speed;
+        return true;
+    }
+    if (property.propertyPath == "animator.enabled") {
+        return ParseBool(property.value, Ensure(node.components.animator).enabled);
+    }
+    if (property.propertyPath == "animator.rootMotionOwner") {
+        int owner = 0;
+        if (!ParseNumber(property.value, owner) ||
+            owner < static_cast<int>(AnimatorRootMotionOwner::None) ||
+            owner > static_cast<int>(AnimatorRootMotionOwner::Rigidbody)) return false;
+        Ensure(node.components.animator).rootMotionOwner = static_cast<AnimatorRootMotionOwner>(owner);
+        return true;
     }
     return false;
 }

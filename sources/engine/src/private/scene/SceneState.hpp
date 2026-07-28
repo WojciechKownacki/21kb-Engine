@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -32,6 +33,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -55,6 +57,45 @@ class IInputHapticsBackend;
 namespace kb::scene {
 
 class IPhysicsBackend;
+
+struct AnimatorRuntimeState {
+    kb::assets::AssetHandle<AnimationClip> clip;
+    std::vector<std::size_t> targetIndices;
+};
+
+struct AnimatorRuntimeBinding {
+    SceneEntity target{};
+    LocalTransform bindTransform{};
+    LocalTransform output{};
+    LocalTransform fromPose{};
+    LocalTransform toPose{};
+    bool outputTouched = false;
+    bool fromTouched = false;
+    bool toTouched = false;
+};
+
+struct AnimatorRuntimeLayer {
+    std::vector<AnimatorRuntimeState> states;
+    std::size_t currentState = 0U;
+    std::size_t previousState = 0U;
+    double currentTimeSeconds = 0.0;
+    double previousTimeSeconds = 0.0;
+    double transitionElapsedSeconds = 0.0;
+    double transitionDurationSeconds = 0.0;
+    bool transitioning = false;
+};
+
+struct AnimatorRuntimeRecord {
+    SceneEntity entity{};
+    kb::assets::AssetHandle<AnimatorController> controller;
+    std::vector<AnimatorRuntimeLayer> layers;
+    std::vector<AnimatorRuntimeBinding> bindings;
+    std::vector<AnimatorParameterValue> parameters;
+    // Live speed is script-mutable. This cache only detects a later authored
+    // component edit; it is never exposed or serialized as independent state.
+    float speed = 1.0F;
+    float lastAppliedComponentSpeed = 1.0F;
+};
 
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
@@ -94,6 +135,8 @@ public:
     bool suppressPrefabDirtyTracking = false;
     SceneMode mode = SceneMode::Runtime;
     kb::assets::AssetManager assets;
+    std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
+    std::vector<AnimationEventRecord> pendingAnimationEvents;
     kb::input::InputSubsystem inputSubsystem;
     // LIB-115: independent input state for local users other than the primary
     // (split-screen / shared-keyboard local co-op). Keyed by LocalUserId::value;

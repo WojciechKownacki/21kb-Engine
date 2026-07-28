@@ -22,7 +22,8 @@ public:
             || StartsWith(propertyPath, "tags")
             || StartsWith(propertyPath, "behaviour")
             || StartsWith(propertyPath, "audioSource")
-            || StartsWith(propertyPath, "audioListener");
+            || StartsWith(propertyPath, "audioListener")
+            || StartsWith(propertyPath, "animator");
     }
 
     [[nodiscard]] static bool IsTransform(std::string_view propertyPath) noexcept {

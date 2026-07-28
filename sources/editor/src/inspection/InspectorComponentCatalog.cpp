@@ -13,6 +13,7 @@ namespace {
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "AudioSource", .category = "Audio", .label = "Audio Source", .icon = HeroIconKind::SpeakerWave },
         InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener", .icon = HeroIconKind::SpeakerWave },
+        InspectorComponentTile{ .id = "Animator", .category = "Animation", .label = "Animator", .icon = HeroIconKind::Play },
         InspectorComponentTile{ .id = "Rigidbody", .category = "Physics", .label = "Rigidbody", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },
@@ -60,6 +61,7 @@ std::vector<InspectorComponentCategory> InspectorComponentCatalog::Categories() 
         if (name == "Rendering") return HeroIconKind::Eye;
         if (name == "Physics") return HeroIconKind::Cube;
         if (name == "Audio") return HeroIconKind::SpeakerWave;
+        if (name == "Animation") return HeroIconKind::Play;
         return fallback;
     };
     std::vector<InspectorComponentCategory> categories;

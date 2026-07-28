@@ -193,6 +193,30 @@ public:
     // movement itself is already folded into CharacterMove's resulting
     // motion automatically, this exists so a script can also observe it.
     [[nodiscard]] virtual PhysicsVectorResult CharacterGroundVelocity(SceneEntity entity) const noexcept = 0;
+
+    // LIB-169: root motion is authored only by Animator. Physics
+    // owners receive the extracted local-space delta through these queues
+    // before the fixed-step loop. durationSeconds is the variable-frame
+    // interval represented by that delta; a backend retains and slices the
+    // motion across authoritative fixed steps instead of bursting it into
+    // the first substep. false means the selected ownership contract cannot
+    // be honored and must be surfaced by the animation system.
+    virtual bool QueueCharacterRootMotion(
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept {
+        static_cast<void>(entity);
+        static_cast<void>(localTranslation);
+        static_cast<void>(localRotation);
+        static_cast<void>(durationSeconds);
+        return false;
+    }
+    virtual bool QueueRigidbodyRootMotion(
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept {
+        static_cast<void>(entity);
+        static_cast<void>(localTranslation);
+        static_cast<void>(localRotation);
+        static_cast<void>(durationSeconds);
+        return false;
+    }
 };
 
 // LIB-127: OnCollisionEnter/Stay/Exit fire for a solid-vs-solid contact;
@@ -298,6 +322,10 @@ public:
     [[nodiscard]] static bool CharacterIsGrounded(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static PhysicsVectorResult CharacterGroundNormal(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static PhysicsVectorResult CharacterGroundVelocity(Scene& scene, SceneEntity entity) noexcept;
+    static bool QueueCharacterRootMotion(
+        Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept;
+    static bool QueueRigidbodyRootMotion(
+        Scene& scene, SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept;
 };
 
 // LIB-126: Raycast has stayed pure ColliderComponent/TransformComponent

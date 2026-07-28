@@ -39,6 +39,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEngineLibraryTests();
     } else if (suite == "engine-math") {
         kb::tests::RunEngineMathTests();
+    } else if (suite == "animation-runtime") {
+        kb::tests::RunAnimationRuntimeTests();
     } else {
         return false;
     }
@@ -60,6 +62,7 @@ void RunAllSuites() {
     kb::tests::RunEngineModuleTests();
     kb::tests::RunEngineLibraryTests();
     kb::tests::RunEngineMathTests();
+    kb::tests::RunAnimationRuntimeTests();
 }
 
 } // namespace
