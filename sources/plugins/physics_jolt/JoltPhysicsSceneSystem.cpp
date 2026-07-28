@@ -1101,6 +1101,7 @@ public:
             const auto body = bodies_.find(it->first);
             if (animator == nullptr ||
                 !animator->enabled ||
+                !context.GetScene().Entities().IsActive(entity) ||
                 animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::Rigidbody ||
                 it->second.empty() ||
                 it->second.front().controllerAssetId != animator->controllerAssetId ||
@@ -1310,6 +1311,7 @@ public:
         SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
             !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
+            !scene_->Entities().IsActive(entity) ||
             scene_->Components().CharacterControllers().TryGet(entity) == nullptr ||
             scene_->Components().Rigidbodies().TryGet(entity) != nullptr ||
             scene_->Components().Colliders().TryGet(entity) != nullptr) {
@@ -1358,7 +1360,8 @@ public:
     bool QueueRigidbodyRootMotion(
         SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
-            !std::isfinite(durationSeconds) || durationSeconds < 0.0F) return false;
+            !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
+            !scene_->Entities().IsActive(entity)) return false;
         const RigidbodyComponent* rigidbody = scene_->Components().Rigidbodies().TryGet(entity);
         const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
         if (animator == nullptr ||
@@ -1949,6 +1952,7 @@ private:
                     context.GetScene().Components().Animators().TryGet(entity);
                 if (animator == nullptr ||
                     !animator->enabled ||
+                    !context.GetScene().Entities().IsActive(entity) ||
                     animator->rootMotionOwner !=
                         kb::scene::AnimatorRootMotionOwner::CharacterController ||
                     rootMotion->second.empty() ||

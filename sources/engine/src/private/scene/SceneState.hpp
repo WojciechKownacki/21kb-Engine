@@ -32,6 +32,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <map>
 #include <optional>
@@ -59,8 +60,12 @@ namespace kb::scene {
 class IPhysicsBackend;
 
 struct AnimatorRuntimeState {
-    kb::assets::AssetHandle<AnimationClip> clip;
-    std::vector<std::size_t> targetIndices;
+    struct Motion {
+        kb::assets::AssetHandle<AnimationClip> clip;
+        std::vector<std::size_t> targetIndices;
+    };
+    std::vector<Motion> motions;
+    std::size_t blendParameterIndex = std::numeric_limits<std::size_t>::max();
 };
 
 struct AnimatorRuntimeBinding {
@@ -85,12 +90,22 @@ struct AnimatorRuntimeLayer {
     bool transitioning = false;
 };
 
+struct AnimatorRuntimeConstraint {
+    std::size_t definitionIndex = 0U;
+    SceneEntity constrained{};
+    SceneEntity mid{};
+    SceneEntity tip{};
+};
+
 struct AnimatorRuntimeRecord {
     SceneEntity entity{};
     kb::assets::AssetHandle<AnimatorController> controller;
+    std::uint64_t controllerLoadGeneration = 0U;
     std::vector<AnimatorRuntimeLayer> layers;
     std::vector<AnimatorRuntimeBinding> bindings;
     std::vector<AnimatorParameterValue> parameters;
+    std::vector<AnimatorRuntimeConstraint> rigConstraints;
+    std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
     // Live speed is script-mutable. This cache only detects a later authored
     // component edit; it is never exposed or serialized as independent state.
     float speed = 1.0F;

@@ -24,6 +24,14 @@ bool SceneAnimators::SetInt(SceneEntity entity, std::string_view name, std::int3
 bool SceneAnimators::SetFloat(SceneEntity entity, std::string_view name, float value) noexcept { return SceneAnimatorService::SetFloat(scene_, entity, name, value); }
 bool SceneAnimators::SetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, true); }
 bool SceneAnimators::ResetTrigger(SceneEntity entity, std::string_view name) noexcept { return SceneAnimatorService::SetTrigger(scene_, entity, name, false); }
+bool SceneAnimators::SetIkTarget(
+    SceneEntity entity, std::string_view name,
+    const AnimatorIkTarget& target) noexcept {
+    return SceneAnimatorService::SetIkTarget(scene_, entity, name, target);
+}
+bool SceneAnimators::ClearIkTarget(SceneEntity entity, std::string_view name) noexcept {
+    return SceneAnimatorService::ClearIkTarget(scene_, entity, name);
+}
 std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 std::vector<AnimationEventRecord> SceneAnimators::DrainEvents() { return SceneAnimatorService::DrainEvents(scene_); }
 

@@ -466,6 +466,11 @@ bool AssetManager::Unload(AssetId id) noexcept {
     return cache_.erase(id.value) > 0;
 }
 
+std::uint64_t AssetManager::LoadGeneration(AssetId id) const noexcept {
+    const auto generation = asyncLoadGenerations_.find(id.value);
+    return generation == asyncLoadGenerations_.end() ? 0U : generation->second;
+}
+
 bool AssetManager::IsLoaded(AssetId id) const noexcept {
     const auto cached = cache_.find(id.value);
     return cached != cache_.end() && !cached->second.weak.expired();

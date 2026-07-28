@@ -715,6 +715,10 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
                      .runtimeLoadable = true,
                  }),
         "Register Animator Controller for Inspector assignment");
+    report.Check(context.OpenAnimationAsset(controllerId) &&
+            context.ScriptEditor().IsOpen() &&
+            context.ScriptEditor().AssetId() == controllerId,
+        "Animator Controller opens in the editor's writable animation-asset surface");
     report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector drop/edit path");
     report.Check(context.SetAnimatorSpeed(actor, 1.75F), "Edit Animator speed through undoable Inspector command");
     report.Check(context.ToggleAnimatorEnabled(actor), "Toggle Animator enabled through Inspector");

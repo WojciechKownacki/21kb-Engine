@@ -35,13 +35,20 @@ std::vector<kb::assets::AssetId> AnimatorControllerAssetLoader::DiscoverDependen
     std::vector<kb::assets::AssetId> dependencies;
     for (const AnimatorControllerLayer& layer : controller->layers) {
         for (const AnimatorControllerState& state : layer.states) {
-            kb::assets::AssetId id{};
-            const kb::assets::AssetMetadata* dependency = nullptr;
-            if (kb::assets::TryParseAssetId(state.clipReference, id) && id.IsValid()) dependency = registry.Find(id);
-            else dependency = registry.FindByPath(std::filesystem::path{ state.clipReference });
-            if (dependency != nullptr && dependency->type == kAnimationClipAssetType &&
-                std::find(dependencies.begin(), dependencies.end(), dependency->id) == dependencies.end()) {
-                dependencies.push_back(dependency->id);
+            std::vector<std::string_view> references;
+            if (!state.clipReference.empty()) references.push_back(state.clipReference);
+            for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
+                references.push_back(child.clipReference);
+            }
+            for (const std::string_view reference : references) {
+                kb::assets::AssetId id{};
+                const kb::assets::AssetMetadata* dependency = nullptr;
+                if (kb::assets::TryParseAssetId(reference, id) && id.IsValid()) dependency = registry.Find(id);
+                else dependency = registry.FindByPath(std::filesystem::path{ reference });
+                if (dependency != nullptr && dependency->type == kAnimationClipAssetType &&
+                    std::find(dependencies.begin(), dependencies.end(), dependency->id) == dependencies.end()) {
+                    dependencies.push_back(dependency->id);
+                }
             }
         }
     }

@@ -284,6 +284,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Animator.SetFloat", "Sets a finite float parameter declared by the attached animator controller." },
     { "Animator.SetTrigger", "Sets a trigger parameter declared by the attached animator controller." },
     { "Animator.ResetTrigger", "Clears a trigger parameter declared by the attached animator controller." },
+    { "Animator.SetIKTarget", "Sets a named world-space IK/rig target consumed by constraints in the attached controller." },
+    { "Animator.ClearIKTarget", "Clears a named IK/rig target from the attached animator runtime." },
     { "Animator.State", "Returns the active state, normalized time, and transition state of an animator layer." },
 
     { "Renderer.IsVisible", "Returns whether an entity was visible in the selected completed render frame." },

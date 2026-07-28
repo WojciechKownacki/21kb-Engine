@@ -74,6 +74,50 @@ ScriptFunctionCallResult ResetTrigger(const ScriptFunctionCallContext& context, 
         "Animator trigger name did not match the attached controller");
 }
 
+ScriptFunctionCallResult SetIkTarget(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("Animator.SetIKTarget requires an active scene");
+    }
+    const auto optionalFloat = [&](std::string_view name, float fallback) {
+        const ScriptValue* value = Arg(arguments, name);
+        return value == nullptr ? fallback : value->AsFloat();
+    };
+    const kb::scene::AnimatorIkTarget target{
+        .worldPosition = {
+            Arg(arguments, "x")->AsFloat(),
+            Arg(arguments, "y")->AsFloat(),
+            Arg(arguments, "z")->AsFloat(),
+        },
+        .worldRotation = {
+            optionalFloat("rotationX", 0.0F),
+            optionalFloat("rotationY", 0.0F),
+            optionalFloat("rotationZ", 0.0F),
+            optionalFloat("rotationW", 1.0F),
+        },
+        .positionWeight = optionalFloat("positionWeight", 1.0F),
+        .rotationWeight = optionalFloat("rotationWeight", 1.0F),
+    };
+    return Applied(
+        context.scene->Animators().SetIkTarget(
+            Target(context, arguments), Arg(arguments, "name")->AsString(),
+            target),
+        "Animator.SetIKTarget requires a declared target and finite world pose/weights");
+}
+
+ScriptFunctionCallResult ClearIkTarget(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("Animator.ClearIKTarget requires an active scene");
+    }
+    return Applied(
+        context.scene->Animators().ClearIkTarget(
+            Target(context, arguments), Arg(arguments, "name")->AsString()),
+        "Animator.ClearIKTarget could not find the active target");
+}
+
 ScriptFunctionCallResult State(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) return Error("Animator.State requires an active scene");
     const auto state = context.scene->Animators().State(Target(context, arguments), Arg(arguments, "layer")->AsString());
@@ -127,6 +171,21 @@ bool ScriptAnimatorApi::Register(ScriptRuntimeHost& host) {
         RegisterFunction(host, "Animator.SetFloat", Targeted({ { "name", ScriptValueType::String, true }, { "value", ScriptValueType::Float, true } }), applied, &SetParameter<kb::scene::AnimatorParameterType::Float>) &&
         RegisterFunction(host, "Animator.SetTrigger", Targeted({ { "name", ScriptValueType::String, true } }), applied, &SetParameter<kb::scene::AnimatorParameterType::Trigger>) &&
         RegisterFunction(host, "Animator.ResetTrigger", Targeted({ { "name", ScriptValueType::String, true } }), applied, &ResetTrigger) &&
+        RegisterFunction(host, "Animator.SetIKTarget", Targeted({
+            { "name", ScriptValueType::String, true },
+            { "x", ScriptValueType::Float, true },
+            { "y", ScriptValueType::Float, true },
+            { "z", ScriptValueType::Float, true },
+            { "rotationX", ScriptValueType::Float, false },
+            { "rotationY", ScriptValueType::Float, false },
+            { "rotationZ", ScriptValueType::Float, false },
+            { "rotationW", ScriptValueType::Float, false },
+            { "positionWeight", ScriptValueType::Float, false },
+            { "rotationWeight", ScriptValueType::Float, false },
+        }), applied, &SetIkTarget) &&
+        RegisterFunction(host, "Animator.ClearIKTarget",
+            Targeted({ { "name", ScriptValueType::String, true } }),
+            applied, &ClearIkTarget) &&
         RegisterFunction(host, "Animator.State", Targeted({ { "layer", ScriptValueType::String, true } }), {
             { "state", ScriptValueType::String, true },
             { "previousState", ScriptValueType::String, true },

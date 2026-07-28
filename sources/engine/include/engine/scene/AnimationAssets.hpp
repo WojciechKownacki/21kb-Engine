@@ -58,7 +58,15 @@ struct AnimatorParameterDefinition {
 
 struct AnimatorControllerState {
     std::string name;
+    // Exactly one motion source is authored: a clipReference, or a 1D blend
+    // tree driven by a Float parameter.
     std::string clipReference;
+    std::string blendParameter;
+    struct BlendChild {
+        float threshold = 0.0F;
+        std::string clipReference;
+    };
+    std::vector<BlendChild> blendChildren;
 };
 
 enum class AnimatorConditionMode : std::uint8_t {
@@ -98,9 +106,32 @@ struct AnimatorControllerLayer {
     std::vector<AnimatorControllerTransition> transitions;
 };
 
+enum class AnimatorRigConstraintType : std::uint8_t {
+    TwoBoneIK,
+    Aim,
+    CopyTransform,
+};
+
+// Constraints are evaluated in authored order after all controller layers.
+// Every driven path may appear only once, making this list the sole rig
+// authority after clip/blend-tree sampling.
+struct AnimatorRigConstraint {
+    std::string name;
+    AnimatorRigConstraintType type = AnimatorRigConstraintType::TwoBoneIK;
+    std::string constrainedPath;
+    std::string midPath;
+    std::string tipPath;
+    // Named transient input. A constraint is intentionally inactive until
+    // gameplay supplies this target through SceneAnimators/Animator script API.
+    std::string target;
+    std::string poleTarget;
+    float weight = 1.0F;
+};
+
 struct AnimatorController {
     std::vector<AnimatorParameterDefinition> parameters;
     std::vector<AnimatorControllerLayer> layers;
+    std::vector<AnimatorRigConstraint> rigConstraints;
 };
 
 enum class AnimatorRootMotionOwner : std::uint8_t {
@@ -134,6 +165,16 @@ struct AnimatorParameterValue {
     bool boolValue = false;
     std::int32_t intValue = 0;
     float floatValue = 0.0F;
+};
+
+// Transient gameplay input consumed by constraints declared in the retained
+// AnimatorController asset. This is runtime state, never serialized beside
+// Animator or duplicated in the editor.
+struct AnimatorIkTarget {
+    Vec3 worldPosition{};
+    Quat worldRotation{};
+    float positionWeight = 1.0F;
+    float rotationWeight = 1.0F;
 };
 
 struct AnimatorStateInfo {

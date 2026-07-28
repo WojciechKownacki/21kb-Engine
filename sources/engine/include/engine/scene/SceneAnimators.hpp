@@ -42,6 +42,11 @@ public:
     [[nodiscard]] bool SetFloat(SceneEntity entity, std::string_view name, float value) noexcept;
     [[nodiscard]] bool SetTrigger(SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] bool ResetTrigger(SceneEntity entity, std::string_view name) noexcept;
+    [[nodiscard]] bool SetIkTarget(
+        SceneEntity entity, std::string_view name,
+        const AnimatorIkTarget& target) noexcept;
+    [[nodiscard]] bool ClearIkTarget(
+        SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::vector<AnimationEventRecord> DrainEvents();
 
