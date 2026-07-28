@@ -2758,6 +2758,51 @@ int LuaUIDestroy(lua_State* state) { return LuaUIApplied(state, "UI.Destroy"); }
 int LuaUIShow(lua_State* state) { return LuaUIApplied(state, "UI.Show"); }
 int LuaUIHide(lua_State* state) { return LuaUIApplied(state, "UI.Hide"); }
 
+enum class LuaUIValueKind : std::uint8_t { String, Hash, Bool, Float };
+
+int LuaUISetValue(lua_State* state, const char* function, const char* field, LuaUIValueKind kind) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+    };
+    switch (kind) {
+    case LuaUIValueKind::String:
+        arguments.push_back(Arg(field, ScriptValue{ std::string{ luaL_checkstring(state, 2) } }));
+        break;
+    case LuaUIValueKind::Hash:
+        arguments.push_back(Arg(field, ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 2)), ScriptValueType::Hash }));
+        break;
+    case LuaUIValueKind::Bool:
+        arguments.push_back(Arg(field, ScriptValue{ lua_toboolean(state, 2) != 0 }));
+        break;
+    case LuaUIValueKind::Float:
+        arguments.push_back(Arg(field, ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }));
+        break;
+    }
+    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI control command was rejected");
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUISetText(lua_State* state) { return LuaUISetValue(state, "UI.SetText", "text", LuaUIValueKind::String); }
+int LuaUISetImage(lua_State* state) { return LuaUISetValue(state, "UI.SetImage", "image", LuaUIValueKind::Hash); }
+int LuaUISetToggle(lua_State* state) { return LuaUISetValue(state, "UI.SetToggle", "value", LuaUIValueKind::Bool); }
+int LuaUISetSlider(lua_State* state) { return LuaUISetValue(state, "UI.SetSlider", "value", LuaUIValueKind::Float); }
+int LuaUIListAppend(lua_State* state) { return LuaUISetValue(state, "UI.ListAppend", "item", LuaUIValueKind::String); }
+int LuaUIListClear(lua_State* state) { return LuaUIApplied(state, "UI.ListClear"); }
+int LuaUISetScrollOffset(lua_State* state) { return LuaUISetValue(state, "UI.SetScrollOffset", "offset", LuaUIValueKind::Float); }
+int LuaUISetModalOpen(lua_State* state) { return LuaUISetValue(state, "UI.SetModalOpen", "open", LuaUIValueKind::Bool); }
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -2974,11 +3019,19 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Time", &LuaTimelineTime, context);
     lua_setfield(state, environmentIndex, "Timeline");
 
-    lua_createtable(state, 0, 4);
+    lua_createtable(state, 0, 12);
     SetClosure(state, "Create", &LuaUICreate, context);
     SetClosure(state, "Destroy", &LuaUIDestroy, context);
     SetClosure(state, "Show", &LuaUIShow, context);
     SetClosure(state, "Hide", &LuaUIHide, context);
+    SetClosure(state, "SetText", &LuaUISetText, context);
+    SetClosure(state, "SetImage", &LuaUISetImage, context);
+    SetClosure(state, "SetToggle", &LuaUISetToggle, context);
+    SetClosure(state, "SetSlider", &LuaUISetSlider, context);
+    SetClosure(state, "ListAppend", &LuaUIListAppend, context);
+    SetClosure(state, "ListClear", &LuaUIListClear, context);
+    SetClosure(state, "SetScrollOffset", &LuaUISetScrollOffset, context);
+    SetClosure(state, "SetModalOpen", &LuaUISetModalOpen, context);
     lua_setfield(state, environmentIndex, "UI");
 
     lua_createtable(state, 0, 5);

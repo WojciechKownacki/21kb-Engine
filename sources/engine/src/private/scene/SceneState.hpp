@@ -151,6 +151,7 @@ enum class UIRuntimeCommandKind : std::uint8_t {
     Create,
     Destroy,
     SetVisible,
+    SetControl,
 };
 
 struct UIRuntimeCommand {
@@ -159,6 +160,7 @@ struct UIRuntimeCommand {
     UIElementId elementId = 0U;
     UIRuntimeElementDesc create{};
     bool visible = true;
+    UIControlState control;
 };
 
 struct SceneTransformValueCacheEntry {

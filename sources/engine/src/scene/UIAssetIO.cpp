@@ -2,7 +2,9 @@
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
+#include <algorithm>
 #include <filesystem>
+#include <cmath>
 #include <iomanip>
 #include <locale>
 #include <span>
@@ -33,6 +35,48 @@ bool ParseBool(std::string_view text, bool& value) {
     if (text == "1" || text == "true") { value = true; return true; }
     if (text == "0" || text == "false") { value = false; return true; }
     return false;
+}
+
+const char* ControlKindName(UIControlKind kind) {
+    switch (kind) {
+    case UIControlKind::Container: return "Container";
+    case UIControlKind::Text: return "Text";
+    case UIControlKind::Image: return "Image";
+    case UIControlKind::Button: return "Button";
+    case UIControlKind::Toggle: return "Toggle";
+    case UIControlKind::Slider: return "Slider";
+    case UIControlKind::List: return "List";
+    case UIControlKind::InputField: return "InputField";
+    case UIControlKind::ScrollView: return "ScrollView";
+    case UIControlKind::ModalDialog: return "ModalDialog";
+    }
+    return "";
+}
+
+bool ParseControlKind(std::string_view text, UIControlKind& kind) {
+    if (text == "Container") kind = UIControlKind::Container;
+    else if (text == "Text") kind = UIControlKind::Text;
+    else if (text == "Image") kind = UIControlKind::Image;
+    else if (text == "Button") kind = UIControlKind::Button;
+    else if (text == "Toggle") kind = UIControlKind::Toggle;
+    else if (text == "Slider") kind = UIControlKind::Slider;
+    else if (text == "List") kind = UIControlKind::List;
+    else if (text == "InputField") kind = UIControlKind::InputField;
+    else if (text == "ScrollView") kind = UIControlKind::ScrollView;
+    else if (text == "ModalDialog") kind = UIControlKind::ModalDialog;
+    else return false;
+    return true;
+}
+
+bool ValidateControl(const UIControlState& control) {
+    if (!std::isfinite(control.sliderValue) || !std::isfinite(control.sliderMinimum) ||
+        !std::isfinite(control.sliderMaximum) || !std::isfinite(control.scrollOffset) ||
+        control.sliderMinimum > control.sliderMaximum ||
+        control.sliderValue < control.sliderMinimum || control.sliderValue > control.sliderMaximum ||
+        control.scrollOffset < 0.0F) return false;
+    if (control.listItems.size() > kMaxUIListItems) return false;
+    for (const std::string& item : control.listItems) if (item.empty()) return false;
+    return ControlKindName(control.kind)[0] != '\0';
 }
 
 const char* ValueTypeName(UIDataValueType value) {
@@ -73,7 +117,7 @@ bool ValidateDocument(const UIDocument& document) {
     std::unordered_set<UIElementId> ids;
     std::size_t roots = 0U;
     for (const UIDocumentElement& element : document.elements) {
-        if (element.id == 0U || element.name.empty() || !ids.insert(element.id).second) return false;
+        if (element.id == 0U || element.name.empty() || !ValidateControl(element.control) || !ids.insert(element.id).second) return false;
         parents.emplace(element.id, element.parentId);
         roots += element.parentId == 0U ? 1U : 0U;
     }
@@ -128,6 +172,30 @@ std::optional<UIDocument> UIAssetIO::LoadDocument(const std::filesystem::path& p
             if (!(input >> element.id >> element.parentId >> std::quoted(element.name) >>
                   std::quoted(element.styleClass) >> visible) || !ParseBool(visible, element.visible) || !EndOfRecord(input)) return std::nullopt;
             document.elements.push_back(std::move(element));
+        } else if (command == "control") {
+            UIElementId elementId = 0U;
+            std::string kind;
+            UIControlState control{};
+            std::string toggle;
+            std::string modal;
+            std::size_t itemCount = 0U;
+            if (!(input >> elementId >> kind >> std::quoted(control.text) >> control.imageAssetId >> toggle >>
+                  control.sliderValue >> control.sliderMinimum >> control.sliderMaximum >> control.scrollOffset >>
+                  modal >> itemCount) || !ParseControlKind(kind, control.kind) ||
+                !ParseBool(toggle, control.toggleValue) || !ParseBool(modal, control.modalOpen)) return std::nullopt;
+            if (itemCount > kMaxUIListItems) return std::nullopt;
+            control.listItems.reserve(itemCount);
+            for (std::size_t index = 0U; index < itemCount; ++index) {
+                std::string item;
+                if (!(input >> std::quoted(item))) return std::nullopt;
+                control.listItems.push_back(std::move(item));
+            }
+            if (!EndOfRecord(input) || !ValidateControl(control)) return std::nullopt;
+            const auto found = std::find_if(document.elements.begin(), document.elements.end(), [elementId](const UIDocumentElement& element) {
+                return element.id == elementId;
+            });
+            if (found == document.elements.end() || found->control.kind != UIControlKind::Container) return std::nullopt;
+            found->control = std::move(control);
         } else if (command == "binding") {
             UIBindingDeclaration binding{};
             std::string valueType;
@@ -177,6 +245,13 @@ bool UIAssetIO::SaveDocument(const std::filesystem::path& path, const UIDocument
     for (const UIDocumentElement& element : document.elements) {
         output << "element " << element.id << ' ' << element.parentId << ' ' << std::quoted(element.name) << ' '
                << std::quoted(element.styleClass) << ' ' << (element.visible ? "true" : "false") << '\n';
+        const UIControlState& control = element.control;
+        output << "control " << element.id << ' ' << ControlKindName(control.kind) << ' ' << std::quoted(control.text) << ' '
+               << control.imageAssetId << ' ' << (control.toggleValue ? "true" : "false") << ' '
+               << control.sliderValue << ' ' << control.sliderMinimum << ' ' << control.sliderMaximum << ' '
+               << control.scrollOffset << ' ' << (control.modalOpen ? "true" : "false") << ' ' << control.listItems.size();
+        for (const std::string& item : control.listItems) output << ' ' << std::quoted(item);
+        output << '\n';
     }
     for (const UIBindingDeclaration& binding : document.bindings) {
         output << "binding " << binding.elementId << ' ' << std::quoted(binding.property) << ' '
