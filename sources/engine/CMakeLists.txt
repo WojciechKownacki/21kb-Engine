@@ -240,6 +240,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptMeshRendererApi.hpp
     include/engine/script/ScriptParticleSystemApi.hpp
     include/engine/script/ScriptAnimatorApi.hpp
+    include/engine/script/ScriptUIApi.hpp
     include/engine/script/ScriptTimelineApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptPhysicsApi.hpp
@@ -773,6 +774,7 @@ add_library(kb_engine STATIC
     src/script/ScriptMeshRendererApi.cpp
     src/script/ScriptParticleSystemApi.cpp
     src/script/ScriptAnimatorApi.cpp
+    src/script/ScriptUIApi.cpp
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptPhysicsApi.cpp
