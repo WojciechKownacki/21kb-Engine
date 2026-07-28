@@ -1,4 +1,5 @@
 add_library(kb_engine STATIC
+    include/engine/core/JsonValue.hpp
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
@@ -329,6 +330,7 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
+    src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
     src/audio/AudioMixerAssetLoader.cpp

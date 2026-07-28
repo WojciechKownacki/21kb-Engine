@@ -1,5 +1,5 @@
 #include "CliCommands.hpp"
-#include "MiniJson.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
@@ -16,6 +16,7 @@
 #include <string>
 
 namespace kb::cli {
+using kb::core::JsonValue;
 
 namespace {
 

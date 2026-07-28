@@ -5,10 +5,11 @@
 #include <string_view>
 #include <vector>
 
-namespace kb::cli {
+namespace kb::core {
 
-// Minimal JSON document model used by the MCP stdio server. The engine keeps
-// its own binary/text formats, so this stays private to the CLI tool.
+// Small strict JSON document model shared by engine-owned tools and editor
+// automation. It deliberately has no filesystem or schema policy: consumers
+// validate their own documents and keep domain contracts out of the parser.
 class JsonValue final {
 public:
     enum class Kind {
@@ -57,4 +58,4 @@ private:
     std::vector<JsonValue> memberValues_;
 };
 
-} // namespace kb::cli
+} // namespace kb::core

@@ -9,6 +9,7 @@ add_executable(kb_editor WIN32
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorAutomationScenarioRunner.cpp
     src/app/EditorSelfTest.cpp
     src/app/EditorHeadlessAutomation.cpp
     src/app/EditorEditCommandPolicy.cpp
@@ -316,6 +317,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPendingTextEditCommitter.hpp
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorPlayModeSceneSession.hpp
+    src/private/app/EditorAutomationScenarioRunner.hpp
     src/private/app/EditorSceneLifecycleGuard.hpp
     src/private/app/EditorSelfTest.hpp
     src/private/app/EditorHeadlessAutomation.hpp
@@ -1112,6 +1114,23 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
     set_tests_properties(kb_editor_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    add_test(
+        NAME kb_editor_headless_automation_scenario
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessAutomationScenario.json"
+            --selftest-root
+            "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task
+            "SELFTEST-002-External-Scenario"
+    )
+    set_tests_properties(
+        kb_editor_headless_automation_scenario
+        PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            LABELS "editor;runtime;headless"
+    )
 
     kb_apply_quality_gates(kb_editor_tests)
 
