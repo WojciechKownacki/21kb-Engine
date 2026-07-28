@@ -10,6 +10,7 @@
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <limits>
 #include <stdexcept>
@@ -29,6 +30,16 @@ UIDocumentRuntimeRecord* FindMutable(SceneState& state, SceneEntity entity) {
 }
 
 constexpr std::size_t kMaxPendingUICommands = 4096U;
+
+bool ValidControl(const UIControlState& control) noexcept {
+    if (!std::isfinite(control.sliderValue) || !std::isfinite(control.sliderMinimum) ||
+        !std::isfinite(control.sliderMaximum) || !std::isfinite(control.scrollOffset) ||
+        control.sliderMinimum > control.sliderMaximum || control.sliderValue < control.sliderMinimum ||
+        control.sliderValue > control.sliderMaximum || control.scrollOffset < 0.0F) return false;
+    if (control.listItems.size() > kMaxUIListItems) return false;
+    for (const std::string& item : control.listItems) if (item.empty()) return false;
+    return control.kind <= UIControlKind::ModalDialog;
+}
 
 bool HasQueuedDestroy(const SceneState& state, SceneEntity entity, UIElementId element) noexcept {
     for (const UIRuntimeCommand& command : state.pendingUICommands) {
@@ -94,6 +105,7 @@ void ApplyCommands(SceneState& state) {
                 .name = command.create.name,
                 .styleClass = command.create.styleClass,
                 .visible = command.create.visible,
+                .control = command.create.control,
             });
             break;
         }
@@ -105,6 +117,11 @@ void ApplyCommands(SceneState& state) {
         case UIRuntimeCommandKind::SetVisible: {
             const auto element = record->elements.find(command.elementId);
             if (element != record->elements.end()) element->second.visible = command.visible;
+            break;
+        }
+        case UIRuntimeCommandKind::SetControl: {
+            const auto element = record->elements.find(command.elementId);
+            if (element != record->elements.end()) element->second.control = command.control;
             break;
         }
         }
@@ -155,6 +172,12 @@ bool SceneUIDocumentService::Visible(const Scene& scene, SceneEntity entity, UIE
     const auto current = record->elements.find(element);
     return current != record->elements.end() && current->second.visible;
 }
+std::optional<UIControlState> SceneUIDocumentService::Control(const Scene& scene, SceneEntity entity, UIElementId element) {
+    const auto* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr) return std::nullopt;
+    const auto current = record->elements.find(element);
+    return current == record->elements.end() ? std::nullopt : std::optional<UIControlState>{ current->second.control };
+}
 bool SceneUIDocumentService::StyleIsResolved(const Scene& scene, SceneEntity entity) noexcept {
     const auto* record = Find(SceneAccess::State(scene), entity);
     return record != nullptr && (record->document->styleAssetId == 0U || record->style.IsLoaded());
@@ -165,7 +188,7 @@ std::size_t SceneUIDocumentService::ElementCount(const Scene& scene, SceneEntity
 }
 
 std::optional<UIElementId> SceneUIDocumentService::QueueCreate(Scene& scene, SceneEntity entity, const UIRuntimeElementDesc& desc) {
-    if (desc.name.empty() || desc.parentId == 0U) return std::nullopt;
+    if (desc.name.empty() || desc.parentId == 0U || !ValidControl(desc.control)) return std::nullopt;
     SceneState& state = SceneAccess::State(scene);
     UIDocumentRuntimeRecord* record = FindMutable(state, entity);
     if (record == nullptr || state.pendingUICommands.size() >= kMaxPendingUICommands ||
@@ -202,6 +225,21 @@ bool SceneUIDocumentService::QueueVisibility(Scene& scene, SceneEntity entity, U
     if (record == nullptr || !record->elements.contains(element) || IsPendingDestroyAncestor(state, *record, entity, element) ||
         state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
     state.pendingUICommands.push_back(UIRuntimeCommand{ .kind = UIRuntimeCommandKind::SetVisible, .entity = entity, .elementId = element, .visible = visible });
+    return true;
+}
+
+bool SceneUIDocumentService::QueueSetControl(Scene& scene, SceneEntity entity, UIElementId element, const UIControlState& control) {
+    if (!ValidControl(control)) return false;
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || !record->elements.contains(element) ||
+        IsPendingDestroyAncestor(state, *record, entity, element) || state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
+    state.pendingUICommands.push_back(UIRuntimeCommand{
+        .kind = UIRuntimeCommandKind::SetControl,
+        .entity = entity,
+        .elementId = element,
+        .control = control,
+    });
     return true;
 }
 

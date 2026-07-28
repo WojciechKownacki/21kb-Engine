@@ -41,6 +41,7 @@ public:
     [[nodiscard]] UIElementId Root(SceneEntity entity) const noexcept;
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
+    [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
 private:
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] UIElementId Root(SceneEntity entity) const noexcept;
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
+    [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
     // Commands are appended in call order and are applied once by
@@ -65,6 +67,7 @@ public:
     [[nodiscard]] bool QueueDestroy(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
+    [[nodiscard]] bool QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control);
 private:
     Scene& scene_;
 };
