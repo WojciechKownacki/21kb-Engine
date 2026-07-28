@@ -7,12 +7,20 @@
 namespace kb::script {
 
 class ScriptRuntimeHost;
+}
+
+namespace kb::scene {
+class Scene;
+}
+
+namespace kb::script {
 
 class ScriptAssetsApi final {
 public:
     ScriptAssetsApi() = delete;
 
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
+    static void ReleaseDeadOwnerHandles(kb::scene::Scene& scene);
 
     // LIB-019: the safe, script-facing fields of an asset — reuses
     // ScriptSceneComponentPropertyDesc's exact shape (name/type/writable)

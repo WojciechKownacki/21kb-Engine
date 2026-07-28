@@ -3,6 +3,8 @@
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/save/SaveGameService.hpp"
+#include "kb/render/resources/RenderAssetRefs.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
@@ -35,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace kb::render::tests {
@@ -2869,6 +2872,35 @@ void RunSceneRendererTicksRegistryDeferredDestroyTest() {
     Require(second.Generation() != first.Generation(), "SceneRenderer registry reused a material slot without generation bump");
 }
 
+void RunRendererTypedAssetReferenceSaveRoundTripTest() {
+    static_assert(std::is_same_v<MeshRef, kb::library::AssetRef<RenderMeshAssetData>>);
+    static_assert(std::is_same_v<MaterialRef, kb::library::AssetRef<RenderMaterialAssetData>>);
+    static_assert(std::is_same_v<TextureRef, kb::library::AssetRef<RenderTextureAssetData>>);
+
+    const MeshRef mesh{ kb::assets::AssetId{ 201U }, std::shared_ptr<const RenderMeshAssetData>{} };
+    const MaterialRef material{ kb::assets::AssetId{ 202U }, std::shared_ptr<const RenderMaterialAssetData>{} };
+    const TextureRef texture{ kb::assets::AssetId{ 203U }, std::shared_ptr<const RenderTextureAssetData>{} };
+    kb::save::SaveGame save;
+    save.SetAssetRef("mesh", mesh.Id());
+    save.SetAssetRef("material", material.Id());
+    save.SetAssetRef("texture", texture.Id());
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "21kb_renderer_typed_asset_refs.kbsave";
+    Require(kb::save::SaveGameService::Save(path, save), "Renderer typed asset refs could not be serialized");
+    const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
+    kb::assets::AssetId loadedMesh;
+    kb::assets::AssetId loadedMaterial;
+    kb::assets::AssetId loadedTexture;
+    Require(loaded.Succeeded() &&
+            loaded.save.GetAssetRef("mesh", loadedMesh) && loadedMesh == mesh.Id() &&
+            loaded.save.GetAssetRef("material", loadedMaterial) && loadedMaterial == material.Id() &&
+            loaded.save.GetAssetRef("texture", loadedTexture) && loadedTexture == texture.Id(),
+        "Renderer mesh/material/texture refs did not round-trip their stable AssetIds");
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+}
+
 } // namespace
 
 void RunRenderResourceRegistryTests() {
@@ -2913,6 +2945,7 @@ void RunRenderResourceRegistryTests() {
     RunRenderTextureAssetLoaderPreservesBimgCubeMetadataTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();
+    RunRendererTypedAssetReferenceSaveRoundTripTest();
 }
 
 } // namespace kb::render::tests

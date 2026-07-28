@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/save/SaveValue.hpp"
+#include "engine/assets/AssetId.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,24 +11,27 @@
 
 namespace kb::save {
 
-// LIB-162: an in-memory save-game document — a flat string -> scalar table,
+// LIB-162/165: an in-memory save-game document — a flat string -> typed value table,
 // the persistent counterpart to kb::script::ScriptSharedState. Typed setters
 // overwrite any existing entry (including one of a different type) for the
 // same key; typed getters return false and leave the out-parameter untouched
 // when the key is absent OR holds a different type (never a silent coercion —
-// asking for an Int that was stored as a String is a miss, not a 0). Serialize
-// it through kb::save::SaveGameService.
+// asking for an Int that was stored as a String is a miss, not a 0). Asset
+// references persist only their stable AssetId, never a physical path or
+// process-local payload pointer. Serialize it through SaveGameService.
 class SaveGame {
 public:
     void SetBool(std::string key, bool value);
     void SetInt(std::string key, std::int64_t value);
     void SetFloat(std::string key, double value);
     void SetString(std::string key, std::string value);
+    void SetAssetRef(std::string key, kb::assets::AssetId value);
 
     [[nodiscard]] bool GetBool(std::string_view key, bool& out) const;
     [[nodiscard]] bool GetInt(std::string_view key, std::int64_t& out) const;
     [[nodiscard]] bool GetFloat(std::string_view key, double& out) const;
     [[nodiscard]] bool GetString(std::string_view key, std::string& out) const;
+    [[nodiscard]] bool GetAssetRef(std::string_view key, kb::assets::AssetId& out) const;
 
     [[nodiscard]] bool Has(std::string_view key) const noexcept;
     // The type stored under `key`, or false if the key is absent.

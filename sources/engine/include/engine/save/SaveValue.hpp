@@ -15,6 +15,7 @@ enum class SaveValueType : std::uint8_t {
     Int = 1,
     Float = 2,
     String = 3,
+    AssetRef = 4,
 };
 
 // A single tagged scalar. Only the field matching `type` is meaningful; the
@@ -26,6 +27,7 @@ struct SaveValue {
     bool boolValue = false;
     std::int64_t intValue = 0;
     double floatValue = 0.0;
+    std::uint64_t assetIdValue = 0U;
     std::string stringValue;
 
     [[nodiscard]] static SaveValue MakeBool(bool value) {
@@ -39,6 +41,9 @@ struct SaveValue {
     }
     [[nodiscard]] static SaveValue MakeString(std::string value) {
         return SaveValue{ .type = SaveValueType::String, .stringValue = std::move(value) };
+    }
+    [[nodiscard]] static SaveValue MakeAssetRef(std::uint64_t value) {
+        return SaveValue{ .type = SaveValueType::AssetRef, .assetIdValue = value };
     }
 };
 

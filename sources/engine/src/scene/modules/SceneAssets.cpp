@@ -24,7 +24,7 @@ std::size_t SceneAssets::Discover() {
     return Manager().DiscoverMountedAssets();
 }
 
-kb::assets::AssetHandle<ScenePrefab> SceneAssets::LoadPrefab(const std::filesystem::path& virtualPath) {
+kb::library::PrefabRef SceneAssets::LoadPrefab(const std::filesystem::path& virtualPath) {
     return Manager().Load<ScenePrefab>(virtualPath);
 }
 

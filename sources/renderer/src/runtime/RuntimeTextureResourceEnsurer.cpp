@@ -7,6 +7,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/resources/RenderAssetRefs.hpp"
 #include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -109,16 +110,17 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 asset = std::make_shared<const RenderTextureAssetData>(std::move(*decoded));
             }
         }
-        if (asset == nullptr || asset->rgba8.empty() ||
-            asset->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        const TextureRef textureRef{ assetId, asset };
+        if (!textureRef.IsLoaded() || textureRef->rgba8.empty() ||
+            textureRef->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
         }
 
-        const std::vector<std::uint8_t>* uploadBytes = &asset->rgba8;
+        const std::vector<std::uint8_t>* uploadBytes = &textureRef->rgba8;
         std::optional<RuntimeTextureMipChain> generatedMipChain;
-        if (asset->dimension == RenderTextureDimension::Texture2D && asset->mipCount == 1U) {
-            generatedMipChain = BuildRuntimeTexture2DMipChain(asset->rgba8, asset->width, asset->height, colorSpace);
+        if (textureRef->dimension == RenderTextureDimension::Texture2D && textureRef->mipCount == 1U) {
+            generatedMipChain = BuildRuntimeTexture2DMipChain(textureRef->rgba8, textureRef->width, textureRef->height, colorSpace);
             if (!generatedMipChain.has_value() ||
                 generatedMipChain->rgba8.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
                 context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
@@ -128,7 +130,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
         }
 
         const bgfx::Memory* memory = bgfx::copy(uploadBytes->data(), static_cast<std::uint32_t>(uploadBytes->size()));
-        RenderTextureDesc textureDesc = asset->MakeDesc(memory, colorSpace);
+        RenderTextureDesc textureDesc = textureRef->MakeDesc(memory, colorSpace);
         if (generatedMipChain.has_value()) {
             textureDesc.mipCount = generatedMipChain->mipCount;
         }
@@ -143,14 +145,14 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .handle = handle,
             .contentHash = metadata->contentHash,
             .lastReferencedFrame = context.currentFrame,
-            .dimension = asset->dimension,
+            .dimension = textureRef->dimension,
         };
         context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, handle);
-        if (asset->dimension != expectedDimension) {
+        if (textureRef->dimension != expectedDimension) {
             std::ostringstream row;
             row << "texture-dimension-mismatch assetId=" << textureAssetId
                 << " expected=" << RenderTextureDimensionName(expectedDimension)
-                << " actual=" << RenderTextureDimensionName(asset->dimension);
+                << " actual=" << RenderTextureDimensionName(textureRef->dimension);
             WriteRendererMaterialGraphDebugLog("resource", row.str());
         }
     };

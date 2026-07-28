@@ -6,6 +6,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderAssetRefs.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
@@ -152,7 +153,7 @@ struct MaterialGraphRuntimeValue;
         return HashCombine(hash, 0x6d6174696e737443ULL);
     }
     if (metadata.type == "RenderMaterialInstance") {
-        const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+        const MaterialInstanceRef instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
         if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
             visited.erase(metadata.id.value);
             return hash;
@@ -346,7 +347,7 @@ void AppendInstanceValidationDiagnostics(
         return result;
     }
 
-    const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+    const MaterialInstanceRef instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
     if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
         result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
             .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
@@ -2143,7 +2144,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     }
 
     const std::uint64_t runtimeContentHash = MaterialRuntimeContentHash(manager, metadata);
-    const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+    const MaterialInstanceRef instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
     if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,

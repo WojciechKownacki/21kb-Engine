@@ -9,6 +9,8 @@ namespace {
 
 void ApplyStep(std::unordered_map<std::string, SaveValue>& entries, const SaveGameMigration& step) {
     switch (step.kind) {
+    case SaveGameMigrationKind::NoOp:
+        return;
     case SaveGameMigrationKind::RenameKey: {
         const auto source = entries.find(step.key);
         if (source == entries.end() || step.newKey.empty() || step.newKey == step.key) {

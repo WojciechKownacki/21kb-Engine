@@ -17,6 +17,8 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -393,7 +395,7 @@ ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::sp
         }
         entity = context.scene->Entities().CreateEntity(std::move(desc));
     } else {
-        kb::assets::AssetHandle<kb::scene::ScenePrefab> prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
+        kb::library::PrefabRef prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
         if (!prefab.IsLoaded()) {
             return Error("prefab asset could not be loaded");
         }
@@ -634,13 +636,10 @@ ScriptFunctionCallResult SetParent(const ScriptFunctionCallContext& context, std
 // path every other World.* function uses (Native+Lua+Visual Graph
 // uniformly, unlike Self.SetProperty's Lua-only wiring).
 //
-// Overrides are therefore applied by COMPOSITION, not as a single atomic
-// InstantiatePrefab call: World.InstantiatePrefab(...) to get the entity,
-// then World.SetPropertyFloat(entity, "Camera", "verticalFovDegrees", ...)
-// per override. A single call taking an override LIST would need a
-// collection value crossing the script boundary — the same architecture
-// LIB-058 deferred (kb::script::ScriptValue is purely scalar) — not
-// invented here either.
+// World.SetProperty* remains useful for live mutations. Atomic instantiate
+// parameters use a caller-owned CreatePrefabParameters/SetPrefabParameter*
+// transaction consumed by World.InstantiatePrefab; any invalid entry rolls
+// back the whole new hierarchy before it becomes observable to a frame.
 [[nodiscard]] std::string ComponentArg(std::span<const ScriptFunctionArgument> arguments) {
     return StringArg(arguments, "component");
 }
@@ -683,6 +682,79 @@ ScriptFunctionCallResult SetPropertyEntity(const ScriptFunctionCallContext& cont
     return SetEntityProperty(context, arguments, [&] { return ScriptValue{ EntityArg(arguments, "value").Id(), ScriptValueType::Entity }; });
 }
 
+[[nodiscard]] std::uint64_t ContextOwner(const ScriptFunctionCallContext& context) noexcept {
+    return context.caller.IsValid() ? context.caller.Id() : 0U;
+}
+
+ScriptFunctionCallResult CreatePrefabParameters(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(*context.scene);
+    std::uint64_t id = state.nextScriptPrefabParameterSetId++;
+    if (id == 0U) {
+        id = state.nextScriptPrefabParameterSetId++;
+    }
+    state.scriptPrefabParameterSets.emplace(id, kb::scene::SceneState::ScriptPrefabParameterSet{
+        .owner = context.caller,
+        .parameters = {},
+    });
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "parameters", ScriptValue{ id, ScriptValueType::Hash } } },
+        .errors = {},
+    };
+}
+
+template <typename ValueFactory>
+ScriptFunctionCallResult SetPrefabParameter(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments,
+    ValueFactory&& valueFactory) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const ScriptValue* idValue = FindArg(arguments, "parameters");
+    const std::uint64_t id = idValue == nullptr ? 0U : idValue->AsUInt64();
+    const int node = IntArg(arguments, "node", 0);
+    const std::string component = ComponentArg(arguments);
+    const std::string property = PropertyArg(arguments);
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(*context.scene);
+    const auto iterator = state.scriptPrefabParameterSets.find(id);
+    if (id == 0U || iterator == state.scriptPrefabParameterSets.end() ||
+        iterator->second.owner.Id() != ContextOwner(context) || node < 0 ||
+        component.empty() || property.empty()) {
+        return BoolResult("set", false);
+    }
+    iterator->second.parameters.push_back(kb::scene::SceneState::ScriptPrefabParameter{
+        .nodeIndex = static_cast<std::uint32_t>(node),
+        .component = component,
+        .property = property,
+        .value = valueFactory(),
+    });
+    return BoolResult("set", true);
+}
+
+ScriptFunctionCallResult SetPrefabParameterBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetPrefabParameter(context, arguments, [&] { return ScriptValue{ FindArg(arguments, "value") != nullptr && FindArg(arguments, "value")->AsBool(false) }; });
+}
+
+ScriptFunctionCallResult SetPrefabParameterInt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetPrefabParameter(context, arguments, [&] { return ScriptValue{ IntArg(arguments, "value", 0) }; });
+}
+
+ScriptFunctionCallResult SetPrefabParameterFloat(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetPrefabParameter(context, arguments, [&] { return ScriptValue{ FloatArg(arguments, "value", 0.0F) }; });
+}
+
+ScriptFunctionCallResult SetPrefabParameterString(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetPrefabParameter(context, arguments, [&] { return ScriptValue{ StringArg(arguments, "value") }; });
+}
+
+ScriptFunctionCallResult SetPrefabParameterEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SetPrefabParameter(context, arguments, [&] { return ScriptValue{ EntityArg(arguments, "value").Id(), ScriptValueType::Entity }; });
+}
+
 ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -691,12 +763,39 @@ ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& cont
     if (prefabPath.empty()) {
         return Error("prefab path is empty");
     }
-    kb::assets::AssetHandle<kb::scene::ScenePrefab> prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
+    kb::library::PrefabRef prefab = context.scene->Assets().LoadPrefab(std::filesystem::path{ prefabPath });
     if (!prefab.IsLoaded()) {
         return Error("prefab asset could not be loaded");
     }
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(*context.scene);
+    const ScriptValue* parameterSetValue = FindArg(arguments, "parameters");
+    const std::uint64_t parameterSetId = parameterSetValue == nullptr ? 0U : parameterSetValue->AsUInt64();
+    std::vector<kb::scene::SceneState::ScriptPrefabParameter> parameters;
+    if (parameterSetId != 0U) {
+        const auto parameterSet = state.scriptPrefabParameterSets.find(parameterSetId);
+        if (parameterSet == state.scriptPrefabParameterSets.end() ||
+            parameterSet->second.owner.Id() != ContextOwner(context)) {
+            return Error("prefab parameter set is invalid or belongs to another caller");
+        }
+        parameters = std::move(parameterSet->second.parameters);
+        state.scriptPrefabParameterSets.erase(parameterSet);
+    }
+
     const kb::scene::ScenePrefabInstance instance = context.scene->Prefabs().Instantiate(*prefab.Get());
     const kb::scene::SceneEntity root = instance.Empty() ? kb::scene::SceneEntity{} : instance.ObjectAt(0).Entity();
+    if (!root.IsValid()) {
+        return Error("prefab instantiation produced no root entity");
+    }
+    for (const kb::scene::SceneState::ScriptPrefabParameter& parameter : parameters) {
+        const kb::scene::SceneObject target = instance.ObjectAt(parameter.nodeIndex);
+        const ScriptSceneComponentMutationResult applied = target.IsValid()
+            ? ScriptSceneComponentApi::SetProperty(*context.scene, target.Entity(), parameter.component, parameter.property, parameter.value)
+            : ScriptSceneComponentMutationResult{ .succeeded = false, .error = "prefab parameter node is out of range" };
+        if (!applied.succeeded) {
+            context.scene->Entities().Destroy(instance.Objects());
+            return Error("prefab parameter '" + parameter.component + "." + parameter.property + "' failed: " + applied.error);
+        }
+    }
     // LIB-160: full spawn transform (position + rotation + scale) applied to
     // the root, matching World.Spawn's established post-instantiate pattern
     // (extended here with scale). Any subset of pins may be supplied.
@@ -752,6 +851,18 @@ bool RegisterFunction(
 }
 
 } // namespace
+
+void ScriptWorldApi::ReleaseDeadPrefabParameterSets(kb::scene::Scene& scene) {
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    for (auto iterator = state.scriptPrefabParameterSets.begin(); iterator != state.scriptPrefabParameterSets.end();) {
+        const kb::scene::SceneEntity owner = iterator->second.owner;
+        if (owner.IsValid() && !scene.Entities().IsAlive(owner)) {
+            iterator = state.scriptPrefabParameterSets.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+}
 
 bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
@@ -838,9 +949,38 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "parent", ScriptValueType::Entity, false } },
         { ScriptFunctionPin{ "parented", ScriptValueType::Bool, true } },
         &SetParent) && ok;
+    ok = RegisterFunction(host, "World.CreatePrefabParameters", {},
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true } },
+        &CreatePrefabParameters) && ok;
+    ok = RegisterFunction(host, "World.SetPrefabParameterBool",
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true }, ScriptFunctionPin{ "node", ScriptValueType::Int, false },
+            ScriptFunctionPin{ "component", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true },
+            ScriptFunctionPin{ "value", ScriptValueType::Bool, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPrefabParameterBool) && ok;
+    ok = RegisterFunction(host, "World.SetPrefabParameterInt",
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true }, ScriptFunctionPin{ "node", ScriptValueType::Int, false },
+            ScriptFunctionPin{ "component", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true },
+            ScriptFunctionPin{ "value", ScriptValueType::Int, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPrefabParameterInt) && ok;
+    ok = RegisterFunction(host, "World.SetPrefabParameterFloat",
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true }, ScriptFunctionPin{ "node", ScriptValueType::Int, false },
+            ScriptFunctionPin{ "component", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true },
+            ScriptFunctionPin{ "value", ScriptValueType::Float, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPrefabParameterFloat) && ok;
+    ok = RegisterFunction(host, "World.SetPrefabParameterString",
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true }, ScriptFunctionPin{ "node", ScriptValueType::Int, false },
+            ScriptFunctionPin{ "component", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true },
+            ScriptFunctionPin{ "value", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPrefabParameterString) && ok;
+    ok = RegisterFunction(host, "World.SetPrefabParameterEntity",
+        { ScriptFunctionPin{ "parameters", ScriptValueType::Hash, true }, ScriptFunctionPin{ "node", ScriptValueType::Int, false },
+            ScriptFunctionPin{ "component", ScriptValueType::String, true }, ScriptFunctionPin{ "property", ScriptValueType::String, true },
+            ScriptFunctionPin{ "value", ScriptValueType::Entity, true } },
+        { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetPrefabParameterEntity) && ok;
     ok = RegisterFunction(host, "World.InstantiatePrefab",
         {
             ScriptFunctionPin{ "prefab", ScriptValueType::String, true },
+            ScriptFunctionPin{ "parameters", ScriptValueType::Hash, false },
             ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
             ScriptFunctionPin{ "x", ScriptValueType::Float, false },
             ScriptFunctionPin{ "y", ScriptValueType::Float, false },
