@@ -103,6 +103,10 @@ void RunCatalogExportTest() {
     const std::string json = kb::script::ScriptApiExport::ToJson(catalog);
     kb::tests::Require(Contains(json, "\"Input.Vector2\""), "Script API JSON is missing functions");
     kb::tests::Require(
+        Contains(json, "\"Timeline.Create\"") &&
+            Contains(json, "\"table\":\"Timeline\""),
+        "Script API JSON is missing the live Timeline Lua surface");
+    kb::tests::Require(
         Contains(json, "\"description\":\"Reads the current two-dimensional value of the named input action.\""),
         "Script API JSON is missing authored function descriptions");
     kb::tests::Require(Contains(json, "\"lifecycleEvents\""), "Script API JSON is missing lifecycle events");
@@ -112,6 +116,10 @@ void RunCatalogExportTest() {
     kb::tests::Require(Contains(stubs, "function Input.Vector2(action, player) end"), "Script API stubs are missing Input.Vector2");
     kb::tests::Require(Contains(stubs, "function Task.WaitSeconds(seconds, owner) end"), "Script API stubs are missing the direct Lua Task.WaitSeconds await surface");
     kb::tests::Require(Contains(stubs, "function Task.WaitEvent(event, owner) end"), "Script API stubs are missing the direct Lua Task.WaitEvent await surface");
+    kb::tests::Require(
+        Contains(stubs, "function Timeline.Create(asset, entity) end") &&
+            Contains(stubs, "function Timeline.Time(instance) end"),
+        "Script API stubs are missing the direct Lua Timeline surface");
     kb::tests::Require(
         Contains(stubs, "---Reads the current two-dimensional value of the named input action."),
         "Script API stubs are missing authored function descriptions");

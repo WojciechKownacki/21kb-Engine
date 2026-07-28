@@ -23,6 +23,15 @@ public:
     ScriptEditorRenderer() = delete;
 
     static void Paint(HWND window, const ScriptEditorDocument& document, const ScriptEditorViewport& viewport, ScriptEditorMetrics& metrics, bool caretVisible, bool focused);
+    [[nodiscard]] static bool PaintTo(
+        HDC target,
+        const RECT& bounds,
+        const ScriptEditorDocument& document,
+        const ScriptEditorViewport& viewport,
+        ScriptEditorMetrics& metrics,
+        bool caretVisible,
+        bool focused,
+        HWND interactionWindow = nullptr);
 };
 
 #endif

@@ -8,10 +8,14 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/PanelContentRenderer.hpp"
+#include "rendering/ScriptEditorPanelRenderer.hpp"
+#include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -231,7 +235,8 @@ template <typename Paint>
 } // namespace
 
 struct EditorHeadlessAutomation::Impl {
-    explicit Impl(EditorSceneContext& context) {
+    explicit Impl(EditorSceneContext& sceneContext)
+        : sceneContext(&sceneContext) {
         window = CreateWindowExW(
             0, L"STATIC", L"21kb headless render host",
             WS_POPUP | WS_CLIPCHILDREN,
@@ -241,13 +246,18 @@ struct EditorHeadlessAutomation::Impl {
         viewport.Configure(
             GetModuleHandleW(nullptr), window, &backendSettings);
         viewport.SetErrorReporter(
-            [&context](std::string_view message) {
-                context.Console().Error(
+            [&sceneContext](std::string_view message) {
+                sceneContext.Console().Error(
                     "Renderer", std::string{ message });
             });
     }
 
     ~Impl() {
+        if (sceneContext != nullptr) {
+            kb::input::InputHaptics::UnregisterBackend(
+                sceneContext->Scene(), hapticsBackend);
+        }
+        hapticsBackend.StopAll();
         viewport.Shutdown();
         if (window != nullptr) {
             DestroyWindow(window);
@@ -287,6 +297,9 @@ struct EditorHeadlessAutomation::Impl {
     }
 
     HWND window = nullptr;
+    HWND scriptEditorWindow = nullptr;
+    EditorSceneContext* sceneContext = nullptr;
+    kb::input::Win32XInputHapticsBackend hapticsBackend;
     EditorRenderBackendSettings backendSettings;
     EditorSceneBgfxViewport viewport;
 };
@@ -541,10 +554,15 @@ bool EditorHeadlessAutomation::StepRuntime(
         Trace("step_runtime", false, "invalid-step");
         return false;
     }
+    if (!kb::input::InputHaptics::HasBackend(context_.Scene())) {
+        kb::input::InputHaptics::RegisterBackend(
+            context_.Scene(), impl_->hapticsBackend);
+    }
     for (std::size_t frame = 0U; frame < frames; ++frame) {
-        static_cast<void>(
-            context_.Scene().Runtime().Update(deltaSeconds));
-        context_.SurfaceScriptDiagnostics();
+        if (!context_.TickPlayModeSceneSession(deltaSeconds)) {
+            Trace("step_runtime", false, "runtime-requested-stop");
+            return false;
+        }
         if (!impl_->Render(context_)) {
             Trace("step_runtime", false, "render-backend-failed");
             return false;
@@ -696,8 +714,9 @@ bool EditorHeadlessAutomation::CapturePanel(
     const std::filesystem::path path =
         artifactRoot_ / "screenshots" /
         (SafeCheckpoint(checkpoint) + ".bmp");
+    bool panelContentCaptured = true;
     const bool saved = CaptureBitmap(
-        path, [this, kind](HDC memory) {
+        path, [this, kind, &panelContentCaptured](HDC memory) {
             const DockPanel dockPanel{
                 .id = 1U,
                 .kind = *kind,
@@ -711,11 +730,45 @@ bool EditorHeadlessAutomation::CapturePanel(
                 memory, kInspectorContent, kInspectorContent,
                 kInspectorContent, kInspectorContent, dockPanel,
                 theme, metrics, context_, settings, false);
+            if (*kind == DockPanelKind::ScriptEditor &&
+                context_.ScriptEditor().IsOpen()) {
+                panelContentCaptured = false;
+                if (impl_->scriptEditorWindow == nullptr ||
+                    IsWindow(impl_->scriptEditorWindow) == 0) {
+                    impl_->scriptEditorWindow =
+                        ScriptEditorWindow::Ensure(impl_->window);
+                }
+                if (impl_->scriptEditorWindow != nullptr) {
+                    const RECT body =
+                        ScriptEditorPanelRenderer::BodyRect(
+                            kInspectorContent);
+                    ScriptEditorWindow::Sync(
+                        impl_->scriptEditorWindow,
+                        body,
+                        context_.ScriptEditor().FilePath(),
+                        context_.ScriptEditor().Generation());
+                    const int savedDc = SaveDC(memory);
+                    if (savedDc != 0 &&
+                        SetViewportOrgEx(
+                            memory, body.left, body.top, nullptr) != 0) {
+                        const bool printed = SendMessageW(
+                            impl_->scriptEditorWindow,
+                            WM_PRINTCLIENT,
+                            reinterpret_cast<WPARAM>(memory),
+                            PRF_CLIENT) != 0;
+                        panelContentCaptured =
+                            RestoreDC(memory, savedDc) != 0 && printed;
+                    } else if (savedDc != 0) {
+                        static_cast<void>(RestoreDC(memory, savedDc));
+                    }
+                }
+            }
         });
+    const bool succeeded = saved && panelContentCaptured;
     Trace(
-        "capture_panel", saved,
+        "capture_panel", succeeded,
         std::string{ panel } + ':' + path.filename().string());
-    return saved;
+    return succeeded;
 }
 
 bool EditorHeadlessAutomation::SnapshotInspectorTree(

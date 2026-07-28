@@ -89,6 +89,21 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             ScriptEditorRenderer::Paint(window, instance->document, instance->viewport, instance->metrics, instance->caretVisible, GetFocus() == window);
         }
         return 0;
+    case WM_PRINTCLIENT:
+        if (instance != nullptr) {
+            const RECT client = ClientRect(window);
+            return ScriptEditorRenderer::PaintTo(
+                       reinterpret_cast<HDC>(wparam),
+                       client,
+                       instance->document,
+                       instance->viewport,
+                       instance->metrics,
+                       false,
+                       false)
+                ? 1
+                : 0;
+        }
+        return 0;
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
         if (instance != nullptr) {

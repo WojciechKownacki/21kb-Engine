@@ -191,6 +191,11 @@ public:
     // installed scene system produced to the Console, so a behaviour that
     // silently fails to run during play surfaces a reason instead of nothing.
     void SurfaceScriptDiagnostics();
+    // Single production play-mode update path shared by the visible editor
+    // loop and deterministic automation. Input collection remains owned by
+    // the host, but system execution, fault surfacing, diagnostics, render
+    // invalidation and quit handling must not diverge between hosts.
+    [[nodiscard]] bool TickPlayModeSceneSession(float deltaSeconds);
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
@@ -969,8 +974,9 @@ private:
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;
-    // Declared last so it is destroyed before scene_: the script module installs
-    // a scene system that references the scene.
+    // EditorSceneContext's destructor destroys scene_ explicitly before
+    // resetting this host, while console_ and the host are still alive, because
+    // script Destroyed callbacks may log during scene shutdown.
     kb::script::ScriptModule* scriptModule_ = nullptr;
     std::unique_ptr<kb::modules::EngineModuleHost> scriptModuleHost_;
 };
