@@ -25,6 +25,7 @@ UIElementId SceneUIDocumentQueries::Root(SceneEntity entity) const noexcept { re
 bool SceneUIDocumentQueries::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocumentQueries::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
 std::optional<UIControlState> SceneUIDocumentQueries::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
+std::optional<UIElementId> SceneUIDocumentQueries::Find(SceneEntity entity, std::string_view name) const noexcept { return SceneUIDocumentService::Find(scene_, entity, name); }
 bool SceneUIDocumentQueries::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocumentQueries::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
 
@@ -35,6 +36,7 @@ UIElementId SceneUIDocuments::Root(SceneEntity entity) const noexcept { return S
 bool SceneUIDocuments::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocuments::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
 std::optional<UIControlState> SceneUIDocuments::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
+std::optional<UIElementId> SceneUIDocuments::Find(SceneEntity entity, std::string_view name) const noexcept { return SceneUIDocumentService::Find(scene_, entity, name); }
 bool SceneUIDocuments::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocuments::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
 std::optional<UIElementId> SceneUIDocuments::QueueCreate(SceneEntity entity, const UIRuntimeElementDesc& desc) { return SceneUIDocumentService::QueueCreate(scene_, entity, desc); }

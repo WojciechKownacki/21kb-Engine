@@ -19,7 +19,7 @@
 namespace kb::scene {
 namespace {
 
-const UIDocumentRuntimeRecord* Find(const SceneState& state, SceneEntity entity) {
+const UIDocumentRuntimeRecord* FindRecord(const SceneState& state, SceneEntity entity) {
     const auto it = state.uiDocuments.find(entity.Id());
     return it != state.uiDocuments.end() && it->second.entity == entity ? &it->second : nullptr;
 }
@@ -166,21 +166,21 @@ bool Attach(Scene& scene, SceneEntity entity, std::uint64_t assetId) {
 
 } // namespace
 
-bool SceneUIDocumentService::Exists(const Scene& scene, SceneEntity entity) noexcept { return Find(SceneAccess::State(scene), entity) != nullptr; }
+bool SceneUIDocumentService::Exists(const Scene& scene, SceneEntity entity) noexcept { return FindRecord(SceneAccess::State(scene), entity) != nullptr; }
 std::uint64_t SceneUIDocumentService::Asset(const Scene& scene, SceneEntity entity) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     return record != nullptr ? record->document.Id().value : 0U;
 }
 UIElementId SceneUIDocumentService::Root(const Scene& scene, SceneEntity entity) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     return record != nullptr ? record->root : 0U;
 }
 bool SceneUIDocumentService::HasElement(const Scene& scene, SceneEntity entity, UIElementId element) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     return record != nullptr && record->elements.contains(element);
 }
 bool SceneUIDocumentService::Visible(const Scene& scene, SceneEntity entity, UIElementId element) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     if (record == nullptr) return false;
     const auto current = record->elements.find(element);
     return current != record->elements.end() && current->second.visible;
@@ -193,17 +193,32 @@ void DiscardEvents(SceneState& state, SceneEntity entity) {
     state.pendingUIEvents.erase(first, state.pendingUIEvents.end());
 }
 std::optional<UIControlState> SceneUIDocumentService::Control(const Scene& scene, SceneEntity entity, UIElementId element) {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     if (record == nullptr) return std::nullopt;
     const auto current = record->elements.find(element);
     return current == record->elements.end() ? std::nullopt : std::optional<UIControlState>{ current->second.control };
 }
+std::optional<UIElementId> SceneUIDocumentService::Find(const Scene& scene, SceneEntity entity, std::string_view name) noexcept {
+    // LIB-177: no name index by design. This deterministic O(n) setup scan
+    // returns no handle for duplicate names rather than silently binding a
+    // cached caller to an arbitrary element.
+    if (name.empty()) return std::nullopt;
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
+    if (record == nullptr) return std::nullopt;
+    std::optional<UIElementId> result;
+    for (const auto& [id, element] : record->elements) {
+        if (element.name != name) continue;
+        if (result.has_value()) return std::nullopt;
+        result = id;
+    }
+    return result;
+}
 bool SceneUIDocumentService::StyleIsResolved(const Scene& scene, SceneEntity entity) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     return record != nullptr && (record->document->styleAssetId == 0U || record->style.IsLoaded());
 }
 std::size_t SceneUIDocumentService::ElementCount(const Scene& scene, SceneEntity entity) noexcept {
-    const auto* record = Find(SceneAccess::State(scene), entity);
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
     return record != nullptr ? record->elements.size() : 0U;
 }
 
@@ -284,7 +299,7 @@ std::vector<UIRuntimeEventRecord> SceneUIDocumentService::DrainEvents(Scene& sce
     std::vector<UIRuntimeEventRecord> drained;
     drained.reserve(pending.size());
     for (PendingUIRuntimeEvent& queued : pending) {
-        const UIDocumentRuntimeRecord* record = Find(state, queued.entity);
+        const UIDocumentRuntimeRecord* record = FindRecord(state, queued.entity);
         if (record == nullptr) continue;
         const auto element = record->elements.find(queued.event.elementId);
         if (element != record->elements.end() && element->second.visible) {

@@ -68,6 +68,9 @@ void RunUIDocumentRuntimeTests() {
             scene.UIDocuments().Root(owner.Entity()) == 1U &&
             scene.UIDocuments().ElementCount(owner.Entity()) == 2U &&
             scene.UIDocuments().HasElement(owner.Entity(), 2U) &&
+            scene.UIDocuments().Find(owner.Entity(), "HUD") == std::optional<kb::scene::UIElementId>{ 1U } &&
+            scene.UIDocuments().Find(owner.Entity(), "Score") == std::optional<kb::scene::UIElementId>{ 2U } &&
+            !scene.UIDocuments().Find(owner.Entity(), "Missing").has_value() &&
             scene.UIDocuments().StyleIsResolved(owner.Entity()),
         "Scene runtime did not derive the UI tree from UIDocument and UIStyle assets");
 
@@ -78,11 +81,13 @@ void RunUIDocumentRuntimeTests() {
         .visible = true,
     });
     Require(transientPanel.has_value() && !scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
+            !scene.UIDocuments().Find(owner.Entity(), "TransientPanel").has_value() &&
             scene.UIDocuments().QueueHide(owner.Entity(), 2U),
         "UI mutations were not accepted through the deferred runtime queue");
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
             scene.UIDocuments().ElementCount(owner.Entity()) == 3U &&
+            scene.UIDocuments().Find(owner.Entity(), "TransientPanel") == transientPanel &&
             !scene.UIDocuments().Visible(owner.Entity(), 2U),
         "UI command FIFO did not apply create/hide at its frame boundary");
     Require(scene.UIDocuments().QueueDestroy(owner.Entity(), *transientPanel) &&
@@ -91,6 +96,7 @@ void RunUIDocumentRuntimeTests() {
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(!scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
             scene.UIDocuments().ElementCount(owner.Entity()) == 2U &&
+            !scene.UIDocuments().Find(owner.Entity(), "TransientPanel").has_value() &&
             scene.UIDocuments().Visible(owner.Entity(), 2U),
         "UI command FIFO did not apply destroy/show at its frame boundary");
 
@@ -101,9 +107,12 @@ void RunUIDocumentRuntimeTests() {
 local phase = 0
 local element = 0
 local clickSubscription = 0
+local score = nil
 
 function Tick(self, dt)
     if phase == 0 then
+        score = UI.Find("Score")
+        if score == nil then error("UI.Find setup lookup failed") end
         element = UI.Create(1, "LuaPanel", { styleClass = "hud", visible = true, kind = "ModalDialog", text = "Pause", modal = true })
         UI.Hide(2)
         phase = 1
@@ -115,7 +124,7 @@ function Tick(self, dt)
         clickSubscription = Events.Subscribe("UI.Click", function(event)
             SetShared("uiClickElement", event.args.element)
             SetShared("uiClickX", event.args.x)
-            UI.SetText(2, "Clicked")
+            UI.SetText(score, "Clicked")
         end)
         UI.EmitClick(2, 12.5, -4.0)
         phase = 3
@@ -137,7 +146,7 @@ end
     });
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
-    for (const char* const function : { "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
+    for (const char* const function : { "UI.Find", "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
              "UI.EmitClick", "UI.EmitPointer", "UI.EmitSubmit", "UI.EmitChanged", "UI.EmitFocus", "UI.EmitNavigation" }) {
         Require(scriptHost.Functions().FindSignature(function) != nullptr,
             "UI control script API was not registered in the production runtime host");
@@ -205,6 +214,21 @@ end
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().Control(owner.Entity(), controlElements[0U])->text == "Score: 43",
         "UI control mutation command did not update the canonical runtime tree");
+
+    const auto duplicateScore = scene.UIDocuments().QueueCreate(owner.Entity(), kb::scene::UIRuntimeElementDesc{
+        .parentId = 1U,
+        .name = "Score",
+        .control = { .kind = kb::scene::UIControlKind::Text, .text = "Duplicate" },
+    });
+    Require(duplicateScore.has_value(), "Duplicate-name UI setup fixture could not be queued");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(!scene.UIDocuments().Find(owner.Entity(), "Score").has_value(),
+        "UI.Find must reject an ambiguous document-local name rather than choose an arbitrary element");
+    Require(scene.UIDocuments().QueueDestroy(owner.Entity(), *duplicateScore),
+        "Duplicate-name UI setup fixture could not be destroyed");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Find(owner.Entity(), "Score") == std::optional<kb::scene::UIElementId>{ 2U },
+        "UI.Find did not recover the original cached handle after the duplicate was removed");
 
     const std::array<kb::scene::UIRuntimeEvent, 6U> events{
         kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Click, .elementId = 2U, .pointerX = 1.0F, .pointerY = 2.0F },

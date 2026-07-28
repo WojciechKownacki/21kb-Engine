@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -48,6 +49,7 @@ public:
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
+    [[nodiscard]] std::optional<UIElementId> Find(SceneEntity entity, std::string_view name) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
 private:
@@ -63,6 +65,9 @@ public:
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
+    // Setup-only linear lookup. Cache the returned typed UIElementId and use
+    // it directly in Tick or another hot path; no name index is maintained.
+    [[nodiscard]] std::optional<UIElementId> Find(SceneEntity entity, std::string_view name) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
     // Commands are appended in call order and are applied once by
