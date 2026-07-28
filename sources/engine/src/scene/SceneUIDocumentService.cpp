@@ -30,6 +30,7 @@ UIDocumentRuntimeRecord* FindMutable(SceneState& state, SceneEntity entity) {
 }
 
 constexpr std::size_t kMaxPendingUICommands = 4096U;
+constexpr std::size_t kMaxPendingUIEvents = 4096U;
 
 bool ValidControl(const UIControlState& control) noexcept {
     if (!std::isfinite(control.sliderValue) || !std::isfinite(control.sliderMinimum) ||
@@ -39,6 +40,18 @@ bool ValidControl(const UIControlState& control) noexcept {
     if (control.listItems.size() > kMaxUIListItems) return false;
     for (const std::string& item : control.listItems) if (item.empty()) return false;
     return control.kind <= UIControlKind::ModalDialog;
+}
+
+bool ValidEvent(const UIRuntimeEvent& event) noexcept {
+    if (event.elementId == 0U || event.kind > UIRuntimeEventKind::Navigation ||
+        !std::isfinite(event.pointerX) || !std::isfinite(event.pointerY) ||
+        !std::isfinite(event.value) || event.text.size() > kMaxUIEventTextBytes) {
+        return false;
+    }
+    if (event.kind == UIRuntimeEventKind::Navigation) {
+        return event.navigation > UINavigationDirection::None && event.navigation <= UINavigationDirection::Right;
+    }
+    return event.navigation == UINavigationDirection::None;
 }
 
 bool HasQueuedDestroy(const SceneState& state, SceneEntity entity, UIElementId element) noexcept {
@@ -172,6 +185,13 @@ bool SceneUIDocumentService::Visible(const Scene& scene, SceneEntity entity, UIE
     const auto current = record->elements.find(element);
     return current != record->elements.end() && current->second.visible;
 }
+
+void DiscardEvents(SceneState& state, SceneEntity entity) {
+    const auto first = std::remove_if(state.pendingUIEvents.begin(), state.pendingUIEvents.end(), [entity](const PendingUIRuntimeEvent& event) {
+        return event.entity == entity;
+    });
+    state.pendingUIEvents.erase(first, state.pendingUIEvents.end());
+}
 std::optional<UIControlState> SceneUIDocumentService::Control(const Scene& scene, SceneEntity entity, UIElementId element) {
     const auto* record = Find(SceneAccess::State(scene), entity);
     if (record == nullptr) return std::nullopt;
@@ -243,11 +263,43 @@ bool SceneUIDocumentService::QueueSetControl(Scene& scene, SceneEntity entity, U
     return true;
 }
 
+bool SceneUIDocumentService::QueueEvent(Scene& scene, SceneEntity entity, const UIRuntimeEvent& event) {
+    if (!ValidEvent(event)) return false;
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || state.pendingUIEvents.size() >= kMaxPendingUIEvents ||
+        IsPendingDestroyAncestor(state, *record, entity, event.elementId)) {
+        return false;
+    }
+    const auto element = record->elements.find(event.elementId);
+    if (element == record->elements.end() || !element->second.visible) return false;
+    state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = entity, .event = event });
+    return true;
+}
+
+std::vector<UIRuntimeEventRecord> SceneUIDocumentService::DrainEvents(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    std::vector<PendingUIRuntimeEvent> pending;
+    pending.swap(state.pendingUIEvents);
+    std::vector<UIRuntimeEventRecord> drained;
+    drained.reserve(pending.size());
+    for (PendingUIRuntimeEvent& queued : pending) {
+        const UIDocumentRuntimeRecord* record = Find(state, queued.entity);
+        if (record == nullptr) continue;
+        const auto element = record->elements.find(queued.event.elementId);
+        if (element != record->elements.end() && element->second.visible) {
+            drained.push_back(UIRuntimeEventRecord{ .owner = queued.entity, .event = std::move(queued.event) });
+        }
+    }
+    return drained;
+}
+
 void SceneUIDocumentService::SyncComponents(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     if (state.mode == SceneMode::PrefabPrivate) {
         state.uiDocuments.clear();
         state.pendingUICommands.clear();
+        state.pendingUIEvents.clear();
         return;
     }
     std::map<std::uint64_t, std::pair<SceneEntity, UIDocumentComponent>> authored;
@@ -273,6 +325,7 @@ void SceneUIDocumentService::SyncComponents(Scene& scene) {
             (current->document->styleAssetId != 0U && current->styleLoadGeneration != scene.Assets().Manager().LoadGeneration(current->style.Id()));
         if (stale) {
             DiscardCommands(state, entity);
+            DiscardEvents(state, entity);
             state.uiDocuments.erase(id);
             if (!Attach(scene, entity, component.documentAssetId)) {
                 throw std::runtime_error("Enabled UIDocument component could not load its document or style asset");
@@ -284,6 +337,7 @@ void SceneUIDocumentService::SyncComponents(Scene& scene) {
         if (!scene.Entities().IsAlive(it->second.entity) || component == nullptr || !component->enabled ||
             !authored.contains(it->first)) {
             DiscardCommands(state, it->second.entity);
+            DiscardEvents(state, it->second.entity);
             it = state.uiDocuments.erase(it);
         }
         else ++it;

@@ -42,5 +42,7 @@ bool SceneUIDocuments::QueueDestroy(SceneEntity entity, UIElementId element) noe
 bool SceneUIDocuments::QueueShow(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, true); }
 bool SceneUIDocuments::QueueHide(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, false); }
 bool SceneUIDocuments::QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control) { return SceneUIDocumentService::QueueSetControl(scene_, entity, element, control); }
+bool SceneUIDocuments::QueueEvent(SceneEntity entity, const UIRuntimeEvent& event) { return SceneUIDocumentService::QueueEvent(scene_, entity, event); }
+std::vector<UIRuntimeEventRecord> SceneUIDocuments::DrainEvents() { return SceneUIDocumentService::DrainEvents(scene_); }
 
 } // namespace kb::scene
