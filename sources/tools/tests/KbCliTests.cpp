@@ -1978,6 +1978,10 @@ void RunApiCommandTests() {
     const CommandRun printed = Run(&kb::cli::RunApiCommand, { "--print", "json" });
     Require(printed.exitCode == 0, "api --print json failed");
     Require(Contains(printed.output, "\"Input.Vector2\""), "api --print json is missing functions");
+    Require(
+        Contains(printed.output, "\"Timeline.Create\"") &&
+            Contains(printed.output, "\"table\":\"Timeline\""),
+        "api --print json is missing the direct Timeline Lua surface");
 
     const CommandRun initAgent = Run(&kb::cli::RunInitAgentCommand, { "--project", root });
     Require(initAgent.exitCode == 0, "init-agent failed");

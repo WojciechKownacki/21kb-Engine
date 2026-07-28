@@ -1156,7 +1156,16 @@ EditorSceneContext::EditorSceneContext()
     console_.Info("Editor", "Editor scene initialized.");
 }
 
-EditorSceneContext::~EditorSceneContext() = default;
+EditorSceneContext::~EditorSceneContext() {
+    // Scene shutdown dispatches the script Destroyed lifecycle and scripts may
+    // legitimately call the editor-provided Log function from that callback.
+    // Destroy the scene explicitly while console_ is still alive; the default
+    // member order would otherwise destroy console_ before scene_ and leave the
+    // registered Log callback pointing at released storage.
+    scene_.reset();
+    scriptModule_ = nullptr;
+    scriptModuleHost_.reset();
+}
 
 void EditorSceneContext::EnsureScriptRuntime() {
     if (scriptModuleHost_ != nullptr) {
@@ -1314,6 +1323,25 @@ void EditorSceneContext::SurfaceScriptDiagnostics() {
     for (const std::string& diagnostic : scriptModule_->Host()->DrainSceneSystemDiagnostics()) {
         console_.Error("Scripts", diagnostic);
     }
+}
+
+bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
+    if (!HasPlayModeSceneSession() || !std::isfinite(deltaSeconds) ||
+        deltaSeconds < 0.0F) {
+        return false;
+    }
+    kb::scene::SceneRuntime runtime = scene_->Runtime();
+    if (!runtime.EcsProfilerEnabled()) {
+        runtime.SetEcsProfilerEnabled(true);
+    }
+    static_cast<void>(runtime.Update(deltaSeconds));
+    for (const std::string& systemError :
+         runtime.DrainSceneSystemErrors()) {
+        console_.Error("Scripts", systemError);
+    }
+    SurfaceScriptDiagnostics();
+    MarkSceneRenderDirty();
+    return !runtime.ShouldQuit();
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
