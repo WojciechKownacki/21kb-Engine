@@ -975,7 +975,8 @@ ReadScriptValue(
         }
         const auto expectedVisible = BoolMember(step, "visible", error, false);
         const auto expectedKind = StringMember(step, "kind", error, false);
-        if (!present && (expectedVisible.has_value() || expectedKind.has_value())) {
+        const auto expectedText = StringMember(step, "text", error, false);
+        if (!present && (expectedVisible.has_value() || expectedKind.has_value() || expectedText.has_value())) {
             return { false, "cannot assert a property of an absent UI element" };
         }
         if (expectedKind.has_value()) {
@@ -995,6 +996,12 @@ ReadScriptValue(
                 return false;
             }();
             if (!matchesKind) return { false, "control kind mismatch" };
+        }
+        if (expectedText.has_value()) {
+            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
+            if (!control.has_value() || control->text != *expectedText) {
+                return { false, "control text mismatch" };
+            }
         }
         if (!expectedVisible.has_value()) return { true, present ? "present" : "absent" };
         const bool visible = state.context.Scene().UIDocuments().Visible(entity, element);
