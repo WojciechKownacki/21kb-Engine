@@ -48,6 +48,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;
+    SceneAnimatorComponents animators;
 };
 
 class ScenePrefabNodeStateWriter {

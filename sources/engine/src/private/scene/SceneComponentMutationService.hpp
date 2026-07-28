@@ -2,6 +2,7 @@
 
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -86,6 +87,10 @@ public:
     static void SetAudioListener(Scene& scene, SceneEntity entity, const AudioListenerComponent& audioListener);
     static void RemoveAudioListener(Scene& scene, SceneEntity entity) noexcept;
     static void MarkAudioListenerModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static Animator* TryGetAnimator(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAnimator(Scene& scene, SceneEntity entity, const Animator& animator);
+    static void RemoveAnimator(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAnimatorModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

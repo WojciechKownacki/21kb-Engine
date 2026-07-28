@@ -3,6 +3,7 @@
 #include "engine/library/EngineLibraryDeprecation.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptAnimatorApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
 #include "engine/script/ScriptEventsApi.hpp"
 #include "engine/script/ScriptTextApi.hpp"
@@ -191,6 +192,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Particles",
             .ownerRuntime = "kb::scene::SceneParticleSystems",
             .Register = &kb::script::ScriptParticleSystemApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Animator",
+            .ownerRuntime = "kb::scene::SceneAnimators",
+            .Register = &kb::script::ScriptAnimatorApi::Register,
         },
         // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame - reads the CPU-side
         // per-entity visibility/bounds feedback frame (kb::scene::SceneRenderFeedback) the

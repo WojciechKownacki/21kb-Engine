@@ -5,6 +5,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
+#include "scene/components/SceneAnimatorComponentStore.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
 #include "scene/components/SceneCharacterControllerComponentStore.hpp"
@@ -62,6 +63,8 @@ public:
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentStore& AudioListeners() noexcept;
+    [[nodiscard]] const SceneAnimatorComponentStore& Animators() const noexcept;
+    [[nodiscard]] SceneAnimatorComponentStore& Animators() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -78,6 +81,7 @@ private:
     SceneTagsComponentStore tags_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
+    SceneAnimatorComponentStore animators_;
 };
 
 } // namespace kb::scene

@@ -92,6 +92,7 @@ public:
     // effect is incrementing/decrementing an atomic counter for the
     // guard's lifetime.
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
+    void ValidateStructuralChangeAllowed(std::string_view operation) const;
 
 #include "engine/ecs/world/WorldEntityApi.inl"
 #include "engine/ecs/world/WorldComponentApi.inl"
@@ -134,7 +135,6 @@ private:
     void SetParentsForNewEntitiesKnownAcyclic(std::span<const Entity> children, std::span<const Entity> parents);
     void ValidateEntityHandle(Entity entity, std::string_view operation) const;
     void ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const;
-    void ValidateStructuralChangeAllowed(std::string_view operation) const;
     [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept;
     [[nodiscard]] NativeComponentValue MakeNativeComponentValue(const BulkComponentData& component) const;
     [[nodiscard]] std::vector<NativeComponentValue> MakeNativeComponentValues(std::span<const BulkComponentData> components) const;

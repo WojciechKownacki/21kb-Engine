@@ -70,6 +70,9 @@ namespace {
     if (StartsWith(propertyPath, "audioListener")) {
         return ScenePrefabOverrideFlag::AudioListener;
     }
+    if (StartsWith(propertyPath, "animator")) {
+        return ScenePrefabOverrideFlag::Animator;
+    }
     if (propertyPath == "children") {
         return ScenePrefabOverrideFlag::AddedChild;
     }
@@ -510,6 +513,30 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "audioListener.enabled") {
             property.value = ToString(audioListener->enabled);
+            return true;
+        }
+    }
+    if (StartsWith(propertyPath, "animator")) {
+        const Animator* animator = components.Animators().TryGet(entity);
+        if (propertyPath == "animator") {
+            property.value = animator == nullptr ? "null" : "present";
+            return true;
+        }
+        if (animator == nullptr) return false;
+        if (propertyPath == "animator.controllerAssetId") {
+            property.value = std::to_string(animator->controllerAssetId);
+            return true;
+        }
+        if (propertyPath == "animator.speed") {
+            property.value = std::to_string(animator->speed);
+            return true;
+        }
+        if (propertyPath == "animator.enabled") {
+            property.value = ToString(animator->enabled);
+            return true;
+        }
+        if (propertyPath == "animator.rootMotionOwner") {
+            property.value = std::to_string(static_cast<std::uint32_t>(animator->rootMotionOwner));
             return true;
         }
     }

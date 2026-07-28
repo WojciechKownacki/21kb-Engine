@@ -135,6 +135,19 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "count", ScriptValueType::Int, true },
             },
         },
+        LibraryEventDesc{
+            .name = "OnAnimationEvent",
+            .id = kb::script::ComputeEventId("OnAnimationEvent"),
+            .arguments = {
+                ScriptFunctionPin{ "schemaMajor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "schemaMinor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "event", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "clip", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "layer", ScriptValueType::String, true },
+                ScriptFunctionPin{ "state", ScriptValueType::String, true },
+                ScriptFunctionPin{ "normalizedTime", ScriptValueType::Float, true },
+            },
+        },
     };
     return kCatalog;
 }

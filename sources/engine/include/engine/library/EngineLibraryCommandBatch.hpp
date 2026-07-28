@@ -231,6 +231,12 @@ public:
     // entity is not resolvable (and therefore not destroyable) by any other
     // code until this same Flush() creates it.
     [[nodiscard]] std::optional<kb::ecs::CommandBufferPlaybackResult> Flush() {
+        // Validate before Playback and before the scene-owned destroy path.
+        // SceneEntities::Destroy is noexcept because ordinary scene teardown
+        // cannot fail; allowing the structural-change validator to throw
+        // through it would terminate the process instead of reporting the
+        // documented CommandBatch misuse.
+        scene_->Runtime().EcsWorld().ValidateStructuralChangeAllowed("command batch playback");
         for (const EntityHandle& target : trackedTargets_) {
             if (!target.IsAlive(*scene_)) {
                 return std::nullopt;

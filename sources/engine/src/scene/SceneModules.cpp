@@ -5,6 +5,7 @@
 #include "scene/SceneState.hpp"
 
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -102,6 +103,14 @@ SceneParticleSystems Scene::Particles() noexcept {
 
 SceneParticleSystemQueries Scene::Particles() const noexcept {
     return SceneParticleSystemQueries{ *this };
+}
+
+SceneAnimators Scene::Animators() noexcept {
+    return SceneAnimators{ *this };
+}
+
+SceneAnimatorQueries Scene::Animators() const noexcept {
+    return SceneAnimatorQueries{ *this };
 }
 
 kb::save::SaveGame& Scene::AmbientSave() noexcept {

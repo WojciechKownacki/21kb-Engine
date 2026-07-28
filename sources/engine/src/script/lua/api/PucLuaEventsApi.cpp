@@ -5,6 +5,7 @@
 #include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "script/lua/PucLuaDebugHook.hpp"
+#include "script/lua/PucLuaRuntimeApi.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 #include "script/lua/api/PucLuaEventApi.hpp"
 
@@ -19,6 +20,7 @@ extern "C" {
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace kb::script {
@@ -41,8 +43,9 @@ namespace {
 // same reason (the existing test suite already does).
 struct SubscriberInvocation {
     lua_State* state = nullptr;
-    const PucLuaScriptRuntime* runtime = nullptr;
+    PucLuaScriptRuntime* runtime = nullptr;
     int ref = LUA_NOREF;
+    ScriptExecutionContext context;
 
     // Explicit constructor (not aggregate init) is required here: a
     // declared destructor suppresses the implicit move constructor, so
@@ -52,10 +55,26 @@ struct SubscriberInvocation {
     // luaL_unref-ing the just-created ref) immediately, before the
     // subscription was ever used. Constructing in place via make_shared's
     // forwarding constructor call avoids the temporary entirely.
-    SubscriberInvocation(lua_State* stateArg, const PucLuaScriptRuntime* runtimeArg, int refArg) noexcept
+    SubscriberInvocation(
+        lua_State* stateArg,
+        PucLuaScriptRuntime* runtimeArg,
+        int refArg,
+        ScriptExecutionContext& sourceContext) noexcept
         : state(stateArg)
         , runtime(runtimeArg)
-        , ref(refArg) {}
+        , ref(refArg)
+        , context(
+              sourceContext.GetScene(),
+              sourceContext.Self(),
+              sourceContext.Asset(),
+              sourceContext.Backend(),
+              ScriptLifecycleEvent::Tick,
+              0.0F,
+              nullptr,
+              nullptr,
+              sourceContext.SharedState(),
+              sourceContext.Functions(),
+              sourceContext.Events()) {}
 
     SubscriberInvocation(const SubscriberInvocation&) = delete;
     SubscriberInvocation& operator=(const SubscriberInvocation&) = delete;
@@ -67,9 +86,27 @@ struct SubscriberInvocation {
     }
 };
 
+void BindSubscriberExecutionApi(const std::shared_ptr<SubscriberInvocation>& invocation) {
+    const int functionIndex = lua_absindex(invocation->state, -1);
+    for (int upvalueIndex = 1;; ++upvalueIndex) {
+        const char* name = lua_getupvalue(invocation->state, functionIndex, upvalueIndex);
+        if (name == nullptr) break;
+        if (std::string_view{ name } == "_ENV" && lua_istable(invocation->state, -1) != 0) {
+            const int environmentIndex = lua_gettop(invocation->state);
+            const std::optional<std::string> error = PucLuaRuntimeApi::AttachExecutionApi(
+                invocation->state, environmentIndex, invocation->context, *invocation->runtime);
+            lua_pop(invocation->state, 1);
+            if (error.has_value()) throw std::runtime_error(*error);
+            return;
+        }
+        lua_pop(invocation->state, 1);
+    }
+}
+
 void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, const ScriptEvent& event) {
     PucLuaStackGuard stack{ invocation->state };
     lua_rawgeti(invocation->state, LUA_REGISTRYINDEX, invocation->ref);
+    BindSubscriberExecutionApi(invocation);
     lua_pushcfunction(invocation->state, &PucLuaErrorReporter::Traceback);
     const int errorHandlerIndex = lua_gettop(invocation->state) - 1;
     lua_insert(invocation->state, errorHandlerIndex);
@@ -161,7 +198,7 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
 
 int LuaEventsSubscribe(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
-    const auto* runtime = static_cast<const PucLuaScriptRuntime*>(lua_touserdata(state, lua_upvalueindex(2)));
+    auto* runtime = static_cast<PucLuaScriptRuntime*>(lua_touserdata(state, lua_upvalueindex(2)));
     auto* registryState = static_cast<lua_State*>(lua_touserdata(state, lua_upvalueindex(3)));
     if (context == nullptr || context->Events() == nullptr || runtime == nullptr || registryState == nullptr) {
         lua_pushinteger(state, static_cast<lua_Integer>(kInvalidEventSubscriptionHandle));
@@ -169,7 +206,11 @@ int LuaEventsSubscribe(lua_State* state) {
     }
     const char* eventName = luaL_checkstring(state, 1);
     luaL_checktype(state, 2, LUA_TFUNCTION);
-    const kb::scene::SceneEntity owner = OptionalEntityArg(state, 3);
+    // A behaviour-local subscription naturally belongs to the executing
+    // entity when the owner argument is omitted. Passing explicit nil keeps
+    // the existing unowned/global subscription semantics.
+    const kb::scene::SceneEntity owner =
+        lua_gettop(state) < 3 ? context->Self() : OptionalEntityArg(state, 3);
     const std::string channel = OptionalStringArg(state, 4);
 
     lua_pushvalue(state, 2);
@@ -181,7 +222,7 @@ int LuaEventsSubscribe(lua_State* state) {
         lua_xmove(state, registryState, 1);
     }
     const int ref = luaL_ref(registryState, LUA_REGISTRYINDEX);
-    auto invocation = std::make_shared<SubscriberInvocation>(registryState, runtime, ref);
+    auto invocation = std::make_shared<SubscriberInvocation>(registryState, runtime, ref, *context);
     const EventSubscriptionHandle handle = context->Events()->Subscribe(
         eventName,
         [invocation](const ScriptEvent& event) { InvokeSubscriber(invocation, event); },
