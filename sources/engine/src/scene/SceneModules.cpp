@@ -16,6 +16,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
+#include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
@@ -111,6 +112,14 @@ SceneAnimators Scene::Animators() noexcept {
 
 SceneAnimatorQueries Scene::Animators() const noexcept {
     return SceneAnimatorQueries{ *this };
+}
+
+SceneTimelines Scene::Timelines() noexcept {
+    return SceneTimelines{ *this };
+}
+
+SceneTimelineQueries Scene::Timelines() const noexcept {
+    return SceneTimelineQueries{ *this };
 }
 
 kb::save::SaveGame& Scene::AmbientSave() noexcept {

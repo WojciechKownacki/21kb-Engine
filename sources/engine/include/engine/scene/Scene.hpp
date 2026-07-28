@@ -62,6 +62,8 @@ class SceneAccess;
 class SceneState;
 class SceneTasks;
 class SceneTimers;
+class SceneTimelineQueries;
+class SceneTimelines;
 class SceneTransformQueries;
 class SceneTransforms;
 
@@ -116,6 +118,8 @@ public:
     [[nodiscard]] SceneParticleSystemQueries Particles() const noexcept;
     [[nodiscard]] SceneAnimators Animators() noexcept;
     [[nodiscard]] SceneAnimatorQueries Animators() const noexcept;
+    [[nodiscard]] SceneTimelines Timelines() noexcept;
+    [[nodiscard]] SceneTimelineQueries Timelines() const noexcept;
     // LIB-162: the scene's ambient SaveGame buffer the script Save.* surface
     // reads/mutates and serializes to disk.
     [[nodiscard]] kb::save::SaveGame& AmbientSave() noexcept;

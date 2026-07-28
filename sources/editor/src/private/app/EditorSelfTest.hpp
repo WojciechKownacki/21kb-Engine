@@ -14,7 +14,9 @@ public:
 
     // Runs every self-test suite, writes a human-readable report to reportPath,
     // and returns 0 when all checks pass, 1 otherwise.
-    [[nodiscard]] static int Run(const std::filesystem::path& reportPath);
+    [[nodiscard]] static int Run(
+        const std::filesystem::path& reportPath,
+        const std::filesystem::path& artifactRoot);
 };
 
 } // namespace kb::editor

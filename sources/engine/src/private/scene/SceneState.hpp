@@ -22,6 +22,8 @@
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTasks.hpp"
+#include "engine/scene/SceneTimelines.hpp"
+#include "engine/scene/TimelineAsset.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -117,6 +119,22 @@ struct AnimatorRuntimeRecord {
     float lastAppliedComponentSpeed = 1.0F;
 };
 
+struct TimelineRuntimeBinding {
+    SceneEntity target{};
+    bool explicitlyBound = false;
+};
+
+struct TimelineRuntimeRecord {
+    std::uint64_t id = 0U;
+    SceneEntity owner{};
+    kb::assets::AssetHandle<TimelineAsset> asset;
+    std::uint64_t assetLoadGeneration = 0U;
+    std::uint64_t observedHierarchyTopologyVersion = 0U;
+    std::map<std::string, TimelineRuntimeBinding, std::less<>> bindings;
+    float timeSeconds = 0.0F;
+    bool playing = false;
+};
+
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
     TransformComponent transform{};
@@ -157,6 +175,9 @@ public:
     kb::assets::AssetManager assets;
     std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
+    std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
+    std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
+    std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;
     // LIB-115: independent input state for local users other than the primary
     // (split-screen / shared-keyboard local co-op). Keyed by LocalUserId::value;

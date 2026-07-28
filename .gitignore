@@ -88,6 +88,7 @@ Thumbs.db
 # Local runtime, verification, and benchmark outputs
 # =========================
 /Saved/
+/SelfTest/
 
 # Keep vendored dependencies complete even if they contain files that look like
 # build artifacts for this repository.
