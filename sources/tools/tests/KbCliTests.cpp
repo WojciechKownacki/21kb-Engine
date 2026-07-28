@@ -1,5 +1,5 @@
 #include "CliCommands.hpp"
-#include "MiniJson.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
@@ -30,6 +30,7 @@
 #endif
 
 namespace {
+using kb::core::JsonValue;
 
 void Require(bool condition, const char* message) {
     if (!condition) {
@@ -114,29 +115,29 @@ struct CommandRun {
 }
 
 void RunMiniJsonTests() {
-    kb::cli::JsonValue value;
+    JsonValue value;
     std::string error;
     Require(
-        kb::cli::JsonValue::Parse(R"({"a": [1, -2.5, "x\nžż"], "b": {"c": true, "d": null}})", value, error),
+        JsonValue::Parse(R"({"a": [1, -2.5, "x\nžż"], "b": {"c": true, "d": null}})", value, error),
         "MiniJson did not parse a valid document");
-    Require(value.GetKind() == kb::cli::JsonValue::Kind::Object, "MiniJson root kind is wrong");
-    const kb::cli::JsonValue* array = value.Find("a");
+    Require(value.GetKind() == JsonValue::Kind::Object, "MiniJson root kind is wrong");
+    const JsonValue* array = value.Find("a");
     Require(array != nullptr && array->Size() == 3U, "MiniJson array is wrong");
     Require(array->At(0U)->AsNumber() == 1.0, "MiniJson number is wrong");
     Require(array->At(1U)->AsNumber() == -2.5, "MiniJson negative number is wrong");
     Require(array->At(2U)->AsString() == "x\n\xC5\xBE\xC5\xBC", "MiniJson string escapes are wrong");
-    const kb::cli::JsonValue* nested = value.Find("b");
+    const JsonValue* nested = value.Find("b");
     Require(nested != nullptr && nested->Find("c")->AsBool(), "MiniJson nested bool is wrong");
     Require(nested->Find("d")->IsNull(), "MiniJson null is wrong");
 
     const std::string dumped = value.Dump();
-    kb::cli::JsonValue reparsed;
-    Require(kb::cli::JsonValue::Parse(dumped, reparsed, error), "MiniJson dump did not round-trip");
+    JsonValue reparsed;
+    Require(JsonValue::Parse(dumped, reparsed, error), "MiniJson dump did not round-trip");
     Require(reparsed.Find("a")->Size() == 3U, "MiniJson round-trip lost data");
 
-    Require(!kb::cli::JsonValue::Parse("{\"a\":1,}", value, error), "MiniJson accepted a trailing comma document");
-    Require(!kb::cli::JsonValue::Parse("[1] junk", value, error), "MiniJson accepted trailing characters");
-    Require(!kb::cli::JsonValue::Parse("\"\\q\"", value, error), "MiniJson accepted an invalid escape");
+    Require(!JsonValue::Parse("{\"a\":1,}", value, error), "MiniJson accepted a trailing comma document");
+    Require(!JsonValue::Parse("[1] junk", value, error), "MiniJson accepted trailing characters");
+    Require(!JsonValue::Parse("\"\\q\"", value, error), "MiniJson accepted an invalid escape");
 }
 
 void RunArgumentListTests() {
@@ -2147,9 +2148,9 @@ void RunMcpCommandTests() {
     Require(responses.size() == 4U, "mcp server response count is wrong");
 
     for (const std::string& response : responses) {
-        kb::cli::JsonValue parsed;
+        JsonValue parsed;
         std::string error;
-        Require(kb::cli::JsonValue::Parse(response, parsed, error), "mcp server emitted invalid JSON");
+        Require(JsonValue::Parse(response, parsed, error), "mcp server emitted invalid JSON");
     }
     Require(Contains(responses[0], "\"protocolVersion\""), "mcp initialize response is wrong");
     Require(Contains(responses[1], "\"tools\""), "mcp tools/list response is wrong");
