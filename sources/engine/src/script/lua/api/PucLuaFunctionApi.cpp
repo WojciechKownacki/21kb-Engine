@@ -2803,6 +2803,35 @@ int LuaUIListClear(lua_State* state) { return LuaUIApplied(state, "UI.ListClear"
 int LuaUISetScrollOffset(lua_State* state) { return LuaUISetValue(state, "UI.SetScrollOffset", "offset", LuaUIValueKind::Float); }
 int LuaUISetModalOpen(lua_State* state) { return LuaUISetValue(state, "UI.SetModalOpen", "open", LuaUIValueKind::Bool); }
 
+int LuaUIEmitPosition(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+    };
+    if (lua_gettop(state) >= 4 && lua_istable(state, 4) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 4);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI event was rejected");
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIEmitClick(lua_State* state) { return LuaUIEmitPosition(state, "UI.EmitClick"); }
+int LuaUIEmitPointer(lua_State* state) { return LuaUIEmitPosition(state, "UI.EmitPointer"); }
+int LuaUIEmitSubmit(lua_State* state) { return LuaUISetValue(state, "UI.EmitSubmit", "text", LuaUIValueKind::String); }
+int LuaUIEmitChanged(lua_State* state) { return LuaUISetValue(state, "UI.EmitChanged", "value", LuaUIValueKind::Float); }
+int LuaUIEmitFocus(lua_State* state) { return LuaUISetValue(state, "UI.EmitFocus", "focused", LuaUIValueKind::Bool); }
+int LuaUIEmitNavigation(lua_State* state) { return LuaUISetValue(state, "UI.EmitNavigation", "direction", LuaUIValueKind::String); }
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3032,6 +3061,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "ListClear", &LuaUIListClear, context);
     SetClosure(state, "SetScrollOffset", &LuaUISetScrollOffset, context);
     SetClosure(state, "SetModalOpen", &LuaUISetModalOpen, context);
+    SetClosure(state, "EmitClick", &LuaUIEmitClick, context);
+    SetClosure(state, "EmitPointer", &LuaUIEmitPointer, context);
+    SetClosure(state, "EmitSubmit", &LuaUIEmitSubmit, context);
+    SetClosure(state, "EmitChanged", &LuaUIEmitChanged, context);
+    SetClosure(state, "EmitFocus", &LuaUIEmitFocus, context);
+    SetClosure(state, "EmitNavigation", &LuaUIEmitNavigation, context);
     lua_setfield(state, environmentIndex, "UI");
 
     lua_createtable(state, 0, 5);

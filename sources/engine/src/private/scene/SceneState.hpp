@@ -163,6 +163,11 @@ struct UIRuntimeCommand {
     UIControlState control;
 };
 
+struct PendingUIRuntimeEvent {
+    SceneEntity entity{};
+    UIRuntimeEvent event{};
+};
+
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
     TransformComponent transform{};
@@ -209,6 +214,10 @@ public:
     // UI scene system, never by callers, so runtime tree iteration cannot be
     // invalidated by script/API mutations mid-frame.
     std::vector<UIRuntimeCommand> pendingUICommands;
+    // LIB-176: input producers never invoke scripts directly. They append
+    // here; ScriptRuntimeSceneSystem drains this FIFO after UI commands have
+    // reached their frame boundary and emits through ScriptEventBus.
+    std::vector<PendingUIRuntimeEvent> pendingUIEvents;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

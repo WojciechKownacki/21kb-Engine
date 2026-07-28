@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 166> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 172> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -191,6 +191,12 @@ constexpr std::array<LuaBindingSpec, 166> kLuaBindings{ {
     { "UI", "ListClear", "UI.ListClear", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetScrollOffset", "UI.SetScrollOffset", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetModalOpen", "UI.SetModalOpen", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitClick", "UI.EmitClick", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitPointer", "UI.EmitPointer", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitSubmit", "UI.EmitSubmit", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitChanged", "UI.EmitChanged", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitFocus", "UI.EmitFocus", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "EmitNavigation", "UI.EmitNavigation", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },

@@ -131,6 +131,10 @@ private:
     void DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchPendingTimelineMarkerEvents(
         kb::scene::Scene& scene, float deltaSeconds);
+    // LIB-176: drains typed runtime UI interactions and emits UI.* through
+    // the existing ScriptEventBus. Real input routing feeds this queue in
+    // LIB-180; listeners use Events.Subscribe/Unsubscribe.
+    void DispatchPendingUIEvents(kb::scene::Scene& scene);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

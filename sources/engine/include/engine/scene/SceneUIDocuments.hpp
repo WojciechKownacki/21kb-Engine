@@ -6,10 +6,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace kb::scene {
 
 class Scene;
+
+struct UIRuntimeEventRecord {
+    SceneEntity owner{};
+    UIRuntimeEvent event{};
+};
 
 class SceneUIDocumentComponentQueries {
 public:
@@ -68,6 +74,11 @@ public:
     [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control);
+    // Enqueues a validated interaction emitted by the UI input layer. The
+    // event is delivered in FIFO order by ScriptRuntimeSceneSystem through
+    // ScriptEventBus at the next script frame boundary.
+    [[nodiscard]] bool QueueEvent(SceneEntity entity, const UIRuntimeEvent& event);
+    [[nodiscard]] std::vector<UIRuntimeEventRecord> DrainEvents();
 private:
     Scene& scene_;
 };
