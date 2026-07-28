@@ -112,6 +112,10 @@ namespace {
         lhs.rootMotionOwner == rhs.rootMotionOwner;
 }
 
+[[nodiscard]] bool Equal(const UIDocumentComponent& lhs, const UIDocumentComponent& rhs) noexcept {
+    return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
+}
+
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
     if (actual == nullptr) {
@@ -156,6 +160,9 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.Animators().TryGet(entity), expected.animator)) {
         flags |= ScenePrefabOverrideFlag::Animator;
+    }
+    if (!EqualOptionalComponent(components.UIDocuments().TryGet(entity), expected.uiDocument)) {
+        flags |= ScenePrefabOverrideFlag::UIDocument;
     }
     return flags;
 }

@@ -145,6 +145,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
+    std::vector<UIDocumentComponent> uiDocuments;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
     std::vector<kb::ecs::Entity> createdEntities;
@@ -213,6 +214,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(animators, std::span<const Animator>{ archetype.animators }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const Animator>{ animators });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
+            RepeatComponents(uiDocuments, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const UIDocumentComponent>{ uiDocuments });
+        }
     }
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
@@ -277,6 +282,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Animator)) {
             AddCommandComponentPatternView(views, std::span<const Animator>{ archetype.animators }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const Animator>{ archetype.animators }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
+            AddCommandComponentPatternView(views, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
         }
     }
 };

@@ -121,6 +121,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioListenerComponents.hpp
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
+    include/engine/scene/SceneUIDocuments.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
@@ -170,6 +171,9 @@ add_library(kb_engine STATIC
     include/engine/scene/AnimationAssets.hpp
     include/engine/scene/AnimationAssetIO.hpp
     include/engine/scene/AnimationAssetLoaders.hpp
+    include/engine/scene/UIAssets.hpp
+    include/engine/scene/UIAssetIO.hpp
+    include/engine/scene/UIAssetLoaders.hpp
     include/engine/scene/SceneAnimators.hpp
     include/engine/scene/TimelineAsset.hpp
     include/engine/scene/TimelineAssetIO.hpp
@@ -467,6 +471,10 @@ add_library(kb_engine STATIC
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
     src/scene/SceneAnimatorService.cpp
+    src/scene/modules/SceneUIDocuments.cpp
+    src/scene/SceneUIDocumentService.cpp
+    src/scene/UIAssetIO.cpp
+    src/scene/UIAssetLoaders.cpp
     src/scene/ParticleEffectAssetIO.cpp
     src/scene/ParticleEffectAssetLoader.cpp
     src/scene/SceneParticleSystemService.cpp
@@ -501,6 +509,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneAnimatorApi.cpp
     src/scene/components/SceneAnimatorStorage.cpp
+    src/scene/components/SceneUIDocumentStorage.cpp
     src/scene/components/SceneComponentAccess.cpp
     src/scene/components/SceneComponentRegistry.cpp
     src/scene/components/SceneComponentStorage.cpp
@@ -616,6 +625,7 @@ add_library(kb_engine STATIC
     src/scene/systems/SceneSystemScheduler.cpp
     src/scene/systems/AnimatorSceneSystem.cpp
     src/scene/systems/TimelineSceneSystem.cpp
+    src/scene/systems/UIDocumentSceneSystem.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
@@ -834,6 +844,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneAudioSourceComponentStore.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneAnimatorComponentStore.hpp
+    src/private/scene/components/SceneUIDocumentComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
     src/private/scene/components/SceneComponentRegistry.hpp
@@ -880,6 +891,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneLoadedContentService.hpp
     src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneAnimatorService.hpp
+    src/private/scene/SceneUIDocumentService.hpp
     src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/save/SaveGameBinaryIO.hpp
@@ -1008,6 +1020,7 @@ add_library(kb_engine STATIC
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/AnimatorSceneSystem.hpp
     src/private/scene/systems/TimelineSceneSystem.hpp
+    src/private/scene/systems/UIDocumentSceneSystem.hpp
     src/private/scene/SceneTimelineService.hpp
     src/private/scene/systems/SceneSystemMutableTransformIteration.hpp
     src/private/scene/transform/QuatMath.hpp
@@ -1249,6 +1262,7 @@ if(BUILD_TESTING)
         tests/AudioSceneSystemTests.cpp
         tests/AnimationRuntimeTests.cpp
         tests/TimelineRuntimeTests.cpp
+        tests/UIDocumentRuntimeTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp

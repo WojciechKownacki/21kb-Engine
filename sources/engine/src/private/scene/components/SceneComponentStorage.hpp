@@ -18,6 +18,7 @@
 #include "scene/components/SceneTagsComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/components/SceneVisibilityComponentStore.hpp"
+#include "scene/components/SceneUIDocumentComponentStore.hpp"
 
 namespace kb::ecs {
 
@@ -65,6 +66,8 @@ public:
     [[nodiscard]] SceneAudioListenerComponentStore& AudioListeners() noexcept;
     [[nodiscard]] const SceneAnimatorComponentStore& Animators() const noexcept;
     [[nodiscard]] SceneAnimatorComponentStore& Animators() noexcept;
+    [[nodiscard]] const SceneUIDocumentComponentStore& UIDocuments() const noexcept;
+    [[nodiscard]] SceneUIDocumentComponentStore& UIDocuments() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -82,6 +85,7 @@ private:
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;
+    SceneUIDocumentComponentStore uiDocuments_;
 };
 
 } // namespace kb::scene
