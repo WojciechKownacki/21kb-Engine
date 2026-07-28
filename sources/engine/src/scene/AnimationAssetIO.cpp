@@ -79,6 +79,23 @@ bool ParseConditionMode(std::string_view text, AnimatorConditionMode& mode) {
     return true;
 }
 
+const char* RigConstraintTypeName(AnimatorRigConstraintType type) {
+    switch (type) {
+    case AnimatorRigConstraintType::TwoBoneIK: return "TwoBoneIK";
+    case AnimatorRigConstraintType::Aim: return "Aim";
+    case AnimatorRigConstraintType::CopyTransform: return "CopyTransform";
+    }
+    return "";
+}
+
+bool ParseRigConstraintType(std::string_view text, AnimatorRigConstraintType& type) {
+    if (text == "TwoBoneIK") type = AnimatorRigConstraintType::TwoBoneIK;
+    else if (text == "Aim") type = AnimatorRigConstraintType::Aim;
+    else if (text == "CopyTransform") type = AnimatorRigConstraintType::CopyTransform;
+    else return false;
+    return true;
+}
+
 AnimatorParameterType ConditionParameterType(AnimatorConditionMode mode) {
     switch (mode) {
     case AnimatorConditionMode::BoolEquals: return AnimatorParameterType::Bool;
@@ -141,7 +158,24 @@ bool ValidateController(const AnimatorController& controller) {
         std::unordered_set<std::string> stateNames;
         bool foundDefault = false;
         for (const AnimatorControllerState& state : layer.states) {
-            if (state.name.empty() || state.clipReference.empty() || !stateNames.insert(state.name).second) return false;
+            if (state.name.empty() || !stateNames.insert(state.name).second) return false;
+            const bool hasClip = !state.clipReference.empty();
+            const bool hasBlendTree = !state.blendParameter.empty() || !state.blendChildren.empty();
+            if (hasClip == hasBlendTree) return false;
+            if (hasBlendTree) {
+                const auto parameter = std::find_if(controller.parameters.begin(), controller.parameters.end(),
+                    [&](const AnimatorParameterDefinition& value) {
+                        return value.name == state.blendParameter &&
+                            value.type == AnimatorParameterType::Float;
+                    });
+                if (parameter == controller.parameters.end() || state.blendChildren.size() < 2U) return false;
+                float previousThreshold = -std::numeric_limits<float>::infinity();
+                for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
+                    if (!std::isfinite(child.threshold) || child.threshold <= previousThreshold ||
+                        child.clipReference.empty()) return false;
+                    previousThreshold = child.threshold;
+                }
+            }
             foundDefault |= state.name == layer.defaultState;
         }
         if (!foundDefault) return false;
@@ -156,6 +190,34 @@ bool ValidateController(const AnimatorController& controller) {
                 if (parameter == controller.parameters.end() || parameter->type != ConditionParameterType(condition.mode) ||
                     !std::isfinite(condition.floatValue)) return false;
             }
+        }
+    }
+    std::unordered_set<std::string> constraintNames;
+    std::unordered_set<std::string> drivenPaths;
+    for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
+        if (constraint.name.empty() || !constraintNames.insert(constraint.name).second ||
+            constraint.target.empty() || !std::isfinite(constraint.weight) ||
+            constraint.weight <= 0.0F || constraint.weight > 1.0F) return false;
+        switch (constraint.type) {
+        case AnimatorRigConstraintType::TwoBoneIK:
+            if (constraint.midPath.empty() || constraint.tipPath.empty() ||
+                constraint.constrainedPath == constraint.midPath ||
+                constraint.constrainedPath == constraint.tipPath ||
+                constraint.midPath == constraint.tipPath ||
+                !drivenPaths.insert(
+                    constraint.constrainedPath.empty()
+                        ? "."
+                        : constraint.constrainedPath).second ||
+                !drivenPaths.insert(constraint.midPath).second ||
+                !drivenPaths.insert(constraint.tipPath).second) return false;
+            break;
+        case AnimatorRigConstraintType::Aim:
+        case AnimatorRigConstraintType::CopyTransform:
+            if (!drivenPaths.insert(
+                    constraint.constrainedPath.empty() ? "." : constraint.constrainedPath).second ||
+                !constraint.midPath.empty() || !constraint.tipPath.empty() ||
+                !constraint.poleTarget.empty()) return false;
+            break;
         }
     }
     return true;
@@ -252,6 +314,26 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(const std::fi
             if (!(input >> layerIndex >> std::quoted(state.name) >> std::quoted(state.clipReference)) ||
                 layerIndex >= controller.layers.size() || !EndOfRecord(input)) return std::nullopt;
             controller.layers[layerIndex].states.push_back(std::move(state));
+        } else if (command == "blend1D") {
+            std::size_t layerIndex = 0U;
+            std::size_t stateIndex = 0U;
+            std::string parameter;
+            if (!(input >> layerIndex >> stateIndex >> std::quoted(parameter)) ||
+                layerIndex >= controller.layers.size() ||
+                stateIndex >= controller.layers[layerIndex].states.size() ||
+                !EndOfRecord(input)) return std::nullopt;
+            controller.layers[layerIndex].states[stateIndex].blendParameter = std::move(parameter);
+        } else if (command == "blendChild") {
+            std::size_t layerIndex = 0U;
+            std::size_t stateIndex = 0U;
+            AnimatorControllerState::BlendChild child{};
+            if (!(input >> layerIndex >> stateIndex >> child.threshold >>
+                    std::quoted(child.clipReference)) ||
+                layerIndex >= controller.layers.size() ||
+                stateIndex >= controller.layers[layerIndex].states.size() ||
+                !EndOfRecord(input)) return std::nullopt;
+            controller.layers[layerIndex].states[stateIndex].blendChildren.push_back(
+                std::move(child));
         } else if (command == "transition") {
             std::size_t layerIndex = 0U;
             AnimatorControllerTransition transition{};
@@ -289,6 +371,19 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(const std::fi
                 break;
             }
             controller.layers[layerIndex].transitions[transitionIndex].conditions.push_back(std::move(condition));
+        } else if (command == "constraint") {
+            AnimatorRigConstraint constraint{};
+            std::string type;
+            if (!(input >> type >> std::quoted(constraint.name) >>
+                    std::quoted(constraint.constrainedPath) >>
+                    std::quoted(constraint.midPath) >>
+                    std::quoted(constraint.tipPath) >>
+                    std::quoted(constraint.target) >>
+                    std::quoted(constraint.poleTarget) >> constraint.weight) ||
+                !ParseRigConstraintType(type, constraint.type) ||
+                !EndOfRecord(input)) return std::nullopt;
+            if (constraint.constrainedPath == ".") constraint.constrainedPath.clear();
+            controller.rigConstraints.push_back(std::move(constraint));
         } else {
             return std::nullopt;
         }
@@ -333,6 +428,16 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
         const std::size_t layerIndex = static_cast<std::size_t>(&layer - controller.layers.data());
         for (const auto& state : layer.states) {
             output << "state " << layerIndex << ' ' << std::quoted(state.name) << ' ' << std::quoted(state.clipReference) << '\n';
+            const std::size_t stateIndex =
+                static_cast<std::size_t>(&state - layer.states.data());
+            if (!state.blendChildren.empty()) {
+                output << "blend1D " << layerIndex << ' ' << stateIndex << ' '
+                       << std::quoted(state.blendParameter) << '\n';
+                for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
+                    output << "blendChild " << layerIndex << ' ' << stateIndex << ' '
+                           << child.threshold << ' ' << std::quoted(child.clipReference) << '\n';
+                }
+            }
         }
         for (std::size_t transitionIndex = 0U; transitionIndex < layer.transitions.size(); ++transitionIndex) {
             const AnimatorControllerTransition& transition = layer.transitions[transitionIndex];
@@ -354,6 +459,17 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
                 output << '\n';
             }
         }
+    }
+    for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
+        output << "constraint " << RigConstraintTypeName(constraint.type) << ' '
+               << std::quoted(constraint.name) << ' '
+               << std::quoted(
+                      constraint.constrainedPath.empty() ? "." : constraint.constrainedPath)
+               << ' ' << std::quoted(constraint.midPath) << ' '
+               << std::quoted(constraint.tipPath) << ' '
+               << std::quoted(constraint.target) << ' '
+               << std::quoted(constraint.poleTarget) << ' '
+               << constraint.weight << '\n';
     }
     return WriteText(path, output.str());
 }

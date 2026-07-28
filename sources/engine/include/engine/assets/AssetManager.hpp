@@ -163,6 +163,10 @@ public:
     [[nodiscard]] std::string AsyncLoadError(AssetId id) const;
 
     [[nodiscard]] bool Unload(AssetId id) noexcept;
+    // Monotonic invalidation generation for a payload. Runtime consumers that
+    // retain AssetHandles can compare this value to detect an explicit unload
+    // and rebuild derived bindings from the newly loaded canonical asset.
+    [[nodiscard]] std::uint64_t LoadGeneration(AssetId id) const noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
 
