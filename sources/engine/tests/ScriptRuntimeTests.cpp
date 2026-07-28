@@ -7445,9 +7445,26 @@ void RunWorldInstantiatePrefabParentTransformCallbackTest() {
         kb::script::ScriptRuntimeHost host{ scene };
         kb::tests::Require(host.Succeeded(), "Prefab spawn test host setup failed (A)");
         const kb::scene::SceneObject spawnParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SpawnParent" });
+        const kb::script::ScriptFunctionCallContext context{ .scene = &scene };
+        const kb::script::ScriptFunctionCallResult createdParameters =
+            host.Functions().Call("World.CreatePrefabParameters", {}, context);
+        kb::tests::Require(createdParameters.Succeeded(), "Prefab parameter set creation failed");
+        const std::uint64_t parameterSet = createdParameters.Output("parameters")->AsUInt64();
+        const std::vector<kb::script::ScriptFunctionArgument> parameterArguments{
+                kb::script::ScriptFunctionArgument{ .name = "parameters", .value = kb::script::ScriptValue{ parameterSet, kb::script::ScriptValueType::Hash } },
+                kb::script::ScriptFunctionArgument{ .name = "node", .value = kb::script::ScriptValue{ 1 } },
+                kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Transform" } } },
+                kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "localPosition.x" } } },
+                kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 17.0F } },
+        };
+        const kb::script::ScriptFunctionCallResult setParameter =
+            host.Functions().Call("World.SetPrefabParameterFloat", parameterArguments, context);
+        kb::tests::Require(setParameter.Succeeded() && setParameter.Output("set")->AsBool(),
+            "Prefab parameter could not be added to the atomic set");
 
         const std::vector<kb::script::ScriptFunctionArgument> args{
             kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+            kb::script::ScriptFunctionArgument{ .name = "parameters", .value = kb::script::ScriptValue{ parameterSet, kb::script::ScriptValueType::Hash } },
             kb::script::ScriptFunctionArgument{ .name = "parent", .value = kb::script::ScriptValue{ spawnParent.Entity().Id(), kb::script::ScriptValueType::Entity } },
             kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 3.0F } },
             kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 4.0F } },
@@ -7458,7 +7475,7 @@ void RunWorldInstantiatePrefabParentTransformCallbackTest() {
             kb::script::ScriptFunctionArgument{ .name = "scaleY", .value = kb::script::ScriptValue{ 2.0F } },
             kb::script::ScriptFunctionArgument{ .name = "scaleZ", .value = kb::script::ScriptValue{ 2.0F } },
         };
-        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, kb::script::ScriptFunctionCallContext{ .scene = &scene });
+        const kb::script::ScriptFunctionCallResult result = host.Functions().Call("World.InstantiatePrefab", args, context);
         kb::tests::Require(result.Succeeded() && result.Output("count")->AsInt() == 2, "World.InstantiatePrefab (A) must instantiate the root and child");
         const kb::scene::SceneEntity root{ result.Output("entity")->AsUInt64() };
         kb::tests::Require(root.IsValid() && scene.Entities().IsAlive(root), "World.InstantiatePrefab (A) must return a live root");
@@ -7475,6 +7492,34 @@ void RunWorldInstantiatePrefabParentTransformCallbackTest() {
         const std::vector<kb::scene::SceneEntity> parentChildren = scene.Hierarchy().ChildEntities(spawnParent.Entity());
         kb::tests::Require(std::find(parentChildren.begin(), parentChildren.end(), root) != parentChildren.end(),
             "World.InstantiatePrefab must parent the instantiated root under the given parent entity");
+        const std::vector<kb::scene::SceneEntity> rootChildren = scene.Hierarchy().ChildEntities(root);
+        kb::tests::Require(rootChildren.size() == 1U &&
+                kb::tests::NearlyEqual(scene.Transforms().Get(rootChildren.front()).localPosition.x, 17.0F),
+            "Prefab parameters must be applied to the requested node before instantiate returns");
+
+        const kb::script::ScriptFunctionCallResult invalidParameters =
+            host.Functions().Call("World.CreatePrefabParameters", {}, context);
+        const std::uint64_t invalidSet = invalidParameters.Output("parameters")->AsUInt64();
+        const std::vector<kb::script::ScriptFunctionArgument> invalidParameterArguments{
+                                   kb::script::ScriptFunctionArgument{ .name = "parameters", .value = kb::script::ScriptValue{ invalidSet, kb::script::ScriptValueType::Hash } },
+                                   kb::script::ScriptFunctionArgument{ .name = "node", .value = kb::script::ScriptValue{ 1 } },
+                                   kb::script::ScriptFunctionArgument{ .name = "component", .value = kb::script::ScriptValue{ std::string{ "Transform" } } },
+                                   kb::script::ScriptFunctionArgument{ .name = "property", .value = kb::script::ScriptValue{ std::string{ "notAProperty" } } },
+                                   kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 1.0F } },
+        };
+        kb::tests::Require(host.Functions().Call("World.SetPrefabParameterFloat", invalidParameterArguments, context)
+                               .Output("set")
+                               ->AsBool(),
+            "Invalid-property fixture could not be staged");
+        const std::size_t entityCountBeforeRejectedInstantiate = scene.Entities().Count();
+        const std::vector<kb::script::ScriptFunctionArgument> rejectedArguments{
+                kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/SpawnPrefab.kbprefab" } } },
+                kb::script::ScriptFunctionArgument{ .name = "parameters", .value = kb::script::ScriptValue{ invalidSet, kb::script::ScriptValueType::Hash } },
+        };
+        const kb::script::ScriptFunctionCallResult rejected =
+            host.Functions().Call("World.InstantiatePrefab", rejectedArguments, context);
+        kb::tests::Require(!rejected.Succeeded() && scene.Entities().Count() == entityCountBeforeRejectedInstantiate,
+            "A failed prefab parameter transaction must roll back every instantiated entity");
     }
 
     // ---- Part B: completion callback end-to-end through a real frame. ----
@@ -11977,23 +12022,37 @@ void RunScriptAssetsApiTest() {
     const kb::script::ScriptFunctionCallResult noSceneLoad = host.Functions().Call("Assets.Load", pathArgs, noSceneContext);
     kb::tests::Require(!noSceneLoad.Succeeded(), "Assets.Load must fail honestly without a scene rather than silently succeeding");
 
-    // LoadAsync end-to-end: the task's poll performs the REAL load on its
-    // first Advance (honest one-tick-delayed completion — see
-    // ScriptAssetsApi.cpp's doc comment on LoadAsync), never within the
-    // starting call itself.
+    // LoadAsync end-to-end: I/O runs on AssetManager's worker and the task
+    // remains pending until the owner-thread commit observes completion.
     const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Assets LoadAsync Caller" });
     const kb::script::ScriptFunctionCallContext callerContext{ .scene = &scene, .caller = caller.Entity() };
     const kb::script::ScriptFunctionCallResult loadAsync = host.Functions().Call("Assets.LoadAsync", pathArgs, callerContext);
     kb::tests::Require(loadAsync.Succeeded() && loadAsync.Output("started")->AsBool(), "Assets.LoadAsync must succeed for a resolvable reference");
     const std::uint64_t asyncTaskId = loadAsync.Output("task")->AsUInt64();
     kb::tests::Require(asyncTaskId != 0U && scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync must create a real, live SceneTasks task");
-    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself — only its task's first poll does");
+    kb::tests::Require(!scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync must not load the asset synchronously within the call itself");
 
-    const std::vector<kb::scene::TaskCompletionRecord> asyncCompletions = scene.Tasks().Advance(0.1F);
-    kb::tests::Require(!scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync's task must resolve on its very first poll");
+    std::vector<kb::scene::TaskCompletionRecord> asyncCompletions;
+    for (std::size_t spin = 0; spin < 100000U && scene.Tasks().Exists(asyncTaskId); ++spin) {
+        std::vector<kb::scene::TaskCompletionRecord> current = scene.Tasks().Advance(0.001F);
+        asyncCompletions.insert(asyncCompletions.end(), current.begin(), current.end());
+        std::this_thread::yield();
+    }
+    kb::tests::Require(!scene.Tasks().Exists(asyncTaskId), "Assets.LoadAsync's background task did not finish");
     kb::tests::Require(asyncCompletions.size() == 1U && asyncCompletions[0].id == asyncTaskId && asyncCompletions[0].succeeded && asyncCompletions[0].owner == caller.Entity(),
-        "Assets.LoadAsync's task must report Completed, owned by the calling entity, on its first Advance");
-    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync's task poll must have performed the real load by the time it reports Completed");
+        "Assets.LoadAsync's task must report Completed and preserve its calling owner");
+    kb::tests::Require(scene.Assets().Manager().IsLoaded(assetId), "Assets.LoadAsync did not commit the real loaded payload");
+
+    const kb::scene::SceneObject secondCaller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second Asset Owner" });
+    const kb::script::ScriptFunctionCallContext secondCallerContext{ .scene = &scene, .caller = secondCaller.Entity() };
+    kb::tests::Require(host.Functions().Call("Assets.Load", pathArgs, secondCallerContext).Output("success")->AsBool(),
+        "A second script caller could not acquire shared ownership of the loaded payload");
+    kb::tests::Require(host.Functions().Call("Assets.Unload", pathArgs, callerContext).Output("unloaded")->AsBool() &&
+            scene.Assets().Manager().IsLoaded(assetId),
+        "Releasing one script owner must not evict a payload still owned by another caller");
+    kb::tests::Require(host.Functions().Call("Assets.Unload", pathArgs, secondCallerContext).Output("unloaded")->AsBool() &&
+            !scene.Assets().Manager().IsLoaded(assetId),
+        "Releasing the final script owner must unload the cache entry");
 
     // LoadAsync failure path: a resolvable reference whose type has no
     // registered loader must start a task that genuinely reports Failed —
@@ -12032,6 +12091,8 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(host.Functions().FindSignature("Save.GetInt") != nullptr, "Save.GetInt was not registered");
     kb::tests::Require(host.Functions().FindSignature("Save.Write") != nullptr, "Save.Write was not registered");
     kb::tests::Require(host.Functions().FindSignature("Save.Read") != nullptr, "Save.Read was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Save.SetAsset") != nullptr && host.Functions().FindSignature("Save.GetAsset") != nullptr,
+        "Save asset-reference functions were not registered");
     kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Save.SetInt") != nullptr,
         "Script save API did not register VisualGraph runtime binding for Save.SetInt");
 
@@ -12048,6 +12109,9 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(call("Save.SetInt", { keyArg("score"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 99 } } }).Output("set")->AsBool(), "Save.SetInt must set");
     kb::tests::Require(call("Save.SetFloat", { keyArg("vol"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ 0.5F } } }).Output("set")->AsBool(), "Save.SetFloat must set");
     kb::tests::Require(call("Save.SetString", { keyArg("name"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ std::string{ "Ada" } } } }).Output("set")->AsBool(), "Save.SetString must set");
+    constexpr std::uint64_t kSavedAssetId = 0xA55157U;
+    kb::tests::Require(call("Save.SetAsset", { keyArg("prefab"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ kSavedAssetId, kb::script::ScriptValueType::Hash } } }).Output("set")->AsBool(),
+        "Save.SetAsset must set a stable asset reference");
 
     // Read each back through the script boundary.
     const kb::script::ScriptFunctionCallResult getBool = call("Save.GetBool", { keyArg("flag") });
@@ -12058,6 +12122,9 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(getFloat.Output("found")->AsBool() && kb::tests::NearlyEqual(getFloat.Output("value")->AsFloat(), 0.5F), "Save.GetFloat must round-trip the stored float");
     const kb::script::ScriptFunctionCallResult getString = call("Save.GetString", { keyArg("name") });
     kb::tests::Require(getString.Output("found")->AsBool() && getString.Output("value")->AsString() == "Ada", "Save.GetString must round-trip the stored string");
+    const kb::script::ScriptFunctionCallResult getAsset = call("Save.GetAsset", { keyArg("prefab") });
+    kb::tests::Require(getAsset.Output("found")->AsBool() && getAsset.Output("value")->AsUInt64() == kSavedAssetId,
+        "Save.GetAsset must round-trip the stored stable asset reference");
 
     // Typed miss (asking for the wrong type) and absent key are honest false.
     kb::tests::Require(!call("Save.GetInt", { keyArg("name") }).Output("found")->AsBool(), "Save.GetInt on a String key must honestly miss");
@@ -12080,10 +12147,14 @@ void RunScriptSaveApiTest() {
     const kb::script::ScriptFunctionCallResult read = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ savePath.string() } } });
     kb::tests::Require(read.Output("loaded")->AsBool() && read.Output("status")->AsString() == "Ok", "Save.Read must load the previously written save");
     kb::tests::Require(call("Save.GetString", { keyArg("name") }).Output("value")->AsString() == "Ada", "Save.Read must restore the entries the script wrote earlier");
+    kb::tests::Require(call("Save.GetAsset", { keyArg("prefab") }).Output("value")->AsUInt64() == kSavedAssetId,
+        "Save.Read must restore a stable asset reference");
 
     // Reading a missing file is an honest, non-crashing failure with status.
     const kb::script::ScriptFunctionCallResult readMissing = call("Save.Read", { kb::script::ScriptFunctionArgument{ .name = "path", .value = kb::script::ScriptValue{ (TestRoot() / "nope.kbsave").string() } } });
-    kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound", "Save.Read of a missing file must report loaded=false and status FileNotFound");
+    kb::tests::Require(!readMissing.Output("loaded")->AsBool() && readMissing.Output("status")->AsString() == "FileNotFound" &&
+            !readMissing.Output("diagnostic")->AsString().empty(),
+        "Save.Read of a missing file must report status and a readable diagnostic");
 
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
     kb::tests::Require(host.Functions().FindSignature("Settings.SetInt") != nullptr, "Settings.SetInt was not registered");

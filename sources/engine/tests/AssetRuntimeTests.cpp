@@ -20,14 +20,17 @@
 #include "engine/visual/VisualGraphTypes.hpp"
 
 #include <array>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <typeindex>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -55,6 +58,35 @@ public:
         std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
         return kb::assets::AssetLoadResult{ .asset = std::make_shared<std::string>(std::move(content)), .error = {} };
     }
+};
+
+struct AsyncLoaderGate {
+    std::atomic_bool entered{ false };
+    std::shared_future<void> release{};
+};
+
+class GatedTextAssetLoader final : public kb::assets::IAssetLoader {
+public:
+    explicit GatedTextAssetLoader(std::shared_ptr<AsyncLoaderGate> gate)
+        : gate_{ std::move(gate) } {}
+
+    [[nodiscard]] std::string_view Type() const noexcept override { return "GatedText"; }
+    [[nodiscard]] std::type_index PayloadType() const noexcept override { return typeid(std::string); }
+    [[nodiscard]] std::vector<std::string> Extensions() const override { return { ".gated" }; }
+
+    [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override {
+        gate_->entered.store(true, std::memory_order_release);
+        gate_->release.wait();
+        std::ifstream input{ request.resolvedPath, std::ios::binary };
+        if (!input.is_open()) {
+            return { .asset = {}, .error = "Gated text file could not be opened" };
+        }
+        std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        return { .asset = std::make_shared<std::string>(std::move(content)), .error = {} };
+    }
+
+private:
+    std::shared_ptr<AsyncLoaderGate> gate_{};
 };
 
 [[nodiscard]] std::filesystem::path TestRoot() {
@@ -190,6 +222,95 @@ void RunAssetManagerLoadOpaqueTest() {
     kb::tests::Require(!manager.IsLoaded(textAssetId), "Asset must report unloaded after Unload following a LoadOpaque");
     kb::tests::Require(manager.LoadOpaque(textAssetId), "LoadOpaque must be able to reload an asset after Unload");
     kb::tests::Require(manager.IsLoaded(textAssetId), "Reload through LoadOpaque after Unload must repopulate the cache");
+}
+
+void RunAssetManagerTrueAsyncLoadTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "AsyncProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Deferred.gated", "background payload");
+    WriteTextFile(assetsRoot / "Text" / "Queued.gated", "queued payload");
+
+    std::promise<void> releasePromise;
+    auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = releasePromise.get_future().share();
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)), "Gated loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Async project mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 2U, "Async asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Deferred.gated");
+    const kb::assets::AssetMetadata* queuedMetadata = manager.Registry().FindByPath("/Game/Text/Queued.gated");
+    kb::tests::Require(metadata != nullptr, "Async asset metadata was not registered");
+    kb::tests::Require(queuedMetadata != nullptr, "Queued async asset metadata was not registered");
+    const kb::assets::AssetId id = metadata->id;
+
+    kb::tests::Require(manager.LoadAsync<std::string>(id), "Typed async load request was rejected");
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending,
+        "Async load must remain pending while the loader is blocked");
+    kb::tests::Require(!manager.IsLoaded(id), "Async request committed a payload before the worker completed");
+
+    for (std::size_t spin = 0; spin < 1000000U && !gate->entered.load(std::memory_order_acquire); ++spin) {
+        std::this_thread::yield();
+    }
+    const bool workerEntered = gate->entered.load(std::memory_order_acquire);
+    if (!workerEntered) {
+        releasePromise.set_value();
+    }
+    kb::tests::Require(workerEntered, "Async loader never ran on the worker");
+    kb::tests::Require(manager.LoadAsync<std::string>(queuedMetadata->id),
+        "A second async request blocked behind the active loader instead of entering the bounded queue");
+    manager.PumpAsyncLoads();
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending,
+        "Owner-thread pump blocked or fabricated completion while I/O was pending");
+
+    releasePromise.set_value();
+    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+        manager.PumpAsyncLoads();
+        std::this_thread::yield();
+    }
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
+        "Async worker result was not committed on the owner thread");
+    for (std::size_t spin = 0; spin < 1000000U &&
+            manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending;
+         ++spin) {
+        manager.PumpAsyncLoads();
+        std::this_thread::yield();
+    }
+    kb::tests::Require(manager.AsyncLoadStatus(queuedMetadata->id) == kb::assets::AsyncAssetLoadStatus::Completed,
+        "The bounded async queue did not execute its second request");
+    const kb::assets::AssetHandle<std::string> typedOwner = manager.AcquireLoaded<std::string>(id);
+    kb::tests::Require(typedOwner.IsLoaded() && *typedOwner == "background payload",
+        "Typed async acquire did not return the decoded payload");
+    kb::assets::AssetOpaqueHandle owner = manager.AcquireOpaqueHandle(id);
+    kb::tests::Require(owner.IsLoaded(), "Completed async payload did not expose a strong ownership handle");
+    kb::tests::Require(manager.ReferenceCount(id) == 2U, "Typed and opaque async ownership were not reflected by the cache");
+    kb::tests::Require(manager.Unload(id), "Async cache entry could not be unloaded");
+    kb::tests::Require(owner.IsLoaded(), "Strong owner did not preserve the payload after cache unload");
+
+    WriteTextFile(assetsRoot / "Text" / "Cancelled.gated", "must not commit");
+    std::promise<void> cancelReleasePromise;
+    auto cancelGate = std::make_shared<AsyncLoaderGate>();
+    cancelGate->release = cancelReleasePromise.get_future().share();
+    kb::assets::AssetManager cancelManager;
+    kb::tests::Require(cancelManager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(cancelGate)), "Cancellation loader registration failed");
+    kb::tests::Require(cancelManager.Mounts().Mount("Game", assetsRoot), "Cancellation project mount failed");
+    kb::tests::Require(cancelManager.DiscoverMountedAssets() == 3U, "Cancellation assets were not discovered");
+    const kb::assets::AssetMetadata* cancelMetadata = cancelManager.Registry().FindByPath("/Game/Text/Cancelled.gated");
+    kb::tests::Require(cancelMetadata != nullptr && cancelManager.RequestLoadAsync(cancelMetadata->id), "Cancellation request could not start");
+    for (std::size_t spin = 0; spin < 1000000U && !cancelGate->entered.load(std::memory_order_acquire); ++spin) {
+        std::this_thread::yield();
+    }
+    const bool cancellationWorkerEntered = cancelGate->entered.load(std::memory_order_acquire);
+    static_cast<void>(cancelManager.Unload(cancelMetadata->id));
+    cancelReleasePromise.set_value();
+    kb::tests::Require(cancellationWorkerEntered, "Cancellation loader never entered its worker");
+    for (std::size_t spin = 0; spin < 1000000U && cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+        cancelManager.PumpAsyncLoads();
+        std::this_thread::yield();
+    }
+    kb::tests::Require(cancelManager.AsyncLoadStatus(cancelMetadata->id) == kb::assets::AsyncAssetLoadStatus::NotRequested &&
+            !cancelManager.IsLoaded(cancelMetadata->id),
+        "Unload during an async request must invalidate the worker result before owner-thread commit");
 }
 
 // LIB-157: kb::assets::AssetKind — the single source of truth mapping each
@@ -385,7 +506,8 @@ void RunAssetKindClassificationTest() {
     const kb::assets::AssetKind kinds[] = {
         kb::assets::AssetKind::Mesh, kb::assets::AssetKind::Material, kb::assets::AssetKind::Texture,
         kb::assets::AssetKind::Audio, kb::assets::AssetKind::Prefab, kb::assets::AssetKind::Scene,
-        kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction, kb::assets::AssetKind::InputMap,
+        kb::assets::AssetKind::Animation, kb::assets::AssetKind::Graph, kb::assets::AssetKind::InputAction,
+        kb::assets::AssetKind::InputMap,
     };
     static_assert(std::size(kinds) == kb::assets::kAssetKindCount, "AssetKind test must cover every kind");
     for (const kb::assets::AssetKind kind : kinds) {
@@ -413,6 +535,10 @@ void RunAssetKindClassificationTest() {
     kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Audio, "Texture"), "AssetMatchesKind must NOT accept a non-audio ImportedAsset as Audio");
     kb::tests::Require(matches("ScenePrefab", kb::assets::AssetKind::Prefab), "AssetMatchesKind must accept ScenePrefab as Prefab");
     kb::tests::Require(matches("Scene", kb::assets::AssetKind::Scene), "AssetMatchesKind must accept Scene as Scene");
+    kb::tests::Require(matches("ImportedAsset", kb::assets::AssetKind::Animation, "Animation"),
+        "AssetMatchesKind must accept an imported animation payload as Animation");
+    kb::tests::Require(!matches("ImportedAsset", kb::assets::AssetKind::Animation, "Audio"),
+        "AssetMatchesKind must reject a non-animation imported payload as Animation");
     kb::tests::Require(matches("VisualGraph", kb::assets::AssetKind::Graph), "AssetMatchesKind must accept VisualGraph as Graph");
     kb::tests::Require(matches("InputAction", kb::assets::AssetKind::InputAction), "AssetMatchesKind must accept InputAction as InputAction");
     kb::tests::Require(matches("InputMappingContext", kb::assets::AssetKind::InputMap), "AssetMatchesKind must accept InputMappingContext as InputMap");
@@ -430,9 +556,11 @@ void RunAssetKindClassificationTest() {
     kb::tests::Require(classify("RenderMaterialInstance", classified) && classified == kb::assets::AssetKind::Material, "TryClassifyAssetKind must classify RenderMaterialInstance as Material");
     kb::tests::Require(classify("VisualGraph", classified) && classified == kb::assets::AssetKind::Graph, "TryClassifyAssetKind must classify VisualGraph as Graph");
     kb::tests::Require(classify("ImportedAsset", classified, "Audio") && classified == kb::assets::AssetKind::Audio, "TryClassifyAssetKind must classify an audio ImportedAsset as Audio");
+    kb::tests::Require(classify("ImportedAsset", classified, "Animation") && classified == kb::assets::AssetKind::Animation,
+        "TryClassifyAssetKind must classify an animation ImportedAsset as Animation");
     kb::tests::Require(!classify("LuaScript", classified), "TryClassifyAssetKind must return false for a type that is none of the typed-reference kinds (LuaScript)");
     kb::tests::Require(!classify("NativeBehaviour", classified), "TryClassifyAssetKind must return false for a NativeBehaviour asset");
-    kb::tests::Require(!classify("ImportedAsset", classified, "Texture"), "TryClassifyAssetKind must return false for a non-audio ImportedAsset (not one of the typed kinds)");
+    kb::tests::Require(!classify("ImportedAsset", classified, "Texture"), "TryClassifyAssetKind must return false for an ImportedAsset outside the typed categories");
 }
 
 void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
@@ -794,6 +922,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerLoadOpaqueTest();
+    RunAssetManagerTrueAsyncLoadTest();
     RunAssetCacheReferenceAndPolicyTest();
     RunAssetCompatibilityValidationTest();
     RunAssetKindClassificationTest();

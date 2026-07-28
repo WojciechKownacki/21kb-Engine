@@ -53,7 +53,11 @@ public:
 
     // Reads the whole file into memory; returns false if it does not exist or
     // cannot be read.
-    [[nodiscard]] static bool ReadAllBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& out);
+    [[nodiscard]] static bool ReadAllBytes(
+        const std::filesystem::path& path,
+        std::vector<std::uint8_t>& out,
+        std::size_t maxBytes,
+        bool& tooLarge);
     // Writes `bytes` to `path` atomically: creates parent dirs, writes a
     // sibling ".tmp", then replaces the target in one step (MoveFileEx with
     // REPLACE_EXISTING|WRITE_THROUGH on Windows, rename on POSIX). Returns

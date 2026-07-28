@@ -399,6 +399,20 @@ public:
     // query honestly reports unsupported).
     kb::input::IInputHapticsBackend* inputHapticsBackend = nullptr;
     std::unordered_map<std::uint32_t, std::uint32_t> hapticsGamepadByLocalUser;
+    std::unordered_map<std::uint64_t, std::unordered_map<std::uint64_t, kb::assets::AssetOpaqueHandle>> scriptOwnedAssets;
+    std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>> scriptPendingAssets;
+    struct ScriptPrefabParameter {
+        std::uint32_t nodeIndex = 0U;
+        std::string component;
+        std::string property;
+        kb::script::ScriptValue value;
+    };
+    struct ScriptPrefabParameterSet {
+        SceneEntity owner;
+        std::vector<ScriptPrefabParameter> parameters;
+    };
+    std::uint64_t nextScriptPrefabParameterSetId = 1U;
+    std::unordered_map<std::uint64_t, ScriptPrefabParameterSet> scriptPrefabParameterSets;
     IPhysicsBackend* physicsBackend = nullptr;
     bool basicLightingEnabled = false;
     // LIB-142: scene-global active PostProcessProfile asset id (0 = none) - the ONLY

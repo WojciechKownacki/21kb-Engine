@@ -111,6 +111,20 @@ ScriptFunctionCallResult SetString(const ScriptFunctionCallContext& context, std
 }
 
 template <kb::save::SaveDomain Domain>
+ScriptFunctionCallResult SetAsset(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    std::string key = KeyArg(arguments);
+    if (key.empty()) {
+        return EmptyKey();
+    }
+    const ScriptValue* value = FindArg(arguments, "value");
+    Buffer<Domain>(*context.scene).SetAssetRef(std::move(key), kb::assets::AssetId{ value == nullptr ? 0U : value->AsUInt64() });
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ true } } }, .errors = {} };
+}
+
+template <kb::save::SaveDomain Domain>
 ScriptFunctionCallResult GetBool(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -148,6 +162,23 @@ ScriptFunctionCallResult GetString(const ScriptFunctionCallContext& context, std
     std::string value;
     const bool found = Buffer<Domain>(*context.scene).GetString(KeyArg(arguments), value);
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "found", ScriptValue{ found } }, ScriptFunctionArgument{ "value", ScriptValue{ std::move(value) } } }, .errors = {} };
+}
+
+template <kb::save::SaveDomain Domain>
+ScriptFunctionCallResult GetAsset(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    kb::assets::AssetId value;
+    const bool found = Buffer<Domain>(*context.scene).GetAssetRef(KeyArg(arguments), value);
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "found", ScriptValue{ found } },
+            ScriptFunctionArgument{ "value", ScriptValue{ value.value, ScriptValueType::Hash } },
+        },
+        .errors = {},
+    };
 }
 
 template <kb::save::SaveDomain Domain>
@@ -205,6 +236,10 @@ ScriptFunctionCallResult Write(const ScriptFunctionCallContext& context, std::sp
         return "MigrationFailed";
     case kb::save::SaveGameLoadStatus::WrongDomain:
         return "WrongDomain";
+    case kb::save::SaveGameLoadStatus::TooLarge:
+        return "TooLarge";
+    case kb::save::SaveGameLoadStatus::IntegrityMismatch:
+        return "IntegrityMismatch";
     }
     return "FileNotFound";
 }
@@ -218,6 +253,7 @@ ScriptFunctionCallResult Read(const ScriptFunctionCallContext& context, std::spa
     const std::string path = pathValue == nullptr ? std::string{} : pathValue->AsString();
 
     const char* status = "FileNotFound";
+    std::string diagnostic = path.empty() ? "save path is empty" : std::string{};
     bool loaded = false;
     if (!path.empty()) {
         // Loading REQUIRES the matching domain — a Save.Read of a settings
@@ -226,13 +262,18 @@ ScriptFunctionCallResult Read(const ScriptFunctionCallContext& context, std::spa
         kb::save::SaveGameLoadResult result = kb::save::SaveGameService::Load(std::filesystem::path{ path }, Domain);
         loaded = result.Succeeded();
         status = StatusName(result.status);
+        diagnostic = std::move(result.diagnostic);
         if (loaded) {
             Buffer<Domain>(*context.scene) = std::move(result.save);
         }
     }
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "loaded", ScriptValue{ loaded } }, ScriptFunctionArgument{ "status", ScriptValue{ std::string{ status } } } },
+        .outputs = {
+            ScriptFunctionArgument{ "loaded", ScriptValue{ loaded } },
+            ScriptFunctionArgument{ "status", ScriptValue{ std::string{ status } } },
+            ScriptFunctionArgument{ "diagnostic", ScriptValue{ std::move(diagnostic) } },
+        },
         .errors = {},
     };
 }
@@ -258,15 +299,20 @@ bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
     ok = RegisterFunction(host, name("SetInt"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::Int, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetInt<Domain>) && ok;
     ok = RegisterFunction(host, name("SetFloat"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::Float, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetFloat<Domain>) && ok;
     ok = RegisterFunction(host, name("SetString"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::String, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetString<Domain>) && ok;
+    ok = RegisterFunction(host, name("SetAsset"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::Hash, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetAsset<Domain>) && ok;
     ok = RegisterFunction(host, name("GetBool"), { keyPin }, { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::Bool, true } }, &GetBool<Domain>) && ok;
     ok = RegisterFunction(host, name("GetInt"), { keyPin }, { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::Int, true } }, &GetInt<Domain>) && ok;
     ok = RegisterFunction(host, name("GetFloat"), { keyPin }, { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::Float, true } }, &GetFloat<Domain>) && ok;
     ok = RegisterFunction(host, name("GetString"), { keyPin }, { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::String, true } }, &GetString<Domain>) && ok;
+    ok = RegisterFunction(host, name("GetAsset"), { keyPin }, { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::Hash, true } }, &GetAsset<Domain>) && ok;
     ok = RegisterFunction(host, name("Has"), { keyPin }, { ScriptFunctionPin{ "has", ScriptValueType::Bool, true } }, &Has<Domain>) && ok;
     ok = RegisterFunction(host, name("Remove"), { keyPin }, { ScriptFunctionPin{ "removed", ScriptValueType::Bool, true } }, &Remove<Domain>) && ok;
     ok = RegisterFunction(host, name("Clear"), {}, { ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true } }, &Clear<Domain>) && ok;
     ok = RegisterFunction(host, name("Write"), { ScriptFunctionPin{ "path", ScriptValueType::String, true } }, { ScriptFunctionPin{ "written", ScriptValueType::Bool, true } }, &Write<Domain>) && ok;
-    ok = RegisterFunction(host, name("Read"), { ScriptFunctionPin{ "path", ScriptValueType::String, true } }, { ScriptFunctionPin{ "loaded", ScriptValueType::Bool, true }, ScriptFunctionPin{ "status", ScriptValueType::String, true } }, &Read<Domain>) && ok;
+    ok = RegisterFunction(host, name("Read"), { ScriptFunctionPin{ "path", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "loaded", ScriptValueType::Bool, true }, ScriptFunctionPin{ "status", ScriptValueType::String, true },
+            ScriptFunctionPin{ "diagnostic", ScriptValueType::String, true } },
+        &Read<Domain>) && ok;
     return ok;
 }
 
