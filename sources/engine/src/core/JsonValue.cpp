@@ -1,11 +1,11 @@
-#include "MiniJson.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
-namespace kb::cli {
+namespace kb::core {
 
 namespace {
 
@@ -539,4 +539,4 @@ bool JsonValue::Parse(std::string_view text, JsonValue& out, std::string& error)
     return true;
 }
 
-} // namespace kb::cli
+} // namespace kb::core

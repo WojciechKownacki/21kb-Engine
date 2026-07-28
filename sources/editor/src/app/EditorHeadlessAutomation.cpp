@@ -4,7 +4,10 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/PanelContentRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
@@ -12,7 +15,11 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
+
+#include <bx/math.h>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -168,7 +175,121 @@ FindInspectorHit(
     return InspectorPropertyId::None;
 }
 
+[[nodiscard]] std::optional<DockPanelKind> ParsePanelKind(
+    std::string_view panel) noexcept {
+    if (panel == "hierarchy") return DockPanelKind::Hierarchy;
+    if (panel == "scene") return DockPanelKind::Scene;
+    if (panel == "inspector") return DockPanelKind::Inspector;
+    if (panel == "assets") return DockPanelKind::Assets;
+    if (panel == "console") return DockPanelKind::Console;
+    if (panel == "project_settings") {
+        return DockPanelKind::ProjectSettings;
+    }
+    if (panel == "script_editor") {
+        return DockPanelKind::ScriptEditor;
+    }
+    if (panel == "plugins") return DockPanelKind::Plugins;
+    if (panel == "material_editor") {
+        return DockPanelKind::MaterialEditor;
+    }
+    return std::nullopt;
+}
+
+template <typename Paint>
+[[nodiscard]] bool CaptureBitmap(
+    const std::filesystem::path& path, Paint&& paint) {
+    HDC screen = GetDC(nullptr);
+    HDC memory =
+        screen == nullptr ? nullptr : CreateCompatibleDC(screen);
+    HBITMAP bitmap =
+        memory == nullptr
+        ? nullptr
+        : CreateCompatibleBitmap(
+              screen, kInspectorContent.right,
+              kInspectorContent.bottom);
+    HGDIOBJ previous =
+        bitmap == nullptr ? nullptr : SelectObject(memory, bitmap);
+    bool saved = false;
+    if (previous != nullptr) {
+        HeroIconGdiplusRuntime::EnsureStarted();
+        paint(memory);
+        if (const auto encoder = EncoderClsid(L"image/bmp")) {
+            Gdiplus::Bitmap image(bitmap, nullptr);
+            saved =
+                image.Save(
+                    path.wstring().c_str(), &*encoder, nullptr) ==
+                Gdiplus::Ok;
+        }
+        SelectObject(memory, previous);
+    }
+    if (bitmap != nullptr) DeleteObject(bitmap);
+    if (memory != nullptr) DeleteDC(memory);
+    if (screen != nullptr) ReleaseDC(nullptr, screen);
+    return saved;
+}
+
 } // namespace
+
+struct EditorHeadlessAutomation::Impl {
+    explicit Impl(EditorSceneContext& context) {
+        window = CreateWindowExW(
+            0, L"STATIC", L"21kb headless render host",
+            WS_POPUP | WS_CLIPCHILDREN,
+            0, 0, 640, 360, nullptr, nullptr,
+            GetModuleHandleW(nullptr), nullptr);
+        if (window == nullptr) return;
+        viewport.Configure(
+            GetModuleHandleW(nullptr), window, &backendSettings);
+        viewport.SetErrorReporter(
+            [&context](std::string_view message) {
+                context.Console().Error(
+                    "Renderer", std::string{ message });
+            });
+    }
+
+    ~Impl() {
+        viewport.Shutdown();
+        if (window != nullptr) {
+            DestroyWindow(window);
+        }
+    }
+
+    [[nodiscard]] bool Render(EditorSceneContext& context) {
+        if (window == nullptr) return false;
+        constexpr RECT bounds{ 0, 0, 640, 360 };
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.renderWidth = 640U;
+        settings.renderHeight = 360U;
+        settings.viewportKey = 1U;
+        kb::render::SceneRenderCamera camera{};
+        bx::mtxLookAt(
+            camera.view.data(),
+            bx::Vec3{ 0.0F, 0.0F, 3.0F },
+            bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        kb::render::SceneDepthPolicy::MakePerspective(
+            camera.projection.data(), 60.0F,
+            640.0F / 360.0F, 0.05F, 100.0F,
+            kb::render::SceneDepthPolicy::HomogeneousDepth());
+        settings.cameraOverride = camera;
+        settings.sceneRevision = context.SceneRenderRevision();
+        settings.sceneDirtyBaseRevision = settings.sceneRevision;
+        settings.sceneFullSyncRequired = true;
+        settings.editorSceneOverlaysEnabled = false;
+        settings.selectionMaskEnabled = false;
+        settings.selectionOutlineEnabled = false;
+        settings.drawSafeArea = false;
+        viewport.BeginPaintLayout(window);
+        viewport.Present(
+            window, bounds, context.Scene(), settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } !=
+            "Not initialized";
+    }
+
+    HWND window = nullptr;
+    EditorRenderBackendSettings backendSettings;
+    EditorSceneBgfxViewport viewport;
+};
 
 EditorHeadlessAutomation::EditorHeadlessAutomation(
     EditorSceneContext& context,
@@ -176,13 +297,16 @@ EditorHeadlessAutomation::EditorHeadlessAutomation(
     : context_(context)
     , artifactRoot_(std::filesystem::absolute(
           std::move(artifactRoot)))
-    , tracePath_(artifactRoot_ / "trace.jsonl") {
+    , tracePath_(artifactRoot_ / "trace.jsonl")
+    , impl_(std::make_unique<Impl>(context)) {
     std::error_code error;
     std::filesystem::create_directories(
         artifactRoot_ / "screenshots", error);
     std::filesystem::create_directories(
         artifactRoot_ / "snapshots", error);
 }
+
+EditorHeadlessAutomation::~EditorHeadlessAutomation() = default;
 
 bool EditorHeadlessAutomation::AddComponent(
     std::string_view componentId) {
@@ -318,17 +442,94 @@ bool EditorHeadlessAutomation::SetPhysicsFloat(
 }
 
 bool EditorHeadlessAutomation::SetGameplayKey(
-    kb::input::InputKey key, bool down) {
+    kb::input::InputKey key, bool down,
+    std::uint8_t gamepadIndex) {
     if (key == kb::input::InputKey::None) {
         Trace("gameplay_key", false, "invalid-key");
         return false;
     }
     context_.Scene().Input().MutableDeviceState().SetKeyDown(
-        key, down);
+        key, down, gamepadIndex);
     Trace(
         "gameplay_key", true,
         std::string{ kb::input::ToString(key) } +
             (down ? ":down" : ":up"));
+    return true;
+}
+
+bool EditorHeadlessAutomation::SetGameplayAnalog(
+    kb::input::InputKey key, float value,
+    std::uint8_t gamepadIndex) {
+    if (key == kb::input::InputKey::None ||
+        !kb::input::IsAnalogKey(key) || !std::isfinite(value) ||
+        value < -1.0F || value > 1.0F) {
+        Trace("gameplay_analog", false, "invalid-value");
+        return false;
+    }
+    context_.Scene().Input().MutableDeviceState().SetAnalog(
+        key, value, gamepadIndex);
+    Trace(
+        "gameplay_analog", true,
+        std::string{ kb::input::ToString(key) } + ':' +
+            std::to_string(value));
+    return true;
+}
+
+bool EditorHeadlessAutomation::SetGameplayPointer(
+    float x, float y) {
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        Trace("gameplay_pointer", false, "invalid-position");
+        return false;
+    }
+    context_.Scene().Input().MutableDeviceState()
+        .SetPointerPosition(x, y);
+    Trace(
+        "gameplay_pointer", true,
+        std::to_string(x) + ',' + std::to_string(y));
+    return true;
+}
+
+bool EditorHeadlessAutomation::SetGameplayTouches(
+    std::span<const kb::input::InputTouchPoint> points) {
+    if (points.size() >
+        kb::input::InputDeviceState::kMaxTouchPoints) {
+        Trace("gameplay_touches", false, "too-many-points");
+        return false;
+    }
+    for (const kb::input::InputTouchPoint& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+            Trace("gameplay_touches", false, "invalid-position");
+            return false;
+        }
+    }
+    context_.Scene().Input().MutableDeviceState().SetTouchPoints(
+        points);
+    Trace(
+        "gameplay_touches", true,
+        std::to_string(points.size()) + " point(s)");
+    return true;
+}
+
+bool EditorHeadlessAutomation::SetGameplayFocus(bool focused) {
+    context_.Scene().Input().MutableDeviceState().SetHasFocus(
+        focused);
+    Trace("gameplay_focus", true, focused ? "true" : "false");
+    return true;
+}
+
+bool EditorHeadlessAutomation::SetGamepadConnected(
+    std::uint8_t gamepadIndex, bool connected) {
+    if (gamepadIndex >=
+        kb::input::InputDeviceState::kMaxGamepads) {
+        Trace("gamepad_connected", false, "invalid-index");
+        return false;
+    }
+    context_.Scene().Input().MutableDeviceState()
+        .SetGamepadConnected(gamepadIndex, connected);
+    Trace(
+        "gamepad_connected", true,
+        std::to_string(gamepadIndex) +
+            (connected ? ":connected" : ":disconnected"));
     return true;
 }
 
@@ -344,6 +545,10 @@ bool EditorHeadlessAutomation::StepRuntime(
         static_cast<void>(
             context_.Scene().Runtime().Update(deltaSeconds));
         context_.SurfaceScriptDiagnostics();
+        if (!impl_->Render(context_)) {
+            Trace("step_runtime", false, "render-backend-failed");
+            return false;
+        }
     }
     Trace(
         "step_runtime", true,
@@ -352,40 +557,137 @@ bool EditorHeadlessAutomation::StepRuntime(
     return true;
 }
 
+bool EditorHeadlessAutomation::CaptureRuntime(
+    std::string_view checkpoint) {
+    if (!context_.HasPlayModeSceneSession()) {
+        Trace("capture_runtime", false, "play-mode-required");
+        return false;
+    }
+    const std::filesystem::path output =
+        artifactRoot_ / "screenshots" /
+        (SafeCheckpoint(checkpoint) + ".png");
+    const std::uint64_t capture =
+        kb::scene::SceneRenderFeedback::RequestScreenCapture(
+            context_.Scene(), output.string());
+    if (capture == 0U) {
+        Trace("capture_runtime", false, "request-rejected");
+        return false;
+    }
+    for (std::size_t frame = 0U; frame < 120U; ++frame) {
+        if (!impl_->Render(context_)) {
+            Trace("capture_runtime", false, "render-backend-failed");
+            return false;
+        }
+        const kb::scene::SceneScreenCaptureStatus status =
+            kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
+                context_.Scene(), capture);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool exists =
+                std::filesystem::is_regular_file(output);
+            Trace(
+                "capture_runtime", exists,
+                output.filename().string());
+            return exists;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
+            Trace("capture_runtime", false, "capture-failed");
+            return false;
+        }
+    }
+    Trace("capture_runtime", false, "capture-timeout");
+    return false;
+}
+
+bool EditorHeadlessAutomation::InspectorPointerDown(
+    int x, int y) {
+    const InspectorPanelRenderer::Hit hit =
+        InspectorPanelRenderer::HitTest(
+            kInspectorContent, context_, x, y);
+    const bool routed =
+        InspectorPanelInteraction::HandlePointerDown(
+            context_, hit, x, y);
+    Trace("inspector_pointer_down", routed);
+    return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorPointerDrag(
+    int x, int y) {
+    const bool routed =
+        InspectorPanelInteraction::HandlePointerDrag(
+            context_, x, y);
+    Trace("inspector_pointer_drag", routed);
+    return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorPointerUp() {
+    const bool routed =
+        InspectorPanelInteraction::HandlePointerUp(context_);
+    Trace("inspector_pointer_up", routed);
+    return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorChar(
+    wchar_t character) {
+    const bool routed =
+        InspectorPanelInteraction::HandleChar(
+            context_, character);
+    Trace("inspector_char", routed);
+    return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorKey(
+    std::uintptr_t key) {
+    const bool routed =
+        InspectorPanelInteraction::HandleKeyDown(
+            nullptr, context_, static_cast<WPARAM>(key));
+    Trace("inspector_key", routed);
+    return routed;
+}
+
 bool EditorHeadlessAutomation::CaptureInspector(
     std::string_view checkpoint) {
     const std::filesystem::path path =
         artifactRoot_ / "screenshots" /
         (SafeCheckpoint(checkpoint) + ".bmp");
-    HDC screen = GetDC(nullptr);
-    HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
-    HBITMAP bitmap = memory == nullptr
-        ? nullptr
-        : CreateCompatibleBitmap(
-              screen, kInspectorContent.right,
-              kInspectorContent.bottom);
-    HGDIOBJ previous = bitmap == nullptr
-        ? nullptr
-        : SelectObject(memory, bitmap);
-    bool saved = false;
-    if (previous != nullptr) {
-        HeroIconGdiplusRuntime::EnsureStarted();
+    const bool saved = CaptureBitmap(path, [this](HDC memory) {
         InspectorPanelRenderer renderer;
         renderer.Paint(
             memory, kInspectorContent, MakeEditorDarkTheme(),
             context_);
-        if (const auto encoder = EncoderClsid(L"image/bmp")) {
-            Gdiplus::Bitmap image(bitmap, nullptr);
-            saved = image.Save(
-                        path.wstring().c_str(), &*encoder, nullptr) ==
-                Gdiplus::Ok;
-        }
-        SelectObject(memory, previous);
-    }
-    if (bitmap != nullptr) DeleteObject(bitmap);
-    if (memory != nullptr) DeleteDC(memory);
-    if (screen != nullptr) ReleaseDC(nullptr, screen);
+    });
     Trace("capture_inspector", saved, path.filename().string());
+    return saved;
+}
+
+bool EditorHeadlessAutomation::CapturePanel(
+    std::string_view panel, std::string_view checkpoint) {
+    const auto kind = ParsePanelKind(panel);
+    if (!kind.has_value()) {
+        Trace("capture_panel", false, panel);
+        return false;
+    }
+    const std::filesystem::path path =
+        artifactRoot_ / "screenshots" /
+        (SafeCheckpoint(checkpoint) + ".bmp");
+    const bool saved = CaptureBitmap(
+        path, [this, kind](HDC memory) {
+            const DockPanel dockPanel{
+                .id = 1U,
+                .kind = *kind,
+                .title = "Headless Automation",
+                .area = DockArea::Center,
+            };
+            const EditorTheme theme = MakeEditorDarkTheme();
+            const EditorMetrics metrics{};
+            const EditorRenderBackendSettings settings{};
+            PanelContentRenderer{}.Paint(
+                memory, kInspectorContent, kInspectorContent,
+                kInspectorContent, kInspectorContent, dockPanel,
+                theme, metrics, context_, settings, false);
+        });
+    Trace(
+        "capture_panel", saved,
+        std::string{ panel } + ':' + path.filename().string());
     return saved;
 }
 

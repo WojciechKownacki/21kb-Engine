@@ -5,10 +5,8 @@ add_library(kb_cli_core STATIC
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliValidateCommand.cpp
-    src/MiniJson.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
-    src/private/MiniJson.hpp
 )
 
 target_include_directories(kb_cli_core PUBLIC src/private)

@@ -1,6 +1,7 @@
 #include "kb/editor/EditorApplication.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
+#include "app/EditorAutomationScenarioRunner.hpp"
 #include "app/EditorSelfTest.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -96,6 +97,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         std::filesystem::current_path() / "SelfTest";
     std::wstring selfTestTask =
         L"SELFTEST-001-Headless-Editor-Automation";
+    std::filesystem::path selfTestScenario;
     if (argv != nullptr) {
         ConfigureProjectFromArguments(argc, argv);
         selfTest = HasSelfTestFlag(argc, argv);
@@ -107,6 +109,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (const auto task = ArgumentValue(
                 argc, argv, L"--selftest-task")) {
             selfTestTask.assign(task->begin(), task->end());
+        }
+        if (const auto scenario = ArgumentValue(
+                argc, argv, L"--selftest-scenario")) {
+            selfTestScenario = std::filesystem::path{
+                std::wstring{
+                    scenario->begin(), scenario->end() } };
+            selfTest = true;
         }
         LocalFree(argv);
     }
@@ -123,6 +132,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const std::filesystem::path reportPath =
             artifactRoot / "report.txt";
         kb::editor::EditorCrashBreadcrumbs::Write("app", "selftest enter");
+        if (!selfTestScenario.empty()) {
+            return kb::editor::EditorAutomationScenarioRunner::Run(
+                selfTestScenario, artifactRoot);
+        }
         return kb::editor::EditorSelfTest::Run(
             reportPath, artifactRoot);
     }

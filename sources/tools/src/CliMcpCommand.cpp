@@ -1,5 +1,5 @@
 #include "CliCommands.hpp"
-#include "MiniJson.hpp"
+#include "engine/core/JsonValue.hpp"
 
 #include <array>
 #include <cstdio>
@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace kb::cli {
+using kb::core::JsonValue;
 
 namespace {
 
